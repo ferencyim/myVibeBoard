@@ -194,3 +194,8 @@ The app runs on iOS, Android, web (browser), and web (Electron desktop). Code is
 ## Debugging
 
 Find the complete daemon logs and traces in the $PASEO_HOME/daemon.log
+
+## myVibeBoard fork
+
+- This repo is a fork of getpaseo/paseo. Put custom work in `plugins/`; keep changes under `packages/` small and commit them separately with a `[core]` message prefix.
+- Never push upstream tags to origin. Fork conventions, upstream merge steps and Actions handling: `docs/vibe/FORK-WORKFLOW.md`.
