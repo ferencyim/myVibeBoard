@@ -14,6 +14,9 @@ export * from "./policy";
 export * from "./scheduler";
 export * from "./settings";
 
+/** How long a compaction turn may wait for the user to answer an approval. */
+const APPROVAL_WAIT_MS = 10 * 60_000;
+
 export interface CompactionOptions {
   /** Replaceable probe for native idle compaction in the installed Claude Code. */
   detectNative?: () => Promise<boolean>;
@@ -28,8 +31,12 @@ export function registerCompaction(server: PluginServerContext, options: Compact
   let config: CompactionConfig = { enabled: true, ttlSeconds: {} };
   let intervalMs = 20_000;
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
-    if (state.status !== "ready") return;
+    if (state.status !== "ready") {
+      log(`vibe-context: compaction settings invalid, keeping defaults: ${state.error}`);
+      return;
+    }
     config = state.values;
+    log(`vibe-context: compaction settings: ${JSON.stringify(state.values)}`);
     intervalMs = state.values.checkIntervalSeconds * 1000;
   };
   void settings.read().then(apply);
@@ -46,10 +53,22 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     return paseo;
   };
   const host: CompactionHost = {
-    run: (agentId, text) => handle().agents.ref(agentId).run(text),
+    async run(agentId, text) {
+      // A turn that stops on an approval stays open: wait for the user, up to a bound.
+      const agent = handle().agents.ref(agentId);
+      const deadline = Date.now() + APPROVAL_WAIT_MS;
+      let result = await agent.run(text);
+      while ((result.status === "permission" || result.status === "timeout") && Date.now() < deadline) {
+        result = await agent.waitForFinish(30_000);
+      }
+      return result;
+    },
     async handoff(agent, prompt) {
+      // The SDK wants "provider/model"; take the model from the agent being replaced.
+      const snapshot = (await handle().agents.ref(agent.id).refresh())?.agent;
+      const provider = snapshot?.model ? `${snapshot.provider}/${snapshot.model}` : agent.provider;
       const created = await handle().agents.create({
-        config: { provider: agent.provider },
+        config: { provider },
         cwd: agent.cwd,
         prompt,
       });

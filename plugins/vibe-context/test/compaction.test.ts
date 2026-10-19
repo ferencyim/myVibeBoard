@@ -68,6 +68,7 @@ function setup(provider = "codex", opts: SetupOptions = {}) {
     buildContext: () => "GOALS+PROJECT_STATE",
     now: clock.now,
     settleMs: 0,
+    pollMs: 0,
     nativeClaude: opts.nativeClaude,
   });
   scheduler.onTurnEnded(agent); // round over: cache written, expires T0 + ttl
@@ -166,12 +167,17 @@ describe("scheduler (fake clock)", () => {
     expect(s.prompts).toEqual([]);
   });
 
-  it("aborts without compacting when the progress turn needs a permission", async () => {
-    const s = setup("codex", { onRun: () => ({ status: "permission" }) });
+  it("defers (not fails) when the progress turn needs a permission, and retries later", async () => {
+    let status: "permission" | "idle" = "permission";
+    const s = setup("codex", { onRun: () => ({ status }) });
     s.clock.advance(250);
-    expect((await s.scheduler.tick())[0]).toMatchObject({ action: "skipped", reason: "failed" });
+    expect((await s.scheduler.tick())[0]).toMatchObject({ action: "skipped", reason: "deferred" });
     expect(s.prompts).toHaveLength(1);
     expect(s.events()).toEqual([]);
+
+    status = "idle"; // the user answered
+    s.clock.advance(5);
+    expect((await s.scheduler.tick())[0]).toMatchObject({ action: "compact" });
   });
 
   it("does not duplicate an event the board lifecycle already recorded", async () => {
