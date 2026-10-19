@@ -74,7 +74,11 @@ function FilePanelSettingsRowView({
     <SettingsRow label={label} testID={`file-panel-settings-row-${selectorKey}`}>
       <View style={styles.controls}>
         <DropdownMenu>
-          <DropdownTrigger accessibilityRole="button" accessibilityLabel={`${label}: ${value}`}>
+          <DropdownTrigger
+            disabled={row.candidates.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel={`${label}: ${value}`}
+          >
             {value}
           </DropdownTrigger>
           <DropdownMenuContent side="bottom" align="end" minWidth={260} maxWidth={360}>
