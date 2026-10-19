@@ -57,7 +57,8 @@ export interface SubAgentRunner {
 
 /** Starts the worker for a "fix" rule in its own worktree. The engine has already created the card. */
 export interface FixLauncher {
-  provider(rule: MaintenanceRule): string;
+  /** Provider of the agent that will run the rule; throws a readable error when `rule.agent` is unusable. */
+  provider(rule: MaintenanceRule, project: Project): string;
   launch(input: {
     agentId: string;
     cardKey: string;

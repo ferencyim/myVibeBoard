@@ -526,6 +526,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
     }
     const launcher = options.fixLauncher;
     if (!launcher) throw new Error("This rule has output=fix but no worker launcher is available");
+    const provider = launcher.provider(rule, project); // fails before any card exists
     const agentId = newId();
     const card = store.cards.create(
       {
@@ -547,7 +548,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
       cardId: card.id,
       agentId,
       role: "worker",
-      provider: launcher.provider(rule),
+      provider,
     });
     recordFindings(card, rule, runId, out, "created");
     const prompt = [

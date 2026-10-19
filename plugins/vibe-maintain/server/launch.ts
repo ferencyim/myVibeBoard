@@ -1,28 +1,25 @@
 // Paseo-backed implementations of the two agent ports (kept thin; the engine is tested with fakes).
 
 import type { PaseoApi } from "@getpaseo/client";
-import type { MaintenanceRule } from "./vibe/contract";
+import { resolveAgent, type AgentResolveDeps } from "./agent";
 import type { FixLauncher, SubAgentRunner } from "./types";
 
 type Api = Pick<PaseoApi, "agents" | "projects" | "workspaces">;
 
 const normalizePath = (p: string) => p.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
-const providerOf = (spec: string) => spec.split("/")[0] ?? spec;
 
 /** Read-only-ish modes; the engine additionally compares `git status`/HEAD before and after. */
-const READ_ONLY_MODE: Record<string, string> = { claude: "plan" };
+const READ_ONLY_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
 
-export function createSubAgentRunner(deps: {
-  getPaseo: () => Api | null;
-  defaultAgent: () => string;
-  timeoutMs?: number;
-}): SubAgentRunner {
+export function createSubAgentRunner(
+  deps: AgentResolveDeps & { getPaseo: () => Api | null; timeoutMs?: number },
+): SubAgentRunner {
   return {
     async run({ rule, project, prompt }) {
       const paseo = deps.getPaseo();
       if (!paseo) throw new Error("No daemon handle yet");
-      const spec = rule.agent ?? deps.defaultAgent();
-      const modeId = READ_ONLY_MODE[providerOf(spec)];
+      const { spec, provider } = resolveAgent(rule, project, deps);
+      const modeId = READ_ONLY_MODE[provider];
       const agent = await paseo.agents.create({
         cwd: project.repoPath,
         title: `Maintenance: ${rule.name}`,
@@ -43,13 +40,9 @@ export function createSubAgentRunner(deps: {
   };
 }
 
-export function createFixLauncher(deps: {
-  getPaseo: () => Api | null;
-  defaultAgent: () => string;
-}): FixLauncher {
-  const specOf = (rule: MaintenanceRule) => rule.agent ?? deps.defaultAgent();
+export function createFixLauncher(deps: AgentResolveDeps & { getPaseo: () => Api | null }): FixLauncher {
   return {
-    provider: (rule) => providerOf(specOf(rule)),
+    provider: (rule, project) => resolveAgent(rule, project, deps).provider,
     async launch({ agentId, cardKey, rule, project, prompt }) {
       const paseo = deps.getPaseo();
       if (!paseo) throw new Error("Maintenance fixes need an active Paseo daemon connection");
@@ -73,13 +66,14 @@ export function createFixLauncher(deps: {
             }
           : { kind: "directory", path: target.projectRootPath, projectId: target.projectId },
       });
+      const agent = resolveAgent(rule, project, deps);
       await workspace.agents.create({
         agentId,
         title,
         prompt,
         labels: { cardKey, role: "worker", origin: "maintenance", ruleId: rule.id },
         env: { VIBE_ROLE: "worker", VIBE_CARD_KEY: cardKey },
-        config: { provider: specOf(rule) },
+        config: { provider: agent.spec, ...(agent.modeId ? { modeId: agent.modeId } : {}) },
       });
       return { workspaceId: workspace.id, worktree: isGit ? workspace.directory : null };
     },

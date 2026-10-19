@@ -105,8 +105,11 @@ rules:
   `PERF-INCONCLUSIVE:`; the verification then ends in `doubt` for the owner.
 - **Evidence**: vibe-verify's backend collector measures `backend.perf` in the baseline worktree (before)
   and the fixed worktree (after) and writes `perf-compare.json` (see the vibe-verify README).
-- Real-run note: `createFixLauncher` sets no permission mode, so a Codex worker waits for a human to approve its
-  first shell command (seen in the isolated-daemon run); approve it in the app or give the agent an auto mode.
+- **Fix agent and permissions** (`server/agent.ts`): `agent` is a preset name/id or `provider/model` (a bare
+  `codex` borrows the model of a preset for that provider, else it is an error). Unset: the shared `selectAgent`
+  ranks the board presets; none usable: the project's default preset, then the `defaultAgent` setting. The
+  permission mode comes from the chosen preset (as in vibe-board dispatch); without a preset it is the
+  unattended accept-edits mode (claude `acceptEdits`, codex `auto-review`), never full access.
 - Limits: MySQL/PostgreSQL parsers cover the stock text formats only; fingerprints are literal-stripped
   text, not a SQL parse; one reproduction command per rule (use `{site}` to parametrise it).
 
