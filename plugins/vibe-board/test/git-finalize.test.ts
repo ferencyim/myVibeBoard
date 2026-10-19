@@ -93,6 +93,35 @@ describe("git finalizer", () => {
     expect(existsSync(join(dirtyMain.repo, "feature.txt"))).toBe(false);
   });
 
+  it("archives the card's worker and verifier agents (not the master) before removing the worktree", async () => {
+    const { t, wt, card } = repoWithCard();
+    const store = t.runtime.store;
+    store.sessions.start({ cardId: card.id, agentId: "v1", workspaceId: null, role: "verifier", provider: "codex" });
+    store.sessions.start({ cardId: card.id, agentId: "m1", workspaceId: null, role: "master", provider: "codex" });
+    const archived: Array<{ id: string; worktreeThere: boolean }> = [];
+    const paseo = {
+      agents: {
+        ref: (id: string) => ({
+          archive: async () => void archived.push({ id, worktreeThere: existsSync(wt) }),
+        }),
+      },
+    } as any;
+    const finalize = createGitFinalizer({ board: t.board, getPaseo: () => paseo });
+    const result = await finalize(card);
+    expect(archived.map((a) => a.id).sort()).toEqual(["a1", "v1"]);
+    expect(archived.every((a) => a.worktreeThere)).toBe(true);
+    expect(existsSync(wt)).toBe(false);
+    expect(result?.detail).toMatchObject({ worktreeRemoved: true, agentsNotClosed: [] });
+  });
+
+  it("reports agents that cannot be shut down in time", async () => {
+    const { t, card } = repoWithCard();
+    const paseo = { agents: { ref: () => ({ archive: () => new Promise(() => {}) }) } } as any;
+    const finalize = createGitFinalizer({ board: t.board, getPaseo: () => paseo, agentCloseTimeoutMs: 20 });
+    const result = await finalize(card);
+    expect(result?.detail).toMatchObject({ agentsNotClosed: ["a1"] });
+  });
+
   it("does nothing for a card without a worktree and honours mode none", async () => {
     const { t, card } = repoWithCard();
     const none = createGitFinalizer({ board: t.board, getConfig: async () => ({ mode: "none" }) });

@@ -3,10 +3,13 @@
 // that push notifications and the stats plugin subscribe to).
 //
 //   turn_started            session -> working; a verifying card goes back to in_progress
-//                           (the user continued the session)
+//                           (the user continued the session). A turn a plugin announced with
+//                           expectSystemTurn() (compaction, ...) only updates the session state.
 //   turn_ended completed    session -> idle; no open question -> card in_progress -> verifying
+//                           (not after a system turn)
 //   turn_ended failed       session -> error (card stays in_progress, the badge shows the error)
-//   permission_requested    session -> waiting (waiting_since + pending_question: the red dot)
+//   permission_requested    a worker writing .vibe/sessions/*.md in its worktree is approved at once;
+//                           otherwise session -> waiting (waiting_since + pending_question: the red dot)
 //   permission_resolved     last pending request resolved -> session -> working (session.answered)
 //   agent.closed/archived   session -> ended
 //   completed compaction    compaction card event
@@ -19,6 +22,8 @@ import type { PluginLifecycleRegistration } from "@getpaseo/plugin/server";
 import type { AgentSession, SessionState } from "../vibe/contract";
 import type { AgentTracker } from "../dispatch";
 import type { BoardService } from "../service";
+import { approveSessionNoteWrite, mayWriteFile } from "./auto-approve";
+import { consumeSystemTurn } from "./system-turn";
 
 export type LifecycleRegistration = Pick<PluginLifecycleRegistration, "on" | "before">;
 
@@ -27,6 +32,8 @@ export interface LifecycleOptions {
   /** Receives the SDK handle every hook carries (dispatch needs one outside hooks). */
   onPaseo?: (paseo: PaseoApi) => void;
   log?: (message: string, error?: unknown) => void;
+  /** Directory of the system-turn markers (default `$VIBE_HOME/system-turns`; tests override). */
+  systemTurnDir?: string;
 }
 
 interface Question {
@@ -61,6 +68,8 @@ export function registerLifecycle(
   const pending = new Map<string, Map<string, Question>>();
   /** agents dispatch is about to bind: their early events wait here */
   const expected = new Map<string, Array<(s: AgentSession) => void>>();
+  /** agents whose running turn was started by a plugin, not the user */
+  const systemTurns = new Set<string>();
 
   function safe(label: string, fn: () => void): void {
     try {
@@ -106,6 +115,7 @@ export function registerLifecycle(
 
   function end(agentId: string, outcome: string) {
     pending.delete(agentId);
+    systemTurns.delete(agentId);
     withSession(agentId, outcome, (s) => setState(s, "ended", { outcome }));
   }
 
@@ -145,15 +155,18 @@ export function registerLifecycle(
 
     server.on("agent.turn_started", ({ agent }, { paseo }) => {
       options.onPaseo?.(paseo);
+      const system = consumeSystemTurn(agent.id, options.systemTurnDir);
+      if (system) systemTurns.add(agent.id);
       withSession(agent.id, "turn_started", (s) => {
         pending.delete(agent.id);
         setState(s, "working");
-        moveCard(s, "in_progress", "user continued the session");
+        if (!system) moveCard(s, "in_progress", "user continued the session");
       });
     }),
 
     server.on("agent.turn_ended", ({ agent, outcome, timeline }, { paseo }) => {
       options.onPaseo?.(paseo);
+      const system = systemTurns.delete(agent.id);
       withSession(agent.id, "turn_ended", (s) => {
         if (outcome.kind === "failed") {
           pending.delete(agent.id);
@@ -167,7 +180,7 @@ export function registerLifecycle(
         if (pending.get(agent.id)?.size) return; // still waiting for an answer
         if ((store.sessions.get(s.id) ?? s).state === "waiting") return;
         setState(s, "idle", { outcome: outcome.kind });
-        if (outcome.kind === "completed") {
+        if (outcome.kind === "completed" && !system) {
           moveCard(s, "verifying", "round completed, no open question");
         }
       });
@@ -175,20 +188,38 @@ export function registerLifecycle(
 
     server.on("agent.permission_requested", ({ agent, request }, { paseo }) => {
       options.onPaseo?.(paseo);
-      withSession(agent.id, "permission_requested", (s) => {
-        const question: Question = {
-          requestId: request.id,
-          kind: request.kind,
-          name: request.name,
-          title: request.title,
-          description: request.description,
-          ...(request.kind === "question" ? { input: request.input } : {}),
-        };
-        const open = pending.get(agent.id) ?? new Map<string, Question>();
-        open.set(request.id, question);
-        pending.set(agent.id, open);
-        setState(s, "waiting", { question: { ...question, pending: open.size } });
-      });
+      const markWaiting = () =>
+        withSession(agent.id, "permission_requested", (s) => {
+          const question: Question = {
+            requestId: request.id,
+            kind: request.kind,
+            name: request.name,
+            title: request.title,
+            description: request.description,
+            ...(request.kind === "question" ? { input: request.input } : {}),
+          };
+          const open = pending.get(agent.id) ?? new Map<string, Question>();
+          open.set(request.id, question);
+          pending.set(agent.id, open);
+          setState(s, "waiting", { question: { ...question, pending: open.size } });
+        });
+      // Only a worker's file-writing tool request can be a session-note write; the rest stays synchronous.
+      const owner = mayWriteFile(request) ? store.sessions.getByAgent(agent.id) : undefined;
+      if (owner?.role !== "worker") return markWaiting();
+      const card = owner.cardId ? store.cards.get(owner.cardId) : undefined;
+      return approveSessionNoteWrite({
+        paseo,
+        agentId: agent.id,
+        request,
+        roots: [agent.cwd, card?.worktree ?? ""],
+      })
+        .catch((error) => {
+          log("session-note auto-approval failed", error);
+          return false;
+        })
+        .then((approved) => {
+          if (!approved) markWaiting();
+        });
     }),
 
     server.on("agent.permission_resolved", ({ agent, requestId }, { paseo }) => {

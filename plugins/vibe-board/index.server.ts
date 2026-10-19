@@ -91,6 +91,7 @@ export default function contribute(server: PluginServerContext) {
     board,
     finalize: createGitFinalizer({
       board,
+      getPaseo: () => paseo,
       getConfig: async () => {
         const current = await settings.read();
         return current.status === "ready"

@@ -5,9 +5,11 @@
 // main checkout is dirty, the main checkout is not on the target branch, or the merge conflicts
 // (the merge is aborted, leaving the checkout as it was). Only fast-forward or a normal merge
 // commit is used. The worktree is removed with plain `git worktree remove`; a refusal is only
-// reported. The branch is always kept.
+// reported. The branch is always kept. Before that, the card's live worker/verifier agents are
+// archived (their processes hold the directory, which Windows refuses to remove).
 
 import { execFile } from "node:child_process";
+import type { PaseoApi } from "@getpaseo/client";
 import type { CardView } from "../vibe/contract";
 import type { BoardService } from "../service";
 import type { Finalizer } from "./finalize";
@@ -37,6 +39,10 @@ export type FinalizeMode = "merge" | "pr" | "none";
 export interface GitFinalizerOptions {
   board: BoardService;
   exec?: Exec;
+  /** SDK handle used to archive the card's agents before the worktree is removed. */
+  getPaseo?: () => PaseoApi | null;
+  /** How long to wait for one agent to shut down (default 30s). */
+  agentCloseTimeoutMs?: number;
   /** Read on every call so settings changes apply immediately. */
   getConfig?: () => Promise<{ mode: FinalizeMode; targetBranch?: string }>;
 }
@@ -53,6 +59,37 @@ export function createGitFinalizer(options: GitFinalizerOptions): Finalizer {
       author: "finalizer",
       body: { kind, text, ...extra },
     });
+
+  /** Archive (= shut down) the card's non-master agents so nothing holds the worktree. */
+  async function closeAgents(card: CardView) {
+    const sessions = board.store.sessions
+      .list({ cardId: card.id })
+      .filter((s) => s.role !== "master" && s.state !== "ended");
+    const paseo = options.getPaseo?.();
+    const failed: string[] = [];
+    if (!paseo) return { closed: [] as string[], failed: sessions.map((s) => s.agentId) };
+    const closed: string[] = [];
+    const timeoutMs = options.agentCloseTimeoutMs ?? 30_000;
+    await Promise.all(
+      sessions.map(async (s) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            paseo.agents.ref(s.agentId).archive(),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error("timed out")), timeoutMs);
+            }),
+          ]);
+          closed.push(s.agentId);
+        } catch {
+          failed.push(s.agentId);
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    );
+    return { closed, failed };
+  }
 
   return async (card) => {
     if (!card.worktree) return;
@@ -146,12 +183,15 @@ export function createGitFinalizer(options: GitFinalizerOptions): Finalizer {
       mergeNote = `Opened PR for ${branch} into ${target}${pr ? `: ${pr}` : ""}`;
     }
 
+    const agents = await closeAgents(card);
     const mergedCommit = (await git(repo, "rev-parse", target)).stdout.trim();
     const removed = await git(repo, "worktree", "remove", worktree);
     const cleanup =
       removed.code === 0
         ? "worktree removed"
-        : `worktree kept (${removed.stderr.trim() || "git refused to remove it"})`;
+        : `worktree kept (${removed.stderr.trim() || "git refused to remove it"}${
+            agents.failed.length ? `; could not shut down agents: ${agents.failed.join(", ")}` : ""
+          })`;
     return {
       summary: `${mergeNote}; ${cleanup}; branch ${branch} kept.`,
       detail: {
@@ -160,6 +200,8 @@ export function createGitFinalizer(options: GitFinalizerOptions): Finalizer {
         target,
         mergedCommit,
         worktreeRemoved: removed.code === 0,
+        agentsClosed: agents.closed,
+        agentsNotClosed: agents.failed,
         pr,
       },
     };

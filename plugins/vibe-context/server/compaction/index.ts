@@ -1,11 +1,13 @@
 // Pre-expiry compaction wiring (WP-35): lifecycle hooks feed the scheduler, a timer runs it.
 
+import { dirname } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { buildContextBlock } from "../inject";
 import { createMemoryStore } from "../memory/store";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "../vibe/db";
 import { detectNativeIdleCompaction } from "./native";
+import { expectSystemTurn } from "./system-turn";
 import { createCompactionScheduler, type CompactionConfig, type CompactionHost } from "./scheduler";
 import { compactionSettings } from "./settings";
 
@@ -46,6 +48,7 @@ export function registerCompaction(server: PluginServerContext, options: Compact
   migrateOwner(db, "core");
   const store = createVibeStore(db);
   const userHome = resolveVibeHome();
+  const markerHome = options.dbPath ? dirname(options.dbPath) : userHome;
 
   let paseo: PaseoApi | null = null;
   const handle = () => {
@@ -56,6 +59,8 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     async run(agentId, text) {
       // A turn that stops on an approval stays open: wait for the user, up to a bound.
       const agent = handle().agents.ref(agentId);
+      // Our own turn: tell vibe-board it is not the user continuing the chat.
+      expectSystemTurn(agentId, markerHome);
       const deadline = Date.now() + APPROVAL_WAIT_MS;
       let result = await agent.run(text);
       while ((result.status === "permission" || result.status === "timeout") && Date.now() < deadline) {
