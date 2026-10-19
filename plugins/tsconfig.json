@@ -11,5 +11,12 @@
     "jsx": "react-jsx"
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", "**/*.test.ts", "vibe-board", "switch-provider", "deepseek-harness"]
+  "exclude": [
+    "node_modules",
+    "**/*.test.ts",
+    "vibe-*",
+    "vibe-board",
+    "switch-provider",
+    "deepseek-harness"
+  ]
 }

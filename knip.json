@@ -4,7 +4,7 @@
     "plugins": {
       "entry": ["**/index.{server,client}.{ts,tsx}", "**/*.test.ts"],
       "project": ["**/*.{ts,tsx}"],
-      "ignore": ["vibe-board/**", "switch-provider/**", "deepseek-harness/**"]
+      "ignore": ["vibe-*/**", "vibe-board/**", "switch-provider/**", "deepseek-harness/**"]
     },
     ".": {
       "entry": ["scripts/**/*.{js,mjs,cjs,ts}"],

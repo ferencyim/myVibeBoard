@@ -132,7 +132,14 @@ scripts/vibe/         # 同步脚本、本地 e2e 辅助、部署检查
   - 各插件 `plugins/<p>/shared/vibe/`（contract+sync，客户端可用）与 `plugins/<p>/server/vibe/`（db，仅服务端）；
   - `packages/app/src/vibe/generated/`（contract+sync，供 App 离线）。
   - 副本带 `// GENERATED FROM plugins/vibe-shared — DO NOT EDIT` 头并**入库**；`node scripts/vibe/sync-shared.mjs --check` 必须在每个 WP 的测试里通过（副本漂移则失败）。
-- WP-00 先做一个 spike：验证“`file:` 依赖的包”是否被编译器放行（`compiler.ts` 对 `findDependencyRoot` 例外）。若可行，则改为依赖包、删副本逻辑；**默认按复制方案推进**。
+- **已选定：复制方案。** WP-00 的 spike（[SPIKE-SHARED.md](SPIKE-SHARED.md)）证明编译器会放行 `file:` 依赖（`findDependencyRoot` 例外），技术上可行；但 App 仍需要副本、且 `file:` 要求 vibe-shared 单独安装依赖，所以不采用。
+- 同步脚本用法（`npm run vibe:sync-shared` / `vibe:sync-shared:check`）：
+  - 消费者在自己的 `package.json` 声明 `"vibe": { "shared": { "shared": ["contract","sync"], "server": ["db"] } }`：`shared` 列出的子目录复制到 `plugins/<p>/shared/vibe/<子目录>`，`server` 列出的复制到 `plugins/<p>/server/vibe/<子目录>`。`packages/app/src/vibe/` 目录一旦存在（WP-40），`contract`+`sync` 自动同步到 `packages/app/src/vibe/generated/`。
+  - 副本目录（`shared/vibe`、`server/vibe`、`generated`）是**纯生成目录**：里面的非副本文件视为漂移，写模式下会被删除，插件自己的代码不要放进去。
+  - 不复制 `*.test.*`、`__tests__`、`node_modules`；`.ts/.js/.sql` 等加头注释，换行统一为 LF，`--check` 对 CRLF 检出不误报。
+  - 没有任何消费者时 `--check` 直接通过；声明了却缺源目录则报错（退出码 2）。
+- 新建插件一律用 `npm run vibe:new-plugin -- <name> [--client]`（生成 `plugins/vibe-<name>/`：manifest 已声明本仓库的 Paseo 版本范围、`package.json` 含 `typecheck`/`test`、tsconfig、vitest 配置、空入口、manifest 兼容性测试）。随后在该目录 `npm install` 生成并提交 `package-lock.json`。合并上游 release 后跑 `npm run vibe:check-plugins` 核对所有 vibe 插件的 `requirements.paseo`。
+- 开发 daemon：`pwsh scripts/vibe/dev-daemon.ps1 -Plugin plugins/vibe-board`（隔离 `PASEO_HOME`/`VIBE_HOME`，默认端口 16767，需已 `build:server`，`-Stop` 停止，`-Reload` 重载）。注意：Paseo 默认关闭插件，脚本在隔离 home 的 `config.json` 里写了 `pluginsEnabled: true`。
 
 ### 3.3 存储与迁移
 
@@ -290,7 +297,7 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 | WP-01 | **vibe-shared：契约+DB+迁移+状态机+事件总线+命令层+采集器接口** | `plugins/vibe-shared/{contract,db}/**`                                                                                | —    | 难   |
 | WP-02 | Android 插件 UI 验证 spike                                      | `docs/vibe/SPIKE-ANDROID.md`（仅文档，不改代码）                                                                      | —    | 中   |
 
-- WP-00 验收：`sync-shared.mjs` 把 `vibe-shared` 复制到示例插件并 `--check` 通过；spike 结论写入 `docs/vibe/SPIKE-SHARED.md`（`file:` 依赖是否被编译器放行，附复现命令）；`scripts/vibe/dev-daemon.ps1` 以隔离的 `PASEO_HOME`/`VIBE_HOME` 启动 daemon 并 `paseo plugin install` 一个插件目录。
+- WP-00 验收：`sync-shared.mjs` 把 `vibe-shared` 复制到示例插件并 `--check` 通过；spike 结论已写入 `docs/vibe/SPIKE-SHARED.md`（可行但不采用，附复现命令）；`scripts/vibe/dev-daemon.ps1` 以隔离的 `PASEO_HOME`/`VIBE_HOME` 启动 daemon 并 `paseo plugin install` 一个插件目录。
 - WP-01 验收：`npm test` 覆盖——迁移幂等与多 owner 并发打开；状态机穷举（合法/非法迁移）；命令层写入产生 `vibe_event` 与 HLC；事件总线游标；契约 zod 往返；`EvidenceCollector`/`Runner` 接口类型（供 WP-22/23/46）。
 - WP-02 验收：文档记录：装 Tasks 原样插件→在模拟器（`adb devices` 中的 emulator）打开 screen 的截图、`eval` 是否可用、断线后插件 UI 行为、`h/[serverId]/plugin/...` 路由在 host 离线时是否可达、轮询 RPC 耗时；结论决定 §3.7 走 3 还是 6。
 
@@ -424,7 +431,7 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 | -------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Hermes `eval`/路由离线可达性未实测                       | WP-02 先做，结论回写本文                                                  |
 | 多个插件进程同写 SQLite                                  | WAL+`busy_timeout`+`BEGIN IMMEDIATE`；命令层统一写入；并发测试在 WP-01    |
-| 编译器边界导致共享代码只能复制                           | 同步脚本+`--check`；WP-00 spike 看 `file:` 依赖是否可行                   |
+| 编译器边界导致共享代码只能复制                           | 同步脚本+`--check`；`file:` 依赖经 spike 可行但不采用（SPIKE-SHARED.md）  |
 | 上游改 `plugins/registry.ts`/`catalog-sync.tsx` 造成冲突 | C1/C2 极小钩子化、单独 `[core]` 提交、两周合并时优先回归                  |
 | 钩子事件不重放（daemon 重启丢事件）                      | 派发/会话状态以 `agent_session` 为准，启动时用 `paseo.agents.list()` 对账 |
 | 推送正文泄露                                             | 默认 `minimalPayload=true` 并有快照测试                                   |

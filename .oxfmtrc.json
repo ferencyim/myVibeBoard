@@ -15,6 +15,8 @@
     "*.lock",
     "**/*.gen.ts",
     "**/*.gen.tsx",
+    "plugins/vibe-*/**",
+    "services/**",
     "plugins/vibe-board/**",
     "plugins/switch-provider/**",
     "plugins/deepseek-harness/**"

@@ -5,6 +5,8 @@
   },
   "ignorePatterns": [
     ".dev/**",
+    "plugins/vibe-*/**",
+    "services/**",
     "plugins/vibe-board/**",
     "plugins/switch-provider/**",
     "plugins/deepseek-harness/**"
