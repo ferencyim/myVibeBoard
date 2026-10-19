@@ -10,6 +10,7 @@ import {
   countsLine,
   dataUri,
   evidenceForItem,
+  fileName,
   needsAttention,
   previewKind,
   provenance,
@@ -88,6 +89,11 @@ describe("evidence helpers", () => {
     expect(evidenceForItem(items[0]!, [a, b, c]).map((e) => e.id)).toEqual(["a"]);
     expect(evidenceForItem(items[1]!, [a, b, c]).map((e) => e.id)).toEqual(["b"]);
     expect(unattachedEvidence(items, [a, b, c]).map((e) => e.id)).toEqual(["c"]);
+  });
+
+  it("takes the file name from posix and windows paths", () => {
+    expect(fileName("/e/run1/shot.png")).toBe("shot.png");
+    expect(fileName("D:\\vibe\\run1\\npm-test.log")).toBe("npm-test.log");
   });
 
   it("classifies previews", () => {

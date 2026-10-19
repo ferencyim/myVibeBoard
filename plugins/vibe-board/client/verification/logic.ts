@@ -90,7 +90,7 @@ export function previewKind(e: Pick<EvidenceFile, "kind" | "path">): PreviewKind
   return "other";
 }
 
-export const fileName = (p: string) => p.split(/[\/]/).pop() || p;
+export const fileName = (p: string) => p.split(/[\\/]/).pop() || p;
 
 export const shortHash = (hash: string) => hash.slice(0, 7);
 
