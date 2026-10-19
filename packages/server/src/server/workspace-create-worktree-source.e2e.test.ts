@@ -610,6 +610,8 @@ test("setup details follow one workspace/source and restore after reconnect with
   const { repoDir, tempRoot } = createGitRepoWithBranch();
   const clients: SocketDaemonClient[] = [];
   const sockets = new Map<string, WebSocket[]>();
+  const observations: Array<{ release(): Promise<void> }> = [];
+  const workspaces: Array<{ id: string; workspaceDirectory?: string }> = [];
   const mcp = new Client({ name: "setup-test", version: "1.0.0" });
   try {
     await mcp.connect(
@@ -668,8 +670,8 @@ const timer = setInterval(() => {
     quiet.subscribeRawMessages((message) => quietMessages.push(message));
     sibling.subscribeRawMessages((message) => siblingMessages.push(message));
     const directory = quiet.observeWorkspaces();
+    observations.push(directory);
     await directory.ready;
-    const workspaces = [];
     for (const worktreeSlug of ["noisy-a", "noisy-b", "noisy-c"]) {
       const result = await creator.createWorkspace({
         source: { kind: "worktree", cwd: repoDir, worktreeSlug },
@@ -695,7 +697,15 @@ const timer = setInterval(() => {
       .poll(() => existsSync(path.join(externalWorkspace.workspaceDirectory!, "started.txt")))
       .toBe(true);
     const workspace = workspaces[0]!;
+    // The child writes its marker before the terminal's output is delivered.
+    // Wait for the daemon snapshot, rather than treating the file as an output barrier.
+    await expect
+      .poll(async () => (await viewer.fetchWorkspaceSetupStatus(workspace.id)).snapshot, {
+        timeout: 30000,
+      })
+      .toMatchObject({ detail: { log: expect.stringContaining("setup started") } });
     const details = viewer.observeWorkspaceSetup(workspace.id);
+    observations.push(details);
     const initial = await details.ready;
     expect(initial.snapshot).toMatchObject({
       status: "running",
@@ -788,12 +798,20 @@ const timer = setInterval(() => {
     await expect
       .poll(() => existsSync(path.join(workspace.workspaceDirectory!, "emitted-1")))
       .toBe(true);
-    // A correlated read is a wire barrier after the released source's next output.
-    await viewer.fetchWorkspaceSetupStatus(workspace.id);
+    // Wait until the daemon has consumed the output before checking wire silence.
+    await expect
+      .poll(
+        async () => (await viewer.fetchWorkspaceSetupStatus(workspace.id)).snapshot?.detail.log,
+        {
+          timeout: 30000,
+        },
+      )
+      .toContain("wave-1:");
     expect(viewerMessages.filter((message) => message.type === "workspace_setup_progress")).toEqual(
       [],
     );
     const resumed = viewer.observeWorkspaceSetup(workspace.id);
+    observations.push(resumed);
     expect((await resumed.ready).snapshot?.detail.log).toContain("wave-1:");
     expect(resumed.subscriptionId).not.toBe(subscriptionId);
     writeFileSync(path.join(workspaces[1]!.workspaceDirectory!, "finish.txt"), "fail");
@@ -807,6 +825,7 @@ const timer = setInterval(() => {
               message.payload.workspace.id === workspaces[1]!.id &&
               message.payload.workspace.setupStatus === "failed",
           ).length,
+        { timeout: 30000 },
       )
       .toBe(1);
     expect(quietMessages.filter((message) => message.type === "workspace_setup_progress")).toEqual(
@@ -815,9 +834,15 @@ const timer = setInterval(() => {
     await resumed.release();
     await directory.release();
   } finally {
+    // End every fixture command and release observations while transports are live,
+    // including when an assertion fails before the normal release path.
+    for (const workspace of workspaces) {
+      writeFileSync(path.join(workspace.workspaceDirectory!, "finish.txt"), "stop");
+    }
+    for (const observation of observations) await observation.release();
     await mcp.close();
     for (const client of clients) await client.close();
     await daemon.close();
     await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
-}, 60000);
+}, 180000);
