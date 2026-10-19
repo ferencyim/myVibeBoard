@@ -39,6 +39,17 @@ export function toMinimalPayload(
   };
 }
 
+/**
+ * A plugin push about an agent's attention gets the same target fields as Paseo's own agent push
+ * (serverId, workspaceId, agentId), so a tap opens that agent instead of the host root.
+ */
+export function withAgentTarget<T extends { data?: Record<string, unknown> }>(
+  notification: T,
+  target: { serverId: string; workspaceId: string; agentId: string },
+): T {
+  return { ...notification, data: { ...target, ...notification.data } };
+}
+
 const PLUGIN_ATTENTION_DEDUPE_MS = 2 * 60_000;
 
 /** True when Paseo itself pushed (or deliberately held back) this attention moments ago. */

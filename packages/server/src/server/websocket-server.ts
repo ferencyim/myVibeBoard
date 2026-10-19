@@ -70,6 +70,7 @@ import {
   resolvePushConfig,
   toMinimalPayload,
   toPluginPayload,
+  withAgentTarget,
   toMinimalTerminalPayload,
   type ResolvedPushConfig,
 } from "./push/push-config.js";
@@ -1036,7 +1037,19 @@ export class VoiceAssistantWebSocketServer {
       this.logger.debug({ pluginId, agentId: attention.agentId }, "Skipped duplicate plugin push");
       return;
     }
-    const payload = toPluginPayload(notification, this.pushConfig.minimalPayload);
+    const workspaceId = attention
+      ? this.agentManager.getAgent(attention.agentId)?.workspaceId
+      : null;
+    const payload = toPluginPayload(
+      attention && workspaceId
+        ? withAgentTarget(notification, {
+            serverId: this.serverId,
+            workspaceId,
+            agentId: attention.agentId,
+          })
+        : notification,
+      this.pushConfig.minimalPayload,
+    );
     void this.pushNotificationSender.send(payload).catch((err) => {
       this.logger.warn({ err, pluginId }, "Failed to send plugin push notification");
     });

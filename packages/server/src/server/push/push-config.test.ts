@@ -8,6 +8,7 @@ import {
   resolvePushConfig,
   toMinimalPayload,
   toPluginPayload,
+  withAgentTarget,
 } from "./push-config.js";
 import { PushService } from "./push-service.js";
 
@@ -42,6 +43,19 @@ describe("plugin notifications", () => {
   test("without minimal mode the payload passes through", () => {
     const input = { title: "T", body: "B".repeat(100), data: { a: { b: 1 } } };
     expect(toPluginPayload(input, false)).toEqual(input);
+  });
+
+  test("agent attention pushes get the daemon's own target fields, kept under minimal mode", () => {
+    const target = { serverId: "srv-1", workspaceId: "ws-1", agentId: "agent-1" };
+    const notification = withAgentTarget(
+      { title: "T", body: "B", data: { event: "session.waiting", cardKey: "VB-1" } },
+      target,
+    );
+    expect(toPluginPayload(notification, true).data).toEqual({
+      ...target,
+      event: "session.waiting",
+      cardKey: "VB-1",
+    });
   });
 
   test("an attention Paseo handled recently is a duplicate; an old or other one is not", () => {
