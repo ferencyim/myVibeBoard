@@ -91,6 +91,8 @@ export type UpdateProjectInput = Partial<Omit<CreateProjectInput, "prefix">> & {
 };
 
 export interface CreatePresetInput {
+  /** Sync materialization: keep the id a replica generated offline. */
+  id?: string;
   name: string;
   provider: string;
   model: string;
@@ -105,6 +107,9 @@ export interface CreatePresetInput {
 export type UpdatePresetInput = Partial<CreatePresetInput>;
 
 export interface CreateCardInput {
+  /** Sync materialization: keep the id/creation time a replica generated offline. */
+  id?: string;
+  createdAt?: string;
   projectId: string;
   title: string;
   description?: string;
@@ -150,6 +155,9 @@ export interface MoveCardInput {
 }
 
 export interface AddCardEventInput {
+  /** Sync materialization: keep the id/creation time a replica generated offline. */
+  id?: string;
+  createdAt?: string;
   cardId: string;
   type: CardEventType;
   authorKind: AuthorKind;
@@ -347,7 +355,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
   }
 
   function insertCardEvent(input: AddCardEventInput, hlc: Hlc): CardEvent {
-    const id = newId(now().getTime());
+    const id = input.id ?? newId(now().getTime());
     db.prepare(
       `INSERT INTO card_event (id, card_id, type, author_kind, author, body_json, created_at, updated_hlc)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -358,10 +366,10 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       input.authorKind,
       input.author ?? "",
       JSON.stringify(input.body ?? {}),
-      iso(),
+      input.createdAt ?? iso(),
       hlc,
     );
-    stampFields("card_event", id, ["body_json"], hlc);
+    stampFields("card_event", id, syncSpec("card_event")!.fields, hlc);
     return decodeRow(CardEventSchema, db.prepare("SELECT * FROM card_event WHERE id = ?").get(id)!);
   }
 
@@ -521,7 +529,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
   const presets = {
     create(input: CreatePresetInput): Preset {
       return write((hlc) => {
-        const id = newId(now().getTime());
+        const id = input.id ?? newId(now().getTime());
         try {
           db.prepare(
             `INSERT INTO preset (id, name, provider, model, thinking, permission_mode, environment_kind, base_branch,
@@ -590,9 +598,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
   const tags = {
     list: (): Tag[] =>
       decodeRows(TagSchema, db.prepare("SELECT * FROM tag ORDER BY builtin DESC, rowid").all()),
-    create(name: string, evidence = false): Tag {
+    create(name: string, evidence = false, tagId?: string): Tag {
       return write((hlc) => {
-        const id = newId(now().getTime());
+        const id = tagId ?? newId(now().getTime());
         try {
           db.prepare(
             "INSERT INTO tag (id, name, evidence, builtin, updated_hlc) VALUES (?, ?, ?, 0, ?)",
@@ -661,7 +669,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       }
       return write((hlc) => {
         const project = mustProject(input.projectId);
-        const id = newId(now().getTime());
+        const id = input.id ?? newId(now().getTime());
+        const createdAt = input.createdAt ?? iso();
         const number = project.nextNumber;
         const key = `${project.prefix}-${number}`;
         const tagIds = input.tagIds ?? [];
@@ -700,8 +709,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           input.dedupeKey ?? null,
           input.planSessionId ?? null,
           input.parentCardId ?? null,
-          iso(),
-          iso(),
+          createdAt,
+          createdAt,
           hlc,
         );
         stampFields("card", id, syncSpec("card")!.fields, hlc);

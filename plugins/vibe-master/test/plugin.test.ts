@@ -20,7 +20,10 @@ describe("rules", () => {
   });
 
   it("ships a skill with front matter and every wake reason", () => {
-    const skill = readFileSync(join(pluginDir, "../../skills/vibe-master/SKILL.md"), "utf8");
+    const skill = readFileSync(
+      join(pluginDir, "../../skills/vibe-master/SKILL.md"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
     expect(skill).toMatch(/^---\nname: vibe-master\n/);
     for (const reason of ["assess_draft", "card_done", "session_help"]) expect(skill).toContain(reason);
     expect(skill).toContain("Never move a card");
