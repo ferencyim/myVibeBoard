@@ -89,6 +89,26 @@ export const RequestSampleSchema = z.object({
 });
 export type RequestSample = z.infer<typeof RequestSampleSchema>;
 
+/** Timing command measured on the fixed commit and on the baseline (the code before the change). */
+export const PerfConfigSchema = z.object({
+  label: z.string().default("perf"),
+  command: z.string(),
+  args: z.array(z.string()).default([]),
+  /** Relative to the worktree. */
+  cwd: z.string().optional(),
+  /** Repetitions; the median wall time is compared. */
+  runs: z.number().int().min(1).max(20).default(3),
+  /** After the change the median must not exceed this. */
+  thresholdMs: z.number().optional(),
+  /** Median measured before the change by whoever filed the work; used when no baseline can be run. */
+  beforeMs: z.number().optional(),
+  /** Files created by the change (bench scripts) that the baseline run needs; copied in and removed again. */
+  copyToBaseline: z.array(z.string()).default([]),
+  /** Filled in by the pipeline: worktree of the pre-change commit. */
+  baseline: z.object({ path: z.string(), commitHash: z.string().optional() }).optional(),
+});
+export type PerfConfig = z.infer<typeof PerfConfigSchema>;
+
 export const VerifyConfigSchema = z.object({
   web: z
     .object({
@@ -115,6 +135,7 @@ export const VerifyConfigSchema = z.object({
       server: CommandSchema.optional(),
       baseUrl: z.string().optional(),
       requests: z.array(RequestSampleSchema).default([]),
+      perf: PerfConfigSchema.optional(),
     })
     .optional(),
   android: AndroidConfigSchema.optional(),

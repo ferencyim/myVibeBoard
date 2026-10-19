@@ -49,6 +49,7 @@ interface Harness {
   launched: number;
   runnerCalls: RunCall[];
   worktree: string;
+  seenConfig?: { backend?: { perf?: { baseline?: { path: string; commitHash?: string } } } };
 }
 
 function setup(options: {
@@ -61,6 +62,8 @@ function setup(options: {
   hasTestScript?: boolean;
   /** the verifier answers in its reply instead of writing files */
   reply?: boolean;
+  /** the worker wrote a backend.perf block into the worktree's .vibe/verify.json */
+  perf?: boolean;
 }): Harness {
   const db = openVibeDb({ path: ":memory:" });
   migrateOwner(db, "verify");
@@ -69,6 +72,13 @@ function setup(options: {
   const worktree = temp("vibe-wt-");
   if (options.hasTestScript) {
     writeFileSync(path.join(worktree, "package.json"), JSON.stringify({ scripts: { test: "x" } }));
+  }
+  if (options.perf) {
+    mkdirSync(path.join(worktree, ".vibe"), { recursive: true });
+    writeFileSync(
+      path.join(worktree, ".vibe", "verify.json"),
+      JSON.stringify({ backend: { perf: { label: "GET /x", command: "node", args: ["bench.js"], thresholdMs: 100 } } }),
+    );
   }
   const project = board.projects.create({
     name: "P",
@@ -95,27 +105,31 @@ function setup(options: {
   const statuses = [...(options.statuses ?? [])];
   const runner = createScriptedRunner((call) => {
     if (call.command === "git" && call.args[0] === "rev-parse") return { stdout: "deadbeefcafe\n" };
+    if (call.command === "git" && call.args[0] === "merge-base") return { stdout: "base1111\n" };
     if (call.command === "git" && call.args[0] === "status") return { stdout: statuses.shift() ?? "" };
     if (call.command === "npm") return { exitCode: options.testExit ?? 0, stdout: "tests ran" };
     return undefined;
   });
 
+  const configs: RunConfigs = new Map();
+  const harness = { sent: [] as Harness["sent"], launched: 0 } as Harness;
   const collector: EvidenceCollector = {
     id: "fake-backend",
     projectTypes: ["backend"],
     detect: async () => ({ available: true }),
-    collect: async (ctx) => ({
+    collect: async (ctx) => {
+      harness.seenConfig = configs.get(ctx.verificationId) as Harness["seenConfig"];
+      return {
       artifacts: [writeArtifact(ctx, "report", "samples.json", "{}", "request samples")],
       judgement: "pass",
       notes: ["1/1 request sample(s) matched"],
       degraded: false,
-    }),
+      };
+    },
   };
   const registry = createCollectorRegistry();
   registry.register(collector);
 
-  const configs: RunConfigs = new Map();
-  const harness = { sent: [] as Harness["sent"], launched: 0 } as Harness;
   const launcher: VerifierLauncher = {
     async launch(input) {
       harness.launched++;
@@ -224,6 +238,17 @@ describe("verification pipeline", () => {
     expect(h.sent[0]!.prompt).toContain("GET /hello returns 200");
     expect(h.sent[0]!.prompt).toContain("GET /hello returned 404");
     expect(h.sent[0]!.prompt).toContain("samples.json");
+  });
+
+  it("keeps the worker's backend.perf block and adds the baseline worktree to it", async () => {
+    const h = setup({ needsEvidence: true, reply: true, perf: true, verdict: () => passing });
+    await h.pipeline.run(h.cardId);
+    expect(h.seenConfig?.backend?.perf).toMatchObject({
+      label: "GET /x",
+      thresholdMs: 100,
+      baseline: { commitHash: "base1111" },
+    });
+    expect(h.runnerCalls.some((c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add")).toBe(true);
   });
 
   it("reads the verdict from the verifier reply when it writes no file", async () => {

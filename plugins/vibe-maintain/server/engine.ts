@@ -491,7 +491,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
   }
 
   async function suggest(rule: MaintenanceRule, project: Project, runId: string, out: CheckOutput): Promise<string[]> {
-    const key = rule.dedupeKey ?? rule.name;
+    const key = out.dedupeKey ?? rule.dedupeKey ?? rule.name;
     const existing = openCardFor(project, key);
     if (existing) {
       recordFindings(existing, rule, runId, out, "recurrence");
@@ -502,6 +502,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
         projectId: project.id,
         title: out.title,
         description: out.body,
+        ...(out.acceptance ? { acceptance: out.acceptance } : {}),
         column: "draft",
         priority: priorityOf(rule),
         origin: "maintenance",
@@ -517,7 +518,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
   }
 
   async function fix(rule: MaintenanceRule, project: Project, runId: string, out: CheckOutput): Promise<string[]> {
-    const key = rule.dedupeKey ?? rule.name;
+    const key = out.dedupeKey ?? rule.dedupeKey ?? rule.name;
     const existing = openCardFor(project, key);
     if (existing) {
       recordFindings(existing, rule, runId, out, "recurrence");
@@ -531,6 +532,8 @@ export function createMaintenanceEngine(options: EngineOptions) {
         projectId: project.id,
         title: out.title,
         description: out.body,
+        ...(out.acceptance ? { acceptance: out.acceptance } : {}),
+        ...(out.needsEvidence !== undefined ? { needsEvidence: out.needsEvidence } : {}),
         column: "in_progress",
         priority: priorityOf(rule),
         origin: "maintenance",
@@ -551,6 +554,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
       `Maintenance rule "${rule.name}" found problems in ${project.name}. Investigate and fix them in this worktree.`,
       "Commit on this worktree's branch. Do NOT merge into the main branch and do not push: the owner reviews",
       "the evidence and merges. Finish with a short report of what changed and how you verified it.",
+      ...(out.instructions ? ["", out.instructions] : []),
       "",
       out.body,
       "",
@@ -613,9 +617,25 @@ export function createMaintenanceEngine(options: EngineOptions) {
         const { type, ...checkOptions } = rule.check as { type: string } & Record<string, unknown>;
         const check = checks[type];
         if (!check) throw new Error(`Unknown check type "${type}"`);
-        const out = await check({ project, rule, options: checkOptions, now: now(), git, trigger });
+        const out = await check({
+          project,
+          rule,
+          options: checkOptions,
+          now: now(),
+          git,
+          trigger,
+          cursor: {
+            get: (key) => getCounter(project.id, `${rule.id}:cursor:${key}`)?.count,
+            set: (key, value) => setCounter(project.id, `${rule.id}:cursor:${key}`, value),
+          },
+          hasOpenCard: (key) => openCardFor(project, key) !== undefined,
+        });
         if (!out) return { status: "fired", run: finishRun(runId, "done", [], []) };
-        const cardIds = rule.outputMode === "fix" ? await fix(rule, project, runId, out) : await suggest(rule, project, runId, out);
+        const cardIds =
+          rule.outputMode === "fix" && !out.forceDraft
+            ? await fix(rule, project, runId, out)
+            : await suggest(rule, project, runId, out);
+        out.commit?.();
         return { status: "fired", run: finishRun(runId, "done", out.findings as Finding[], cardIds) };
       } catch (error) {
         log(`rule ${rule.name} failed`, error);

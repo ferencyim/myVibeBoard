@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createBackendCollector, type HttpClient } from "../server/collectors/backend";
-import type { VerifyConfig } from "../server/collectors/common";
+import { PerfConfigSchema, type VerifyConfig } from "../server/collectors/common";
 import { createScriptedRunner } from "../server/vibe/contract/collector";
 import { makeCtx } from "./helpers";
 
@@ -83,5 +83,62 @@ describe("backend collector", () => {
     const ctx = makeCtx({ worktreePath: "/definitely/not/here" });
     expect((await createBackendCollector({ loadConfig: () => ({}) }).detect(ctx)).available).toBe(false);
     expect((await createBackendCollector({ loadConfig: () => config }).detect(ctx)).available).toBe(true);
+  });
+  describe("perf before/after comparison", () => {
+    const perfConfig = (extra: Record<string, unknown> = {}): VerifyConfig => ({
+      backend: {
+        requests: [],
+        perf: PerfConfigSchema.parse({
+          label: "GET /items",
+          command: "node",
+          args: ["bench.js"],
+          runs: 3,
+          thresholdMs: 100,
+          baseline: { path: "/base", commitHash: "base123" },
+          ...extra,
+        }),
+      },
+    });
+    // 400ms in the baseline directory, 40ms in the worktree
+    const timed = createScriptedRunner;
+
+    it("measures baseline and worktree and records the improvement", async () => {
+      const runner = timed((call) => ({ durationMs: call.options?.cwd?.toString().includes("base") ? 400 : 40 }));
+      const res = await createBackendCollector({ loadConfig: () => perfConfig() }).collect(makeCtx({ runner }));
+      expect(runner.calls).toHaveLength(6);
+      expect(res.judgement).toBe("pass");
+      const report = JSON.parse(readFileSync(res.artifacts.find((a) => a.path.endsWith("perf-compare.json"))!.path, "utf8"));
+      expect(report).toMatchObject({
+        label: "GET /items",
+        before: { source: "baseline", medianMs: 400, runs: [400, 400, 400] },
+        after: { medianMs: 40 },
+        judgement: "pass",
+      });
+      expect(report.improvement).toBeCloseTo(0.9);
+      expect(res.notes.join()).toContain("before 400ms (baseline) -> after 40ms");
+    });
+
+    it("fails when the fixed code is still above the threshold", async () => {
+      const runner = timed((call) => ({ durationMs: call.options?.cwd?.toString().includes("base") ? 400 : 300 }));
+      const res = await createBackendCollector({ loadConfig: () => perfConfig() }).collect(makeCtx({ runner }));
+      expect(res.judgement).toBe("fail");
+    });
+
+    it("doubts when nothing got faster, or no before timing exists", async () => {
+      const same = timed(() => ({ durationMs: 50 }));
+      expect((await createBackendCollector({ loadConfig: () => perfConfig() }).collect(makeCtx({ runner: same }))).judgement).toBe("doubt");
+      const noBase = timed(() => ({ durationMs: 50 }));
+      const res = await createBackendCollector({ loadConfig: () => perfConfig({ baseline: undefined }) }).collect(makeCtx({ runner: noBase }));
+      expect(res.judgement).toBe("doubt");
+      const recorded = await createBackendCollector({ loadConfig: () => perfConfig({ baseline: undefined, beforeMs: 500 }) }).collect(makeCtx({ runner: noBase }));
+      expect(recorded.judgement).toBe("pass");
+    });
+
+    it("falls back to the recorded timing when the baseline command fails", async () => {
+      const runner = timed((call) => (call.options?.cwd?.toString().includes("base") ? { exitCode: 2, stderr: "no such file" } : { durationMs: 20 }));
+      const res = await createBackendCollector({ loadConfig: () => perfConfig({ beforeMs: 200 }) }).collect(makeCtx({ runner }));
+      expect(res.judgement).toBe("pass");
+      expect(res.notes.join()).toContain("(recorded)");
+    });
   });
 });
