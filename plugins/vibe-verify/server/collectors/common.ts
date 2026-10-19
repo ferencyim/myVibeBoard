@@ -14,6 +14,8 @@ import type {
 } from "../vibe/contract/collector";
 import type { EvidenceKind } from "../vibe/contract/enums";
 import { AndroidConfigSchema } from "./android/config";
+import { DesktopConfigSchema } from "./desktop/config";
+import { IosConfigSchema } from "./ios/config";
 
 // --- artifacts -------------------------------------------------------------------------------
 
@@ -23,6 +25,9 @@ const MIME: Record<string, string> = {
   ".json": "application/json",
   ".txt": "text/plain",
   ".log": "text/plain",
+  ".mp4": "video/mp4",
+  ".ips": "text/plain",
+  ".crash": "text/plain",
 };
 
 /** Writes `data` into ctx.outputDir/name and returns the stamped evidence record. */
@@ -113,6 +118,8 @@ export const VerifyConfigSchema = z.object({
     })
     .optional(),
   android: AndroidConfigSchema.optional(),
+  ios: IosConfigSchema.optional(),
+  desktop: DesktopConfigSchema.optional(),
 });
 export type VerifyConfig = z.infer<typeof VerifyConfigSchema>;
 
