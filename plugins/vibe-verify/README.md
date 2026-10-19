@@ -29,3 +29,25 @@ are injectable; unit tests use fakes. Real run: `npx playwright install chromium
   Electron apps `automation: "electron"` uses Playwright `_electron` for click/fill/press steps. Apps whose
   launcher exits and hands over to another process (e.g. Windows 11 Notepad) need `windowTitle`.
   Real run on this machine: `VIBE_E2E_DESKTOP=1 npm test`.
+
+## Verification pipeline (WP-20)
+
+A `card.moved to=verifying` event starts `server/pipeline`:
+
+- `needs_evidence` cards (mode `evidence`): an independent, read-only verifier agent (a different provider than
+  the worker when possible; swap `pickVerifier`) first replies with a verify config (`VerifyConfigSchema`), the
+  collectors of the project type run (`server/registry.ts`: web, backend, android, ios, desktop; Android leases go
+  through the `device_lease` table), tests/lint run, then the verifier judges each check from the evidence.
+  The verifier never writes: it answers in its reply. Read-only is enforced by the permission policy
+  (`server/verifier/policy.ts`), a `git status` + HEAD snapshot around each round (a changed tree voids the
+  evidence, conclusion `doubt`), and the board MCP for `VIBE_ROLE=verifier` (read + comment).
+- other cards (mode `tests_only`): only the project's tests and lint.
+- Conclusion = fail > doubt > pass. `fail` sends the card back to `in_progress` (actor `verifier`) and the failing
+  checks go to the worker session as its next prompt; `doubt`/`pass` leave the card in `verifying` for the user.
+
+Plugin RPCs (`shared/rpc.ts`): `vibe.verify.get`, `vibe.verify.list`, `vibe.verify.evidence`,
+`vibe.verify.approve` (-> done), `vibe.verify.reject` (comment -> in_progress + worker prompt),
+`vibe.verify.rerun`.
+
+Evidence lives in `$VIBE_HOME/verify/<card key>/<verification id>/`. Baseline worktrees for web before/after
+go under `$VIBE_WORKTREE_ROOT` (default `$VIBE_HOME/worktrees`; on Windows point it at D:).

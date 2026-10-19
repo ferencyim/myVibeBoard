@@ -7,7 +7,7 @@ import { createEventConsumer, type VibeDb } from "../vibe/db";
 import { isEvent, type CardView } from "../vibe/contract";
 import type { BoardService } from "../service";
 
-export type Finalizer = (card: CardView) => Promise<{ summary: string } | void>;
+export type Finalizer = (card: CardView) => Promise<{ summary: string; detail?: Record<string, unknown> } | void>;
 
 export const noteOnlyFinalizer =
   (board: BoardService): Finalizer =>
@@ -50,7 +50,7 @@ export function startFinalizer(options: {
           type: "status",
           authorKind: "system",
           author: "finalizer",
-          body: { kind: "finalized", text: result.summary },
+          body: { ...result.detail, kind: "finalized", text: result.summary },
         });
       }
     },

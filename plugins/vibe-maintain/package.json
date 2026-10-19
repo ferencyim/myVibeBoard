@@ -1,0 +1,35 @@
+{
+  "name": "@vibe/maintain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "myVibeBoard maintenance: maintenance.yml rules, work counters, cron, dedupe/caps/auto-pause, built-in git health check.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "vibe": {
+    "shared": {
+      "shared": [
+        "contract"
+      ],
+      "server": [
+        "contract",
+        "db"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@getpaseo/client": "^0.12.0",
+    "@getpaseo/plugin": "0.12.0",
+    "@tanstack/react-query": "^5.90.11",
+    "@types/node": "^24.19.2",
+    "@types/react": "~19.2.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "yaml": "2.9.1",
+    "zod": "^4.4.3"
+  }
+}

@@ -23,7 +23,8 @@ export interface ElectronDriver {
 export function createPlaywrightElectronDriver(): ElectronDriver {
   return {
     async launch(spec) {
-      const { _electron } = await import("playwright");
+      // Opaque specifier: the plugin bundler must not inline playwright (resolved at run time).
+      const { _electron } = (await import(["play", "wright"].join(""))) as typeof import("playwright");
       const app = await _electron.launch({
         executablePath: spec.executablePath,
         args: spec.args,

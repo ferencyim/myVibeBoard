@@ -43,6 +43,13 @@ export const EVENT_PAYLOADS = {
     conclusion: JudgementSchema,
   }),
   "maintenance.triggered": z.object({ ruleId: z.string(), runId: z.string() }),
+  // vibe-maintain (WP-36): a rule was paused after consecutive rejections; the master/UI should tell the user.
+  "maintenance.paused": z.object({
+    ruleId: z.string(),
+    ruleName: z.string(),
+    reason: z.enum(["rejections"]),
+    rejections: z.number().int(),
+  }),
   "plan.updated": z.object({ version: z.number().int() }),
   // vibe-scheduler (WP-34). `scheduler.admitted` asks vibe-board to dispatch the card now;
   // vibe-board answers a failed dispatch with `scheduler.dispatch_failed`.
@@ -73,6 +80,14 @@ export const EVENT_PAYLOADS = {
     ),
   }),
   "scheduler.resumed": z.object({ reason: z.enum(["memory"]) }),
+  // vibe-master (WP-50): a reminder for the owner (quota low, quota error, ...). `message` is the
+  // full text; the push notifier only sends the kind, never the message.
+  "master.alert": z.object({
+    kind: z.string(),
+    provider: z.string().optional(),
+    message: z.string(),
+    sessionId: z.string().optional(),
+  }),
 } as const;
 
 export type EventType = keyof typeof EVENT_PAYLOADS;
