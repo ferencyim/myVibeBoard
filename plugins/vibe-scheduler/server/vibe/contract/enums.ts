@@ -1,0 +1,112 @@
+// GENERATED FROM plugins/vibe-shared — DO NOT EDIT (run: node scripts/vibe/sync-shared.mjs)
+import { z } from "zod";
+
+// --- board -----------------------------------------------------------------------------
+export const CARD_COLUMNS = ["draft", "todo", "in_progress", "verifying", "done"] as const;
+export type CardColumn = (typeof CARD_COLUMNS)[number];
+export const CardColumnSchema = z.enum(CARD_COLUMNS);
+
+export const CARD_PRIORITIES = ["urgent", "high", "medium", "low", "none"] as const;
+export type CardPriority = (typeof CARD_PRIORITIES)[number];
+export const CardPrioritySchema = z.enum(CARD_PRIORITIES);
+
+export const CARD_ORIGINS = ["manual", "maintenance"] as const;
+export type CardOrigin = (typeof CARD_ORIGINS)[number];
+export const CardOriginSchema = z.enum(CARD_ORIGINS);
+
+export const PROJECT_TYPES = [
+  "android",
+  "ios",
+  "web",
+  "desktop",
+  "backend",
+  "embedded",
+  "other",
+] as const;
+export type ProjectType = (typeof PROJECT_TYPES)[number];
+export const ProjectTypeSchema = z.enum(PROJECT_TYPES);
+
+export const CARD_EVENT_TYPES = [
+  "evaluation",
+  "status",
+  "switch_agent",
+  "compaction",
+  "reject",
+  "note",
+  "maintenance",
+] as const;
+export type CardEventType = (typeof CARD_EVENT_TYPES)[number];
+export const CardEventTypeSchema = z.enum(CARD_EVENT_TYPES);
+
+export const AUTHOR_KINDS = ["user", "agent", "system"] as const;
+export type AuthorKind = (typeof AUTHOR_KINDS)[number];
+export const AuthorKindSchema = z.enum(AUTHOR_KINDS);
+
+// --- presets (field values kept compatible with the Tasks plugin) ------------------------
+export const PRESET_ENVIRONMENT_KINDS = ["project-default", "new-worktree"] as const;
+export type PresetEnvironmentKind = (typeof PRESET_ENVIRONMENT_KINDS)[number];
+export const PresetEnvironmentKindSchema = z.enum(PRESET_ENVIRONMENT_KINDS);
+
+export const PRESET_PERMISSION_MODES = ["accept-edits", "auto", "full"] as const;
+export type PresetPermissionMode = (typeof PRESET_PERMISSION_MODES)[number];
+export const PresetPermissionModeSchema = z.enum(PRESET_PERMISSION_MODES);
+
+// --- agent sessions --------------------------------------------------------------------
+export const SESSION_ROLES = ["master", "planner", "worker", "verifier"] as const;
+export type SessionRole = (typeof SESSION_ROLES)[number];
+export const SessionRoleSchema = z.enum(SESSION_ROLES);
+
+export const SESSION_STATES = ["starting", "working", "waiting", "idle", "ended", "error"] as const;
+export type SessionState = (typeof SESSION_STATES)[number];
+export const SessionStateSchema = z.enum(SESSION_STATES);
+
+// --- verification ----------------------------------------------------------------------
+export const JUDGEMENTS = ["pass", "doubt", "fail"] as const;
+export type Judgement = (typeof JUDGEMENTS)[number];
+export const JudgementSchema = z.enum(JUDGEMENTS);
+
+export const VERIFICATION_MODES = ["evidence", "tests_only"] as const;
+export type VerificationMode = (typeof VERIFICATION_MODES)[number];
+export const VerificationModeSchema = z.enum(VERIFICATION_MODES);
+
+export const EVIDENCE_KINDS = ["screenshot", "gif", "video", "log", "report", "photo"] as const;
+export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
+export const EvidenceKindSchema = z.enum(EVIDENCE_KINDS);
+
+// --- devices / maintenance -------------------------------------------------------------
+export const DEVICE_KINDS = [
+  "emulator",
+  "simulator",
+  "board",
+  "debugger",
+  "camera",
+  "other",
+] as const;
+export type DeviceKind = (typeof DEVICE_KINDS)[number];
+export const DeviceKindSchema = z.enum(DEVICE_KINDS);
+
+export const MAINTENANCE_TRIGGER_KINDS = ["workload", "time", "event"] as const;
+export type MaintenanceTriggerKind = (typeof MAINTENANCE_TRIGGER_KINDS)[number];
+export const MaintenanceTriggerKindSchema = z.enum(MAINTENANCE_TRIGGER_KINDS);
+
+export const MAINTENANCE_OUTPUT_MODES = ["suggest", "fix"] as const;
+export type MaintenanceOutputMode = (typeof MAINTENANCE_OUTPUT_MODES)[number];
+export const MaintenanceOutputModeSchema = z.enum(MAINTENANCE_OUTPUT_MODES);
+
+export const MAINTENANCE_RUN_STATUSES = ["running", "done", "skipped", "failed"] as const;
+export type MaintenanceRunStatus = (typeof MAINTENANCE_RUN_STATUSES)[number];
+export const MaintenanceRunStatusSchema = z.enum(MAINTENANCE_RUN_STATUSES);
+
+/** Fixed default tag vocabulary. `evidence` is the default for card.needs_evidence. */
+export const DEFAULT_TAGS = [
+  { id: "tag_bug", name: "bug", evidence: false },
+  { id: "tag_feature", name: "feature", evidence: true },
+  { id: "tag_change", name: "change", evidence: true },
+  { id: "tag_refactor", name: "refactor", evidence: false },
+  { id: "tag_test", name: "test", evidence: false },
+  { id: "tag_doc", name: "doc", evidence: false },
+  { id: "tag_research", name: "research", evidence: false },
+] as const;
+
+export const PROJECT_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{0,9}$/;
+export const CARD_KEY_PATTERN = /^([A-Z][A-Z0-9]{0,9})-(\d+)$/;
