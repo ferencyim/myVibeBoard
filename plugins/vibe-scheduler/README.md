@@ -36,12 +36,12 @@ VIBE_E2E_SAMPLE=1 npx vitest run test/resources.test.ts   # one real machine sam
 - **Ports**: one dev-server port per admitted card from `devPortBase..+devPortSpan`, checked free
   on the machine and persisted in `$VIBE_HOME/scheduler/ports.json`; released with the card. The
   admission consumer adds the port to the dispatch brief.
-- **Sub-agent selection** (`server/select.ts`, pure): `selectAgent(profiles, task, ctx)` ranks
+- **Sub-agent selection** (`vibe-shared/contract/select.ts`, pure, shared by the master): `selectAgent(profiles, task, ctx)` ranks
   agents by quota, machine pressure, capability table (`agentProfiles` setting over built-in
   defaults), tag/platform strengths, tier vs size/priority, track record parsed from
   `<repo>/.vibe/workers/<agent>/MEMORY.md` (bullets with a check/cross or success/fail marker and
   `#tags`) and current load; a user pre-selection always wins. Exposed as RPC
-  `scheduler.select_agent`; the file has no imports so it can be copied into other plugins.
+  `scheduler.select_agent`; the file has no imports and lives in vibe-shared so vibe-master uses the same code.
 
 ## Devices and leases
 

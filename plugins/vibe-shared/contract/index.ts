@@ -7,3 +7,4 @@ export * from "./model";
 export * from "./sort-key";
 export * from "./state-machine";
 export * from "./sync-spec";
+export * from "./select";

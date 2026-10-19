@@ -11,7 +11,7 @@ import type { CardView, DeviceKind } from "./vibe/contract";
 import { publishEvent, type DeviceLeases, type VibeDb, type createVibeStore } from "./vibe/db";
 import { quotaFor } from "./quota";
 import { topSessions, type ResourceSnapshot } from "./resources";
-import { PRIORITY_RANK, type Priority, type ProviderQuota } from "./select";
+import { PRIORITY_RANK, type Priority, type ProviderQuota } from "./vibe/contract";
 import type { PortAllocator } from "./ports";
 
 type Store = ReturnType<typeof createVibeStore>;

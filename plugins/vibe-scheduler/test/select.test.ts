@@ -6,7 +6,7 @@ import {
   parseWorkerHistory,
   selectAgent,
   type ProviderQuota,
-} from "../server/select";
+} from "../server/vibe/contract";
 import { normalizeUsage } from "../server/quota";
 import { usage } from "./helpers";
 
