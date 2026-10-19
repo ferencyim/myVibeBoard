@@ -690,6 +690,20 @@ test("scoped setup clients never receive session-wide setup output", async () =>
 
 test("setup output invalidates directory metadata only when visible setup status changes", () => {
   const setup = new WorkspaceSetupObservation();
+  const earlier = {
+    status: "failed" as const,
+    error: "failed before any connection",
+    detail: {
+      type: "worktree_setup" as const,
+      worktreePath: "/workspace",
+      branchName: "test",
+      log: "earlier output",
+      commands: [],
+    },
+  };
+  setup.publish("earlier", earlier);
+  expect(setup.get("earlier")).toEqual(earlier);
+  expect(setup.status({ workspaceId: "earlier", untrustedSource: null })).toBe("failed");
   const changes: boolean[] = [];
   setup.subscribe((_workspaceId, _snapshot, changed) => changes.push(changed));
   const detail = {

@@ -7,6 +7,8 @@ import { expect, onTestFinished, test } from "vitest";
 
 import { DaemonClient } from "./test-utils/index.js";
 import { WebSocket } from "ws";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   DaemonClient as SocketDaemonClient,
   type WebSocketLike,
@@ -604,11 +606,15 @@ async function expectMissingLocalMergeTarget({ client, cwd }: RestorableWorkspac
 
 // Setup output is opt-in even for multiple sockets sharing one logical client.
 test("setup details follow one workspace/source and restore after reconnect with minimal directory status", async () => {
-  const daemon = await createTestPaseoDaemon();
+  const daemon = await createTestPaseoDaemon({ mcpEnabled: true });
   const { repoDir, tempRoot } = createGitRepoWithBranch();
   const clients: SocketDaemonClient[] = [];
   const sockets = new Map<string, WebSocket[]>();
+  const mcp = new Client({ name: "setup-test", version: "1.0.0" });
   try {
+    await mcp.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${daemon.port}/mcp/agents`)),
+    );
     writeFileSync(
       path.join(repoDir, "paseo.json"),
       JSON.stringify({ worktree: { setup: "node setup.cjs" } }),
@@ -674,6 +680,20 @@ const timer = setInterval(() => {
         .poll(() => existsSync(path.join(result.workspace!.workspaceDirectory!, "started.txt")))
         .toBe(true);
     }
+    const external = await mcp.callTool({
+      name: "create_workspace",
+      arguments: { isolation: "worktree", path: repoDir, worktreeSlug: "noisy-mcp" },
+    });
+    if (typeof external.structuredContent?.workspaceId !== "string")
+      throw new Error("Missing MCP workspace");
+    const externalWorkspace = (await creator.fetchWorkspaces()).entries.find(
+      (entry) => entry.id === external.structuredContent!.workspaceId,
+    );
+    if (!externalWorkspace) throw new Error("Missing MCP directory entry");
+    workspaces.unshift(externalWorkspace);
+    await expect
+      .poll(() => existsSync(path.join(externalWorkspace.workspaceDirectory!, "started.txt")))
+      .toBe(true);
     const workspace = workspaces[0]!;
     const details = viewer.observeWorkspaceSetup(workspace.id);
     const initial = await details.ready;
@@ -699,7 +719,7 @@ const timer = setInterval(() => {
               ),
           ).size,
       )
-      .toBe(3);
+      .toBe(4);
     for (const entry of workspaces) {
       writeFileSync(path.join(entry.workspaceDirectory!, "wave-0"), "go");
       await expect
@@ -739,6 +759,16 @@ const timer = setInterval(() => {
       expect(message.payload.workspace).not.toHaveProperty("detail");
       expect(message.payload.workspace).not.toHaveProperty("error");
     }
+    const waveLogs = viewerMessages
+      .filter(
+        (message) =>
+          message.type === "workspace_setup_progress" &&
+          message.payload.detail.log.includes("wave-0:"),
+      )
+      .map((message) =>
+        message.type === "workspace_setup_progress" ? message.payload.detail.log : "",
+      );
+    expect(waveLogs.length).toBe(new Set(waveLogs).size);
     const restoredSnapshots: unknown[] = [];
     details.subscribe({
       snapshot: (snapshot) => restoredSnapshots.push(snapshot),
@@ -785,6 +815,7 @@ const timer = setInterval(() => {
     await resumed.release();
     await directory.release();
   } finally {
+    await mcp.close();
     for (const client of clients) await client.close();
     await daemon.close();
     await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

@@ -51,6 +51,7 @@ describe("workspace-setup-store", () => {
       expect(shouldShowWorkspaceSetup(status)).toBe(status !== null);
       expect(shouldSeedWorkspaceSetupTab(status)).toBe(status === "failed" || status === "blocked");
     }
+    expect(shouldShowWorkspaceSetup(null, false)).toBe(true);
     const identity = { serverId: "server-1", workspaceId: "42", status: "failed" as const };
     expect(useWorkspaceSetupStore.getState().snapshots).toEqual({});
     expect(useWorkspaceSetupStore.getState().claimFailedSetupSurface(identity)).toBe(true);

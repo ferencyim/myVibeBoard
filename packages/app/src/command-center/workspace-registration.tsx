@@ -188,7 +188,7 @@ export function useWorkspaceCommandCenterActions(): void {
     workspaceDirectory: workspace.workspaceDirectory ?? null,
     currentBranch: workspace.gitRuntime?.currentBranch ?? null,
     pinnedAt: workspace.pinnedAt ?? null,
-    canShowSetup: shouldShowWorkspaceSetup(workspace.setupStatus ?? null),
+    setupStatus: workspace.setupStatus ?? null,
     labels: workspace.labels ?? [],
   }));
   const cwd = useWorkspaceDirectory(serverId, workspaceId);
@@ -196,7 +196,11 @@ export function useWorkspaceCommandCenterActions(): void {
   const isPinned = fields?.pinnedAt != null;
   const isCompact = useIsCompactFormFactor();
   const canPin = useHostFeature(serverId, "workspacePinning");
-  const canShowSetup = fields?.canShowSetup === true;
+  const supportsSetupObservation = useHostFeature(serverId, "workspaceSetupObservation");
+  const canShowSetup = shouldShowWorkspaceSetup(
+    fields?.setupStatus ?? null,
+    supportsSetupObservation,
+  );
   const { overrides } = useKeyboardShortcutOverrides();
   const { gitActions, isGit } = useGitActions({
     serverId: serverId ?? "",

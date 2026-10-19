@@ -25,8 +25,8 @@ export interface WorkspaceSetupSnapshot extends WorkspaceSetupProgressPayload {
 
 export type WorkspaceSetupStatus = WorkspaceSetupSnapshot["status"] | null;
 
-export function shouldShowWorkspaceSetup(status: WorkspaceSetupStatus): boolean {
-  return status !== null;
+export function shouldShowWorkspaceSetup(status: WorkspaceSetupStatus, supported = true): boolean {
+  return !supported || status !== null;
 }
 
 export function shouldSeedWorkspaceSetupTab(status: WorkspaceSetupStatus): boolean {

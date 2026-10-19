@@ -2313,7 +2313,8 @@ export class DaemonClient {
       message,
       async (query, accept) => {
         resetSource = false;
-        if (query.type === "workspace.setup.subscribe.request") this.requireWorkspaceSetupObservation();
+        if (query.type === "workspace.setup.subscribe.request")
+          this.requireWorkspaceSetupObservation();
         const requestId = this.createRequestId(options?.requestId);
         const request = SessionInboundMessageSchema.parse({ ...query, requestId });
         try {
