@@ -177,6 +177,8 @@ export function createPipeline(deps: PipelineDeps) {
           }
           return result;
         };
+        let setupReply = "";
+        let judgeReply = "";
 
         // ---- round 1: how to run it -----------------------------------------------------
         if (project.projectType === "web") {
@@ -192,7 +194,7 @@ export function createPipeline(deps: PipelineDeps) {
         const existing = existsSync(path.join(worktree, ".vibe", "verify.json"));
         let config: VerifyConfig = {};
         if (verifierAgent) {
-          await guarded(
+          setupReply = (await guarded(
             buildSetupPrompt({
               card,
               projectType: project.projectType,
@@ -204,14 +206,14 @@ export function createPipeline(deps: PipelineDeps) {
               baselineCommit: baseline?.commitHash,
               existingConfig: existing,
             }),
-          );
-          const raw = await readJsonFile(path.join(outputDir, "verify.json"));
+          ))?.text ?? "";
+          const raw = parseJsonLoose(setupReply) ?? (await readJsonFile(path.join(outputDir, "verify.json")));
           if (raw !== undefined) {
             const parsed = VerifyConfigSchema.safeParse(raw);
             if (parsed.success) config = parsed.data;
             else notes.push(`verify.json written by the verifier is invalid: ${parsed.error.message.slice(0, 300)}`);
           } else {
-            notes.push("The verifier wrote no verify.json; falling back to .vibe/verify.json of the worktree");
+            notes.push("The verifier returned no verify config; falling back to .vibe/verify.json of the worktree");
           }
         }
         if (baseline && config.web && !config.web.baseline) {
@@ -268,7 +270,7 @@ export function createPipeline(deps: PipelineDeps) {
         // ---- round 2: judge the evidence ------------------------------------------------
         if (verifierAgent) {
           const evidence = verify.evidence(vid);
-          await guarded(
+          judgeReply = (await guarded(
             buildJudgePrompt({
               card,
               checks,
@@ -280,8 +282,8 @@ export function createPipeline(deps: PipelineDeps) {
                 .filter((i) => i.method === "auto" && i.note)
                 .map((i) => `${i.checkText}: ${i.note}`),
             }),
-          );
-          const raw = await readJsonFile(path.join(outputDir, "verdict.json"));
+          ))?.text ?? "";
+          const raw = parseJsonLoose(judgeReply) ?? (await readJsonFile(path.join(outputDir, "verdict.json")));
           const parsed = raw === undefined ? undefined : VerdictSchema.safeParse(raw);
           if (parsed?.success) {
             for (const v of parsed.data.items) {
@@ -295,7 +297,7 @@ export function createPipeline(deps: PipelineDeps) {
               );
             }
           } else {
-            notes.push("The verifier produced no valid verdict.json");
+            notes.push("The verifier produced no valid verdict");
           }
         }
       } else {

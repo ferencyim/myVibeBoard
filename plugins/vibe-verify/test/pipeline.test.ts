@@ -59,6 +59,8 @@ function setup(options: {
   statuses?: string[];
   testExit?: number;
   hasTestScript?: boolean;
+  /** the verifier answers in its reply instead of writing files */
+  reply?: boolean;
 }): Harness {
   const db = openVibeDb({ path: ":memory:" });
   migrateOwner(db, "verify");
@@ -124,6 +126,10 @@ function setup(options: {
         provider: input.provider,
         async run() {
           round++;
+          if (options.reply) {
+            const json = round === 1 ? { backend: { requests: [] } } : (options.verdict?.(2) ?? { items: [] });
+            return { status: "idle" as const, text: ["Here you go:", "```json", JSON.stringify(json), "```"].join(String.fromCharCode(10)) };
+          }
           if (round === 1) {
             writeFileSync(
               path.join(input.outputDir, "verify.json"),
@@ -218,6 +224,12 @@ describe("verification pipeline", () => {
     expect(h.sent[0]!.prompt).toContain("GET /hello returns 200");
     expect(h.sent[0]!.prompt).toContain("GET /hello returned 404");
     expect(h.sent[0]!.prompt).toContain("samples.json");
+  });
+
+  it("reads the verdict from the verifier reply when it writes no file", async () => {
+    const h = setup({ needsEvidence: true, reply: true, verdict: () => passing });
+    const result = await h.pipeline.run(h.cardId);
+    expect(result!.conclusion).toBe("pass");
   });
 
   it("needs_evidence=false runs only tests and lint: no verifier, no collectors", async () => {

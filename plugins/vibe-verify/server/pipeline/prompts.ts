@@ -33,7 +33,7 @@ export function buildSetupPrompt(i: SetupPromptInput): string {
 
 Worktree under test (READ-ONLY for you): ${i.worktree}
 Commit: ${i.commitHash}
-Output directory (the only place you may write): ${i.outputDir}
+You write nothing at all: your reply is the result.
 ${i.baselinePath ? `Baseline worktree (the code before the change, commit ${i.baselineCommit}): ${i.baselinePath}` : "No baseline worktree is available."}
 
 ## Card
@@ -45,12 +45,12 @@ ${i.card.description || ""}
 ${numbered(i.checks)}
 
 ## Your task
-Read the code and decide how an evidence collector should run this project and exercise each check (start command + ready URL, pages and click/fill steps, HTTP requests, Android app/flow, test command). Write ONE JSON file ${i.outputDir}/verify.json that follows this JSON Schema (only include the sections that apply; omit everything you cannot determine):
+Read the code and decide how an evidence collector should run this project and exercise each check (start command + ready URL, pages and click/fill steps, HTTP requests, Android app/flow, test command). Reply with ONE JSON object (in a \`\`\`json fence, nothing after it) that follows this JSON Schema (only include the sections that apply; omit everything you cannot determine):
 ${verifyConfigDoc()}
 
 Use the check number as string in \`checkId\` of backend requests (for example "1"). Use paths relative to the worktree for \`cwd\`. ${i.baselinePath ? `Put the baseline path above in web.baseline.path when the project is a web app.` : ""}
 ${i.existingConfig ? "The repository already contains .vibe/verify.json; read it, and write a corrected copy if it needs changes, otherwise write it unchanged." : ""}
-Do not modify anything in the worktree. Reply with one short sentence when the file is written.`;
+Do not modify anything; do not write files.`;
 }
 
 export interface EvidenceLine {
@@ -84,9 +84,9 @@ ${i.evidence.length ? i.evidence.map((e) => `- ${e.name} [${e.kind}]${e.label ? 
 ${i.notes.length ? i.notes.map((n) => `- ${n}`).join("\n") : "- none"}
 
 ## Your task
-Open the evidence (look at screenshots and read logs and reports), compare it with the code and each check, and judge every check: "pass" (clearly satisfied), "doubt" (cannot tell from the evidence) or "fail" (not satisfied or broken). Be strict; do not give "pass" without evidence. Write ONE JSON file ${i.outputDir}/verdict.json:
+Open the evidence (look at screenshots and read logs and reports), compare it with the code and each check, and judge every check: "pass" (clearly satisfied), "doubt" (cannot tell from the evidence) or "fail" (not satisfied or broken). Be strict; do not give "pass" without evidence. Reply with ONE JSON object (in a \`\`\`json fence, nothing after it):
 {"summary": "one sentence", "items": [{"check": 1, "judgement": "pass|doubt|fail", "note": "why, one or two sentences", "evidence": ["file names from the list above"]}]}
-Include every check number. Do not modify anything outside the evidence directory. Reply with one short sentence when the file is written.`;
+Include every check number. Do not modify anything; do not write files.`;
 }
 
 export interface FailedItem {
