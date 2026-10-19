@@ -44,6 +44,13 @@ export const EVENT_PAYLOADS = {
     conclusion: JudgementSchema,
   }),
   "maintenance.triggered": z.object({ ruleId: z.string(), runId: z.string() }),
+  // vibe-maintain (WP-36): a rule was paused after consecutive rejections; the master/UI should tell the user.
+  "maintenance.paused": z.object({
+    ruleId: z.string(),
+    ruleName: z.string(),
+    reason: z.enum(["rejections"]),
+    rejections: z.number().int(),
+  }),
   "plan.updated": z.object({ version: z.number().int() }),
   // vibe-scheduler (WP-34). `scheduler.admitted` asks vibe-board to dispatch the card now;
   // vibe-board answers a failed dispatch with `scheduler.dispatch_failed`.
