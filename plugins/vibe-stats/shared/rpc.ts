@@ -35,6 +35,8 @@ const Tokens = z.object({
   cacheRead: z.number(),
   cacheWrite: z.number(),
   cost: z.number(),
+  /** Tokens of events whose model has no known price (not included in `cost`). */
+  unpricedTokens: z.number(),
   events: z.number(),
 });
 export type TokenTotals = z.infer<typeof Tokens>;
@@ -55,6 +57,7 @@ const TaskRow = z.object({
   title: z.string(),
   tokens: z.number(),
   cost: z.number(),
+  unpricedTokens: z.number(),
   durationMs: z.number(),
   waitingMs: z.number(),
   compactions: z.array(z.object({ before: z.number(), after: z.number() })),

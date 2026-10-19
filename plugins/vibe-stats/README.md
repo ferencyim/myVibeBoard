@@ -39,8 +39,11 @@ are best effort until a real install is available; fix `server/parsers.ts` then.
   minutes are ignored. Events without a measurable duration are excluded.
 - Cost: log-reported `costUSD` if present, else tokens x built-in estimate table
   (`server/pricing.ts`). Set `pricingFile` to a LiteLLM-format price JSON (ccusage's dataset) to
-  override. Unknown models have no cost. Cost is fixed when a row is first indexed; a full reindex
-  keeps existing rows (their logs may already be deleted by the CLI) and only fills gaps.
+  override. Unknown models have no cost, and the Claude 5 family (`fable`, `opus/sonnet/haiku-5`) and
+  `gpt-6` models are deliberately left unpriced until a price file names them (no invented prices): the
+  overview shows their tokens as "unpriced" (`unpricedTokens`) with a hint to set `pricingFile`. A cost is
+  fixed when a row is first indexed; a full reindex keeps existing rows (their logs may already be deleted
+  by the CLI) and only fills gaps, including the cost of previously unpriced rows.
 - Compaction: no table of its own; a call whose context (input + cache) drops below half of the
   previous call's (and the previous was at least 20k) in the same CLI session counts as one.
 - Waiting for you: sum of `session.waiting` -> `session.answered` intervals in `vibe_event`.

@@ -7,6 +7,13 @@ export function fmtTokens(n: number): string {
 
 export const fmtCost = (usd: number): string => `$${usd >= 100 ? usd.toFixed(0) : usd.toFixed(2)}`;
 
+/** Cost with an explicit note for tokens that could not be priced ("price unknown" when none could). */
+export function fmtCostNote(usd: number, unpricedTokens: number): string {
+  if (unpricedTokens <= 0) return fmtCost(usd);
+  const note = `${fmtTokens(unpricedTokens)} tok unpriced`;
+  return usd > 0 ? `${fmtCost(usd)} + ${note}` : `price unknown (${note})`;
+}
+
 export const fmtRate = (v: number | null): string => (v === null ? "-" : `${v.toFixed(1)} tok/s`);
 
 export function fmtDuration(ms: number): string {

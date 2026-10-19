@@ -29,12 +29,15 @@ interface GroupRow {
   cache_read: number;
   cache_write: number;
   cost: number;
+  unpriced: number;
   events: number;
 }
 
 const SUMS = `SUM(e.tokens_in) AS input, SUM(e.tokens_out) AS output,
   SUM(e.tokens_cache_read) AS cache_read, SUM(e.tokens_cache_write) AS cache_write,
-  SUM(COALESCE(e.cost, 0)) AS cost, COUNT(*) AS events`;
+  SUM(COALESCE(e.cost, 0)) AS cost,
+  SUM(CASE WHEN e.cost IS NULL THEN e.tokens_in + e.tokens_out + e.tokens_cache_read + e.tokens_cache_write ELSE 0 END) AS unpriced,
+  COUNT(*) AS events`;
 
 const toGroup = (r: GroupRow): StatsGroup => ({
   key: r.k ?? "",
@@ -44,6 +47,7 @@ const toGroup = (r: GroupRow): StatsGroup => ({
   cacheRead: r.cache_read,
   cacheWrite: r.cache_write,
   cost: r.cost,
+  unpricedTokens: r.unpriced,
   events: r.events,
 });
 
@@ -190,9 +194,10 @@ export function computeOverview(
       cacheRead: t.cacheRead + g.cacheRead,
       cacheWrite: t.cacheWrite + g.cacheWrite,
       cost: t.cost + g.cost,
+      unpricedTokens: t.unpricedTokens + g.unpricedTokens,
       events: t.events + g.events,
     }),
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, events: 0 },
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, unpricedTokens: 0, events: 0 },
   );
 
   // Output speed: tokens per second of each turn that has a measured duration.
@@ -226,10 +231,18 @@ export function computeOverview(
 
   const waiting = waitingByCard(db, since);
   const taskRows = db
-    .prepare<{ card_id: string; key: string; title: string; tokens: number; cost: number }>(
+    .prepare<{
+      card_id: string;
+      key: string;
+      title: string;
+      tokens: number;
+      cost: number;
+      unpriced: number;
+    }>(
       `SELECT c.id AS card_id, c.key AS key, c.title AS title,
          SUM(e.tokens_in + e.tokens_out + e.tokens_cache_read + e.tokens_cache_write) AS tokens,
-         SUM(COALESCE(e.cost, 0)) AS cost
+         SUM(COALESCE(e.cost, 0)) AS cost,
+         SUM(CASE WHEN e.cost IS NULL THEN e.tokens_in + e.tokens_out + e.tokens_cache_read + e.tokens_cache_write ELSE 0 END) AS unpriced
        FROM usage_event e JOIN card c ON c.id = e.card_id ${where}
        GROUP BY c.id ORDER BY tokens DESC LIMIT ${MAX_TASK_ROWS}`,
     )
@@ -244,6 +257,7 @@ export function computeOverview(
     title: r.title,
     tokens: r.tokens,
     cost: r.cost,
+    unpricedTokens: r.unpriced,
     durationMs: Math.round(sessionSpan.get(r.card_id)?.ms ?? 0),
     waitingMs: Math.round(waiting.get(r.card_id) ?? 0),
     compactions: compactions
