@@ -2,7 +2,7 @@
 // the event consumer that hears back from vibe-board. `index.server.ts` only adds Paseo plumbing.
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { normalizeUsage, type UsageProviderLike } from "./quota";
 import { createPortAllocator, type PortAllocator } from "./ports";
 import {
@@ -81,7 +81,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   const sampler = createResourceSampler({
     probe: options.probe ?? createSystemProbe(),
     now,
-    diskPath: options.dataDir,
+    diskPath: dirname(db.path),
   });
 
   let latest: ResourceSnapshot | null = null;

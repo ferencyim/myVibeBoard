@@ -46,7 +46,7 @@ export const statusRpc = defineRpc({
 });
 
 export const selectAgentRpc = defineRpc({
-  name: "scheduler.selectAgent",
+  name: "scheduler.select_agent",
   input: z.object({
     tags: z.array(z.string()).default([]),
     size: z.enum(["S", "M", "L", "XL"]).optional(),
@@ -69,7 +69,7 @@ export const devicesRpc = defineRpc({
 });
 
 export const registerDeviceRpc = defineRpc({
-  name: "scheduler.registerDevice",
+  name: "scheduler.register_device",
   input: z.object({
     kind: DeviceKind,
     name: z.string().min(1),
@@ -80,7 +80,7 @@ export const registerDeviceRpc = defineRpc({
 });
 
 export const removeDeviceRpc = defineRpc({
-  name: "scheduler.removeDevice",
+  name: "scheduler.remove_device",
   input: z.object({ id: z.string() }),
   output: z.object({ ok: z.boolean() }),
 });

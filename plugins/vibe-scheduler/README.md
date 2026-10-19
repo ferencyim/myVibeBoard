@@ -41,16 +41,16 @@ VIBE_E2E_SAMPLE=1 npx vitest run test/resources.test.ts   # one real machine sam
   defaults), tag/platform strengths, tier vs size/priority, track record parsed from
   `<repo>/.vibe/workers/<agent>/MEMORY.md` (bullets with a check/cross or success/fail marker and
   `#tags`) and current load; a user pre-selection always wins. Exposed as RPC
-  `scheduler.selectAgent`; the file has no imports so it can be copied into other plugins.
+  `scheduler.select_agent`; the file has no imports so it can be copied into other plugins.
 
 ## Devices and leases
 
 `vibe-shared/db/leases.ts` (`createDeviceLeases`) implements `acquire(request)` ->
 `{leaseId, deviceId, serial?, avd?, release()}` on `device` / `device_lease` and is shared with
 vibe-verify. Lease owner markers (`session_id`): `scheduler:<cardId>`, `verify:<verificationId>`.
-Register devices with RPC `scheduler.registerDevice {kind,name,serial?,avd?}`.
+Register devices with RPC `scheduler.register_device {kind,name,serial?,avd?}`.
 
 ## RPCs
 
-`scheduler.status`, `scheduler.selectAgent`, `scheduler.devices`, `scheduler.registerDevice`,
-`scheduler.removeDevice`.
+`scheduler.status`, `scheduler.select_agent`, `scheduler.devices`, `scheduler.register_device`,
+`scheduler.remove_device`.

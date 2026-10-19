@@ -83,7 +83,15 @@ export default function contribute(server: PluginServerContext) {
   const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });
   const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, onError: (e) => console.error("vibe-board admission:", e) });
   const finalizer = startFinalizer({ db: runtime.db, board });
-  registerBoardRpcs(server, board, { dispatcher, lifecycle, onPaseo });
+  // Any RPC (e.g. the UI polling) refreshes the SDK handle, so scheduler-admitted dispatches work
+  // without a prior agent event.
+  const tracked = Object.create(server) as typeof server;
+  tracked.handle = (contract, handler) =>
+    server.handle(contract, (input, context) => {
+      onPaseo(context.paseo);
+      return handler(input, context);
+    });
+  registerBoardRpcs(tracked, board, { dispatcher, lifecycle, onPaseo });
 
   return async () => {
     await admission.stop();

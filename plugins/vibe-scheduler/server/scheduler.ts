@@ -93,7 +93,6 @@ export function createScheduler(deps: SchedulerDeps) {
   const { db, store, leases, ports, now } = deps;
   const pending = new Map<string, Admission>();
   const failures = new Map<string, { count: number; until: number }>();
-  const admitCount = new Map<string, number>();
   let paused = false;
   let lastDeferred: Record<string, string> = {};
   const announcedQuota = new Map<string, string>();
@@ -310,8 +309,6 @@ export function createScheduler(deps: SchedulerDeps) {
         continue;
       }
 
-      const n = (admitCount.get(card.id) ?? 0) + 1;
-      admitCount.set(card.id, n);
       const admission: Admission = {
         cardId: card.id,
         cardKey: card.key,
@@ -332,7 +329,8 @@ export function createScheduler(deps: SchedulerDeps) {
           cardId: card.id,
           projectId: card.projectId,
           payload: { cardId: card.id, presetId: preset.id, provider, port, deviceIds },
-          dedupeKey: `admit:${card.id}:${n}`,
+          // Time-based: a restarted scheduler must be able to admit the same card again.
+          dedupeKey: `admit:${card.id}:${now().toISOString()}`,
         },
         now,
       );
