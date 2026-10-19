@@ -92,6 +92,15 @@ const TEXT_MIME_TYPES: Record<string, string> = {
   ".json": "application/json",
 };
 
+const BINARY_MIME_TYPES: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".zip": "application/zip",
+  ".gz": "application/gzip",
+  ".mp3": "audio/mpeg",
+  ".mp4": "video/mp4",
+  ".woff2": "font/woff2",
+};
+
 const DEFAULT_TEXT_MIME_TYPE = "text/plain";
 const FILE_TYPE_SAMPLE_BYTES = 8192;
 export const FILE_EXPLORER_STREAM_CHUNK_BYTES = 256 * 1024;
@@ -266,13 +275,13 @@ export async function readExplorerFileBytes({
       };
     }
 
-    if (isLikelyBinary(buffer) || !isValidUtf8(buffer)) {
+    if (ext in BINARY_MIME_TYPES || isLikelyBinary(buffer) || !isValidUtf8(buffer)) {
       return {
         ...basePayload,
         kind: "binary",
         encoding: "binary",
         bytes: buffer,
-        mimeType: "application/octet-stream",
+        mimeType: BINARY_MIME_TYPES[ext] ?? "application/octet-stream",
       };
     }
 
@@ -305,7 +314,8 @@ export async function streamExplorerFile(
     const advertisedRevision = fileRevision(stats);
     const ext = path.extname(filePath.resolvedPath).toLowerCase();
     const isImage = ext in IMAGE_MIME_TYPES;
-    const isBinary = isImage || (await isFileHandleBinary(handle, advertisedSize));
+    const isBinary =
+      isImage || ext in BINARY_MIME_TYPES || (await isFileHandleBinary(handle, advertisedSize));
     let kind: ExplorerFileKind = "text";
     let mimeType = textMimeTypeForExtension(ext);
     if (isImage) {
@@ -313,7 +323,7 @@ export async function streamExplorerFile(
       mimeType = IMAGE_MIME_TYPES[ext];
     } else if (isBinary) {
       kind = "binary";
-      mimeType = "application/octet-stream";
+      mimeType = BINARY_MIME_TYPES[ext] ?? "application/octet-stream";
     }
 
     await consume({
@@ -549,10 +559,10 @@ export async function getDownloadableFileInfo({ root, relativePath }: ReadFilePa
     }
 
     const ext = path.extname(filePath.resolvedPath).toLowerCase();
-    let mimeType = "application/octet-stream";
+    let mimeType = BINARY_MIME_TYPES[ext] ?? "application/octet-stream";
     if (ext in IMAGE_MIME_TYPES) {
       mimeType = IMAGE_MIME_TYPES[ext];
-    } else {
+    } else if (!(ext in BINARY_MIME_TYPES)) {
       const sample = Buffer.alloc(FILE_TYPE_SAMPLE_BYTES);
       const { bytesRead } = await handle.read(sample, 0, sample.length, 0);
       const chunk = bytesRead < sample.length ? sample.subarray(0, bytesRead) : sample;

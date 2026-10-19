@@ -19,6 +19,8 @@ import {
   deleteExplorerEntry,
   duplicateExplorerEntry,
   getExplorerFileVersion,
+  getDownloadableFileInfo,
+  readExplorerFileBytes,
   readExplorerFile,
   renameExplorerEntry,
   streamExplorerFile,
@@ -187,6 +189,36 @@ describe("file explorer service", () => {
       expect(result.encoding).toBe("utf-8");
       expect(result.mimeType).toBe("text/plain");
       expect(result.content).toBe(content);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["report.pdf", Buffer.from("%PDF-1.4\n%\x00\xff\n%%EOF", "binary")],
+    ["report.PDF", Buffer.from("%PDF-1.4\n%%EOF")],
+  ])("reports application/pdf for %s across file reads and downloads", async (name, bytes) => {
+    const root = await createTempDir("paseo-file-pdf-");
+    try {
+      await writeFile(path.join(root, name), bytes);
+      const target = { root, relativePath: name };
+      expect(await readExplorerFile(target)).toMatchObject({
+        kind: "binary",
+        mimeType: "application/pdf",
+      });
+      expect(await readExplorerFileBytes(target)).toMatchObject({
+        kind: "binary",
+        mimeType: "application/pdf",
+        bytes,
+      });
+      await streamExplorerFile(target, async (file) => {
+        expect(file.kind).toBe("binary");
+        expect(file.mimeType).toBe("application/pdf");
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of file.chunks) chunks.push(chunk);
+        expect(Buffer.concat(chunks)).toEqual(bytes);
+      });
+      expect(await getDownloadableFileInfo(target)).toMatchObject({ mimeType: "application/pdf" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
