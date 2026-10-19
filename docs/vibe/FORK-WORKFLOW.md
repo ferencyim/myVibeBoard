@@ -47,7 +47,9 @@ myVibeBoard 是 `getpaseo/paseo` 的 fork。自研内容尽量放 `plugins/`，�
 
 ### 首次演练记录（2026-10-19）
 
-演练结果见文末"演练结果"小节。
+- 本地 `git fetch upstream --tags` 后，最新稳定 tag 为 `v0.12.0`，已是当前基线的祖先，脚本报告 "已合并，无需操作"。
+- 用 `-Tag FETCH_HEAD`（`git fetch upstream main` 之后）演练 upstream/main 合并路径：upstream/main 为 `19749baee`，相对基线无新提交，结果 "clean merge"，冲突 0，与 `[core]` 提交重叠 0；脚本正常切回原分支并删除临时分支。
+- 目前仓库内尚无 `[core]` 提交。下次有新 release 时再跑一次。
 
 ## 6. GitHub Actions 处理
 
