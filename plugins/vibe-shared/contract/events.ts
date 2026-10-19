@@ -73,6 +73,14 @@ export const EVENT_PAYLOADS = {
     ),
   }),
   "scheduler.resumed": z.object({ reason: z.enum(["memory"]) }),
+  // vibe-master (WP-50): a reminder for the owner (quota low, quota error, ...). `message` is the
+  // full text; the push notifier only sends the kind, never the message.
+  "master.alert": z.object({
+    kind: z.string(),
+    provider: z.string().optional(),
+    message: z.string(),
+    sessionId: z.string().optional(),
+  }),
 } as const;
 
 export type EventType = keyof typeof EVENT_PAYLOADS;

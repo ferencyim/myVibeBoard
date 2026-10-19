@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import contribute from "../index.server";
 import { statusRpc, switchRpc, wakeRpc } from "../shared/rpc";
 import { assessmentJson, fakePaseo, setupBoard, tempDir, tick } from "./helpers";
-import { createVibeStore, migrateOwner, openVibeDb } from "../server/vibe/db";
+import { createVibeStore, migrateOwner, openVibeDb, publishEvent } from "../server/vibe/db";
 
 const pluginDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,7 +34,7 @@ describe("rules", () => {
 type Handler = (input: any, context: any) => unknown;
 
 /** Stand-in for the plugin server context: records hooks, RPC handlers and settings. */
-function fakeServer() {
+function fakeServer(host: Record<string, unknown> = {}) {
   const handlers = new Map<string, Handler>();
   const hooks = new Map<string, Array<(e: unknown, c: unknown) => void>>();
   const server = {
@@ -50,6 +50,7 @@ function fakeServer() {
     before: () => () => undefined,
     registerProvider: () => undefined,
     registerUsageSource: () => undefined,
+    ...host,
   };
   return { server: server as never, handlers, hooks };
 }
@@ -94,6 +95,33 @@ describe("plugin entry", () => {
 
     const missing = (await handlers.get("master.wake")!({ card: "DEMO-99", reason: "assess_draft", force: true }, context)) as { queued: boolean };
     expect(missing.queued).toBe(false);
+
+    await cleanup();
+    db.close();
+  });
+
+  it("works from the start-up handle: sweeps drafts and pushes bus events with no hook or RPC", async () => {
+    const home = tempDir("vibe-master-home-");
+    process.env.VIBE_HOME = home;
+    const db = openVibeDb();
+    migrateOwner(db, "core");
+    const store = createVibeStore(db);
+    const project = store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: home, projectType: "web" });
+    store.presets.create({ name: "Claude Opus", provider: "claude", model: "opus" });
+    const card = store.cards.create({ projectId: project.id, title: "Startup test", description: "d" });
+
+    const fake = fakePaseo(() => assessmentJson());
+    const pushed: unknown[] = [];
+    const { server } = fakeServer({ paseo: fake.paseo, notify: (n: unknown) => pushed.push(n) });
+    const cleanup = contribute(server);
+    for (let i = 0; i < 100 && store.events.list(card.id).every((e) => e.type !== "evaluation"); i++) await tick(20);
+    expect(store.events.list(card.id).some((e) => e.type === "evaluation")).toBe(true);
+
+    publishEvent(db, { type: "master.alert", payload: { kind: "quota_error", message: "x" } });
+    for (let i = 0; i < 100 && pushed.length === 0; i++) await tick(20);
+    expect(pushed).toEqual([
+      { title: "Vibe Board", body: "Master: quota error", data: { event: "master.alert", kind: "quota_error" } },
+    ]);
 
     await cleanup();
     db.close();

@@ -41,10 +41,10 @@ function build(script: Script, over: { usage?: ReturnType<typeof usageOf>[]; fai
 
 const alerts = (board: ReturnType<typeof setupBoard>) =>
   board.db
-    .prepare<{ payload_json: string }>("SELECT payload_json FROM vibe_event WHERE type = 'session.error' ORDER BY seq")
+    .prepare<{ payload_json: string }>("SELECT payload_json FROM vibe_event WHERE type = 'master.alert' ORDER BY seq")
     .all()
-    .map((r) => (JSON.parse(r.payload_json) as { message: string }).message)
-    .filter((m) => m.startsWith("[master:"));
+    .map((r) => JSON.parse(r.payload_json) as { kind: string; provider: string; message: string })
+    .map((p) => `[master:${p.kind}] ${p.provider}: ${p.message}`);
 
 describe("target resolution", () => {
   it("prefers Opus for Claude, the default elsewhere, and the highest thinking level on request", async () => {

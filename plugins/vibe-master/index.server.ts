@@ -9,6 +9,7 @@ import {
   type MasterSettings,
 } from "./shared/rpc";
 import { createMasterRuntime } from "./server/runtime";
+import { startNotifyConsumer, type PushNotification } from "./server/notify";
 import { CARD_KEY_PATTERN } from "./server/vibe/contract";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 
@@ -67,10 +68,24 @@ export default function contribute(server: PluginServerContext) {
     return runtime.wake(CARD_KEY_PATTERN.test(upper) ? upper : input.card, input.reason, input.force);
   });
 
+  // Hosts that expose the handle and push at start-up (server.paseo / server.notify) need no hook
+  // or RPC first; older hosts keep working through the paths above.
+  const host = server as { paseo?: PaseoApi; notify?: (notification: PushNotification) => void };
+  if (host.paseo) onPaseo(host.paseo);
+  const notifier = host.notify
+    ? startNotifyConsumer({
+        db,
+        store,
+        notify: host.notify,
+        onError: (error) => console.error("vibe-master notify:", error),
+      })
+    : null;
+
   runtime.startQuotaMonitor();
   runtime.sweep();
 
   return async () => {
+    await notifier?.stop();
     for (const off of offs) off();
     stopSettings();
     await runtime.dispose();
