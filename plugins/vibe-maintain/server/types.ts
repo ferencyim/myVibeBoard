@@ -17,6 +17,18 @@ export interface CheckOutput {
   findings: Finding[];
   /** Check limitations worth telling the user (skipped sub-checks, unsupported git, ...). */
   notes: string[];
+  /** Overrides the rule's dedupe key (per-subject cards, e.g. one per slow call site). */
+  dedupeKey?: string;
+  /** Extra instructions appended to the fix worker's prompt. */
+  instructions?: string;
+  /** Acceptance criteria of a new card (Markdown). */
+  acceptance?: string;
+  /** New card must be verified with captured evidence. */
+  needsEvidence?: boolean;
+  /** Write a draft card even when the rule's output is "fix" (the check is not confident enough to automate). */
+  forceDraft?: boolean;
+  /** Called by the engine once the card exists (advance read cursors only now, so a failed run retries). */
+  commit?: () => void;
 }
 
 export interface CheckContext {
@@ -28,6 +40,10 @@ export interface CheckContext {
   git: GitRunner;
   /** Why the rule fired (and, for event triggers, what changed). */
   trigger: { reason: string; detail?: string[] };
+  /** Persistent integer cursors of this rule (e.g. file read offsets). */
+  cursor: { get(key: string): number | undefined; set(key: string, value: number): void };
+  /** True while a not-done maintenance card with this dedupe key exists. */
+  hasOpenCard(dedupeKey: string): boolean;
 }
 
 /** A deterministic check. Return null when there is nothing to report. */

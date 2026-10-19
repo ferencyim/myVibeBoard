@@ -15,6 +15,18 @@ The browser (`BrowserDriver`), processes (`Runner`), dev servers (`ServerLaunche
 are injectable; unit tests use fakes. Real run: `npx playwright install chromium`, then
 `VIBE_E2E_WEB=1 npm test`.
 
+### Performance before/after (`backend.perf`, WP-47)
+
+`.vibe/verify.json` may carry `backend.perf`: `{ label, command, args, cwd?, runs (3), thresholdMs?, beforeMs?,
+copyToBaseline? }`. The backend collector runs the command `runs` times in the fixed worktree and, when a
+baseline worktree exists, in the pre-change commit (files in `copyToBaseline`, e.g. a new bench script, are
+copied in for the run and unlinked afterwards), compares the medians and writes `perf-compare.json`.
+Judgement: fail if the command fails or `after > thresholdMs`; doubt if under 10% faster or no before timing
+(`beforeMs` is accepted as a recorded fallback); else pass. The pipeline creates the baseline worktree for web
+projects and whenever the worker's `.vibe/verify.json` has `backend.perf`, injects it, and keeps the worker's
+`backend.perf` when the verifier's own config lacks it. vibe-maintain's `perf-slow` rule tells its worker to
+write this block.
+
 ## iOS and desktop collectors (WP-46)
 
 - `server/collectors/ios`: `createIosCollector` drives `xcrun simctl` (boot, install, launch, screenshot,

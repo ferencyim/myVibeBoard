@@ -8,6 +8,7 @@ import {
   type MaintainSettings,
 } from "./shared/rpc";
 import { createMaintenanceEngine } from "./server/engine";
+import { perfSlowCheck } from "./server/checks/perf-slow";
 import { gitCheck } from "./server/git/check";
 import { execGit } from "./server/git/exec";
 import { createFixLauncher, createSubAgentRunner } from "./server/launch";
@@ -35,7 +36,7 @@ export default function contribute(server: PluginServerContext) {
     db,
     store,
     git: execGit,
-    checks: { git: gitCheck },
+    checks: { git: gitCheck, "perf-slow": perfSlowCheck },
     settings: () => current,
     subAgent: createSubAgentRunner(agentPorts),
     fixLauncher: createFixLauncher(agentPorts),

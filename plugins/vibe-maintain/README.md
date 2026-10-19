@@ -70,10 +70,53 @@ Deterministic, no model: stale unmerged branches, merged-but-not-deleted branche
 large tracked files, outdated npm dependencies (`npm outdated`, set `outdated: false` to skip).
 Findings are grouped per category into one card.
 
+## Performance slow records (`check.type: perf-slow`, WP-47)
+
+Register slow-record sources and thresholds per project; the rule runs on a cron and files what is new.
+
+```yaml
+rules:
+  - name: perf-slow
+    trigger: { kind: time, cron: "0 4 * * *" }
+    check:
+      type: perf-slow
+      sources:
+        - { name: api, kind: jsonl, path: logs/access.jsonl, threshold_ms: 500,
+            fields: { site: route, ms: duration_ms, ts: time, method: method }, unit: ms }
+        - { kind: bench-json, path: bench/result.json, threshold_ms: 50 }   # hyperfine / vitest bench / [{name, ms}]
+        - { kind: mysql-slow, path: /var/log/mysql/slow.log, threshold_ms: 1000 }
+        - { kind: pg-log, path: /var/log/postgresql/postgresql.log, threshold_ms: 1000 }
+      repro: { command: node, args: [bench/run.js, "{site}"], runs: 3 }   # threshold_ms defaults to the source's
+    output: fix        # reproduced -> worktree worker; otherwise a draft card
+    agent: codex
+```
+
+- **Incremental**: per source a byte offset (bench files: mtime) is kept in `work_counter`
+  (`<ruleId>:cursor:*`) and advanced only after the card exists. Rotation/truncation restarts at 0; a backlog
+  over 8 MB skips the oldest part (noted in the card). Unterminated last lines/blocks wait for the next run.
+- **Dedupe by call site**: route (query string dropped, ids -> `:id`), SQL fingerprint (literals -> `?`) or
+  benchmark name. The card's `dedupeKey` is `perf-slow:<source>:<site>`; a site with an open card is skipped, so
+  the next site gets its turn. One card per run (worst p95/threshold first), the other slow sites are listed in it.
+- **Reproduce first**: `repro` runs `runs` times in the repository; median above the threshold = reproduced.
+  Reproduced + `output: fix` -> in_progress card, worker prompt with the exact `.vibe/verify.json`
+  `backend.perf` block to merge in. Otherwise (no `repro`, command failed, not reproducible) the card is a
+  **draft** with the investigation notes (`CheckOutput.forceDraft`). The card state machine has no
+  `in_progress -> draft`, so a worker that is unsure instead comments its conclusion and reports
+  `PERF-INCONCLUSIVE:`; the verification then ends in `doubt` for the owner.
+- **Evidence**: vibe-verify's backend collector measures `backend.perf` in the baseline worktree (before)
+  and the fixed worktree (after) and writes `perf-compare.json` (see the vibe-verify README).
+- Real-run note: `createFixLauncher` sets no permission mode, so a Codex worker waits for a human to approve its
+  first shell command (seen in the isolated-daemon run); approve it in the app or give the agent an auto mode.
+- Limits: MySQL/PostgreSQL parsers cover the stock text formats only; fingerprints are literal-stripped
+  text, not a SQL parse; one reproduction command per rule (use `{site}` to parametrise it).
+
+Checks may also return `dedupeKey`, `instructions`, `acceptance`, `needsEvidence`, `forceDraft` and `commit`
+(called after the card exists); `CheckContext` offers `cursor` and `hasOpenCard`.
+
 ## Adding rules / checks
 
 A check is `(ctx) => Promise<CheckOutput | null>` registered in `checks` (see `index.server.ts`);
-WP-47's performance rule plugs in there (`check.type: perf-slow`). Fix-mode and sub agent prompts are
+the performance rule (`check.type: perf-slow`, `server/checks/perf-slow`) is registered there. Fix-mode and sub agent prompts are
 built from `CheckOutput`.
 
 ## RPC
