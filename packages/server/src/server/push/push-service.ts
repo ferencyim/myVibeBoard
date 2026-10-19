@@ -21,6 +21,14 @@ interface ExpoPushTicket {
   details?: { error?: string };
 }
 
+export interface PushGatewayConfig {
+  /** Base URL of vibe-push-gateway, e.g. https://host/push */
+  url: string;
+  authToken?: string;
+}
+
+const isExpoToken = (token: string): boolean => /^Expo(nent)?PushToken\[/.test(token);
+
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const MAX_BATCH_SIZE = 100;
 
@@ -32,14 +40,35 @@ export class PushService {
   private readonly logger: pino.Logger;
   private readonly revokeToken: (token: string) => void;
 
-  constructor(logger: pino.Logger, revokeToken: (token: string) => void) {
+  private readonly gateway: PushGatewayConfig | undefined;
+
+  constructor(
+    logger: pino.Logger,
+    revokeToken: (token: string) => void,
+    gateway?: PushGatewayConfig,
+  ) {
     this.logger = logger.child({ component: "push-service" });
     this.revokeToken = revokeToken;
+    this.gateway = gateway;
   }
 
   async sendPush(tokens: string[], payload: PushPayload): Promise<void> {
     if (tokens.length === 0) {
       return;
+    }
+
+    // Native FCM tokens (anything that is not an Expo token) go through the gateway.
+    const nativeTokens = tokens.filter((token) => !isExpoToken(token));
+    tokens = tokens.filter(isExpoToken);
+    if (nativeTokens.length > 0) {
+      if (this.gateway) {
+        await Promise.all(nativeTokens.map((token) => this.sendViaGateway(token, payload)));
+      } else {
+        this.logger.debug(
+          { count: nativeTokens.length },
+          "Skipping native push tokens: no push gateway configured",
+        );
+      }
     }
 
     const messages: ExpoPushMessage[] = tokens.map((token) => ({
@@ -57,6 +86,36 @@ export class PushService {
     }
 
     await Promise.all(batches.map((batch) => this.sendBatch(batch)));
+  }
+
+  private async sendViaGateway(token: string, payload: PushPayload): Promise<void> {
+    const gateway = this.gateway;
+    if (!gateway) return;
+    try {
+      const response = await fetch(`${gateway.url.replace(/\/+$/, "")}/v1/push`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(gateway.authToken ? { Authorization: `Bearer ${gateway.authToken}` } : {}),
+        },
+        body: JSON.stringify({
+          token,
+          title: payload.title,
+          body: payload.body,
+          data: payload.data,
+        }),
+      });
+      if (response.status === 404) {
+        // Gateway reports the FCM token as unregistered.
+        this.revokeToken(token);
+        return;
+      }
+      if (!response.ok) {
+        this.logger.error({ status: response.status }, "Push gateway error");
+      }
+    } catch (error) {
+      this.logger.error({ err: error }, "Failed to reach push gateway");
+    }
   }
 
   private async sendBatch(messages: ExpoPushMessage[]): Promise<void> {
