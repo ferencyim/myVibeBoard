@@ -41,7 +41,7 @@ describe("push notifier", () => {
       {
         title: "Demo",
         body: "Needs your answer",
-        data: { event: "session.waiting", cardKey: card.key },
+        data: { event: "session.waiting", cardKey: card.key, agentId: "worker-1" },
         agentAttention: { agentId: "worker-1", reason: "permission" },
       },
     ]);

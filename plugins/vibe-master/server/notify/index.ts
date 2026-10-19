@@ -3,7 +3,7 @@
 //   session.waiting (worker)   "Needs your answer"  (Paseo already pushes the agent's own
 //                              permission/question; agentAttention lets the daemon drop the twin)
 //   master.alert               "Master: quota low" etc. (the reminders of the master agent)
-// Title = project name, body = event type, data = card key only: never card text, so the push stays
+// Title = project name, body = event type, data = card key (+ agentId for session.waiting): never card text, so the push stays
 // within the daemon's minimal-payload rule.
 
 import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } from "../vibe/db";
@@ -57,7 +57,12 @@ export function startNotifyConsumer(options: NotifyOptions): EventConsumer {
       return {
         title: projectName({ ...event, cardId: session.cardId ?? event.cardId }),
         body: "Needs your answer",
-        data: { event: "session.waiting", ...(card ? { cardKey: card.key } : {}) },
+        data: {
+          event: "session.waiting",
+          ...(card ? { cardKey: card.key } : {}),
+          // Same field the daemon puts in its own agent pushes, so a tap opens the session.
+          ...(agentId ? { agentId } : {}),
+        },
         ...(agentId ? { agentAttention: { agentId, reason: "permission" as const } } : {}),
       };
     }
