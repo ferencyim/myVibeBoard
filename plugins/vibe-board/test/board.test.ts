@@ -512,7 +512,9 @@ describe("plugin entry", () => {
     const { default: contribute } = await import("../index.server");
     const dispose = contribute(server as never);
     expect(hooks).toEqual(["agent.create", "agent.session_open", "agent.session_open"]);
-    expect(handlers).toHaveLength(Object.keys(rpc.VIBE_BOARD_RPCS).length);
+    expect(handlers).toHaveLength(
+      Object.keys(rpc.VIBE_BOARD_RPCS).length + Object.keys(rpc.VIBE_VERIFY_UI_RPCS).length,
+    );
     await (dispose as () => Promise<void>)();
     vi.unstubAllEnvs();
   });

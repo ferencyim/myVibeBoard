@@ -32,6 +32,12 @@ export function useBoardApi() {
     attachmentsUpload: useRpc(rpc.attachmentsUploadRpc),
     attachmentsDownload: useRpc(rpc.attachmentsDownloadRpc),
     attachmentsDelete: useRpc(rpc.attachmentsDeleteRpc),
+    verifyGet: useRpc(rpc.verifyGetRpc),
+    verifyList: useRpc(rpc.verifyListRpc),
+    verifyEvidence: useRpc(rpc.verifyEvidenceRpc),
+    verifyApprove: useRpc(rpc.verifyApproveRpc),
+    verifyReject: useRpc(rpc.verifyRejectRpc),
+    verifyRerun: useRpc(rpc.verifyRerunRpc),
   };
 }
 

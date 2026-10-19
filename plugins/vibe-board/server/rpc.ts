@@ -7,6 +7,7 @@ import type { Dispatcher } from "./dispatch";
 import type { Lifecycle } from "./lifecycle";
 import type { ReplyService, SyncService } from "./sync";
 import type { BoardService } from "./service";
+import type { VerifyService } from "./verify";
 
 async function listPaseoProjects(paseo: PaseoApi) {
   try {
@@ -53,6 +54,8 @@ export interface BoardRpcExtras {
   lifecycle?: Lifecycle;
   sync?: SyncService;
   replies?: ReplyService;
+  /** Verification result for the card UI (WP-21). */
+  verify?: VerifyService;
   /** Keeps the newest SDK handle for dispatch outside hooks. */
   onPaseo?: (paseo: PaseoApi) => void;
 }
@@ -102,7 +105,15 @@ export function registerBoardRpcs(
   server.handle(rpc.attachmentsDeleteRpc, (input) => board.attachments.delete(input.attachmentId));
   server.handle(rpc.sessionsListRpc, (input) => board.sessions.list(input.card));
 
-  const { dispatcher, lifecycle, sync, replies } = extras;
+  const { dispatcher, lifecycle, sync, replies, verify } = extras;
+  if (verify) {
+    server.handle(rpc.verifyGetRpc, (input) => verify.get(input.card, input.verificationId));
+    server.handle(rpc.verifyListRpc, (input) => verify.list(input.card));
+    server.handle(rpc.verifyEvidenceRpc, (input) => verify.evidence(input.evidenceId, input.thumb));
+    server.handle(rpc.verifyApproveRpc, (input) => verify.approve(input.card));
+    server.handle(rpc.verifyRejectRpc, (input) => verify.reject(input.card, input.comment));
+    server.handle(rpc.verifyRerunRpc, (input) => verify.rerun(input.card));
+  }
   if (sync) server.handle(rpc.syncExchangeRpc, (input) => sync.exchange(input as never));
   if (replies) {
     server.handle(rpc.replyCheckRpc, (input, { paseo }) => {

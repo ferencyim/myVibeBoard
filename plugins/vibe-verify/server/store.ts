@@ -16,6 +16,7 @@ import {
   type VerificationMode,
 } from "./vibe/contract";
 import { decodeRow, decodeRows, publishEvent, type VibeDb } from "./vibe/db";
+import { writeThumbnail } from "./thumbnail";
 import type { VerificationDetail } from "../shared/rpc";
 
 export const SUMMARY: Record<Judgement, string> = {
@@ -46,6 +47,8 @@ export interface VerifyStore {
   items(verificationId: string): VerificationItem[];
   evidence(verificationId: string): EvidenceFile[];
   evidenceById(id: string): EvidenceFile | undefined;
+  /** Creates and records the thumbnail of an image evidence file that has none; returns its path. */
+  ensureThumb(evidence: EvidenceFile): string | null;
   setVerifier(verificationId: string, agentId: string): void;
   addItem(verificationId: string, check: { text: string; method: string }): VerificationItem;
   judgeItem(itemId: string, judgement: Judgement, note: string, evidenceIds?: string[]): void;
@@ -122,6 +125,12 @@ export function createVerifyStore(
       const row = db.prepare("SELECT * FROM evidence_file WHERE id = ?").get(id);
       return row ? decodeRow(EvidenceFileSchema, row) : undefined;
     },
+    ensureThumb(evidence) {
+      if (evidence.thumbPath) return evidence.thumbPath;
+      const thumbPath = writeThumbnail(evidence.path);
+      if (thumbPath) db.prepare("UPDATE evidence_file SET thumb_path = ? WHERE id = ?").run(thumbPath, evidence.id);
+      return thumbPath;
+    },
     setVerifier(verificationId, agentId) {
       db.prepare("UPDATE verification SET verifier_agent_id = ? WHERE id = ?").run(agentId, verificationId);
     },
@@ -158,7 +167,7 @@ export function createVerifyStore(
         itemId,
         artifact.kind,
         artifact.path,
-        artifact.thumbPath ?? null,
+        artifact.thumbPath ?? (artifact.kind === "screenshot" ? writeThumbnail(artifact.path) : null),
         artifact.sha256 ?? "",
         artifact.capturedAt,
         artifact.commitHash,

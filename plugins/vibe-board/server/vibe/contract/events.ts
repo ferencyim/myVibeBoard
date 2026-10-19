@@ -43,6 +43,12 @@ export const EVENT_PAYLOADS = {
     verificationId: z.string(),
     conclusion: JudgementSchema,
   }),
+  // The UI (vibe-board, which cannot call another plugin's RPC) asks vibe-verify to act on a
+  // card in `verifying`: send the user's rejection to the worker, or start a new verification.
+  "verification.decision_requested": z.object({
+    action: z.enum(["reject", "rerun"]),
+    comment: z.string().optional(),
+  }),
   "maintenance.triggered": z.object({ ruleId: z.string(), runId: z.string() }),
   "plan.updated": z.object({ version: z.number().int() }),
   // vibe-scheduler (WP-34). `scheduler.admitted` asks vibe-board to dispatch the card now;

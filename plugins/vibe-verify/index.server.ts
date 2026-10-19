@@ -93,11 +93,18 @@ export default function contribute(server: PluginServerContext) {
   const consumer = createEventConsumer({
     db,
     consumer: "vibe-verify",
-    types: ["card.moved"],
+    types: ["card.moved", "verification.decision_requested"],
     startAt: "now",
-    handler: (event) => {
+    handler: async (event) => {
       if (isEvent(event, "card.moved") && event.payload.to === "verifying" && event.cardId) {
         start(event.cardId);
+      }
+      // Requests from the board UI (it cannot call this plugin's RPCs): only while still verifying.
+      if (isEvent(event, "verification.decision_requested") && event.cardId) {
+        if (board.cards.get(event.cardId)?.column !== "verifying") return;
+        const { action, comment } = event.payload;
+        if (action === "reject" && comment?.trim()) await pipeline.reject(event.cardId, comment.trim());
+        else if (action === "rerun" && !pipeline.isRunning(event.cardId)) start(event.cardId);
       }
     },
     onError: (error) => log("event handling failed", error),

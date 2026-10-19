@@ -497,3 +497,4 @@ export const VIBE_BOARD_RPCS = {
 } as const;
 
 export * from "./sync";
+export * from "./verify";

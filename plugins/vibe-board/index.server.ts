@@ -13,6 +13,7 @@ import { createGitFinalizer } from "./server/lifecycle/git-finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
 import { createReplyService, createSyncService } from "./server/sync";
+import { createVerifyService } from "./server/verify";
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(boardSettings);
@@ -110,7 +111,14 @@ export default function contribute(server: PluginServerContext) {
       onPaseo(context.paseo);
       return handler(input, context);
     });
-  registerBoardRpcs(tracked, board, { dispatcher, lifecycle, onPaseo, sync, replies });
+  registerBoardRpcs(tracked, board, {
+    dispatcher,
+    lifecycle,
+    onPaseo,
+    sync,
+    replies,
+    verify: createVerifyService({ db: runtime.db, board }),
+  });
 
   return async () => {
     await admission.stop();
