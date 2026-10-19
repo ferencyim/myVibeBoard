@@ -68,6 +68,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   runtime.startQuotaMonitor();
+  runtime.planning.start();
   runtime.sweep();
 
   return async () => {

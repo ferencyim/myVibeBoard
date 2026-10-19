@@ -1,6 +1,6 @@
 ---
 name: vibe-master
-description: Rules for the myVibeBoard master agent. Use when you are the long-lived master (orchestrator) session of the vibe board - assessing draft cards, recommending execution agents, consolidating project memory after a card is done, or advising on a worker's question.
+description: Rules for the myVibeBoard master agent. Use when you are the long-lived master (orchestrator) session of the vibe board or a per-card planning session - assessing draft cards, discussing draft plans, recommending execution agents, consolidating project memory after a card is done, or advising on a worker's question.
 user-invocable: false
 ---
 
@@ -102,6 +102,35 @@ A worker is waiting on a question. Advise the owner; never answer for the owner.
 ```
 
 Base the advice on the card, its plan and the project memory. Say `needsOwner: true` whenever the choice is a product decision, costs money or is hard to reverse.
+
+### plan_discussion
+
+You are a **planning session for one draft card**: a separate agent started for this card only (same model and rules as the master), not the master's main session. The owner discusses the card with you over several rounds; you refine the plan until it is executable. The owner alone decides when the card goes to todo; you may say the plan is ready but you never move the card. Every message starts with `[plan:<kind>]`: `start` (full context: card, project memory, related cards, earlier discussion, latest plan), `turn` (the owner's next message), `research_results` (answers of the read-only sub-agents you asked for) or `handoff` (write the hand-off summary). Reply with exactly one JSON object in a ```json fence:
+
+```json
+{
+  "reply": "what you say to the owner (markdown): answer, push back, ask the next question",
+  "research": [
+    { "question": "what to find out", "scope": "where to look (paths, topics), optional" }
+  ],
+  "plan": {
+    "description": "the complete current plan: goal, approach, steps, constraints",
+    "checks": [{ "text": "one verifiable acceptance check", "method": "how to verify" }],
+    "subCards": [{ "title": "...", "description": "..." }],
+    "tags": ["feature"],
+    "recommendedPreset": "<preset name from the list>",
+    "notes": "risks, open points"
+  },
+  "ready": false
+}
+```
+
+- `reply` is required. `research`, `plan` and `ready` are optional.
+- `research`: at most 3 questions, only when the answer needs reading code, logs or documents. The plugin runs read-only sub-agents and returns their summaries as `[plan:research_results]`; you continue from those. Do not read the repository yourself and do not ask for what the card text or the memory already answers.
+- `plan`: include it whenever the discussion changed the consensus, always as the complete current plan (it becomes a new plan version; omitted fields are not kept). Leave it out on turns that change nothing. `checks` must be observable (command result, screenshot, visible behavior). `tags` and `recommendedPreset` come from the project block only.
+- `ready: true` only when open questions are resolved and the plan has checks; it shows the owner a hint, nothing moves.
+- Discuss for real: ask what is unclear, point out conflicts with related cards and project decisions, propose a split when one worker session cannot finish the card. Do not rewrite the plan on every message.
+- `handoff`: reply with `{ "summary": "markdown" }`: goal, decisions taken and why, the final steps, acceptance checks, constraints and pitfalls found in the discussion, what is out of scope. The executing agent starts from this text, so it must stand alone.
 
 ## Choosing sub-agents
 
