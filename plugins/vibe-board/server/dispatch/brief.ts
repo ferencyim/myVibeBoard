@@ -44,14 +44,29 @@ function section(title: string, body: string): string {
   return `## ${title}\n${body.trim() || "None."}`;
 }
 
+/** Hand-off summary written by the card's planning session (vibe-master, WP-33). */
+export interface PlanHandoff {
+  /** Absolute path of `<repo>/.vibe/sessions/<KEY>-plan.md`, when it exists. */
+  path: string | null;
+  text: string;
+}
+
+const HANDOFF_MAX_CHARS = 8000;
+const DISCUSSION_KINDS = new Set(["discussion", "discussion_research", "handoff", "handoff_request"]);
+
 export interface BriefInput {
   card: CardView;
   project: Project;
   preset: Preset;
   events: readonly CardEvent[];
   latestPlan?: PlanVersion;
+  handoff?: PlanHandoff | null;
   extraInstructions?: string;
 }
+
+/** Discussion messages are carried by the hand-off summary, not repeated as notes. */
+const isDiscussion = (e: CardEvent) =>
+  e.type === "note" && DISCUSSION_KINDS.has(String((e.body as { kind?: unknown } | null)?.kind));
 
 function eventLine(e: CardEvent): string {
   const body = e.body as { text?: unknown } | null;
@@ -69,6 +84,7 @@ export function buildDispatchBrief(input: BriefInput): string {
   const { card, project, preset } = input;
   const notes = input.events
     .filter((e) => e.type === "note" || e.type === "reject" || e.type === "evaluation")
+    .filter((e) => !isDiscussion(e))
     .slice(-RECENT_EVENT_LIMIT)
     .map(eventLine)
     .filter(Boolean)
@@ -79,6 +95,18 @@ export function buildDispatchBrief(input: BriefInput): string {
     section("Description", card.description || "No description provided."),
     section("Acceptance criteria", card.acceptance),
     section("Reference images", card.refImages.map((id) => `- attachment ${id}`).join("\n")),
+    input.handoff
+      ? section(
+          "Planning hand-off (start here)",
+          [
+            "The owner and the planning session agreed on the approach below; follow it and report deviations in a card comment." +
+              (input.handoff.path ? ` Full file: ${input.handoff.path}` : ""),
+            input.handoff.text.length > HANDOFF_MAX_CHARS
+              ? `${input.handoff.text.slice(0, HANDOFF_MAX_CHARS)}\n…(truncated, see the file)`
+              : input.handoff.text,
+          ].join("\n\n"),
+        )
+      : "",
     plan
       ? section(
           "Plan",
@@ -95,6 +123,7 @@ export function buildDispatchBrief(input: BriefInput): string {
       `You are the worker for card ${card.key}. Read it with \`vibe-board show ${card.key}\` (MCP \`vibe_show\`). ` +
         `Report progress or ask a question with \`vibe-board comment ${card.key} --body "..."\`. ` +
         `Attach result files with \`vibe-board attachment add ${card.key} --file <path>\`. ` +
+        `Commit your finished work on the worktree branch before you end the round (the board merges that branch after approval and never touches uncommitted changes). ` +
         `You cannot move the card: when your round ends with no open question, the board moves it to verifying.`,
     ),
     preset.runtimeEnv ? section("Runtime environment", preset.runtimeEnv) : "",

@@ -28,10 +28,12 @@ export function createPlaywrightDriver(): BrowserDriver {
   type PW = typeof import("playwright");
   type Browser = Awaited<ReturnType<PW["chromium"]["launch"]>>;
   let browser: Browser | undefined;
+  // Opaque specifier: the plugin bundler must not inline playwright (it is resolved at run time).
+  const loadPlaywright = (): Promise<PW> => import(["play", "wright"].join("")) as Promise<PW>;
 
   async function launch(): Promise<Browser> {
     if (!browser) {
-      const { chromium } = await import("playwright");
+      const { chromium } = await loadPlaywright();
       browser = await chromium.launch();
     }
     return browser;
@@ -40,7 +42,7 @@ export function createPlaywrightDriver(): BrowserDriver {
   return {
     async probe() {
       try {
-        const { chromium } = await import("playwright");
+        const { chromium } = await loadPlaywright();
         const { existsSync } = await import("node:fs");
         return existsSync(chromium.executablePath())
           ? { ok: true }
