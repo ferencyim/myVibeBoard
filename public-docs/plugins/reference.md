@@ -16,6 +16,7 @@ Local plugins are directory sources installed into one Paseo daemon. A plugin ca
 
 - React Native screens and sidebar header and footer items to Paseo clients;
 - workspace and agent panels opened as workspace tabs;
+- [file panels](#file-panels) for viewing or editing matching files;
 - global, workspace, and agent actions in the Command Center;
 - slash commands in the message composer;
 - transformed and daemon-pushed agent timeline rows;
@@ -1754,6 +1755,144 @@ Agent snapshot fields:
 | `labels`            | `Record<string, string>`                                       |
 
 Paseo owns tab focus, splitting, closing, persistence, query state, the API/RPC providers, and the render error boundary. A restored tab whose plugin, panel, context, workspace, or agent is unavailable stays open with an unavailable message instead of crashing the workspace.
+
+## File panels
+
+Register a component for a file tab's Preview slot. Paseo loads the document from the selected
+host, including remote hosts. Your plugin receives its contents and edits through the host document.
+
+```tsx
+import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { RichMarkdownPanel } from "./client/rich-markdown";
+
+export default function contribute(client: PluginClientContext) {
+  return client.addFilePanel({
+    id: "rich-markdown",
+    title: "Rich Markdown",
+    icon: "FileType",
+    files: { extensions: ["md", "markdown"] },
+    document: "text",
+    Component: RichMarkdownPanel,
+  });
+}
+```
+
+`addFilePanel` takes a `PluginFilePanelContribution` and returns an idempotent cleanup function.
+Paseo also removes the registration when the client entry is unloaded.
+
+| Field       | Required | Meaning                                                                                |
+| ----------- | -------- | -------------------------------------------------------------------------------------- |
+| `id`        | Yes      | Plugin-local ID matching `^[a-z][a-z0-9-]*$`.                                          |
+| `title`     | Yes      | Non-empty label in the picker and Open with menu.                                      |
+| `icon`      | Yes      | Lucide name, `{ svg }`, or component. See [Icons](#icons).                             |
+| `files`     | Yes      | `{ extensions: readonly string[]; filenames?: readonly string[] }`.                    |
+| `document`  | Yes      | `"text"` or `"bytes"`; selects the document passed to the component.                   |
+| `maxBytes`  | No       | Positive finite size limit in bytes. Defaults to 10 MiB. Larger files skip this panel. |
+| `Component` | Yes      | Component receiving `PluginFilePanelProps`.                                            |
+
+Extensions have no leading dot and match without case sensitivity. Filenames match the exact
+basename, including case. Selectors contain no paths, globs, or wildcards. Use `extensions: []`
+for a filename-only selector. At least one extension or filename is required.
+
+### File panel props
+
+`PluginFilePanelProps` includes the common `theme`, `host`, `layout`, and optional `navigation`
+props described under [Theme and layout](#theme-and-layout), plus:
+
+| Prop                             | Type                                          | Meaning                                                                      |
+| -------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------- |
+| `workspaceId`                    | `string`                                      | Workspace containing the file tab.                                           |
+| `file.path`                      | `string`                                      | Absolute path on the selected host.                                          |
+| `file.name`                      | `string`                                      | Basename.                                                                    |
+| `file.extension`                 | `string`                                      | Lowercase extension without the dot, or `""`.                                |
+| `file.mimeType`                  | `string`                                      | Host-reported MIME type; binary files can report `application/octet-stream`. |
+| `file.size`                      | `number`                                      | Size in bytes.                                                               |
+| `file.modifiedAt`                | `string`                                      | Modification timestamp.                                                      |
+| `file.lineStart`, `file.lineEnd` | `number` (optional)                           | Requested line range.                                                        |
+| `navigationRevision`             | `number`                                      | Increments when the same tab receives another line navigation.               |
+| `document`                       | `PluginTextDocument` or `PluginBytesDocument` | Matches the registration's `document` field.                                 |
+
+A `PluginTextDocument` keeps the text owned by Paseo:
+
+| Field      | Type                     | Meaning                                                                                |
+| ---------- | ------------------------ | -------------------------------------------------------------------------------------- |
+| `kind`     | `"text"`                 | Document discriminator.                                                                |
+| `text`     | `string`                 | Current editor text, including external updates.                                       |
+| `editable` | `boolean`                | False on native, daemons without file editing, or files above 1 MiB. Render read-only. |
+| `setText`  | `(next: string) => void` | Replace editor text. Paseo owns autosave, dirty state, and conflict handling.          |
+
+Call `document.setText(next)` from your editor's change callback when `editable` is true.
+Update your editor when `document.text` changes; do not send that update back as a user edit.
+Do not write the file through RPCs or maintain a second save workflow. Source still opens
+Paseo's text editor with the same document.
+
+A `PluginBytesDocument` is read-only:
+
+| Field   | Type         | Meaning                                                                               |
+| ------- | ------------ | ------------------------------------------------------------------------------------- |
+| `kind`  | `"bytes"`    | Document discriminator.                                                               |
+| `bytes` | `Uint8Array` | Loaded file bytes.                                                                    |
+| `url`   | `string`     | Host-owned local preview URL: `blob:` on web, `file:` on native. Valid while mounted. |
+
+Use `bytes` for your own renderer or pass `url` to `DocumentFrame`. Do not reconstruct a daemon
+URL from `file.path`; local document URLs also work when the daemon is remote.
+
+### Selection and Open with
+
+Text panels require a text file. Bytes panels accept any file with loaded bytes. Paseo filters
+matching panels by document kind and size before selecting one. Built-in Markdown, HTML, and
+Image panels precede plugins; plugins follow host catalog order.
+
+A remembered association selects its panel when that panel is available on the current host.
+With one candidate, Paseo opens it directly. With several and no available association, Paseo
+shows the first candidate under a picker, once per tab open. A Markdown plugin therefore opens
+with **Markdown — Paseo** and **Rich Markdown — markdown-panel** as choices.
+
+**Don't ask me again** remembers the choice on this device for the extension. When a candidate
+matches an exact filename, the choice applies to that basename instead. An unavailable association
+is ignored on that host and retained for hosts where its panel is installed.
+
+Users switch the current tab through **Open with…** in the tab menu or file bar. That choice
+wins over the remembered association for this tab until it is retargeted. **Always use** also
+remembers the choice. Without a candidate, text files show Source and other files show
+**Binary preview unavailable**. Binary files have no Source editor.
+
+### DocumentFrame
+
+Import `DocumentFrame` from `@getpaseo/plugin/client/ui` to display a local document URL:
+
+```tsx
+import type { PluginFilePanelProps } from "@getpaseo/plugin/client";
+import { DocumentFrame } from "@getpaseo/plugin/client/ui";
+
+export function PdfPanel({ document }: PluginFilePanelProps) {
+  if (document.kind !== "bytes") return null;
+  return <DocumentFrame url={document.url} testID="pdf-panel" />;
+}
+```
+
+| Prop     | Required | Meaning                                                                             |
+| -------- | -------- | ----------------------------------------------------------------------------------- |
+| `url`    | Yes      | Host document URL; `blob:` on web or `file:` on native. Other schemes are rejected. |
+| `testID` | No       | Test identifier for the frame.                                                      |
+
+Web uses a sandboxed iframe with no scripts or same-origin access. Native uses a WebView with
+JavaScript, storage, and further navigation disabled. iOS supports inline PDF rendering; Android's
+WebView does not. Provide an Android fallback or bundle your own renderer.
+
+Inline PDF rendering needs a daemon from Paseo 0.13.0 or later; older daemons report PDFs as
+`application/octet-stream`.
+
+### Version requirement and examples
+
+File panels and `DocumentFrame` require Paseo 0.13.0 or later. Declare
+`"requirements": { "paseo": ">=0.13.0" }` in `paseo-plugin.json`. Both daemon and app check the
+[version requirement](#requirements); older apps skip the client bundle before evaluation.
+
+Complete directory examples:
+
+- [PDF panel](https://github.com/getpaseo/paseo/tree/main/plugin-examples/pdf-panel): bytes with `DocumentFrame` and an Android fallback.
+- [Markdown panel](https://github.com/getpaseo/paseo/tree/main/plugin-examples/markdown-panel): a bundled CodeMirror editor that calls the host document's `setText`, with read-only native text.
 
 ## Command Center items
 

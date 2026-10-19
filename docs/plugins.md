@@ -558,7 +558,11 @@ one section's order from built-ins, plugin groups, and the section's preference
 
 ## Contribute file panels
 
-Client `addFilePanel` registrations fill a file tab's Preview slot with a host-owned text or bytes document. Text edits go through Paseo's editor model; bytes include a local preview URL. Resolution lives in `packages/app/src/file-panels/`: built-ins precede plugins in host catalog order, selectors match extensions or exact filenames, and document kind and size filter candidates before associations apply. With several candidates and no association for the selector key, the tab shows the first candidate and asks once per tab open which panel to use; "Don't ask me again" and "Always use" write the association to app settings, so it is per device. A tab's own choice wins over the association until the tab is retargeted. Declare `requirements.paseo` at the release introducing this API so older apps skip the bundle before evaluation; see [plugin requirements](../public-docs/plugins/reference.md#requirements).
+Client `addFilePanel` registrations fill a file tab's Preview slot with host-owned text or bytes.
+Keep editing in the host document so autosave and conflicts have one owner. See the
+[public file panel reference](../public-docs/plugins/reference.md#file-panels) for selectors,
+selection, document props, `DocumentFrame`, and the version requirement. The examples live in
+`plugin-examples/pdf-panel` and `plugin-examples/markdown-panel`.
 
 ## Contribute buttons
 

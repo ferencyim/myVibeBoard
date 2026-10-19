@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Plugins
+
+- Added PDF and Rich Markdown file panel examples and the file panel API reference. The Markdown example edits through Paseo’s autosave and conflict handling.
+
 ## 0.12.0 - 2026-10-19
 
 Background workspaces, a new Markdown renderer with selection across paragraphs on phones, a reworked phone layout, and more than 120 fixes.
