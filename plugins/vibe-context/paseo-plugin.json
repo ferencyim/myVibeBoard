@@ -1,0 +1,8 @@
+{
+  "id": "vibe-context",
+  "name": "Vibe Context",
+  "description": "myVibeBoard context plugin.",
+  "requirements": {
+    "paseo": ">=0.12.0 <0.13.0"
+  }
+}
