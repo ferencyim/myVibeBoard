@@ -1,0 +1,21 @@
+{
+  "id": "deepseek-harness",
+  "requirements": {
+    "paseo": ">=0.11.0"
+  },
+  "build": [
+    [
+      "npm",
+      "ci",
+      "--ignore-scripts",
+      "--legacy-peer-deps",
+      "--no-audit",
+      "--no-fund"
+    ],
+    [
+      "npm",
+      "run",
+      "check"
+    ]
+  ]
+}

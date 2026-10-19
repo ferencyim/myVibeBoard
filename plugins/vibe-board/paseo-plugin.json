@@ -1,0 +1,14 @@
+{
+  "id": "tasks",
+  "name": "Tasks",
+  "description": "Linear-style task tracker with projects, folders, subtasks, comments, agent preset delegation, comment steering, and CLI/MCP report-back.",
+  "icon": "assets/icon.png",
+  "media": [
+    "assets/screenshot-board.png",
+    "assets/screenshot-list.png",
+    "assets/screenshot-detail.png"
+  ],
+  "requirements": {
+    "paseo": ">=0.11.2"
+  }
+}

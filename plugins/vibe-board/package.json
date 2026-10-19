@@ -1,0 +1,55 @@
+{
+  "name": "paseo-plugin-tasks",
+  "version": "0.1.1",
+  "description": "Paseo plugin: Linear-style task tracker with projects, folders, subtasks, comments, agent preset delegation, comment steering, and CLI/MCP report-back.",
+  "keywords": [
+    "paseo",
+    "paseo-plugin",
+    "tasks",
+    "kanban",
+    "tracker",
+    "delegation",
+    "agents"
+  ],
+  "author": "anh-chu",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/anh-chu/paseo-plugin-tasks#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anh-chu/paseo-plugin-tasks.git"
+  },
+  "bugs": "https://github.com/anh-chu/paseo-plugin-tasks/issues",
+  "bin": {
+    "paseo-tasks": "./bin/paseo-tasks.mjs",
+    "bb-tasks": "./bin/paseo-tasks.mjs"
+  },
+  "files": [
+    "paseo-plugin.json",
+    "OVERVIEW.md",
+    "README.md",
+    "LICENSE",
+    "index.client.tsx",
+    "index.server.ts",
+    "client/",
+    "server/",
+    "shared/",
+    "bin/",
+    "assets/"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@getpaseo/client": "^0.11.2",
+    "@getpaseo/plugin": "0.11.2",
+    "@tanstack/react-query": "^5.90.11",
+    "@types/node": "^24.19.2",
+    "@types/react": "~19.2.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "zod": "^4.4.3"
+  }
+}

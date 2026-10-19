@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import { compact, estimateTokens, type Common } from "../server/compact";
+
+const filler = "x".repeat(40_000);
+const at = (n: number) => new Date(2026, 0, 1, 0, n).toISOString();
+const messages: Common["messages"] = [];
+const tool = (id: string, name: string, input: unknown, result: string, error = false, n = 0) => {
+  messages.push({ role: "assistant", content: [{ type: "tool_use", id, tool: { name: "Raw", tool_name: name, input } }], timestamp: at(n) });
+  messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: result }], is_error: error }], timestamp: at(n) });
+};
+for (let turn = 0; turn < 14; turn++) {
+  messages.push({ role: "user", content: [{ type: "text", text: turn === 0 ? "Build the widget" : `step ${turn}` }], timestamp: at(turn) });
+  tool(`r${turn}`, "read", { path: "/p/a.ts" }, filler, false, turn);
+  if (turn === 2) tool("e1", "edit", { filePath: "/p/a.ts" }, "ok", false, turn);
+  if (turn === 3) tool("e2", "edit", { filePath: "/p/a.ts" }, "ok", false, turn);
+  if (turn === 4) tool("c1", "bash", { command: 'git add -A && git commit -m "feat: widget"' }, "done", false, turn);
+  if (turn === 5) tool("c2", "bash", { command: "python3 - <<'EOF'\nprint('git commit -m fake')\nEOF" }, "x", false, turn);
+  if (turn === 6) tool("e3", "edit", { filePath: "/p/failed.ts" }, "no match", true, turn);
+  if (turn === 7) tool("e4", "bash", { command: "cat > /p/shell.ts <<'EOF'\nhello\nEOF" }, "ok", false, turn);
+  if (turn === 8) tool("e5", "bash", { command: "python3 - <<'EOF'\np='server/picker.ts'\nopen(p,'w').write('ok')\nEOF" }, "ok", false, turn);
+  if (turn === 9) tool("e6", "bash", { command: "sed -i 's/a/b/' /p/sed.ts" }, "ok", false, turn);
+  if (turn === 13) tool("e8", "bash", { command: "sed -i 's/width: 8px/width: 10px/' ; cat > .scratch.mjs <<'EOF'\nx\nEOF\ncat > /tmp/out.txt <<'EOF'\nx\nEOF" }, "ok", false, turn);
+  if (turn === 11) tool("e7", "edit", { filePath: ".github/workflows/ci.yml" }, "ok", false, turn);
+  if (turn === 12) tool("c3", "bash", { command: "git commit -m \"$(cat <<'EOF'\nfix: heredoc title\n\nbody text\nEOF\n)\"" }, "done", false, turn);
+  if (turn === 10) tool("t1", "update_plan", { plan: [{ step: "Check output", status: "completed" }, { step: "Ship widget", status: "in_progress" }] }, "ok", false, turn);
+  messages.push({ role: "assistant", content: [{ type: "text", text: `done ${turn}` }], timestamp: at(turn) });
+}
+const common: Common = { meta: { id: "check-session" }, messages };
+const before = estimateTokens(common);
+const result = await compact(common, 20_000);
+assert.ok(result, "a session over budget is compacted");
+assert.ok(result.afterTokens <= 20_000 && result.afterTokens < before, `fits the budget (${result.afterTokens} of ${before})`);
+const first = JSON.stringify(result.common.messages[0]).split("Earlier history, oldest first")[0];
+assert.match(first, /Session goal: Build the widget/);
+assert.match(first, /Do not resume, repeat or finish earlier work/, "the new agent is told not to resume on its own");
+assert.match(first, /\/p\/a\.ts \(2 edits\)/);
+assert.doesNotMatch(first, /failed\.ts/, "failed edits are not listed");
+assert.match(first, /feat: widget/);
+assert.match(first, /\/p\/shell\.ts/);
+assert.match(first, /server\/picker\.ts/);
+assert.match(first, /\/p\/sed\.ts/);
+assert.match(first, /Unfinished tasks from the last task list:.*Ship widget/s);
+assert.doesNotMatch(first, /- Check output/, "completed tasks are omitted");
+assert.match(first, /\.github\/workflows\/ci\.yml/, "dot directories are listed");
+assert.match(first, /fix: heredoc title/, "a heredoc commit message is read");
+assert.doesNotMatch(first, /\$\(cat/, "no raw shell syntax in a commit line");
+assert.doesNotMatch(first, /- 10px|\.scratch\.mjs|\/tmp\/out\.txt/, "words, scratch scripts and /tmp files are not listed as edited files");
+assert.doesNotMatch(first, /Current status/, "the tail already holds the latest turns");
+assert.doesNotMatch(first, /fake/, "a script that only mentions a commit is not a commit");
+assert.equal(await compact(common, before + 1), null, "a session that fits is left alone");
+console.log("compact checks passed");

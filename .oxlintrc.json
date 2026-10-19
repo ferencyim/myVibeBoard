@@ -3,7 +3,12 @@
   "options": {
     "typeAware": false
   },
-  "ignorePatterns": [".dev/**"],
+  "ignorePatterns": [
+    ".dev/**",
+    "plugins/vibe-board/**",
+    "plugins/switch-provider/**",
+    "plugins/deepseek-harness/**"
+  ],
   "plugins": ["react", "react-perf", "unicorn", "typescript", "oxc", "import", "promise"],
   "jsPlugins": ["./scripts/oxlint/paseo-plugin.mjs"],
   "categories": {

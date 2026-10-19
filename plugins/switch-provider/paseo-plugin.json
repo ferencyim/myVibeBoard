@@ -1,0 +1,15 @@
+{
+  "id": "switch-provider",
+  "name": "Switch provider",
+  "description": "Continue an agent session on another provider and model, compacting large histories with links to a saved transcript.",
+  "icon": "assets/icon.png",
+  "media": [
+    "assets/screenshot-command-center.png",
+    "assets/screenshot-models.png",
+    "assets/screenshot-switched.png"
+  ],
+  "build": [["npm", "ci", "--omit=dev", "--ignore-scripts"]],
+  "requirements": {
+    "paseo": ">=0.11.2"
+  }
+}
