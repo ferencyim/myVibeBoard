@@ -1876,7 +1876,9 @@ export function PdfPanel({ document }: PluginFilePanelProps) {
 | `url`    | Yes      | Host document URL; `blob:` on web or `file:` on native. Other schemes are rejected. |
 | `testID` | No       | Test identifier for the frame.                                                      |
 
-Web uses a sandboxed iframe with no scripts or same-origin access. Native uses a WebView with
+Web inspects the local document URL’s media type before mounting the iframe. PDF uses the
+browser’s PDF viewer without a sandbox; every other type, including HTML and unknown types,
+keeps a full sandbox with no scripts or same-origin access. Native uses a WebView with
 JavaScript, storage, and further navigation disabled. iOS supports inline PDF rendering; Android's
 WebView does not. Provide an Android fallback or bundle your own renderer.
 

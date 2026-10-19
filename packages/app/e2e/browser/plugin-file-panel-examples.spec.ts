@@ -112,6 +112,9 @@ test("directory examples mount the PDF frame and edit Markdown through Paseo's d
       "src",
       /^blob:/,
     );
+    await expect(page.getByTitle("Document preview", { exact: true })).not.toHaveAttribute(
+      "sandbox",
+    );
     const documentUrl = await page
       .getByTitle("Document preview", { exact: true })
       .getAttribute("src");

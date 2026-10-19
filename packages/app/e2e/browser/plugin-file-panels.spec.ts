@@ -127,6 +127,10 @@ test("directory plugins render PDF bytes and edit associated Markdown through th
     await openWorkspaceFile(page, "bytes.txt");
     await expect(page.getByText("PDF plugin: bytes.txt", { exact: true })).toBeVisible();
     await expect(page.getByTitle("Document preview", { exact: true })).toBeVisible();
+    await expect(page.getByTitle("Document preview", { exact: true })).toHaveAttribute(
+      "sandbox",
+      "",
+    );
     await expect(
       page
         .frameLocator('[title="Document preview"]')
