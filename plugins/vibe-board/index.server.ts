@@ -1,9 +1,13 @@
 import { delimiter, join } from "node:path";
+import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { boardSettings } from "./shared/settings";
 import { resolveVibeHome } from "./server/vibe/db";
 import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
 import { BOARD_INSTRUCTIONS_MARKER, buildBoardInstructions } from "./server/mcp/instructions";
+import { createDispatcher } from "./server/dispatch";
+import { registerLifecycle } from "./server/lifecycle";
+import { startFinalizer } from "./server/lifecycle/finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
 
@@ -71,9 +75,17 @@ export default function contribute(server: PluginServerContext) {
     };
   });
 
-  registerBoardRpcs(server, board);
+  // The SDK handle only reaches plugins through hook/RPC contexts; keep the newest one for dispatch.
+  let paseo: PaseoApi | null = null;
+  const onPaseo = (api: PaseoApi) => void (paseo = api);
+  const lifecycle = registerLifecycle(server, { board, onPaseo });
+  const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });
+  const finalizer = startFinalizer({ db: runtime.db, board });
+  registerBoardRpcs(server, board, { dispatcher, lifecycle, onPaseo });
 
   return async () => {
+    lifecycle.close();
+    await finalizer.stop();
     await (bridge ?? (await bridgeReady))?.close();
     runtime.close();
   };
