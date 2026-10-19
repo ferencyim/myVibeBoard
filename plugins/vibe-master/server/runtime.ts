@@ -13,6 +13,7 @@ import { createFileMemoryPort, type MemoryPort } from "./memory/files";
 import { createPlanning } from "./planning/planner";
 import { defaultSelector, type AgentSelector } from "./select";
 import { createAlerts } from "./subscription/alerts";
+import { createPermissionResolver, isBoardMcpCall } from "./subscription/permission";
 import { createQuotaReader } from "./subscription/quota";
 import { createStateFile } from "./subscription/state";
 import { providerSpec, type TargetRequest } from "./subscription/target";
@@ -62,6 +63,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     getPaseo: deps.getPaseo,
     settings: deps.settings,
     state,
+    permission: createPermissionResolver(deps.getPaseo),
     rules: deps.rules ?? MASTER_RULES,
     workspace: () => deps.settings().workspaceDir || join(deps.dataDir, "workspace"),
     alerts,
@@ -219,6 +221,23 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       .flatMap((s) => s.switchHistory)
       .sort((a, b) => a.at.localeCompare(b.at));
 
+    let permission: MasterStatus["permission"] = null;
+    if (target && deps.getPaseo()) {
+      try {
+        const p = await session.permission();
+        permission = {
+          setting: p.setting,
+          source: p.source,
+          modeId: p.resolved.modeId,
+          label: p.resolved.label,
+          auto: p.resolved.auto,
+          options: p.resolved.options,
+        };
+      } catch {
+        permission = null;
+      }
+    }
+
     let providers: ProviderInfo[] = [];
     const paseo = deps.getPaseo();
     if (includeProviders && paseo) {
@@ -255,6 +274,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       paseoReady: paseo !== null,
       target,
       targetSource: switched ? "switched" : "settings",
+      permission,
       session: live
         ? { sessionId: live.id, agentId: live.agentId, provider: live.currentProvider, state: live.state }
         : null,
@@ -307,6 +327,37 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       const result = await queue.exclusive(() => session.switchTo(request, reason ?? "manual switch"));
       queue.resume();
       return result;
+    },
+
+    /** Manual permission switch: a running master moves to a fresh agent, parked jobs continue on it. */
+    async setPermission(mode: string) {
+      const result = await queue.exclusive(() => session.setPermission(mode));
+      queue.resume();
+      return result;
+    },
+
+    /**
+     * A permission request of an agent. Only calls of the vibe-board MCP tools by the master or a
+     * planner are approved (they would stall an assessment otherwise); every other request of those
+     * agents waits for the owner, who is reminded with a master.alert.
+     */
+    async onPermissionRequest(
+      agentId: string,
+      request: { id: string; kind: string; name?: string; metadata?: unknown },
+      approve: (requestId: string) => Promise<void>,
+    ): Promise<"approved" | "alerted" | "ignored"> {
+      const owner = store.sessions.getByAgent(agentId);
+      if (owner?.role !== "master" && owner?.role !== "planner") return "ignored";
+      if (isBoardMcpCall(request)) {
+        await approve(request.id);
+        return "approved";
+      }
+      alerts.raise(
+        "permission_wait",
+        owner.currentProvider,
+        `The ${owner.role} agent is waiting for your approval of ${request.name ?? request.kind}`,
+      );
+      return "alerted";
     },
 
     wake(cardRef: string, reason: "assess_draft" | "card_done", force: boolean) {

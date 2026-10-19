@@ -3,6 +3,7 @@ import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   masterSettings,
+  permissionRpc,
   statusRpc,
   switchRpc,
   wakeRpc,
@@ -46,6 +47,17 @@ export default function contribute(server: PluginServerContext) {
     server.on("agent.turn_started", (_e, { paseo: api }) => onPaseo(api)),
     server.on("agent.turn_ended", (_e, { paseo: api }) => onPaseo(api)),
     server.on("workspace.created", (_e, { paseo: api }) => onPaseo(api)),
+    server.on("agent.permission_requested", ({ agent, request }, { paseo: api }) => {
+      onPaseo(api);
+      return runtime
+        .onPermissionRequest(agent.id, request, (requestId) =>
+          api.agents.ref(agent.id).respondToPermission({ requestId, response: { behavior: "allow" } }),
+        )
+        .then(
+          () => undefined,
+          (error) => console.error("vibe-master permission request:", error),
+        );
+    }),
   ];
 
   server.handle(statusRpc, async (input, { paseo: api }) => {
@@ -60,6 +72,12 @@ export default function contribute(server: PluginServerContext) {
       input.reason,
     );
     return { target: result.target, changed: result.changed, sessionId: result.sessionId };
+  });
+
+  server.handle(permissionRpc, async (input, { paseo: api }) => {
+    onPaseo(api);
+    const result = await runtime.setPermission(input.mode);
+    return { changed: result.changed, permission: (await runtime.status(false)).permission };
   });
 
   server.handle(wakeRpc, async (input, { paseo: api }) => {

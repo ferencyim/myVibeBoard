@@ -7,7 +7,7 @@ import { messagesOf, threadState } from "../server/planning/thread";
 import { createMasterRuntime } from "../server/runtime";
 import { MasterError, type MasterPaseo } from "../server/types";
 import type { MemoryPort } from "../server/memory/files";
-import { ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir, type Script } from "./helpers";
+import { ManualClock, defaultSettings, fakeMaster, fakePaseo, setupBoard, tempDir, type Script } from "./helpers";
 
 const fence = (value: unknown) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
 const memory: MemoryPort = {
@@ -24,11 +24,12 @@ function setup(script: Script, options: { noPaseo?: boolean } = {}) {
   const board = setupBoard();
   const fake = fakePaseo(script);
   let paseo: MasterPaseo | null = options.noPaseo ? null : fake.paseo;
+  let mode = "auto";
   const planning = createPlanning({
     db: board.db,
     store: board.store,
     getPaseo: () => paseo,
-    master: { currentTarget: async () => ({ provider: "claude", model: "opus-x", thinking: "high" }) },
+    master: fakeMaster(fake, () => mode),
     rules: MASTER_RULES,
     dataDir: tempDir("vibe-master-data-"),
     clock: new ManualClock(),
@@ -62,6 +63,9 @@ function setup(script: Script, options: { noPaseo?: boolean } = {}) {
     discussion,
     setPaseo(next: MasterPaseo | null) {
       paseo = next;
+    },
+    setMode(next: string) {
+      mode = next;
     },
   };
 }
@@ -281,7 +285,7 @@ describe("planning session", () => {
       db: t.db,
       store: t.store,
       getPaseo: () => t.fake.paseo,
-      master: { currentTarget: async () => ({ provider: "claude", model: "opus-x", thinking: null }) },
+      master: fakeMaster(t.fake),
       rules: MASTER_RULES,
       dataDir: tempDir("vibe-master-data-"),
       clock: new ManualClock(),
@@ -307,7 +311,7 @@ describe("planning session", () => {
       db: t.db,
       store: t.store,
       getPaseo: () => t.fake.paseo,
-      master: { currentTarget: async () => ({ provider: "claude", model: "opus-x", thinking: null }) },
+      master: fakeMaster(t.fake),
       rules: MASTER_RULES,
       dataDir: tempDir("vibe-master-data-"),
       clock: new ManualClock(),
@@ -320,6 +324,27 @@ describe("planning session", () => {
     expect(t.fake.agents[1]!.prompts[0]).toContain("Discussion so far");
     expect(t.fake.agents[1]!.prompts[0]).toContain("OWNER: one");
     expect(t.store.sessions.list({ cardId: card.id }).map((s) => s.state)).toEqual(["ended", "idle"]);
+  });
+
+  it("starts planners in the automatic permission mode and restarts one seeded when the mode changes", async () => {
+    const t = setup(() => fence({ reply: "fine" }));
+    const card = t.draft("Mode switch");
+    t.say(card.id, "one");
+    await t.planning.tick();
+    expect(t.fake.agents[0]!.options.config.modeId).toBe("auto");
+
+    t.say(card.id, "two");
+    await t.planning.tick();
+    expect(t.fake.agents).toHaveLength(1); // same mode: the planner is reused
+
+    t.setMode("acceptEdits");
+    t.say(card.id, "three");
+    await t.planning.tick();
+    expect(t.fake.agents).toHaveLength(2);
+    expect(t.fake.agents[0]!.archived).toBe(true);
+    expect(t.fake.agents[1]!.options.config.modeId).toBe("acceptEdits");
+    expect(t.fake.agents[1]!.prompts[0]).toContain("OWNER: one");
+    expect(t.discussion(card.id).map((m) => m.role)).toEqual(["user", "planner", "user", "planner", "user", "planner"]);
   });
 
   it("MasterError kinds stay distinguishable", () => {

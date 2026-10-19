@@ -17,6 +17,9 @@ Claude Code、Codex、Kimi、DeepSeek 四个 agent；Android 手机可离线编�
   因为是公开仓库，**全局「密钥入库」约定在本仓库不适用**：任何密钥、签名材料、口令都不得提交。
 - 自研功能尽量写成仓库内插件（`plugins/vibe-*`）；核心改动（`packages/`）单独提交并加 `[core]` 前缀。
 - 每两周合并一次上游 release；保留 Paseo / Tasks（Apache-2.0）与 Switch provider / ccusage（MIT）声明。
+- 2026-10-20：总 agent 与草稿规划会话的权限**默认用自动模式**（Claude Code 的 auto 模式；Codex 用对应的自动审阅档），
+  用户可在桌面/手机上手动切换权限模式（不再默认使用 bypassPermissions / full-access）。
+  自动维护的修复者按所选预设的权限模式，无预设时用「自动接受编辑」类模式。
 - 连接：局域网 / Tailscale 直连优先，自建 E2E 中继兜底；中继部署在用户提供的腾讯云主机。
 
 ## 模块（详见实施方案）
@@ -35,9 +38,9 @@ M9 连接与中继 · M10 自动维护（maintenance.yml，git 体检、性能�
 > 仓库公开：主机地址、登录用户等只记在本机 SESSION.md，不入库。
 
 - **Mac 主机**：局域网/Tailscale 上的一台 Mac（SSH 可达），用于跑 iOS 模拟器等需要 macOS 的测试。
-  现状：macOS 26.6.2，只有 Command Line Tools，未装 Xcode / Node / Homebrew——iOS 模拟器取证需用户先装 Xcode。
+  现状：macOS 26.6.2，Xcode 26.6 装在外置盘（需设置 DEVELOPER_DIR，具体路径见 SESSION.md），有 iOS 18.6 / 26.5 模拟器运行时；无 Node / Homebrew。
 - **中继服务器**：一台腾讯云主机（SSH 可达，AlmaLinux 8，Docker + nginx）。该机已在跑其它产品
   （多个其它产品的站点与数据库），部署中继必须隔离：独立容器只监听 127.0.0.1，经新增 nginx 站点对外，
-  不改动其它站点配置；对外域名部署前向用户确认。
+  不改动其它站点配置；对外域名已由用户确定（2026-10-20，见 SESSION.md），复用该主机已有的通配证书。
 - **硬件取证**：暂不做（P3#6 中固件仿真 / 硬件在环推迟，待用户确定芯片平台）。
 - P1 验证证据试点项目（默认，用户未反对）：本仓库自身（Web + 后端）及其 Android App。

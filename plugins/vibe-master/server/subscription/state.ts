@@ -10,6 +10,8 @@ export interface MasterAgentRecord {
   agentId: string;
   sessionId: string;
   target: MasterTarget;
+  /** Permission mode the agent was created with (null = provider default). */
+  modeId?: string | null;
 }
 
 export interface MasterAlert {
@@ -21,6 +23,8 @@ export interface MasterAlert {
 export interface MasterStateData {
   /** Set by a manual switch; overrides the settings default until switched again. */
   target?: MasterTarget;
+  /** Set by a manual permission switch; overrides the settings default until switched back. */
+  permissionMode?: string;
   agent?: MasterAgentRecord;
   lastAlert?: MasterAlert;
 }

@@ -36,6 +36,18 @@ npm ci && npm run typecheck && npm test
   agent first, then retires the old one (`session.switched` event); the queue and the board carry on
   unchanged, so the same cards are processed. The choice is kept in `<VIBE_HOME>/master/state.json`.
   "highest reasoning" = the last thinking option of the catalog.
+- **Permission mode** (WP-71, setting `permissionMode`, RPC `master.permission`, status screen, command palette): shared by
+  the master and the planning sessions. `auto` (default) = the provider's own automatic mode taken from the Paseo
+  mode catalog (`providers.listModes`): Claude `auto` (classifier), Codex `auto-review` (older Codex without it: `auto`,
+  Default Permissions, still below Full Access); a provider without an automatic mode keeps its own default. Anything
+  else is a concrete modeId of the provider (a mode the provider lacks falls back to auto). The UI shows the concrete
+  mode in effect. A manual switch is kept in `state.json` and wins over the settings default until set back
+  (`settings`). The plugin API has no in-place mode change, so a running master is replaced like a subscription switch
+  (new agent first, then the old one retires, same cards continue); a planner is replaced before its next turn by a
+  fresh one seeded with the whole discussion. The hook `agent.permission_requested` approves **only** calls of the
+  `vibe-board` MCP server (Claude `mcp__vibe-board__*`, Codex `CodexMcpElicitation` with `serverName=vibe-board`) by
+  the master and planners; any other request of those agents waits for the owner and raises a `master.alert`
+  (`kind=permission_wait`, pushed like the others).
 - **Quota**: low quota (own `listUsage` check, or `scheduler.quota_low` for the master's provider) and
   quota errors only publish a reminder: a `master.alert` bus event (`kind` quota_low|quota_error);
   `server/notify` pushes it to the phone. It never switches by itself.
@@ -73,7 +85,8 @@ npm ci && npm run typecheck && npm test
 ## RPCs
 
 `master.status` (queue, session, target, switch history, providers with models/quota),
-`master.switch {provider, model?, thinking? ("max")}`, `master.wake {card, reason}`.
+`master.switch {provider, model?, thinking? ("max")}`, `master.permission {mode: auto|<modeId>|settings}`,
+`master.wake {card, reason}`.
 
 ## Notes for other work packages
 
