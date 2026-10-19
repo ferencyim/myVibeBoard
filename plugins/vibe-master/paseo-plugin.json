@@ -1,0 +1,8 @@
+{
+  "id": "vibe-master",
+  "name": "Vibe Master",
+  "description": "myVibeBoard master plugin.",
+  "requirements": {
+    "paseo": ">=0.12.0 <0.13.0"
+  }
+}

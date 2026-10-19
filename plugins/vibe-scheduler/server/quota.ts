@@ -1,6 +1,6 @@
 // Turns providers.listUsage() into per-provider quota levels.
 
-import type { ProviderQuota } from "./select";
+import type { ProviderQuota } from "./vibe/contract";
 
 export interface UsageWindowLike {
   usedPct?: number | null;

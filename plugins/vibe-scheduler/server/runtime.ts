@@ -20,7 +20,7 @@ import {
   type AgentProfile,
   type ProviderQuota,
   type TaskNeeds,
-} from "./select";
+} from "./vibe/contract";
 import {
   createDeviceLeases,
   createEventConsumer,
