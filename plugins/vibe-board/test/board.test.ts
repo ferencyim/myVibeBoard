@@ -255,7 +255,10 @@ describe("rpc contract", () => {
   it("registers every contract exactly once with vibe.* names", () => {
     const { board } = withProject();
     const handled: string[] = [];
-    registerBoardRpcs({ handle: (def: { name: string }) => handled.push(def.name) } as never, board);
+    registerBoardRpcs({ handle: (def: { name: string }) => handled.push(def.name) } as never, board, {
+      dispatcher: {} as never,
+      lifecycle: {} as never,
+    });
     const names = Object.values(rpc.VIBE_BOARD_RPCS).map((r) => r.name);
     expect(new Set(names).size).toBe(names.length);
     expect(handled.sort()).toEqual([...names].sort());
@@ -501,11 +504,12 @@ describe("plugin entry", () => {
         }),
       }),
       handle: (def: { name: string }) => handlers.push(def.name),
-      before: (name: string) => hooks.push(name),
+      before: (name: string) => (hooks.push(name), () => undefined),
+      on: () => () => undefined,
     };
     const { default: contribute } = await import("../index.server");
     const dispose = contribute(server as never);
-    expect(hooks).toEqual(["agent.create", "agent.session_open"]);
+    expect(hooks).toEqual(["agent.create", "agent.session_open", "agent.session_open"]);
     expect(handlers).toHaveLength(Object.keys(rpc.VIBE_BOARD_RPCS).length);
     await (dispose as () => Promise<void>)();
     vi.unstubAllEnvs();
