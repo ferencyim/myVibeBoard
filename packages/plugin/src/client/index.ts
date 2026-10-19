@@ -1,5 +1,9 @@
 export type {
   PluginHostProps,
+  PluginFilePanelContribution,
+  PluginFilePanelProps,
+  PluginTextDocument,
+  PluginBytesDocument,
   PluginSurfaceProps,
   PluginScreenProps,
   PluginPopoverProps,

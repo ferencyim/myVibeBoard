@@ -812,3 +812,59 @@ it("binds imported getters to each originating installation across delayed callb
   await first.cleanup();
   await second.cleanup();
 });
+
+describe("file panels", () => {
+  const panel =
+    '{ id: "pdf", title: "PDF", icon: "FileText", files: { extensions: ["pdf"] }, document: "bytes", Component() { return null; } }';
+  it("registers a panel with the default limit and removes it on cleanup", async () => {
+    const plugin = evaluatePluginClientBundle("files", bundle(`plugin.addFilePanel(${panel})`));
+    expect(
+      plugin.filePanels.map(({ id, files, document, maxBytes }) => ({
+        id,
+        files,
+        document,
+        maxBytes,
+      })),
+    ).toEqual([
+      { id: "pdf", files: { extensions: ["pdf"] }, document: "bytes", maxBytes: 10 * 1024 * 1024 },
+    ]);
+    await plugin.cleanup();
+    expect(plugin.filePanels).toEqual([]);
+  });
+  it.each([
+    ['files: { extensions: ["pdf"] }', 'files: { pattern: "*.pdf" }', "selector"],
+    ['files: { extensions: ["pdf"] }', 'files: { extensions: [".pdf"] }', "selector"],
+    ['files: { extensions: ["pdf"] }', 'files: { extensions: ["*"] }', "selector"],
+    ['files: { extensions: ["pdf"] }', 'files: { extensions: ["foo/bar"] }', "selector"],
+    ['files: { extensions: ["pdf"] }', "files: { extensions: [] }", "selector"],
+    ['files: { extensions: ["pdf"] }', 'files: { extensions: [], filenames: ["a/b"] }', "selector"],
+    ['document: "bytes"', 'document: "binary"', "document"],
+    ['id: "pdf"', 'id: "Bad"', "file panel id"],
+    ['title: "PDF"', 'title: " "', "title"],
+    ['document: "bytes"', 'document: "bytes", maxBytes: 0', "maxBytes"],
+    ['document: "bytes"', 'document: "bytes", maxBytes: Infinity', "maxBytes"],
+    ["Component() { return null; }", "Component: {}", "component"],
+    ['icon: "FileText"', 'icon: ""', "icon"],
+  ])("rejects invalid registration %s → %s", (from, to, error) => {
+    expect(() =>
+      evaluatePluginClientBundle(
+        "files",
+        bundle(`plugin.addFilePanel(${panel.replace(from, to)})`),
+      ),
+    ).toThrow(error);
+  });
+  it("accepts filename selectors and rejects duplicate IDs", () => {
+    const source = panel.replace(
+      'extensions: ["pdf"]',
+      'extensions: [], filenames: ["Dockerfile"]',
+    );
+    const plugin = evaluatePluginClientBundle("files", bundle(`plugin.addFilePanel(${source})`));
+    expect(plugin.filePanels[0]?.files).toEqual({ extensions: [], filenames: ["Dockerfile"] });
+    expect(() =>
+      evaluatePluginClientBundle(
+        "files",
+        bundle(`plugin.addFilePanel(${source}); plugin.addFilePanel(${source})`),
+      ),
+    ).toThrow("Duplicate file panel");
+  });
+});

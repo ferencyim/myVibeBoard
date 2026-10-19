@@ -8,7 +8,7 @@ import type { LiveFileSnapshot } from "../live-file/model";
 
 export interface FilePanePreview {
   file: ExplorerFile;
-  imageAttachment: AttachmentMetadata | null;
+  documentAttachment: AttachmentMetadata | null;
 }
 
 export type FilePreviewLifecycleSnapshot =
@@ -24,11 +24,8 @@ const initialSnapshot: FilePreviewLifecycleSnapshot = { status: "initial" };
 /** Converts a completed raw read into the preview resources consumed by FilePane. */
 export async function createFilePanePreview(file: FileReadResult): Promise<FilePanePreview | null> {
   const explorerFile = explorerFileFromReadResult(file);
-  if (file.kind !== "image") {
-    return { file: explorerFile, imageAttachment: null };
-  }
 
-  const imageAttachment = await persistAttachmentFromBytes({
+  const documentAttachment = await persistAttachmentFromBytes({
     id: createPreviewAttachmentId({
       mimeType: file.mime,
       path: file.path,
@@ -41,7 +38,7 @@ export async function createFilePanePreview(file: FileReadResult): Promise<FileP
     fileName: getFileNameFromPath(file.path),
   });
 
-  return { file: explorerFile, imageAttachment };
+  return { file: explorerFile, documentAttachment };
 }
 
 /** Owns conversion after LiveFileModel has produced a raw file snapshot. */
@@ -135,10 +132,10 @@ export function filePreviewFromLifecycle(
 
 export function resolveFilePreviewLifecycle(snapshot: FilePreviewLifecycleSnapshot): {
   file: ExplorerFile | null;
-  imageAttachment: AttachmentMetadata | null;
+  documentAttachment: AttachmentMetadata | null;
 } {
   const preview = filePreviewFromLifecycle(snapshot);
-  return preview ?? { file: null, imageAttachment: null };
+  return preview ?? { file: null, documentAttachment: null };
 }
 
 function getReadySource(input: {

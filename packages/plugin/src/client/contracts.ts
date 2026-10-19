@@ -120,6 +120,48 @@ export interface PluginAgentPanelProps extends PluginNavigableHostProps {
   agentId: string;
 }
 
+export interface PluginTextDocument {
+  kind: "text";
+  text: string;
+  /** Paseo owns autosave, dirty state, and conflicts. False on native, old daemons, and files above 1 MiB. */
+  editable: boolean;
+  setText(next: string): void;
+}
+
+export interface PluginBytesDocument {
+  kind: "bytes";
+  bytes: Uint8Array;
+  /** Local URL owned by the host. */
+  url: string;
+}
+
+export interface PluginFilePanelProps extends PluginNavigableHostProps {
+  workspaceId: string;
+  file: {
+    path: string;
+    name: string;
+    extension: string;
+    mimeType: string;
+    size: number;
+    modifiedAt: string;
+    lineStart?: number;
+    lineEnd?: number;
+  };
+  navigationRevision: number;
+  document: PluginTextDocument | PluginBytesDocument;
+}
+
+export interface PluginFilePanelContribution {
+  id: string;
+  title: string;
+  icon: PluginIcon;
+  files: { extensions: readonly string[]; filenames?: readonly string[] };
+  document: "text" | "bytes";
+  /** Defaults to 10 MiB. */
+  maxBytes?: number;
+  Component: ComponentType<PluginFilePanelProps>;
+}
+
 export interface PluginClientOpenPanelOptions extends PluginOpenPanelOptions {
   workspaceId: string;
   agentId?: string;
@@ -140,6 +182,7 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   addScreen(contribution: PluginScreenContribution): PluginCleanup;
   addSidebarHeaderItem(contribution: PluginSidebarItemContribution): PluginCleanup;
   addSidebarFooterItem(contribution: PluginSidebarItemContribution): PluginCleanup;
+  addFilePanel(contribution: PluginFilePanelContribution): PluginCleanup;
   addWorkspacePanel(contribution: PluginWorkspacePanelContribution): PluginCleanup;
   addCommandCenterItem(contribution: PluginCommandCenterItemContribution): PluginCleanup;
   addSlashCommand(contribution: PluginClientSlashCommandContribution): PluginCleanup;

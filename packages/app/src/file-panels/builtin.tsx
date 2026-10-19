@@ -15,7 +15,7 @@ interface FilePanelPreviewProps {
   workspaceRoot: string;
   client: DaemonClient | null;
   serverId: string;
-  imagePreviewUri: string | null;
+  documentPreviewUri: string | null;
 }
 
 function MarkdownPanel(props: FilePanelPreviewProps) {
@@ -45,9 +45,9 @@ function HtmlPanel({ content }: FilePanelPreviewProps) {
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
-function ImagePanel({ imagePreviewUri }: FilePanelPreviewProps) {
+function ImagePanel({ documentPreviewUri }: FilePanelPreviewProps) {
   const { t } = useTranslation();
-  if (!imagePreviewUri) {
+  if (!documentPreviewUri) {
     return (
       <View style={styles.centerState}>
         <ThemedLoadingSpinner size="small" uniProps={foregroundMutedColorMapping} />
@@ -55,7 +55,7 @@ function ImagePanel({ imagePreviewUri }: FilePanelPreviewProps) {
       </View>
     );
   }
-  return <ZoomableImage uri={imagePreviewUri} testID="image-file-preview" />;
+  return <ZoomableImage uri={documentPreviewUri} testID="image-file-preview" />;
 }
 
 const components = {
@@ -64,7 +64,7 @@ const components = {
   "builtin:image": ImagePanel,
 };
 
-export function FilePanelPreview({
+export function BuiltinFilePanelPreview({
   panel,
   ...props
 }: FilePanelPreviewProps & {

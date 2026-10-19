@@ -103,3 +103,28 @@ describe("resolveFilePanel", () => {
     expect(resolve({ file: { ...file, path: "README" } }).selectorKey).toBe("ext:");
   });
 });
+
+it("opens a binary PDF with its plugin and filters oversized and unavailable documents", () => {
+  const pdf: FilePanelCandidate = {
+    id: "plugin:pdf/viewer",
+    files: { extensions: ["pdf"] },
+    document: "bytes",
+    maxBytes: 1024,
+  };
+  const pdfFile: FilePanelFile = {
+    path: "/workspace/document.pdf",
+    kind: "binary",
+    size: 1024,
+    hasBytes: true,
+  };
+  expect(
+    resolveFilePanel({ file: pdfFile, candidates: [markdown, pdf], associations: {} }).panel,
+  ).toBe(pdf);
+  expect(
+    resolveFilePanel({
+      file: { ...pdfFile, size: 1025 },
+      candidates: [pdf],
+      associations: { "ext:pdf": pdf.id },
+    }).panel,
+  ).toBeNull();
+});

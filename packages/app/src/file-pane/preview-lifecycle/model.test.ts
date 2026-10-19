@@ -88,7 +88,7 @@ describe("FilePreviewLifecycleModel", () => {
     const model = new FilePreviewLifecycleModel(() => preparations.shift()!.promise);
     const preview: FilePanePreview = {
       file: previewFile("preview"),
-      imageAttachment: null,
+      documentAttachment: null,
     };
 
     model.setSource(source("/workspace:file.ts", pending()));
@@ -134,12 +134,12 @@ describe("FilePreviewLifecycleModel", () => {
     );
     const nextPreview: FilePanePreview = {
       file: previewFile("two"),
-      imageAttachment: null,
+      documentAttachment: null,
     };
 
     model.setSource(source("/workspace:file.ts", completed(file("one"))));
     model.setSource(source("/workspace:second.ts", completed(file("two", "second.ts"))));
-    first.resolve({ file: previewFile("one"), imageAttachment: null });
+    first.resolve({ file: previewFile("one"), documentAttachment: null });
     await Promise.resolve();
     expect(model.getSnapshot()).toEqual({ status: "preparing" });
 

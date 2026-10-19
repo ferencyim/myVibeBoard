@@ -4,6 +4,7 @@ import type { ExplorerFile } from "@/stores/session-store";
 export function explorerFileFromReadResult(file: FileReadResult): ExplorerFile {
   const isText = file.kind === "text";
   return {
+    bytes: file.bytes,
     path: file.path,
     kind: file.kind,
     encoding: isText ? "utf-8" : "none",

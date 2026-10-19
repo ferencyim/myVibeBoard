@@ -7,7 +7,12 @@ import { StyleSheet, UnistylesRuntime, withUnistyles } from "react-native-unisty
 import { useTranslation } from "react-i18next";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSessionStore, type ExplorerFile } from "@/stores/session-store";
-import { FilePanelPreview, resolveFilePreviewPanel, type FilePanel } from "@/file-panels";
+import {
+  FilePanelPreview,
+  resolveFilePreviewPanel,
+  useFilePanels,
+  type FilePanel,
+} from "@/file-panels";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
@@ -37,6 +42,7 @@ const foregroundMutedColorMapping = (theme: Theme) => ({
 });
 
 interface FilePreviewBodyProps {
+  setText?: (text: string) => void;
   panel: FilePanel | null;
   preview: ExplorerFile | null;
   mode?: "preview" | "source";
@@ -44,7 +50,7 @@ interface FilePreviewBodyProps {
   isMobile: boolean;
   location: WorkspaceFileLocation;
   navigationRevision: number;
-  imagePreviewUri: string | null;
+  documentPreviewUri: string | null;
   workspaceRoot: string;
   client: DaemonClient | null;
   serverId: string;
@@ -122,6 +128,7 @@ function TooLargeSource({ size }: { size?: number }) {
 }
 
 function FilePreviewBody({
+  setText,
   panel,
   preview,
   mode,
@@ -129,7 +136,7 @@ function FilePreviewBody({
   isMobile: _isMobile,
   location,
   navigationRevision,
-  imagePreviewUri,
+  documentPreviewUri,
   workspaceRoot,
   client,
   serverId,
@@ -159,12 +166,16 @@ function FilePreviewBody({
     return (
       <FilePanelPreview
         panel={panel}
+        preview={preview}
+        location={location}
+        navigationRevision={navigationRevision}
+        setText={setText}
         content={preview.content ?? ""}
         filePath={filePath}
         workspaceRoot={workspaceRoot}
         client={client}
         serverId={serverId}
-        imagePreviewUri={imagePreviewUri}
+        documentPreviewUri={documentPreviewUri}
       />
     );
   }
@@ -247,9 +258,11 @@ export function FilePane({
 
   useEffect(() => setPreviewMode("preview"), [targetKey]);
 
-  const { file: preview, imageAttachment } = resolveFilePreviewLifecycle(previewLifecycle);
-  const imagePreviewUri = useAttachmentPreviewUrl(imageAttachment);
+  const { file: preview, documentAttachment } = resolveFilePreviewLifecycle(previewLifecycle);
+  const documentPreviewUri = useAttachmentPreviewUrl(documentAttachment);
+  const candidates = useFilePanels(serverId);
   const panel = resolveFilePreviewPanel({
+    candidates,
     preview,
     path: location.path,
     associations: settings.filePanelAssociations,
@@ -291,7 +304,7 @@ export function FilePane({
       isMobile={isMobile}
       location={location}
       navigationRevision={navigationRevision}
-      imagePreviewUri={imagePreviewUri}
+      documentPreviewUri={documentPreviewUri}
     />
   );
 }
@@ -330,7 +343,7 @@ function FilePanePresentation({
   isMobile,
   location,
   navigationRevision,
-  imagePreviewUri,
+  documentPreviewUri,
 }: {
   panel: FilePanel | null;
   serverId: string;
@@ -353,7 +366,7 @@ function FilePanePresentation({
   isMobile: boolean;
   location: WorkspaceFileLocation;
   navigationRevision: number;
-  imagePreviewUri: string | null;
+  documentPreviewUri: string | null;
 }) {
   if (!client && readTarget) {
     return (
@@ -369,6 +382,7 @@ function FilePanePresentation({
     return (
       <EditableFilePane
         panel={panel}
+        documentPreviewUri={documentPreviewUri}
         key={`${serverId}:${readTarget.cwd}:${readTarget.path}`}
         serverId={serverId}
         workspaceRoot={workspaceRoot}
@@ -428,7 +442,7 @@ function FilePanePresentation({
         isMobile={isMobile}
         location={location}
         navigationRevision={navigationRevision}
-        imagePreviewUri={imagePreviewUri}
+        documentPreviewUri={documentPreviewUri}
         workspaceRoot={workspaceRoot}
         client={client}
         serverId={serverId}
@@ -438,6 +452,7 @@ function FilePanePresentation({
 }
 
 function EditableFilePane({
+  documentPreviewUri,
   panel,
   serverId,
   workspaceRoot,
@@ -456,6 +471,7 @@ function EditableFilePane({
   location,
   navigationRevision,
 }: {
+  documentPreviewUri: string | null;
   panel: FilePanel | null;
   serverId: string;
   workspaceRoot: string;
@@ -564,6 +580,7 @@ function EditableFilePane({
     onRetry: onRetryRead,
     retrying: retryingRead,
   });
+  const setText = useCallback((text: string) => model.edit(text), [model]);
   const handleVimModeChange = useCallback((nextMode: string | null) => setVimMode(nextMode), []);
   const renderedPreview = useMemo<ExplorerFile>(
     () => ({
@@ -605,13 +622,14 @@ function EditableFilePane({
       ) : (
         <FilePreviewBody
           panel={panel}
+          setText={setText}
           preview={renderedPreview}
           mode={mode}
           isLoading={isLoading}
           isMobile={isMobile}
           location={location}
           navigationRevision={navigationRevision}
-          imagePreviewUri={null}
+          documentPreviewUri={documentPreviewUri}
           workspaceRoot={workspaceRoot}
           client={client}
           serverId={serverId}

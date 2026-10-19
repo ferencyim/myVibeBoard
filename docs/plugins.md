@@ -556,6 +556,10 @@ one section's order from built-ins, plugin groups, and the section's preference
   remembers under its own key. It shares header ids and the `plugin:<pluginId>:<id>` settings key
   with new-API items.
 
+## Contribute file panels
+
+Client `addFilePanel` registrations fill a file tab's Preview slot with a host-owned text or bytes document. Text edits go through Paseo's editor model; bytes include a local preview URL. Resolution lives in `packages/app/src/file-panels/`: built-ins precede plugins in host catalog order, selectors match extensions or exact filenames, and document kind and size filter candidates before associations apply. The first candidate wins until the picker ships. Declare `requirements.paseo` at the release introducing this API so older apps skip the bundle before evaluation; see [plugin requirements](../public-docs/plugins/reference.md#requirements).
+
 ## Contribute buttons
 
 Header buttons and composer pills share the client-only descriptor and registration lifecycle in
