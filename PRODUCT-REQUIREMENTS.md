@@ -17,6 +17,9 @@ Claude Code、Codex、Kimi、DeepSeek 四个 agent；Android 手机可离线编�
   因为是公开仓库，**全局「密钥入库」约定在本仓库不适用**：任何密钥、签名材料、口令都不得提交。
 - 自研功能尽量写成仓库内插件（`plugins/vibe-*`）；核心改动（`packages/`）单独提交并加 `[core]` 前缀。
 - 每两周合并一次上游 release；保留 Paseo / Tasks（Apache-2.0）与 Switch provider / ccusage（MIT）声明。
+- 2026-10-20：总 agent 与草稿规划会话的权限**默认用自动模式**（Claude Code 的 auto 模式；Codex 用对应的自动审阅档），
+  用户可在桌面/手机上手动切换权限模式（不再默认使用 bypassPermissions / full-access）。
+  自动维护的修复者按所选预设的权限模式，无预设时用「自动接受编辑」类模式。
 - 连接：局域网 / Tailscale 直连优先，自建 E2E 中继兜底；中继部署在用户提供的腾讯云主机。
 
 ## 模块（详见实施方案）
