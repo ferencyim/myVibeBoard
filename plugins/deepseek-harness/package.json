@@ -1,0 +1,63 @@
+{
+  "name": "paseo-deepseek-harness",
+  "version": "0.1.0-beta.13",
+  "description": "DeepSeek Harness through its official ACP profile for Paseo 0.11 and later.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/geoqiao/paseo-stuff.git",
+    "directory": "plugins/deepseek-harness"
+  },
+  "homepage": "https://github.com/geoqiao/paseo-stuff/tree/main/plugins/deepseek-harness#readme",
+  "bugs": {
+    "url": "https://github.com/geoqiao/paseo-stuff/issues"
+  },
+  "keywords": [
+    "paseo",
+    "paseo-plugin",
+    "deepseek",
+    "deepseek-harness",
+    "acp"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "paseo-plugin.json",
+    "OVERVIEW.md",
+    "icon.svg",
+    "index.server.ts",
+    "server/provider.ts",
+    "server/dsh-compatibility.ts",
+    "server/usage.ts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "images/",
+    "package.json",
+    "npm-shrinkwrap.json"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "lint": "oxlint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --maxWorkers=2",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "prepack": "node scripts/pack-manifest.mjs prepare",
+    "postpack": "node scripts/pack-manifest.mjs restore"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
+    "yaml": "2.9.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@getpaseo/client": "0.11.4",
+    "@getpaseo/plugin": "0.11.4",
+    "@getpaseo/protocol": "0.11.4",
+    "@types/node": "^22.0.0",
+    "oxlint": "1.61.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
+  }
+}
