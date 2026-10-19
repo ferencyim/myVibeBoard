@@ -146,3 +146,42 @@ describe("session-note auto approval", () => {
     expect(isSessionNotePath(root, ".vibe/sessions/../x.md")).toBe(false);
   });
 });
+
+describe("vibe_session_note", () => {
+  it("writes the card's session notes into its worktree", async () => {
+    const { callMcpTool } = await import("../server/mcp/tools");
+    const { mkdirSync, readFileSync } = await import("node:fs");
+    const t = setup();
+    mkdirSync(t.worktree, { recursive: true });
+    const card = t.runtime.store.cards.list({})[0]!;
+    const ok = await callMcpTool("vibe_session_note", { key: card.key, text: "# notes" }, t.board, { agentId: "a1", role: "worker" });
+    expect(ok.isError).toBeUndefined();
+    expect(readFileSync(join(t.worktree, ".vibe", "sessions", `${card.id}.md`), "utf8")).toBe("# notes");
+    const unknown = await callMcpTool("vibe_session_note", { key: "NOPE-1", text: "x" }, t.board, { role: "worker" });
+    expect(unknown.isError).toBe(true);
+    const verifier = await callMcpTool("vibe_session_note", { key: card.key, text: "x" }, t.board, { agentId: "a1", role: "verifier" });
+    expect(verifier.isError).toBe(true);
+  });
+});
+
+describe("session-note MCP tool approval", () => {
+  it("approves vibe_session_note on the vibe-board server only", async () => {
+    respond.mockClear();
+    const t = setup();
+    await t.started("t");
+    const elicit = (serverName: string, tool: string) => ({
+      name: "CodexMcpElicitation",
+      description: `Allow the ${serverName} MCP server to run tool "${tool}"?`,
+      metadata: { serverName },
+    });
+    await t.ask({ id: "m1", ...elicit("vibe-board", "vibe_session_note") });
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(t.state()).toBe("working");
+
+    respond.mockClear();
+    await t.ask({ id: "m2", ...elicit("vibe-board", "vibe_update") });
+    await t.ask({ id: "m3", ...elicit("other", "vibe_session_note") });
+    expect(respond).not.toHaveBeenCalled();
+    expect(t.state()).toBe("waiting");
+  });
+});

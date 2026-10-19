@@ -6,9 +6,13 @@
 // (the merge is aborted, leaving the checkout as it was). Only fast-forward or a normal merge
 // commit is used. The worktree is removed with plain `git worktree remove`; a refusal is only
 // reported. The branch is always kept. Before that, the card's live worker/verifier agents are
-// archived (their processes hold the directory, which Windows refuses to remove).
+// archived (their processes hold the directory, which Windows refuses to remove). Untracked
+// session-note files (`.vibe/sessions/*.md`, written by compaction) do not count as dirty; they are
+// deleted one by one (never recursively) right before the removal, since git refuses otherwise.
 
 import { execFile } from "node:child_process";
+import { rmdir, unlink } from "node:fs/promises";
+import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { CardView } from "../vibe/contract";
 import type { BoardService } from "../service";
@@ -111,11 +115,17 @@ export function createGitFinalizer(options: GitFinalizerOptions): Finalizer {
     const git = (cwd: string, ...args: string[]) => exec(cwd, "git", args);
 
     // ---- worktree: clean, on a branch ---------------------------------------------------
-    const dirty = await git(worktree, "status", "--porcelain");
+    const dirty = await git(worktree, "status", "--porcelain", "-uall");
     if (dirty.code !== 0) {
       return blocked("worktree_missing", `Cannot read the worktree: ${dirty.stderr.trim()}`);
     }
-    if (dirty.stdout.trim()) {
+    const lines = dirty.stdout
+      .split("\n")
+      .map((l) => l.replace(/\r$/, ""))
+      .filter((l) => l.trim());
+    const isNote = (l: string) => /^\?\? "?\.vibe\/sessions\/[^/"]+\.md"?$/.test(l);
+    const notes = lines.filter(isNote).map((l) => l.slice(3).replace(/"/g, ""));
+    if (lines.some((l) => !isNote(l))) {
       return blocked(
         "worktree_dirty",
         "The worktree has uncommitted changes; commit or discard them, then merge manually.",
@@ -185,6 +195,8 @@ export function createGitFinalizer(options: GitFinalizerOptions): Finalizer {
 
     const agents = await closeAgents(card);
     const mergedCommit = (await git(repo, "rev-parse", target)).stdout.trim();
+    for (const note of notes) await unlink(join(worktree, note)).catch(() => {});
+    for (const dir of [".vibe/sessions", ".vibe"]) await rmdir(join(worktree, dir)).catch(() => {});
     const removed = await git(repo, "worktree", "remove", worktree);
     const cleanup =
       removed.code === 0

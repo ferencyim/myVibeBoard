@@ -1,6 +1,8 @@
 // Auto-approval for one narrow permission class: a worker writing its own progress notes
 // (`<worktree>/.vibe/sessions/*.md`, vibe-context compaction asks for them before /compact).
-// Everything else still waits for the user.
+// Everything else still waits for the user. The MCP tool vibe_session_note (which writes exactly that
+// file) is approved too: codex shells out to PowerShell for notes otherwise, and a shell command
+// cannot be checked for its target path.
 //
 // Paths come from the request (`detail.filePath`, `input.file_path|path`) or, for providers whose
 // approval request carries no path (codex "CodexFileChange"), from the matching tool-call item in
@@ -12,6 +14,8 @@ import type { PaseoApi } from "@getpaseo/client";
 
 interface RequestLike {
   id: string;
+  name?: string;
+  description?: string;
   kind: string;
   input?: unknown;
   detail?: unknown;
@@ -42,11 +46,28 @@ function directPaths(request: RequestLike): string[] {
   return out;
 }
 
-/** Cheap synchronous pre-check: does the request carry (or point to) any file path at all? */
+/**
+ * The vibe-board MCP tool `vibe_session_note` (the way to save notes without a file-write approval).
+ * Codex asks via "CodexMcpElicitation" (server in metadata, tool in the description); Claude names
+ * the permission after the tool.
+ */
+export function isSessionNoteTool(request: RequestLike): boolean {
+  if (request.kind !== "tool") return false;
+  if (request.name === "mcp__vibe-board__vibe_session_note") return true;
+  return (
+    request.name === "CodexMcpElicitation" &&
+    asRecord(request.metadata)?.serverName === "vibe-board" &&
+    /["']vibe_session_note["']/.test(request.description ?? "")
+  );
+}
+
+/** Cheap synchronous pre-check: could this request be a session-note write? */
 export function mayWriteFile(request: RequestLike): boolean {
   return (
     request.kind === "tool" &&
-    (directPaths(request).length > 0 || typeof asRecord(request.metadata)?.itemId === "string")
+    (isSessionNoteTool(request) ||
+      directPaths(request).length > 0 ||
+      typeof asRecord(request.metadata)?.itemId === "string")
   );
 }
 
@@ -71,6 +92,12 @@ export async function approveSessionNoteWrite(options: {
 }): Promise<boolean> {
   const { paseo, agentId, request } = options;
   if (request.kind !== "tool") return false;
+  const allow = () =>
+    paseo.agents
+      .ref(agentId)
+      .respondToPermission({ requestId: request.id, response: { behavior: "allow" } })
+      .then(() => true);
+  if (isSessionNoteTool(request)) return allow();
   let paths = directPaths(request);
   const itemId = asRecord(request.metadata)?.itemId;
   if (paths.length === 0 && typeof itemId === "string") {
@@ -80,8 +107,5 @@ export async function approveSessionNoteWrite(options: {
   const roots = options.roots.filter(Boolean);
   const allowed = paths.every((p) => roots.some((root) => isSessionNotePath(root, p)));
   if (!allowed) return false;
-  await paseo.agents
-    .ref(agentId)
-    .respondToPermission({ requestId: request.id, response: { behavior: "allow" } });
-  return true;
+  return allow();
 }

@@ -10,5 +10,6 @@ Cards live in five columns: draft, todo, in_progress, verifying, done. You work 
 - Update fields: \`vibe-board update ABC-12 --acceptance "..."\` / MCP \`vibe_update\`
 - Report progress or ask questions: \`vibe-board comment ABC-12 --body "..."\` / MCP \`vibe_comment\`
 - Attach files: \`vibe-board attachment add ABC-12 --file ./out.png\` / MCP \`vibe_attach\`; fetch: \`vibe-board attachment get <id> --out ./file\`
+- Save session progress notes when asked: MCP \`vibe_session_note\` (writes \`.vibe/sessions/<card>.md\` in your worktree, no approval needed)
 You cannot move cards between columns; people and the board decide that.`;
 }

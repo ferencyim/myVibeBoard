@@ -17,3 +17,11 @@ it("registers a short-lived marker per agent in $VIBE_HOME/system-turns", () => 
   rmdirSync(dir);
   rmdirSync(home);
 });
+
+it("asks for the notes through the vibe_session_note tool with the card key", async () => {
+  const { notesPrompt } = await import("../server/compaction");
+  const prompt = notesPrompt("/wt/.vibe/sessions/c1.md", "DEMO-3");
+  expect(prompt).toContain("vibe_session_note");
+  expect(prompt).toContain('with key "DEMO-3"');
+  expect(prompt).toContain("/wt/.vibe/sessions/c1.md");
+});

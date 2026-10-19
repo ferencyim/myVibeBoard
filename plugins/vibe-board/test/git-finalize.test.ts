@@ -122,6 +122,15 @@ describe("git finalizer", () => {
     expect(result?.detail).toMatchObject({ agentsNotClosed: ["a1"] });
   });
 
+  it("does not treat untracked session notes as dirty and removes them before removing the worktree", async () => {
+    const { wt, card, finalize } = repoWithCard();
+    mkdirSync(join(wt, ".vibe", "sessions"), { recursive: true });
+    writeFileSync(join(wt, ".vibe", "sessions", "card.md"), "notes");
+    const result = await finalize(card);
+    expect(result?.detail).toMatchObject({ worktreeRemoved: true });
+    expect(existsSync(wt)).toBe(false);
+  });
+
   it("does nothing for a card without a worktree and honours mode none", async () => {
     const { t, card } = repoWithCard();
     const none = createGitFinalizer({ board: t.board, getConfig: async () => ({ mode: "none" }) });
