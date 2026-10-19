@@ -10,9 +10,12 @@
   },
   "vibe": {
     "shared": {
-      "shared": [],
-      "server": [
+      "shared": [
         "contract"
+      ],
+      "server": [
+        "contract",
+        "db"
       ]
     }
   },
