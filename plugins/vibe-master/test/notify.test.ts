@@ -70,6 +70,14 @@ describe("push notifier", () => {
     await consumer.stop();
   });
 
+  it("labels the permission_wait alert", async () => {
+    const { board, sent, consumer } = start();
+    publishEvent(board.db, { type: "master.alert", payload: { kind: "permission_wait", message: "x" } });
+    await consumer.poll();
+    expect(sent[0]?.body).toBe("Master: waiting for permission");
+    await consumer.stop();
+  });
+
   it("ignores events from before it started", async () => {
     const board = setupBoard();
     const card = board.store.cards.create({ projectId: board.project.id, title: "Old" }, "user");
