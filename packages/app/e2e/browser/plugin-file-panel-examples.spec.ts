@@ -73,6 +73,28 @@ async function selectPreview(page: Page) {
     .click();
 }
 
+async function expectPdfViewerReady(page: Page) {
+  const viewerUrl = /^chrome-extension:\/\/[^/]+\/index\.html$/;
+  await expect.poll(() => page.frame({ url: viewerUrl }) !== null).toBe(true);
+  const viewer = page.frame({ url: viewerUrl })!;
+  await expect(viewer.getByRole("textbox", { name: "Page number", exact: true })).toHaveValue("1");
+  await expect(viewer.getByRole("button", { name: "Print", exact: true })).toBeEnabled();
+}
+
+async function expectCompactMarkdownEditor(page: Page, text: string) {
+  const editor = page.getByRole("textbox", { name: "Rich Markdown editor", exact: true });
+  await expect(editor).toBeVisible();
+  await expect(editor).toContainText(text);
+  await expect(editor).toBeInViewport({ ratio: 1 });
+  const bar = page.getByTestId("file-panel-bar").filter({ visible: true });
+  await expect(bar.getByRole("button", { name: "Preview", exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+  await expect(bar.getByRole("button", { name: "Source", exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+}
+
 test("directory examples mount the PDF frame and edit Markdown through Paseo's document", async ({
   page,
 }, testInfo) => {
@@ -124,6 +146,7 @@ test("directory examples mount the PDF frame and edit Markdown through Paseo's d
         documentUrl,
       ),
     ).toBe("application/pdf");
+    await expectPdfViewerReady(page);
     await capture(page, testInfo, "pdf-example-web");
 
     await openFile(page, "notes.md");
@@ -173,6 +196,7 @@ test("directory examples mount the PDF frame and edit Markdown through Paseo's d
     );
     await expect(page.getByText("Open .md files with", { exact: true })).toBeHidden();
     await page.setViewportSize({ width: 390, height: 844 });
+    await expectCompactMarkdownEditor(page, "Remembered panel");
     await capture(page, testInfo, "markdown-example-compact-web");
   } finally {
     await client.removePlugin("pdf-panel");
