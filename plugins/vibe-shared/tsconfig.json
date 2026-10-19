@@ -12,5 +12,5 @@
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["contract/**/*.ts", "db/**/*.ts", "test/**/*.ts"]
+  "include": ["contract/**/*.ts", "db/**/*.ts", "sync/**/*.ts", "test/**/*.ts"]
 }
