@@ -2,7 +2,16 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { attachmentGetCommand } from "../shared/constants";
 
-describe("attachmentGetCommand", () => {
+const hasSh = (() => {
+  try {
+    execFileSync("sh", ["-c", "true"]);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+describe.skipIf(!hasSh)("attachmentGetCommand", () => {
   it.each([
     "report.txt",
     "my report.txt",
