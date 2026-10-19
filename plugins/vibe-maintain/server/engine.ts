@@ -275,7 +275,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
     now,
     pollIntervalMs: options.pollIntervalMs,
     onError: (error, seq) => log(`event ${seq} failed`, error),
-    handler: (event) => {
+    handler: async (event) => {
       const cardId = event.cardId;
       if (!cardId) return;
       if (isEvent(event, "card.deleted")) {
@@ -303,7 +303,11 @@ export function createMaintenanceEngine(options: EngineOptions) {
         }
         return;
       }
-      if (isEvent(event, "card.moved") && event.payload.to === "done") onCardDone(card.projectId);
+      if (isEvent(event, "card.moved") && event.payload.to === "done") {
+        // A brand-new project has no rules until the next sync: do not lose its first cards.
+        if (listRules(card.projectId).length === 0) await syncRules();
+        onCardDone(card.projectId);
+      }
     },
   });
 
@@ -628,8 +632,8 @@ export function createMaintenanceEngine(options: EngineOptions) {
   /** One pass: consume bus events, refresh rules, evaluate triggers. */
   async function tick(): Promise<void> {
     if (!settings().enabled) return;
-    await consumer.poll();
     await syncRules();
+    await consumer.poll();
     for (const rule of listRules()) {
       if (!rule.enabled || rule.pausedAt) continue;
       const project = store.projects.get(rule.projectId);

@@ -45,6 +45,14 @@ describe("workload trigger -> git health draft card (WP-36 acceptance)", () => {
     expect(h.engine.status().rules[0]!.counters.cards).toBe(0);
   });
 
+  it("does not lose cards completed before the first tick of a new project", async () => {
+    const h = setup();
+    sh(h.repo, ["branch", "feat/finished"]);
+    h.complete(10); // no tick yet: the rules do not exist
+    await h.engine.tick();
+    expect(h.maintenanceCards()).toHaveLength(1);
+  });
+
   it("appends a record instead of a new card while the dedupe key has an open card", async () => {
     const h = setup();
     await h.engine.tick();
