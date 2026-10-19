@@ -1,0 +1,8 @@
+{
+  "id": "vibe-verify",
+  "name": "Vibe Verify",
+  "description": "myVibeBoard verify plugin.",
+  "requirements": {
+    "paseo": ">=0.12.0 <0.13.0"
+  }
+}
