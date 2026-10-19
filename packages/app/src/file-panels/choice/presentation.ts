@@ -27,6 +27,12 @@ export function filePanelOptionLabel(t: TFunction, panel: FilePanel): string {
   });
 }
 
+/** ".md" for an extension key, "Dockerfile" for a filename key. */
+export function filePanelSelectorLabel(selectorKey: string): string {
+  const selector = parseFilePanelSelectorKey(selectorKey);
+  return selector.kind === "name" ? selector.value : `.${selector.value}`;
+}
+
 /** "Open .md files with" for an extension key, "Open Dockerfile with" for a filename key. */
 export function filePanelPickerTitle(t: TFunction, selectorKey: string): string {
   const selector = parseFilePanelSelectorKey(selectorKey);

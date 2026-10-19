@@ -2113,6 +2113,7 @@ export const en = {
       appearance: "Appearance",
       sidebar: "Sidebar",
       editor: "Editor",
+      files: "Files",
       terminal: "Terminal",
       browser: "Browser",
       shortcuts: "Shortcuts",
@@ -2165,6 +2166,14 @@ export const en = {
       title: "Editor",
       vimKeybindings: "Vim keybindings",
       vimHint: "Applies to source files on web and desktop.",
+    },
+    files: {
+      title: "Files",
+      askEveryTime: "Ask every time",
+      askAgain: "Ask again",
+      askAgainFor: "Ask again for {{label}}",
+      unavailable: "Not on a connected host",
+      empty: "File panels appear here when a plugin adds one",
     },
     notifications: {
       title: "Notifications",

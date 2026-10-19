@@ -10,3 +10,6 @@ export {
   type FilePanelOpenWithMenu,
 } from "./choice/open-with";
 export { DocumentFrame } from "./document-frame";
+export { filePanelIcon, filePanelOptionLabel, filePanelSelectorLabel } from "./choice/presentation";
+export { useFilePanelSettings, type FilePanelSettings } from "./settings/hook";
+export type { FilePanelSettingsRow } from "./settings/rows";

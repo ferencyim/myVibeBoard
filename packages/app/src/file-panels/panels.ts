@@ -16,21 +16,29 @@ export type FilePanel = (typeof builtinFilePanels)[number] | PluginFilePanel;
 export function useFilePanels(serverId: string): readonly FilePanel[] {
   const plugins = useInstalledPlugins();
   return useMemo(
-    () => [
-      ...builtinFilePanels,
-      ...plugins
-        .filter((plugin) => plugin.serverId === serverId)
-        .flatMap((plugin) =>
-          plugin.filePanels.map((contribution) => ({
-            id: `plugin:${plugin.id}/${contribution.id}`,
-            files: contribution.files,
-            document: contribution.document,
-            maxBytes: contribution.maxBytes,
-            plugin,
-            contribution,
-          })),
-        ),
-    ],
+    () => filePanelCatalog(plugins.filter((plugin) => plugin.serverId === serverId)),
     [plugins, serverId],
   );
+}
+
+/** Every host's panels; a plugin installed on several hosts contributes its panels once per host. */
+export function useAllHostsFilePanels(): readonly FilePanel[] {
+  const plugins = useInstalledPlugins();
+  return useMemo(() => filePanelCatalog(plugins), [plugins]);
+}
+
+function filePanelCatalog(plugins: readonly InstalledPlugin[]): FilePanel[] {
+  return [
+    ...builtinFilePanels,
+    ...plugins.flatMap((plugin) =>
+      plugin.filePanels.map((contribution) => ({
+        id: `plugin:${plugin.id}/${contribution.id}`,
+        files: contribution.files,
+        document: contribution.document,
+        maxBytes: contribution.maxBytes,
+        plugin,
+        contribution,
+      })),
+    ),
+  ];
 }

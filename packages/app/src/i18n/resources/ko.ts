@@ -2100,6 +2100,7 @@ export const ko: TranslationResources = {
       terminal: "터미널",
       browser: "브라우저",
       editor: "편집기",
+      files: "파일",
       shortcuts: "단축키",
       integrations: "통합",
       notifications: "알림",
@@ -2112,6 +2113,14 @@ export const ko: TranslationResources = {
       title: "편집기",
       vimKeybindings: "Vim 키 바인딩",
       vimHint: "웹 및 데스크톱의 소스 파일에 적용됩니다.",
+    },
+    files: {
+      title: "파일",
+      askEveryTime: "매번 묻기",
+      askAgain: "다시 묻기",
+      askAgainFor: "{{label}} 다시 묻기",
+      unavailable: "연결된 호스트에 없음",
+      empty: "플러그인이 파일 패널을 추가하면 여기에 표시됩니다",
     },
     notifications: {
       title: "알림",

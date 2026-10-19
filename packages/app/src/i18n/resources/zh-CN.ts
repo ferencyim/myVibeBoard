@@ -2068,6 +2068,7 @@ export const zhCN: TranslationResources = {
       terminal: "终端",
       browser: "浏览器",
       editor: "编辑器",
+      files: "文件",
       shortcuts: "快捷键",
       integrations: "集成",
       notifications: "通知",
@@ -2080,6 +2081,14 @@ export const zhCN: TranslationResources = {
       title: "编辑器",
       vimKeybindings: "Vim 键位",
       vimHint: "适用于网页和桌面端的源文件。",
+    },
+    files: {
+      title: "文件",
+      askEveryTime: "每次询问",
+      askAgain: "重新询问",
+      askAgainFor: "重新询问 {{label}}",
+      unavailable: "不在已连接的主机上",
+      empty: "插件添加文件面板后会显示在这里",
     },
     notifications: {
       title: "通知",

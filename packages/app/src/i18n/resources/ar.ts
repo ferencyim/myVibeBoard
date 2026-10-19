@@ -2090,6 +2090,7 @@ export const ar: TranslationResources = {
       terminal: "الطرفية",
       browser: "المتصفح",
       editor: "المحرر",
+      files: "الملفات",
       shortcuts: "الاختصارات",
       integrations: "التكامل",
       notifications: "الإشعارات",
@@ -2102,6 +2103,14 @@ export const ar: TranslationResources = {
       title: "المحرر",
       vimKeybindings: "اختصارات Vim",
       vimHint: "تنطبق على ملفات المصدر في الويب وسطح المكتب.",
+    },
+    files: {
+      title: "الملفات",
+      askEveryTime: "اسأل في كل مرة",
+      askAgain: "اسأل مجددًا",
+      askAgainFor: "اسأل مجددًا عن {{label}}",
+      unavailable: "غير موجود على مضيف متصل",
+      empty: "تظهر لوحات الملفات هنا عندما تضيف إحدى الإضافات لوحة",
     },
     notifications: {
       title: "الإشعارات",

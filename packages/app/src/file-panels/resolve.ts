@@ -54,9 +54,38 @@ export function parseFilePanelSelectorKey(selectorKey: string): FilePanelSelecto
 }
 
 function matchesSelector(file: FilePanelFile, selector: FilePanelSelector): boolean {
-  if (selector.filenames?.includes(filePanelBasename(file.path))) return true;
-  const extension = filePanelExtension(file.path);
+  return matchesName(filePanelBasename(file.path), filePanelExtension(file.path), selector);
+}
+
+function matchesName(name: string, extension: string, selector: FilePanelSelector): boolean {
+  if (selector.filenames?.includes(name)) return true;
   return selector.extensions.some((entry) => entry.toLowerCase() === extension);
+}
+
+/** The selector keys a panel claims: one per extension and one per filename. */
+export function filePanelClaimedSelectorKeys(selector: FilePanelSelector): string[] {
+  return [
+    ...selector.extensions.map((extension) =>
+      filePanelSelectorKey({ kind: "ext", value: extension.toLowerCase() }),
+    ),
+    ...(selector.filenames ?? []).map((filename) =>
+      filePanelSelectorKey({ kind: "name", value: filename }),
+    ),
+  ];
+}
+
+/**
+ * Whether a panel is offered for files under `selectorKey`, by the resolver's matching rule. Size
+ * and document kind depend on the file, so they are not part of the answer.
+ */
+export function claimsFilePanelSelectorKey(
+  selector: FilePanelSelector,
+  selectorKey: string,
+): boolean {
+  const { kind, value } = parseFilePanelSelectorKey(selectorKey);
+  return kind === "name"
+    ? matchesName(value, filePanelExtension(value), selector)
+    : matchesName("", value, selector);
 }
 
 export function resolveFilePanel<Candidate extends FilePanelCandidate>(input: {

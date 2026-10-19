@@ -2123,6 +2123,7 @@ export const ru: TranslationResources = {
       terminal: "Терминал",
       browser: "Браузер",
       editor: "Редактор",
+      files: "Файлы",
       shortcuts: "Сочетания клавиш",
       integrations: "Интеграции",
       notifications: "Уведомления",
@@ -2135,6 +2136,14 @@ export const ru: TranslationResources = {
       title: "Редактор",
       vimKeybindings: "Сочетания клавиш Vim",
       vimHint: "Применяется к исходным файлам в веб- и настольной версии.",
+    },
+    files: {
+      title: "Файлы",
+      askEveryTime: "Спрашивать каждый раз",
+      askAgain: "Спросить снова",
+      askAgainFor: "Спросить снова для {{label}}",
+      unavailable: "Нет на подключённых хостах",
+      empty: "Панели файлов появятся здесь, когда плагин добавит их",
     },
     notifications: {
       title: "Уведомления",

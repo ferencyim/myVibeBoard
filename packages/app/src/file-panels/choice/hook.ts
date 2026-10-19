@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FileReadResult } from "@getpaseo/client/internal/daemon-client";
-import { useAppSettings } from "@/hooks/use-settings";
 import { usePaneContext } from "@/panels/pane-context";
 import type { PanelInstanceIdentity } from "@/panels/panel-instance-attributes";
+import { useFilePanelAssociations } from "../associations";
 import { useFilePanels, type FilePanel } from "../panels";
 import { resolveFileReadPanels } from "../resolve";
 import { chosenPanelFor, FilePanelChoiceModel, type FilePanelChoiceSnapshot } from "./model";
@@ -25,22 +25,8 @@ export function useFilePanelChoice(input: {
   const { targetKey, path, file, presentable } = input;
   const { serverId, workspaceId, tabId } = usePaneContext();
   const candidates = useFilePanels(input.serverId);
-  const { settings, updateSettings } = useAppSettings();
-  const associations = settings.filePanelAssociations;
-  const [choice] = useState(
-    () =>
-      new FilePanelChoiceModel<FilePanel>({
-        remember(selectorKey, panelId) {
-          void updateSettings((current) => ({
-            filePanelAssociations: withAssociation(
-              current.filePanelAssociations,
-              selectorKey,
-              panelId,
-            ),
-          }));
-        },
-      }),
-  );
+  const { associations, remember } = useFilePanelAssociations();
+  const [choice] = useState(() => new FilePanelChoiceModel<FilePanel>({ remember }));
   // From the subscribed snapshot: React Compiler caches reads off the stable model object.
   const chosenPanelId = chosenPanelFor(useFilePanelChoiceSnapshot(choice), targetKey);
   const resolution = useMemo(
@@ -86,15 +72,4 @@ export function useFilePanelChoiceSnapshot(
     choice?.getSnapshot ?? getNoChoiceSnapshot,
     choice?.getSnapshot ?? getNoChoiceSnapshot,
   );
-}
-
-function withAssociation(
-  associations: Readonly<Record<string, string>>,
-  selectorKey: string,
-  panelId: string | null,
-): Record<string, string> {
-  const next = { ...associations };
-  if (panelId === null) delete next[selectorKey];
-  else next[selectorKey] = panelId;
-  return next;
 }

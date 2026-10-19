@@ -2123,6 +2123,7 @@ export const ptBR: TranslationResources = {
       terminal: "Terminal",
       browser: "Navegador",
       editor: "Editor",
+      files: "Arquivos",
       shortcuts: "Atalhos",
       integrations: "Integrações",
       notifications: "Notificações",
@@ -2135,6 +2136,14 @@ export const ptBR: TranslationResources = {
       title: "Editor",
       vimKeybindings: "Atalhos do Vim",
       vimHint: "Aplica-se a arquivos-fonte na web e no desktop.",
+    },
+    files: {
+      title: "Arquivos",
+      askEveryTime: "Perguntar sempre",
+      askAgain: "Perguntar de novo",
+      askAgainFor: "Perguntar de novo para {{label}}",
+      unavailable: "Não está em um host conectado",
+      empty: "Os painéis de arquivo aparecem aqui quando um plugin adiciona um",
     },
     notifications: {
       title: "Notificações",
