@@ -7,12 +7,7 @@ import { StyleSheet, UnistylesRuntime, withUnistyles } from "react-native-unisty
 import { useTranslation } from "react-i18next";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSessionStore, type ExplorerFile } from "@/stores/session-store";
-import {
-  FilePanelPreview,
-  resolveFilePreviewPanel,
-  useFilePanels,
-  type FilePanel,
-} from "@/file-panels";
+import { FilePanelPreview, useFilePanels, type FilePanel } from "@/file-panels";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
@@ -42,6 +37,7 @@ const foregroundMutedColorMapping = (theme: Theme) => ({
 });
 
 interface FilePreviewBodyProps {
+  bytes: Uint8Array | null;
   setText?: (text: string) => void;
   panel: FilePanel | null;
   preview: ExplorerFile | null;
@@ -128,6 +124,7 @@ function TooLargeSource({ size }: { size?: number }) {
 }
 
 function FilePreviewBody({
+  bytes,
   setText,
   panel,
   preview,
@@ -165,6 +162,7 @@ function FilePreviewBody({
   if (panel && !showSource) {
     return (
       <FilePanelPreview
+        bytes={bytes}
         panel={panel}
         preview={preview}
         location={location}
@@ -251,22 +249,24 @@ export function FilePane({
   });
 
   const targetKey = readTarget ? `${readTarget.cwd}:${readTarget.path}` : null;
+  const candidates = useFilePanels(serverId);
   const previewLifecycle = useFilePreview({
+    candidates,
+    associations: settings.filePanelAssociations,
+    path: location.path,
     targetKey,
     liveFileSnapshot: liveFile.snapshot,
   });
 
   useEffect(() => setPreviewMode("preview"), [targetKey]);
 
-  const { file: preview, documentAttachment } = resolveFilePreviewLifecycle(previewLifecycle);
+  const {
+    file: preview,
+    panel,
+    bytes,
+    documentAttachment,
+  } = resolveFilePreviewLifecycle(previewLifecycle);
   const documentPreviewUri = useAttachmentPreviewUrl(documentAttachment);
-  const candidates = useFilePanels(serverId);
-  const panel = resolveFilePreviewPanel({
-    candidates,
-    preview,
-    path: location.path,
-    associations: settings.filePanelAssociations,
-  });
   const isRenderable = preview?.kind === "text" && panel !== null;
   const editable = isEditableTextFile({
     preview,
@@ -283,6 +283,7 @@ export function FilePane({
 
   return (
     <FilePanePresentation
+      bytes={bytes}
       panel={panel}
       serverId={serverId}
       workspaceRoot={normalizedWorkspaceRoot}
@@ -322,6 +323,7 @@ function isEditableTextFile(input: {
 }
 
 function FilePanePresentation({
+  bytes,
   panel,
   serverId,
   workspaceRoot,
@@ -345,6 +347,7 @@ function FilePanePresentation({
   navigationRevision,
   documentPreviewUri,
 }: {
+  bytes: Uint8Array | null;
   panel: FilePanel | null;
   serverId: string;
   workspaceRoot: string;
@@ -381,6 +384,7 @@ function FilePanePresentation({
   if (editable && client && readTarget && preview?.kind === "text") {
     return (
       <EditableFilePane
+        bytes={bytes}
         panel={panel}
         documentPreviewUri={documentPreviewUri}
         key={`${serverId}:${readTarget.cwd}:${readTarget.path}`}
@@ -435,6 +439,7 @@ function FilePanePresentation({
         />
       ) : null}
       <FilePreviewBody
+        bytes={bytes}
         panel={panel}
         preview={preview}
         mode={previewMode}
@@ -452,6 +457,7 @@ function FilePanePresentation({
 }
 
 function EditableFilePane({
+  bytes,
   documentPreviewUri,
   panel,
   serverId,
@@ -471,6 +477,7 @@ function EditableFilePane({
   location,
   navigationRevision,
 }: {
+  bytes: Uint8Array | null;
   documentPreviewUri: string | null;
   panel: FilePanel | null;
   serverId: string;
@@ -621,6 +628,7 @@ function EditableFilePane({
         />
       ) : (
         <FilePreviewBody
+          bytes={bytes}
           panel={panel}
           setText={setText}
           preview={renderedPreview}

@@ -2,6 +2,7 @@ import type { FileReadResult } from "@getpaseo/client/internal/daemon-client";
 import type { LiveFileSnapshot } from "../live-file/model";
 import { describe, expect, it } from "vitest";
 import {
+  createFilePanePreview,
   FilePreviewLifecycleModel,
   type FilePanePreview,
   type FilePreviewLifecycleSnapshot,
@@ -75,8 +76,9 @@ function source(
 ): {
   targetKey: string;
   liveFileSnapshot: LiveFileSnapshot;
+  panel: null;
 } {
-  return { targetKey, liveFileSnapshot: snapshot };
+  return { targetKey, liveFileSnapshot: snapshot, panel: null };
 }
 
 describe("FilePreviewLifecycleModel", () => {
@@ -88,7 +90,8 @@ describe("FilePreviewLifecycleModel", () => {
     const model = new FilePreviewLifecycleModel(() => preparations.shift()!.promise);
     const preview: FilePanePreview = {
       file: previewFile("preview"),
-      documentAttachment: null,
+      panel: null,
+      bytesPreview: null,
     };
 
     model.setSource(source("/workspace:file.ts", pending()));
@@ -134,12 +137,13 @@ describe("FilePreviewLifecycleModel", () => {
     );
     const nextPreview: FilePanePreview = {
       file: previewFile("two"),
-      documentAttachment: null,
+      panel: null,
+      bytesPreview: null,
     };
 
     model.setSource(source("/workspace:file.ts", completed(file("one"))));
     model.setSource(source("/workspace:second.ts", completed(file("two", "second.ts"))));
-    first.resolve({ file: previewFile("one"), documentAttachment: null });
+    first.resolve({ file: previewFile("one"), panel: null, bytesPreview: null });
     await Promise.resolve();
     expect(model.getSnapshot()).toEqual({ status: "preparing" });
 
@@ -155,3 +159,40 @@ async function expectSnapshot(
   await new Promise<void>((resolve) => queueMicrotask(resolve));
   expect(model.getSnapshot()).toEqual(expected);
 }
+
+it("does not persist attachments when a text file has no selected panel", async () => {
+  let writes = 0;
+  await createFilePanePreview(file(), null, async () => {
+    writes++;
+    return {
+      id: "attachment",
+      mimeType: "text/plain",
+      storageType: "web-indexeddb",
+      storageKey: "attachment",
+      createdAt: 0,
+    };
+  });
+  expect(writes).toBe(0);
+});
+
+it("reprepares the same file when its selected panel changes", async () => {
+  const preparations: Array<string | null> = [];
+  const model = new FilePreviewLifecycleModel(async (raw, panel) => {
+    preparations.push(panel?.id ?? null);
+    return { file: previewFile("preview"), panel, bytesPreview: null };
+  });
+  const initial = source("/workspace:file.ts", completed(file()));
+  model.setSource(initial);
+  await Promise.resolve();
+  const textPanel = {
+    id: "builtin:markdown",
+    files: { extensions: ["md", "markdown"] },
+    document: "text",
+    maxBytes: Infinity,
+  } as const;
+  model.setSource({ ...initial, panel: textPanel });
+  await Promise.resolve();
+  model.setSource({ ...initial, panel: textPanel });
+  expect(preparations).toEqual([null, "builtin:markdown"]);
+  expect(model.getSnapshot()).toMatchObject({ status: "ready", preview: { panel: textPanel } });
+});

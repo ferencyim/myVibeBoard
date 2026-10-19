@@ -3,12 +3,14 @@ import type { AttachmentMetadata } from "@/attachments/types";
 import { persistAttachmentFromBytes } from "@/attachments/service";
 import { createPreviewAttachmentId, getFileNameFromPath } from "@/attachments/utils";
 import { explorerFileFromReadResult } from "@/file-explorer/read-result";
+import type { FilePanel } from "@/file-panels";
 import type { ExplorerFile } from "@/stores/session-store";
 import type { LiveFileSnapshot } from "../live-file/model";
 
 export interface FilePanePreview {
   file: ExplorerFile;
-  documentAttachment: AttachmentMetadata | null;
+  panel: FilePanel | null;
+  bytesPreview: { bytes: Uint8Array; attachment: AttachmentMetadata } | null;
 }
 
 export type FilePreviewLifecycleSnapshot =
@@ -22,10 +24,17 @@ export type FilePreviewLifecycleSnapshot =
 const initialSnapshot: FilePreviewLifecycleSnapshot = { status: "initial" };
 
 /** Converts a completed raw read into the preview resources consumed by FilePane. */
-export async function createFilePanePreview(file: FileReadResult): Promise<FilePanePreview | null> {
+export async function createFilePanePreview(
+  file: FileReadResult,
+  panel: FilePanel | null,
+  persist: typeof persistAttachmentFromBytes = persistAttachmentFromBytes,
+): Promise<FilePanePreview | null> {
   const explorerFile = explorerFileFromReadResult(file);
+  if (panel?.document !== "bytes") {
+    return { file: explorerFile, panel, bytesPreview: null };
+  }
 
-  const documentAttachment = await persistAttachmentFromBytes({
+  const documentAttachment = await persist({
     id: createPreviewAttachmentId({
       mimeType: file.mime,
       path: file.path,
@@ -38,7 +47,11 @@ export async function createFilePanePreview(file: FileReadResult): Promise<FileP
     fileName: getFileNameFromPath(file.path),
   });
 
-  return { file: explorerFile, documentAttachment };
+  return {
+    file: explorerFile,
+    panel,
+    bytesPreview: { bytes: file.bytes, attachment: documentAttachment },
+  };
 }
 
 /** Owns conversion after LiveFileModel has produced a raw file snapshot. */
@@ -48,9 +61,13 @@ export class FilePreviewLifecycleModel {
   private generation = 0;
   private preparedSourceKey: string | null = null;
   private targetKey: string | null = null;
+  private preparedPanel: FilePanel | null = null;
 
   constructor(
-    private readonly prepare: (file: FileReadResult) => Promise<FilePanePreview | null>,
+    private readonly prepare: (
+      file: FileReadResult,
+      panel: FilePanel | null,
+    ) => Promise<FilePanePreview | null>,
   ) {}
 
   subscribe = (listener: () => void): (() => void) => {
@@ -60,7 +77,11 @@ export class FilePreviewLifecycleModel {
 
   getSnapshot = (): FilePreviewLifecycleSnapshot => this.snapshot;
 
-  setSource(input: { targetKey: string | null; liveFileSnapshot: LiveFileSnapshot }): void {
+  setSource(input: {
+    targetKey: string | null;
+    liveFileSnapshot: LiveFileSnapshot;
+    panel: FilePanel | null;
+  }): void {
     const targetChanged = input.targetKey !== this.targetKey;
     const retainedPreview = targetChanged ? undefined : filePreviewFromLifecycle(this.snapshot);
     if (targetChanged) {
@@ -71,16 +92,22 @@ export class FilePreviewLifecycleModel {
 
     const source = getReadySource(input);
     if (source) {
-      if (source.key === this.preparedSourceKey) {
+      if (source.key === this.preparedSourceKey && input.panel === this.preparedPanel) {
         return;
       }
       this.preparedSourceKey = source.key;
+      this.preparedPanel = input.panel;
       const generation = ++this.generation;
       this.setSnapshot({
         status: "preparing",
         ...(retainedPreview ? { preview: retainedPreview } : {}),
       });
-      void this.prepareSource({ file: source.file, generation, retainedPreview });
+      void this.prepareSource({
+        file: source.file,
+        panel: input.panel,
+        generation,
+        retainedPreview,
+      });
       return;
     }
 
@@ -106,11 +133,12 @@ export class FilePreviewLifecycleModel {
 
   private async prepareSource(input: {
     file: FileReadResult;
+    panel: FilePanel | null;
     generation: number;
     retainedPreview?: FilePanePreview;
   }): Promise<void> {
     try {
-      const preview = await this.prepare(input.file);
+      const preview = await this.prepare(input.file, input.panel);
       if (input.generation !== this.generation) return;
       this.setSnapshot(preview ? { status: "ready", preview } : { status: "unsupported" });
     } catch (error) {
@@ -132,10 +160,18 @@ export function filePreviewFromLifecycle(
 
 export function resolveFilePreviewLifecycle(snapshot: FilePreviewLifecycleSnapshot): {
   file: ExplorerFile | null;
+  panel: FilePanel | null;
+  bytes: Uint8Array | null;
   documentAttachment: AttachmentMetadata | null;
 } {
   const preview = filePreviewFromLifecycle(snapshot);
-  return preview ?? { file: null, documentAttachment: null };
+  if (!preview) return { file: null, panel: null, bytes: null, documentAttachment: null };
+  return {
+    file: preview.file,
+    panel: preview.panel,
+    bytes: preview.bytesPreview ? preview.bytesPreview.bytes : null,
+    documentAttachment: preview.bytesPreview ? preview.bytesPreview.attachment : null,
+  };
 }
 
 function getReadySource(input: {

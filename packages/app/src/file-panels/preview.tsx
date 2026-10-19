@@ -10,6 +10,7 @@ export function FilePanelPreview(
   props: Omit<ComponentProps<typeof BuiltinFilePanelPreview>, "panel"> & {
     panel: FilePanel;
     preview: ExplorerFile;
+    bytes: Uint8Array | null;
     location: WorkspaceFileLocation;
     navigationRevision: number;
     setText?: (text: string) => void;
@@ -19,8 +20,8 @@ export function FilePanelPreview(
   if (!("plugin" in panel)) return <BuiltinFilePanelPreview {...props} panel={panel} />;
   let document;
   if (panel.document === "text") document = textDocument(props.content, props.setText);
-  else if (preview.bytes && props.documentPreviewUri)
-    document = bytesDocument(preview.bytes, props.documentPreviewUri);
+  else if (props.bytes && props.documentPreviewUri)
+    document = bytesDocument(props.bytes, props.documentPreviewUri);
   if (!document) return null;
   return (
     <PluginFilePanelHost

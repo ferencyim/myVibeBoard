@@ -244,7 +244,6 @@ export interface ExplorerEntry {
 }
 
 export interface ExplorerFile {
-  bytes?: Uint8Array;
   path: string;
   kind: ExplorerFileKind;
   encoding: ExplorerEncoding;

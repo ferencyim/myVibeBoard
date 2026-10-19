@@ -1,3 +1,8 @@
+import { createFilePanePreview } from "@/file-pane/preview-lifecycle/model";
+import { builtinFilePanels } from "./catalog";
+import type { FileReadResult } from "@getpaseo/client/internal/daemon-client";
+import type { AttachmentMetadata } from "@/attachments/types";
+import { resolveFilePreviewPanel } from "./resolve";
 import { describe, expect, it } from "vitest";
 import { resolveFilePanel, type FilePanelCandidate, type FilePanelFile } from "./resolve";
 
@@ -127,4 +132,69 @@ it("opens a binary PDF with its plugin and filters oversized and unavailable doc
       associations: { "ext:pdf": pdf.id },
     }).panel,
   ).toBeNull();
+});
+
+describe("resolved panel resources", () => {
+  const attachment: AttachmentMetadata = {
+    id: "preview",
+    mimeType: "image/png",
+    storageType: "web-indexeddb",
+    storageKey: "preview",
+    createdAt: 0,
+  };
+  function read(path: string, kind: FileReadResult["kind"]): FileReadResult {
+    return {
+      path,
+      kind,
+      bytes: new TextEncoder().encode("contents"),
+      mime: "text/plain",
+      size: 8,
+      modifiedAt: "2026-10-19T00:00:00Z",
+    };
+  }
+  it.each([
+    ["notes.md", "text"],
+    ["source.ts", "text"],
+    ["unknown.bin", "binary"],
+  ] as const)(
+    "does not create an attachment for %s, including live refreshes",
+    async (path, kind) => {
+      const writes: Uint8Array[] = [];
+      const persist = async (input: { bytes: Uint8Array }) => {
+        writes.push(input.bytes);
+        return attachment;
+      };
+      for (const modifiedAt of ["2026-10-19T00:00:00Z", "2026-10-19T00:00:01Z"]) {
+        const raw = { ...read(path, kind), modifiedAt };
+        const panel = resolveFilePreviewPanel({
+          file: raw,
+          path,
+          candidates: builtinFilePanels,
+          associations: {},
+        });
+        const preview = await createFilePanePreview(raw, panel, persist);
+        expect(preview?.bytesPreview).toBeNull();
+        expect(preview?.file).not.toHaveProperty("bytes");
+      }
+      expect(writes).toEqual([]);
+    },
+  );
+  it("persists and retains bytes only for the selected image panel", async () => {
+    const raw = read("picture.png", "image");
+    const panel = resolveFilePreviewPanel({
+      file: raw,
+      path: raw.path,
+      candidates: builtinFilePanels,
+      associations: {},
+    });
+    const writes: Uint8Array[] = [];
+    const preview = await createFilePanePreview(raw, panel, async (input) => {
+      writes.push(input.bytes);
+      return attachment;
+    });
+    expect(panel?.id).toBe("builtin:image");
+    expect(writes).toEqual([raw.bytes]);
+    expect(preview?.bytesPreview).toEqual({ bytes: raw.bytes, attachment });
+    expect(preview?.file).not.toHaveProperty("bytes");
+  });
 });

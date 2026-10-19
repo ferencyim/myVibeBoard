@@ -1,3 +1,5 @@
+import type { FileReadResult } from "@getpaseo/client/internal/daemon-client";
+
 export interface FilePanelFile {
   path: string;
   kind: "text" | "image" | "binary";
@@ -60,4 +62,20 @@ export function resolveFilePanel<Candidate extends FilePanelCandidate>(input: {
   const panel =
     candidates.find((candidate) => candidate.id === association) ?? candidates[0] ?? null;
   return { panel, candidates, selectorKey };
+}
+
+/** Raw reads always carry bytes, independently of whether a panel will retain them. */
+export function resolveFilePreviewPanel<Candidate extends FilePanelCandidate>(input: {
+  file: FileReadResult | null;
+  path: string;
+  candidates: readonly Candidate[];
+  associations: Readonly<Record<string, string>>;
+}): Candidate | null {
+  const { file, path, associations } = input;
+  if (!file) return null;
+  return resolveFilePanel({
+    file: { path, kind: file.kind, size: file.size, hasBytes: true },
+    candidates: input.candidates,
+    associations,
+  }).panel;
 }
