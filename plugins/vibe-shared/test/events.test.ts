@@ -60,6 +60,8 @@ describe("publishEvent", () => {
         "verification.finished",
         "verification.decision_requested",
         "maintenance.triggered",
+        "maintenance.paused",
+        "master.alert",
         "plan.updated",
         "scheduler.admitted",
         "scheduler.dispatch_failed",

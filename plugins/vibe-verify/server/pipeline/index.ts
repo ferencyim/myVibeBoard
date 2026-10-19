@@ -19,7 +19,7 @@ import {
   type VerificationItem,
 } from "../vibe/contract";
 import type { VibeStore } from "../vibe/db";
-import { VerifyConfigSchema, type VerifyConfig } from "../collectors/common";
+import { VerifyConfigSchema, loadVerifyConfig, type PerfConfig, type VerifyConfig } from "../collectors/common";
 import { type VerifierLauncher, type PickVerifier, VerdictSchema, parseJsonLoose, pickDifferentProvider } from "../verifier/agent";
 import { aggregate, SUMMARY, type VerifyStore } from "../store";
 import { runAutoChecks, splitChecks } from "./checks";
@@ -63,6 +63,15 @@ function textExcerpt(file: string, kind: string): string | undefined {
       : `${text.slice(0, EXCERPT_CHARS / 2)}
 ...[cut]...
 ${text.slice(-EXCERPT_CHARS / 2)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `backend.perf` block of the worktree's own `.vibe/verify.json` (written by the worker of a perf fix). */
+function readExistingPerf(worktree: string): PerfConfig | undefined {
+  try {
+    return loadVerifyConfig(worktree).backend?.perf;
   } catch {
     return undefined;
   }
@@ -198,7 +207,8 @@ export function createPipeline(deps: PipelineDeps) {
         let judgeReply = "";
 
         // ---- round 1: how to run it -----------------------------------------------------
-        if (project.projectType === "web") {
+        const existingPerf = readExistingPerf(worktree);
+        if (project.projectType === "web" || existingPerf) {
           const base = await prepareBaseline(
             runner,
             worktree,
@@ -237,6 +247,18 @@ export function createPipeline(deps: PipelineDeps) {
           config = {
             ...config,
             web: { ...config.web, baseline: { path: baseline.path, commitHash: baseline.commitHash } },
+          };
+        }
+        if (existingPerf && !config.backend?.perf) {
+          config = { ...config, backend: { ...config.backend, requests: config.backend?.requests ?? [], perf: existingPerf } };
+        }
+        if (baseline && config.backend?.perf && !config.backend.perf.baseline) {
+          config = {
+            ...config,
+            backend: {
+              ...config.backend,
+              perf: { ...config.backend.perf, baseline: { path: baseline.path, commitHash: baseline.commitHash } },
+            },
           };
         }
         deps.configs.set(vid, config);

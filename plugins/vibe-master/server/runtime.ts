@@ -10,6 +10,7 @@ import { MASTER_RULES } from "./master/rules.generated";
 import { createMasterSession } from "./master/session";
 import { createConsolidator } from "./memory/consolidate";
 import { createFileMemoryPort, type MemoryPort } from "./memory/files";
+import { createPlanning } from "./planning/planner";
 import { defaultSelector, type AgentSelector } from "./select";
 import { createAlerts } from "./subscription/alerts";
 import { createQuotaReader } from "./subscription/quota";
@@ -35,6 +36,7 @@ export interface RuntimeDeps {
   log?: (message: string, error?: unknown) => void;
 }
 
+const PLANNER_LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
 const KNOWN_PROVIDERS = ["claude", "codex", "kimi", "deepseek"];
 
 export function createMasterRuntime(deps: RuntimeDeps) {
@@ -78,18 +80,39 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     },
     log,
   });
+  const memory = deps.memory ?? createFileMemoryPort();
   const consolidator = createConsolidator({
     db,
     store,
     master: session,
     assessor,
-    memory: deps.memory ?? createFileMemoryPort(),
+    memory,
+    log,
+  });
+  // Per-card planning sessions (WP-33): separate agents, same model and rules as the master.
+  const planning = createPlanning({
+    db,
+    store,
+    getPaseo: deps.getPaseo,
+    master: session,
+    rules: deps.rules ?? MASTER_RULES,
+    dataDir: deps.dataDir,
+    clock,
+    memory,
+    alerts,
+    enabled: () => deps.settings().enabled,
+    pollIntervalMs: deps.pollIntervalMs,
     log,
   });
 
   async function run(job: WakeJob): Promise<void> {
     if (!deps.settings().enabled) return;
     if (job.kind === "assess_draft") {
+      // A live planning session owns the plan of its card: its plan versions must not be overwritten.
+      if (store.sessions.list({ cardId: job.cardId, role: "planner", states: PLANNER_LIVE }).length > 0) {
+        log(`assess ${job.cardId}: skipped (planning session active)`);
+        return;
+      }
       const outcome = await assessor.assess(job.cardId, { force: job.force });
       log(`assess ${job.cardId}: ${outcome.status}${"reason" in outcome ? ` (${outcome.reason})` : ""}`);
     } else if (job.kind === "card_done") {
@@ -256,6 +279,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     triggers,
     assessor,
     consolidator,
+    planning,
     quota,
     alerts,
     status,
@@ -265,6 +289,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     /** A daemon handle became available: retry parked jobs and catch up on unassessed drafts. */
     onPaseoAvailable(): void {
       queue.resume();
+      planning.resume();
     },
 
     /** Startup catch-up (drafts without a current assessment, recently done cards). */
@@ -294,6 +319,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     async dispose(): Promise<void> {
       monitoring = false;
       stopMonitor?.();
+      await planning.stop();
       await triggers.stop();
     },
   };

@@ -40,6 +40,27 @@ const DOWN_TABLES = [
   "evidence_file",
   "maintenance_run",
 ] as const;
+/**
+ * Display-only columns of the phone-writable tables (card key and number, project prefix, ...).
+ * They are not in sync-spec, so the phone can never write them: the daemon publishes them as plain
+ * values (no sync_meta) and the phone shows them. Without them the offline board could not show
+ * card keys.
+ */
+const DISPLAY_COLUMNS: Record<string, readonly string[]> = {
+  project: ["prefix", "next_number", "created_at", "updated_at"],
+  card: [
+    "number",
+    "key",
+    "worktree",
+    "origin",
+    "origin_ref",
+    "plan_session_id",
+    "created_at",
+    "updated_at",
+  ],
+  preset: ["builtin", "created_at", "updated_at"],
+  tag: ["builtin"],
+};
 /** Local file paths never leave the computer. */
 const DOWN_EXCLUDE: Record<string, readonly string[]> = { evidence_file: ["path", "thumb_path"] };
 
@@ -182,6 +203,25 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
         if (Object.keys(changed).length) node.writeFields(table, rowId, changed);
       }
       for (const rowId of known.keys()) if (!seen.has(rowId)) node.deleteRow(table, rowId);
+    }
+  }
+
+  /** Display-only columns of live business rows; only differences are written. */
+  function publishDisplayColumns(): void {
+    for (const [table, columns] of Object.entries(DISPLAY_COLUMNS)) {
+      if (!has(table)) continue;
+      const known = store.tableFields(table);
+      for (const row of db.prepare(`SELECT * FROM ${table}`).all()) {
+        const rowId = String(row.id);
+        const have = known.get(rowId);
+        if (!have) continue; // not exported to the log (yet)
+        const changed: Record<string, JsonValue> = {};
+        for (const col of columns) {
+          const v = cell(row[col]);
+          if (v !== undefined && !same(have[col], v)) changed[col] = v;
+        }
+        if (Object.keys(changed).length) node.writeFields(table, rowId, changed);
+      }
     }
   }
 
@@ -577,7 +617,7 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     return repaired;
   }
 
-  return { backfill, exportBusiness, publishDown, importBusiness, bizRow, has };
+  return { backfill, exportBusiness, publishDown, publishDisplayColumns, importBusiness, bizRow, has };
 }
 
 export type Bridge = ReturnType<typeof createBridge>;

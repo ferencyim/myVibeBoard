@@ -1,7 +1,7 @@
 // Backend / CLI / library evidence collector: runs the project's tests through the injected
 // Runner and replays configured requests against the (optionally started) service, recording
 // request/response samples. Driven by `<worktree>/.vibe/verify.json` (see ../common.ts).
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import type {
   CollectResult,
@@ -12,6 +12,7 @@ import type {
 } from "../../vibe/contract/collector";
 import {
   ServerRegistry,
+  type PerfConfig,
   createNodeServerLauncher,
   loadVerifyConfig,
   writeArtifact,
@@ -82,6 +83,68 @@ function tail(text: string, max: number): string {
   return text.length <= max ? text : `[truncated ${text.length - max} chars]...\n${text.slice(-max)}`;
 }
 
+const medianOf = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
+
+type Measured = { runs: number[]; medianMs: number } | { error: string };
+
+/** Runs the timing command `runs` times in `cwd`; an error when it failed or timed out. */
+async function measure(ctx: CollectorContext, perf: PerfConfig, cwd: string, timeoutMs: number): Promise<Measured> {
+  const runs: number[] = [];
+  for (let i = 0; i < perf.runs; i++) {
+    const res = await ctx.runner.run(perf.command, perf.args, { cwd, timeoutMs, signal: ctx.signal });
+    if (res.exitCode !== 0 || res.timedOut) {
+      return { error: `${res.timedOut ? "timed out" : `exit ${res.exitCode}`}: ${(res.stderr || res.stdout).trim().slice(-300)}` };
+    }
+    runs.push(res.durationMs);
+  }
+  return { runs, medianMs: medianOf(runs) };
+}
+
+/** "Before vs after" timing of one command (baseline worktree vs this commit). */
+async function comparePerf(ctx: CollectorContext, perf: PerfConfig, timeoutMs: number) {
+  const after = await measure(ctx, perf, path.join(ctx.worktreePath, perf.cwd ?? "."), timeoutMs);
+  let before: Measured | undefined;
+  const copied: string[] = [];
+  if (perf.baseline) {
+    try {
+      for (const rel of perf.copyToBaseline) {
+        const from = path.join(ctx.worktreePath, rel);
+        const to = path.join(perf.baseline.path, rel);
+        if (!existsSync(from) || existsSync(to)) continue;
+        mkdirSync(path.dirname(to), { recursive: true });
+        copyFileSync(from, to);
+        copied.push(to);
+      }
+      before = await measure(ctx, perf, path.join(perf.baseline.path, perf.cwd ?? "."), timeoutMs);
+    } finally {
+      for (const file of copied) unlinkSync(file);
+    }
+  }
+  const measuredBefore = before && "medianMs" in before ? before.medianMs : undefined;
+  const beforeMs = measuredBefore ?? perf.beforeMs;
+  const beforeSource = measuredBefore !== undefined ? "baseline" : perf.beforeMs !== undefined ? "recorded" : "none";
+  const afterMs = "medianMs" in after ? after.medianMs : undefined;
+  const improvement = beforeMs !== undefined && afterMs !== undefined && beforeMs > 0 ? (beforeMs - afterMs) / beforeMs : undefined;
+  let judgement: "pass" | "fail" | "doubt" = "pass";
+  const reasons: string[] = [];
+  if (afterMs === undefined) {
+    judgement = "fail";
+    reasons.push(`command failed after the change (${"error" in after ? after.error : ""})`);
+  } else if (perf.thresholdMs !== undefined && afterMs > perf.thresholdMs) {
+    judgement = "fail";
+    reasons.push(`still above the threshold: ${afterMs}ms > ${perf.thresholdMs}ms`);
+  }
+  if (judgement !== "fail" && improvement !== undefined && improvement < 0.1) {
+    judgement = "doubt";
+    reasons.push(`less than 10% faster than before (${beforeMs}ms -> ${afterMs}ms)`);
+  }
+  if (judgement !== "fail" && beforeMs === undefined) {
+    judgement = "doubt";
+    reasons.push("no baseline timing available, cannot show the improvement");
+  }
+  return { after, before, beforeMs, beforeSource, afterMs, improvement, judgement, reasons };
+}
+
 export function createBackendCollector(options: BackendCollectorOptions = {}): EvidenceCollector {
   const launcher = options.launcher ?? createNodeServerLauncher();
   const http = options.http ?? fetchHttpClient;
@@ -99,7 +162,11 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
 
     async detect(ctx): Promise<CollectorAvailability> {
       const config = loadConfig(ctx);
-      if (resolveTestCommand(config, ctx.worktreePath) || selectRequests(config, ctx).length > 0) {
+      if (
+        resolveTestCommand(config, ctx.worktreePath) ||
+        selectRequests(config, ctx).length > 0 ||
+        config.backend?.perf
+      ) {
         return { available: true };
       }
       return { available: false, reason: "No test command found and no requests configured in .vibe/verify.json" };
@@ -111,6 +178,7 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
       const artifacts: EvidenceArtifact[] = [];
       const notes: string[] = [];
       const failures: string[] = [];
+      const doubts: string[] = [];
       let ran = false;
 
       // Tests are card-wide evidence; per-check collection only replays that check's requests.
@@ -194,10 +262,54 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
         notes.push(`${samples.filter((s) => s.ok).length}/${samples.length} request sample(s) matched expectations`);
       }
 
+      const perf = ctx.check ? undefined : config.backend?.perf;
+      if (perf) {
+        ran = true;
+        const cmp = await comparePerf(ctx, perf, options.testTimeoutMs ?? 600_000);
+        const pct = cmp.improvement === undefined ? "" : ` (${(cmp.improvement * 100).toFixed(1)}% faster)`;
+        const line = `perf ${perf.label}: before ${cmp.beforeMs ?? "n/a"}ms (${cmp.beforeSource}) -> after ${cmp.afterMs ?? "failed"}ms${pct}`;
+        artifacts.push(
+          writeArtifact(
+            ctx,
+            "report",
+            "perf-compare.json",
+            JSON.stringify(
+              {
+                label: perf.label,
+                command: [perf.command, ...perf.args].join(" "),
+                thresholdMs: perf.thresholdMs,
+                before: {
+                  source: cmp.beforeSource,
+                  medianMs: cmp.beforeMs,
+                  runs: cmp.before && "runs" in cmp.before ? cmp.before.runs : undefined,
+                  baseline: perf.baseline,
+                },
+                after: { medianMs: cmp.afterMs, runs: "runs" in cmp.after ? cmp.after.runs : undefined, commitHash: ctx.commitHash },
+                improvement: cmp.improvement,
+                judgement: cmp.judgement,
+                reasons: cmp.reasons,
+                capturedAt: ctx.now().toISOString(),
+              },
+              null,
+              2,
+            ),
+            `before/after: ${line}`,
+          ),
+        );
+        notes.push(line, ...cmp.reasons);
+        if (cmp.judgement === "fail") failures.push(`${perf.label}: ${cmp.reasons.join("; ")}`);
+        else if (cmp.judgement === "doubt") doubts.push(`${perf.label}: ${cmp.reasons.join("; ")}`);
+      }
+
       if (!ran) {
         return { artifacts, judgement: "doubt", notes: [...notes, "Nothing to run for this collection"], degraded: false };
       }
-      return { artifacts, judgement: failures.length ? "fail" : "pass", notes: [...notes, ...failures], degraded: false };
+      return {
+        artifacts,
+        judgement: failures.length ? "fail" : doubts.length ? "doubt" : "pass",
+        notes: [...notes, ...failures],
+        degraded: false,
+      };
     },
 
     async dispose(ctx) {

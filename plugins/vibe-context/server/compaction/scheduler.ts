@@ -70,11 +70,15 @@ export const ttlFor = (config: CompactionConfig, provider: string): number => {
   return config.ttlSeconds[id] ?? DEFAULT_TTL_SECONDS[id] ?? FALLBACK_TTL_SECONDS;
 };
 
-export function notesPrompt(mdPath: string): string {
+export function notesPrompt(mdPath: string, cardRef?: string | null): string {
   return (
-    `Your context is about to be compacted. Before that, write your progress to \`${mdPath}\` ` +
-    "(create or overwrite it): the goal, what is done, what is in progress, next steps, key files " +
-    'and decisions, open questions. Do nothing else. Reply "saved" when the file is written.'
+    "Your context is about to be compacted. Before that, save your progress notes: the goal, " +
+    "what is done, what is in progress, next steps, key files and decisions, open questions. " +
+    "Use the `vibe_session_note` tool of the `vibe-board` MCP server" +
+    (cardRef ? ` with key "${cardRef}"` : "") +
+    " (it overwrites " +
+    `\`${mdPath}\` and needs no approval); only if that tool does not exist, write that file ` +
+    'yourself (create or overwrite it). Do nothing else. Reply "saved" when done.'
   );
 }
 
@@ -133,7 +137,7 @@ export function createCompactionScheduler(options: SchedulerOptions) {
       return false;
     };
 
-    const notes = await host.run(agent.id, notesPrompt(mdPath));
+    const notes = await host.run(agent.id, notesPrompt(mdPath, s.cardId));
     // Waiting for an approval is not a failure: try again once the user has answered.
     if (notes.status === "permission") return "deferred";
     if (notes.status !== "idle" || !(await stillIdle())) return "failed";

@@ -324,6 +324,7 @@ describe("MCP tools", () => {
       "vibe_update",
       "vibe_comment",
       "vibe_attach",
+      "vibe_session_note",
     ]);
     expect(toolsForRole("verifier").map((t) => t.name)).toEqual([
       "vibe_projects",

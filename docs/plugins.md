@@ -521,6 +521,12 @@ Register a usage source from `index.server.ts` with `server.registerUsageSource(
 
 The daemon calls discovery for `usage.list_reports`; the client gates this RPC on `server_info.features.usageSources`. The old `provider.usage.list` RPC maps discovered reports for older clients.
 
+## Paseo API at start-up and push notifications
+
+`contribute(server)` receives `server.paseo`, the same `PaseoApi` that hooks and RPC handlers get, ready as soon as the plugin loads, so background work does not have to wait for a first hook or RPC.
+
+`server.notify({ title, body, data?, agentAttention? })` sends a push through the daemon's push service. With minimal push payloads enabled the daemon clips the title and body and keeps only short string `data` values. Set `agentAttention` when the notification restates an agent attention Paseo already pushes (for example a permission request): the daemon skips it if it handled that attention in the last two minutes.
+
 ## Contribute sidebar items
 
 Sidebar header and footer items are plugin components, not descriptors. The

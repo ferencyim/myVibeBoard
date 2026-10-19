@@ -4,14 +4,16 @@ import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeature } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
-import { pluginRegistry } from "./registry";
+import { loadOfflineCatalog, saveOfflineCatalog } from "@/vibe/plugin-cache";
+import { pluginRegistry, type CatalogPlugin } from "./registry";
 
 export function PluginCatalogSync({
   serverId,
   client,
 }: {
   serverId: string;
-  client: DaemonClient;
+  /** null while the host has no client yet (cold start without a connection). */
+  client: DaemonClient | null;
 }) {
   const audio = useVoiceAudioEngineOptional();
   const connected = useHostRuntimeIsConnected(serverId);
@@ -20,12 +22,16 @@ export function PluginCatalogSync({
   useEffect(() => {
     let cancelled = false;
     let refreshQueue = Promise.resolve();
-    if (!supported || !audio) {
+    if (!audio || (client && connected && !supported)) {
       pluginRegistry.removeHost(serverId);
       return;
     }
-    if (!connected) {
-      pluginRegistry.removeHost(serverId);
+    if (!client || !connected) {
+      // Offline: keep what is installed (their RPCs fall back to the local replica); after a cold
+      // start bring back the plugins cached from the last online session.
+      pluginRegistry.restoreFromCache(serverId, loadOfflineCatalog<CatalogPlugin>(serverId), {
+        audio,
+      });
       return;
     }
     const refresh = (replacePluginId?: string) => {
@@ -34,6 +40,7 @@ export function PluginCatalogSync({
           .getPluginCatalog()
           .then((catalog) => {
             if (!cancelled) {
+              saveOfflineCatalog(serverId, catalog);
               pluginRegistry.installCatalog(serverId, catalog, {
                 replacePluginId,
                 client,
@@ -84,6 +91,5 @@ export function PluginCatalogSync({
     };
   }, [audio, client, connected, serverId, supported]);
 
-  useEffect(() => () => pluginRegistry.removeHost(serverId), [serverId]);
   return null;
 }

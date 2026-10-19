@@ -1,15 +1,33 @@
 import type { AudioEngine } from "@/audio";
 import { useMemo, useSyncExternalStore } from "react";
 import { QueryClient } from "@tanstack/react-query";
-import { createPaseoApi } from "@getpaseo/client";
+import { createPaseoApi, type PaseoApi } from "@getpaseo/client";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
+import { getHostRuntimeStore, isHostRuntimeConnected } from "@/runtime/host-runtime";
 import { resolveAppVersion } from "@/utils/app-version";
+import { invokeOfflineVibeRpc } from "@/vibe/rpc/provider";
 import { createPluginClientRuntime } from "./client-runtime";
 import { runPluginClientBundle } from "./evaluate";
 import type { InstalledPlugin } from "./types";
 
-type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
+export type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
+
+/** Stands in for the daemon-bound Paseo API while a host is offline: every call fails loudly. */
+function createOfflinePaseoApi(): PaseoApi {
+  const offline = (): never => {
+    throw new Error("[offline] Paseo is not reachable right now");
+  };
+  const node = (): unknown =>
+    new Proxy(offline, {
+      get: (_target, property) => {
+        if (property === "then") return undefined;
+        if (property === "dispose") return async () => undefined;
+        return node();
+      },
+    });
+  return node() as PaseoApi;
+}
 
 export class PluginRegistry {
   private readonly byHost = new Map<string, InstalledPlugin[]>();
@@ -17,11 +35,22 @@ export class PluginRegistry {
   private snapshot: InstalledPlugin[] = [];
   private readonly disposed = new WeakSet<InstalledPlugin>();
   private readonly evaluationErrors = new Map<string, string>();
+  /** The client each installation was created with (null = restored from the offline cache). */
+  private readonly installedWith = new WeakMap<InstalledPlugin, DaemonClient | null>();
 
   constructor(
     private readonly dependencies: {
       version: string | null;
       createRuntime: typeof createPluginClientRuntime;
+      /** The host's client while it is connected; null = offline. Default: the install-time client. */
+      getLiveClient?: (serverId: string) => DaemonClient | null;
+      /** Answers a plugin RPC while the host is offline (local replica); default: reject. */
+      invokeOffline?: (
+        serverId: string,
+        pluginId: string,
+        method: string,
+        input: unknown,
+      ) => Promise<unknown>;
     },
   ) {}
 
@@ -41,7 +70,8 @@ export class PluginRegistry {
     catalog: CatalogPlugin[],
     options: {
       replacePluginId?: string;
-      client: DaemonClient;
+      /** null: install from the offline cache (no daemon behind the plugin's Paseo API). */
+      client: DaemonClient | null;
       audio: Pick<AudioEngine, "play">;
     },
   ): boolean {
@@ -55,7 +85,8 @@ export class PluginRegistry {
           plugin.id !== options.replacePluginId &&
           plugin.id === entry.id &&
           plugin.clientBundle === entry.clientBundle &&
-          plugin.requirements?.paseo === entry.requirements?.paseo,
+          plugin.requirements?.paseo === entry.requirements?.paseo &&
+          this.installedWith.get(plugin) === options.client,
       );
       return existing ? [existing] : [];
     });
@@ -71,9 +102,7 @@ export class PluginRegistry {
       try {
         if (!entry.clientBundle) return [];
         assertPluginCompatibility({ ...entry, version: this.dependencies.version, runtime: "app" });
-        const existing = preserved.find(
-          (plugin) => plugin.id === entry.id && plugin.clientBundle === entry.clientBundle,
-        );
+        const existing = preserved.find((plugin) => plugin.id === entry.id);
         if (existing) {
           this.evaluationErrors.delete(key);
           return [existing];
@@ -81,8 +110,8 @@ export class PluginRegistry {
         const client = options.client;
         installation = {
           lifetime: new AbortController(),
-          paseo: createPaseoApi(client),
-          invoke: (method, input) => client.invokePluginRpc(entry.id, method, input),
+          paseo: client ? createPaseoApi(client) : createOfflinePaseoApi(),
+          invoke: (method, input) => this.invokeRpc(serverId, entry.id, client, method, input),
           id: entry.id,
           serverId,
           clientBundle: entry.clientBundle,
@@ -105,6 +134,7 @@ export class PluginRegistry {
         const evaluated = runPluginClientBundle(entry.id, entry.clientBundle, runtime, () =>
           this.publish(),
         );
+        this.installedWith.set(installation, client);
         Object.assign(installation, evaluated);
         const paseo = installation.paseo;
         installation.cleanup = async () => {
@@ -145,6 +175,40 @@ export class PluginRegistry {
     );
   }
 
+  /**
+   * Cold start without a connection: evaluate the catalog cached from the last online session so
+   * offline-capable plugins (vibe-board) open. A no-op once the host has any installation.
+   */
+  restoreFromCache(
+    serverId: string,
+    catalog: CatalogPlugin[],
+    options: { audio: Pick<AudioEngine, "play"> },
+  ): void {
+    if ((this.byHost.get(serverId)?.length ?? 0) > 0) return;
+    this.installCatalog(serverId, catalog, { client: null, audio: options.audio });
+  }
+
+  /** Drop installations of hosts that were removed from the app. */
+  pruneHosts(serverIds: readonly string[]): void {
+    for (const serverId of this.byHost.keys()) {
+      if (!serverIds.includes(serverId)) this.removeHost(serverId);
+    }
+  }
+
+  private invokeRpc(
+    serverId: string,
+    pluginId: string,
+    installClient: DaemonClient | null,
+    method: string,
+    input: unknown,
+  ): Promise<unknown> {
+    const { getLiveClient, invokeOffline } = this.dependencies;
+    const live = getLiveClient ? getLiveClient(serverId) : installClient;
+    if (live) return live.invokePluginRpc(pluginId, method, input);
+    if (invokeOffline) return invokeOffline(serverId, pluginId, method, input);
+    return Promise.reject(new Error("[offline] Plugin host is offline"));
+  }
+
   removeHost(serverId: string): void {
     const installed = this.byHost.get(serverId);
     if (!installed) return;
@@ -183,6 +247,11 @@ export class PluginRegistry {
 export const pluginRegistry = new PluginRegistry({
   version: resolveAppVersion(),
   createRuntime: createPluginClientRuntime,
+  getLiveClient: (serverId) => {
+    const snapshot = getHostRuntimeStore().getSnapshot(serverId);
+    return isHostRuntimeConnected(snapshot) ? (snapshot?.client ?? null) : null;
+  },
+  invokeOffline: invokeOfflineVibeRpc,
 });
 
 export function useInstalledPlugins(): InstalledPlugin[] {

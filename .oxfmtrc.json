@@ -18,6 +18,7 @@
     "plugins/vibe-*/**",
     "services/**",
     "plugins/vibe-board/**",
+    "packages/app/src/vibe/generated/**",
     "plugins/switch-provider/**",
     "plugins/deepseek-harness/**"
   ]

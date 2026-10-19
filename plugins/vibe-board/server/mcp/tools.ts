@@ -2,8 +2,8 @@
 // cards. Moves are deliberately absent: columns are decided by the user, dispatcher, lifecycle
 // and verifier, never through a tool call.
 
-import { readFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import {
   CARD_PRIORITIES,
   CARD_COLUMNS,
@@ -117,6 +117,17 @@ export const MCP_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "vibe_session_note",
+    description:
+      "Save your session progress notes (goal, done, in progress, next steps, key files, open questions) to this card's .vibe/sessions/<card>.md in your worktree. Overwrites the previous notes. Use this instead of writing the file yourself.",
+    inputSchema: {
+      type: "object",
+      properties: { key: str("Card key such as PROD-12 (or card id)"), text: str("Markdown notes") },
+      required: ["key", "text"],
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 const READ_ONLY_TOOLS = new Set(["vibe_projects", "vibe_list", "vibe_show", "vibe_comment"]);
@@ -206,6 +217,16 @@ export async function callMcpTool(
             asRefImage: args.refImage === true,
           }),
         );
+      }
+      case "vibe_session_note": {
+        // MCP servers of some providers (codex) do not see the agent's env, so the caller is not
+        // identifiable: the card comes from the argument.
+        const { card } = board.cards.detail(key);
+        if (!card.worktree) throw new Error(`Card ${card.key} has no worktree to save notes in`);
+        const file = join(card.worktree, ".vibe", "sessions", `${card.id}.md`);
+        await mkdir(join(card.worktree, ".vibe", "sessions"), { recursive: true });
+        await writeFile(file, String(args.text ?? ""), "utf8");
+        return result({ saved: file });
       }
       default:
         throw new Error(`Unknown tool: ${name}`);

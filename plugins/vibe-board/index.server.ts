@@ -79,8 +79,9 @@ export default function contribute(server: PluginServerContext) {
     };
   });
 
-  // The SDK handle only reaches plugins through hook/RPC contexts; keep the newest one for dispatch.
-  let paseo: PaseoApi | null = null;
+  // Hosts that expose the handle at start-up (server.paseo) let dispatch run with no UI attached;
+  // older hosts only hand it over through hook/RPC contexts, which keep refreshing it below.
+  let paseo: PaseoApi | null = (server as { paseo?: PaseoApi }).paseo ?? null;
   const onPaseo = (api: PaseoApi) => void (paseo = api);
   const lifecycle = registerLifecycle(server, { board, onPaseo });
   const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });
@@ -92,6 +93,7 @@ export default function contribute(server: PluginServerContext) {
     board,
     finalize: createGitFinalizer({
       board,
+      getPaseo: () => paseo,
       getConfig: async () => {
         const current = await settings.read();
         return current.status === "ready"
