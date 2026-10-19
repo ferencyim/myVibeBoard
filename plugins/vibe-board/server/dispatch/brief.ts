@@ -59,6 +59,12 @@ function eventLine(e: CardEvent): string {
   return text ? `- [${e.type}] ${e.author}: ${text}` : "";
 }
 
+/** Pointers only, never content: vibe-context injects the text itself (WP-31). */
+const MEMORY_POINTER =
+  "Project goals, rules and current state live in `.vibe/` (start with `.vibe/INDEX.md` and " +
+  "`.vibe/PROJECT_STATE.md`; owner rules are in `.vibe/instructions/`). These files are " +
+  "authoritative and read-only for you: report needed changes in a card comment instead of editing them.";
+
 export function buildDispatchBrief(input: BriefInput): string {
   const { card, project, preset } = input;
   const notes = input.events
@@ -83,6 +89,7 @@ export function buildDispatchBrief(input: BriefInput): string {
       : "",
     section("Recent notes", notes),
     section("Project", `- Name: ${project.name}\n- Type: ${project.projectType}`),
+    section("Project memory", MEMORY_POINTER),
     section(
       "Report-back contract",
       `You are the worker for card ${card.key}. Read it with \`vibe-board show ${card.key}\` (MCP \`vibe_show\`). ` +

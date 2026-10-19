@@ -100,6 +100,8 @@ describe("brief helpers", () => {
     expect(brief).toContain("login works");
     expect(brief).toContain("web-dev-server");
     expect(brief).toContain("Be careful.");
+    expect(brief).toContain(".vibe/PROJECT_STATE.md");
+    expect(brief).toContain("read-only");
   });
 });
 
