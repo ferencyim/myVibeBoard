@@ -57,15 +57,19 @@ bash install.sh --env-file relay.env             # 确认无误后执行
 6. `nginx -t` 通过才 `nginx -s reload`；不通过则删除新文件、不 reload。
 7. 写 manifest，做一次本机冒烟请求。
 
-可选推送网关：设置 `PUSH_PORT`（网关为 `services/vibe-push-gateway`，另行在本机 `127.0.0.1:<PUSH_PORT>` 启动）后，同一站点多一个 `location /push/`，前缀被去掉后转发给网关，即 `https://<RELAY_DOMAIN>/push/v1/push`。
+### 3.3 推送网关（WP-44，可选）
+
+网关是 `services/vibe-push-gateway`（Node，不在本脚本内部署），需在服务器上另行启动：`HOST=127.0.0.1 PORT=18787 VIBE_PUSH_AUTH_TOKEN=<secret> node src/main.mjs`（或用其 Dockerfile，FCM 服务账号文件通过 `VIBE_PUSH_FCM_SERVICE_ACCOUNT_FILE` 挂载，不入库；没有服务账号时网关为 dry-run，只记录不发送）。网关自带默认端口 8787 在目标主机上已被占用，所以**端口必须改**：本脚本的 `PUSH_PORT`（示例 18787）与网关的 `PORT` 保持一致；`RELAY_PORT` 同样要选主机上未占用的端口（`ss -ltn` 核对）。
+
+设置 `PUSH_PORT` 后，同一站点多一个 `location /push/`，前缀被去掉后转发到 `127.0.0.1:<PUSH_PORT>`，即 `https://<RELAY_DOMAIN>/push/v1/push`；`PUSH_PORT` 留空则不生成该 location。daemon 侧：配置 `daemon.push.gateway=https://<RELAY_DOMAIN>/push`，并设置环境变量 `PASEO_PUSH_GATEWAY_TOKEN`（与网关的 `VIBE_PUSH_AUTH_TOKEN` 相同）。
 
 脚本可重复执行（幂等）：站点文件内容变化才替换，旧版本备份在 `STATE_DIR`，容器由 compose 对账。
 
-### 3.3 daemon 与手机侧
+### 3.4 daemon 与手机侧
 
 daemon 配置：`daemon.relay.enabled=true`、`daemon.relay.endpoint="<RELAY_DOMAIN>:443"`、`daemon.relay.useTls=true`，重启 daemon 后重新配对（第 1 节），手机扫新的二维码即走自建中继。
 
-### 3.4 回滚
+### 3.5 回滚
 
 ```bash
 bash uninstall.sh --env-file relay.env --dry-run
@@ -74,7 +78,7 @@ bash uninstall.sh --env-file relay.env
 
 只移除本脚本创建的东西：带 `managed-by: vibe-relay` 标记的站点文件（删除后先 `nginx -t`，失败则恢复文件且不 reload）、compose 项目（容器、网络、本地构建的镜像）、manifest 与备份摘要；应用环境文件仅在为空时删除，有内容则保留并提示。任何现有 nginx 文件都不会被碰。
 
-### 3.5 本地验证（不连服务器）
+### 3.6 本地验证（不连服务器）
 
 ```bash
 bash deploy/relay/test-dry-run.sh

@@ -11,14 +11,14 @@ bad() { echo "FAIL - $1"; FAILS=$((FAILS + 1)); }
 expect_contains() { grep -qF -- "$2" <<<"$1" && ok "$3" || bad "$3 (missing: $2)"; }
 expect_absent() { grep -qF -- "$2" <<<"$1" && bad "$3 (found: $2)" || ok "$3"; }
 
-sed -e 's/<PINNED_TAG_OR_SHA>/v0.0.0-example/' -e 's/^PUSH_PORT=$/PUSH_PORT=14100/' \
+sed -e 's/<PINNED_TAG_OR_SHA>/v0.0.0-example/' -e 's/^PUSH_PORT=18787$/PUSH_PORT=18787/' \
   "$DIR/relay.env.example" >"$TMP/relay.env"
 
 out="$(bash "$DIR/install.sh" --env-file "$TMP/relay.env" --dry-run 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "install --dry-run exits 0" || bad "install --dry-run exits 0 (rc=$rc)"
 expect_contains "$out" "server_name relay.example.com;" "site has server_name"
 expect_contains "$out" "proxy_pass http://127.0.0.1:14000;" "relay proxied to loopback port"
-expect_contains "$out" "proxy_pass http://127.0.0.1:14100/;" "push location rendered"
+expect_contains "$out" "proxy_pass http://127.0.0.1:18787/;" "push location rendered"
 expect_contains "$out" 'proxy_set_header Upgrade $http_upgrade;' "websocket upgrade header"
 expect_contains "$out" "proxy_read_timeout 3600s;" "long timeout"
 expect_contains "$out" "+ nginx -t" "nginx -t is run"
@@ -31,7 +31,7 @@ pos_r="$(grep -n '^+ nginx -s reload' <<<"$out" | head -1 | cut -d: -f1)"
 [ -n "$pos_t" ] && [ -n "$pos_r" ] && [ "$pos_t" -lt "$pos_r" ] && ok "nginx -t precedes reload" || bad "nginx -t precedes reload"
 
 # without PUSH_PORT there is no push location
-sed 's/<PINNED_TAG_OR_SHA>/v0.0.0-example/' "$DIR/relay.env.example" >"$TMP/nopush.env"
+sed -e 's/<PINNED_TAG_OR_SHA>/v0.0.0-example/' -e 's/^PUSH_PORT=.*/PUSH_PORT=/' "$DIR/relay.env.example" >"$TMP/nopush.env"
 out2="$(bash "$DIR/install.sh" --env-file "$TMP/nopush.env" --dry-run 2>&1)"
 expect_absent "$out2" "location /push/" "no push location when PUSH_PORT empty"
 
