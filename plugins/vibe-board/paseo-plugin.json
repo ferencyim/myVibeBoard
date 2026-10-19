@@ -1,14 +1,9 @@
 {
-  "id": "tasks",
-  "name": "Tasks",
-  "description": "Linear-style task tracker with projects, folders, subtasks, comments, agent preset delegation, comment steering, and CLI/MCP report-back.",
+  "id": "vibe-board",
+  "name": "Vibe Board",
+  "description": "Five-column kanban board (draft, todo, in progress, verifying, done) with cards, tags, presets, plans, board MCP and CLI on the shared vibe.db.",
   "icon": "assets/icon.png",
-  "media": [
-    "assets/screenshot-board.png",
-    "assets/screenshot-list.png",
-    "assets/screenshot-detail.png"
-  ],
   "requirements": {
-    "paseo": ">=0.11.2"
+    "paseo": ">=0.12.0 <0.13.0"
   }
 }

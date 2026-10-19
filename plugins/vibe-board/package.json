@@ -1,27 +1,10 @@
 {
-  "name": "paseo-plugin-tasks",
-  "version": "0.1.1",
-  "description": "Paseo plugin: Linear-style task tracker with projects, folders, subtasks, comments, agent preset delegation, comment steering, and CLI/MCP report-back.",
-  "keywords": [
-    "paseo",
-    "paseo-plugin",
-    "tasks",
-    "kanban",
-    "tracker",
-    "delegation",
-    "agents"
-  ],
-  "author": "anh-chu",
+  "name": "@vibe/board",
+  "version": "0.1.0",
+  "description": "myVibeBoard kanban board plugin: five-column cards, events, plans, board MCP and CLI on the shared vibe.db.",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/anh-chu/paseo-plugin-tasks#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/anh-chu/paseo-plugin-tasks.git"
-  },
-  "bugs": "https://github.com/anh-chu/paseo-plugin-tasks/issues",
   "bin": {
-    "paseo-tasks": "./bin/paseo-tasks.mjs",
-    "bb-tasks": "./bin/paseo-tasks.mjs"
+    "vibe-board": "./bin/vibe-board.mjs"
   },
   "files": [
     "paseo-plugin.json",
@@ -41,8 +24,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@getpaseo/client": "^0.11.2",
-    "@getpaseo/plugin": "0.11.2",
+    "@getpaseo/client": "^0.12.0",
+    "@getpaseo/plugin": "0.12.0",
     "@tanstack/react-query": "^5.90.11",
     "@types/node": "^24.19.2",
     "@types/react": "~19.2.0",
@@ -51,5 +34,17 @@
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "zod": "^4.4.3"
+  },
+  "private": true,
+  "vibe": {
+    "shared": {
+      "shared": [
+        "contract"
+      ],
+      "server": [
+        "contract",
+        "db"
+      ]
+    }
   }
 }

@@ -1,7 +1,7 @@
 import { defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
-export const tasksSettings = defineSettings({
+export const boardSettings = defineSettings({
   id: "preferences",
   scope: "host",
   version: 1,
@@ -13,4 +13,7 @@ export const tasksSettings = defineSettings({
   }),
 });
 
-export type TasksSettingsValues = z.output<typeof tasksSettings.schema>;
+/** Legacy name still imported by the pre-WP-11 client; WP-11 removes it. */
+export const tasksSettings = boardSettings;
+
+export type BoardSettingsValues = z.output<typeof boardSettings.schema>;

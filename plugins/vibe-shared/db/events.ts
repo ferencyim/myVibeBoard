@@ -247,7 +247,8 @@ export function createEventConsumer(options: EventConsumerOptions): EventConsume
       timer = setInterval(() => {
         poll().catch((error) => options.onError?.(error, -1));
       }, options.pollIntervalMs ?? 500);
-      timer.unref?.();
+      // React Native typings (client plugins) type timers as number; Node returns an object.
+      (timer as unknown as { unref?: () => void }).unref?.();
     },
     async stop() {
       if (timer) clearInterval(timer);
