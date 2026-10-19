@@ -519,6 +519,7 @@ describe("agent MCP end-to-end (offline)", () => {
       agentStoragePath: path.join(paseoHome, "agents"),
     };
 
+    process.env.PASEO_ALLOW_INSECURE_LISTEN = "1";
     const daemon = await createPaseoDaemon(daemonConfig, pino({ level: "silent" }));
     await daemon.start();
 
@@ -553,6 +554,7 @@ describe("agent MCP end-to-end (offline)", () => {
         await client.callTool({ name: "kill_agent", args: { agentId } });
       }
       await client.close();
+      delete process.env.PASEO_ALLOW_INSECURE_LISTEN;
       await daemon.stop();
       await rm(paseoHome, { recursive: true, force: true });
       await rm(staticDir, { recursive: true, force: true });
