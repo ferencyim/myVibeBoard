@@ -82,3 +82,6 @@ npm ci && npm run typecheck && npm test
   the `MasterAsk` port; planning agents are separate sessions, not this one.
 - Memory: plugins cannot import vibe-context, so `server/memory/files.ts` duplicates the entry
   format. Proposal: move the memory core into `vibe-shared` and use the budgeted store here.
+
+Real end-to-end run of the discussion flow (isolated dev daemon + local codex, never part of `npm test`):
+see the header of `scripts/e2e-planning.mjs`.
