@@ -98,3 +98,9 @@ app.json
 
 # Project-local Serena configuration and memories.
 .serena/
+
+# myVibeBoard local session files
+SESSION.md
+.claude/requirements-inbox.log
+.claude/.requirements-state.json
+
