@@ -80,6 +80,7 @@ export function createSyncService(options: SyncServiceOptions) {
         bridge.backfill();
         bridge.exportBusiness();
         bridge.publishDown();
+        bridge.publishDisplayColumns();
       }
       const opts = { policy, limit: options.limit };
       const mark = changeStore.cursor;
@@ -89,6 +90,7 @@ export function createSyncService(options: SyncServiceOptions) {
         const mark2 = changeStore.cursor;
         bridge.importBusiness();
         bridge.exportBusiness(); // values the commands filled in (defaults, normalised sort keys)
+        bridge.publishDisplayColumns(); // key and number of cards the phone just created
         if (changeStore.cursor !== mark2) {
           const again = serveExchange(node, { ...req, changes: [] }, opts);
           if (again.ok) result = { ...again, rejected: first.rejected };

@@ -141,6 +141,22 @@ describe("phone sync endpoint", () => {
     expect(t.store.cards.get(id)?.title).toBe("Once");
   });
 
+  it("publishes display-only columns (card key, project prefix) for the phone", async () => {
+    const t = setup();
+    const existing = t.store.cards.create({ projectId: t.project.id, title: "Numbered" });
+    const p = t.phone();
+    await p.syncNow();
+    expect(p.row("project", t.project.id)).toMatchObject({ prefix: "DEM" });
+    expect(p.row("card", existing.id)).toMatchObject({ key: existing.key, number: existing.number });
+
+    // A card made on the phone gets its key in the same round trip that creates it.
+    const id = p.newCard("Phone card");
+    await p.syncNow();
+    const created = t.store.cards.get(id);
+    expect(created?.key).toMatch(/^DEM-\d+$/);
+    expect(p.row("card", id)).toMatchObject({ key: created?.key, number: created?.number });
+  });
+
   it("rejects phone column moves outside draft <-> todo and converges to the daemon value", async () => {
     const t = setup();
     const running = t.store.cards.create({ projectId: t.project.id, title: "Running", column: "todo" });
