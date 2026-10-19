@@ -10,6 +10,7 @@ import { registerLifecycle } from "./server/lifecycle";
 import { startFinalizer } from "./server/lifecycle/finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
+import { createReplyService, createSyncService } from "./server/sync";
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(boardSettings);
@@ -81,7 +82,9 @@ export default function contribute(server: PluginServerContext) {
   const lifecycle = registerLifecycle(server, { board, onPaseo });
   const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });
   const finalizer = startFinalizer({ db: runtime.db, board });
-  registerBoardRpcs(server, board, { dispatcher, lifecycle, onPaseo });
+  const sync = createSyncService({ db: runtime.db, store: runtime.store });
+  const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
+  registerBoardRpcs(server, board, { dispatcher, lifecycle, onPaseo, sync, replies });
 
   return async () => {
     lifecycle.close();

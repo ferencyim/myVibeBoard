@@ -26,6 +26,11 @@ outside a plugin directory).
 - Card moves: `store.cards.move(id, { to, actor })` - see `contract/state-machine.ts`
   (`todo -> in_progress` only via `store.cards.dispatch`).
 
+- Sync (WP-41): `sync_field` / `sync_tomb` (core migration 2) are the phone-sync exchange log, written
+  only by vibe-board's `server/sync`. `contract/sync-spec.ts` fields include the columns needed to
+  create a card / card_event on a phone (`card.project_id`, `card_event.card_id/type/author_kind/author/created_at`);
+  `cards.create`, `events.add`, `tags.create`, `presets.create` accept an optional replica-generated `id`.
+
 ## Commands
 
     npm ci && npm run typecheck && npm test

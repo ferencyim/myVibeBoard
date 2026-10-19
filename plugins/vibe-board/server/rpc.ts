@@ -5,6 +5,7 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import * as rpc from "../shared/rpc";
 import type { Dispatcher } from "./dispatch";
 import type { Lifecycle } from "./lifecycle";
+import type { ReplyService, SyncService } from "./sync";
 import type { BoardService } from "./service";
 
 async function listPaseoProjects(paseo: PaseoApi) {
@@ -50,6 +51,8 @@ async function providerCatalog(paseo: PaseoApi) {
 export interface BoardRpcExtras {
   dispatcher?: Dispatcher;
   lifecycle?: Lifecycle;
+  sync?: SyncService;
+  replies?: ReplyService;
   /** Keeps the newest SDK handle for dispatch outside hooks. */
   onPaseo?: (paseo: PaseoApi) => void;
 }
@@ -99,7 +102,18 @@ export function registerBoardRpcs(
   server.handle(rpc.attachmentsDeleteRpc, (input) => board.attachments.delete(input.attachmentId));
   server.handle(rpc.sessionsListRpc, (input) => board.sessions.list(input.card));
 
-  const { dispatcher, lifecycle } = extras;
+  const { dispatcher, lifecycle, sync, replies } = extras;
+  if (sync) server.handle(rpc.syncExchangeRpc, (input) => sync.exchange(input as never));
+  if (replies) {
+    server.handle(rpc.replyCheckRpc, (input, { paseo }) => {
+      extras.onPaseo?.(paseo);
+      return replies.check(input);
+    });
+    server.handle(rpc.replySendRpc, (input, { paseo }) => {
+      extras.onPaseo?.(paseo);
+      return replies.send(input);
+    });
+  }
   if (dispatcher) {
     server.handle(rpc.cardsDispatchRpc, async ({ card, ...input }, { paseo }) => {
       extras.onPaseo?.(paseo);

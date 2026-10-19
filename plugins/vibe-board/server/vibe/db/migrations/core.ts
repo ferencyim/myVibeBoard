@@ -228,4 +228,33 @@ CREATE TABLE vibe_meta (
 ${tagSeed}
 `,
   },
+  {
+    version: 2,
+    name: "sync_store",
+    sql: `
+-- Exchange log of the phone sync endpoint (vibe-board server/sync): current value + HLC of every
+-- synced field, tombstones, both with a server arrival seq that phones use as cursor. Business
+-- tables stay the source of truth; the endpoint reconciles them with this log on every exchange.
+-- Epoch / seq counter / min cursor live in vibe_meta (sync_epoch, sync_seq, sync_min_cursor).
+CREATE TABLE sync_field (
+  table_name TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  column_name TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  hlc TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  PRIMARY KEY (table_name, row_id, column_name)
+);
+CREATE INDEX idx_sync_field_seq ON sync_field(seq);
+CREATE INDEX idx_sync_field_row ON sync_field(table_name, row_id);
+CREATE TABLE sync_tomb (
+  table_name TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  hlc TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  PRIMARY KEY (table_name, row_id)
+);
+CREATE INDEX idx_sync_tomb_seq ON sync_tomb(seq);
+`,
+  },
 ];

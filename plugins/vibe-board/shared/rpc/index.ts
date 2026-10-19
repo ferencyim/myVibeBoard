@@ -7,6 +7,7 @@
 
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { replyCheckRpc, replySendRpc, syncExchangeRpc } from "./sync";
 import {
   AgentSessionSchema,
   AttachmentSchema,
@@ -490,4 +491,9 @@ export const VIBE_BOARD_RPCS = {
   sessionsListRpc,
   cardsDispatchRpc,
   sessionsRecordSwitchRpc,
+  syncExchangeRpc,
+  replyCheckRpc,
+  replySendRpc,
 } as const;
+
+export * from "./sync";
