@@ -1,0 +1,20 @@
+{
+  "name": "@vibe/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single source of truth for myVibeBoard: contract (zod types, state machine, events), SQLite schema/migrations, command layer and event bus. Not a Paseo plugin; copied into plugins by scripts/vibe/sync-shared.mjs.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
+  }
+}
