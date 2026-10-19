@@ -1,0 +1,8 @@
+{
+  "id": "vibe-stats",
+  "name": "Vibe Stats",
+  "description": "myVibeBoard stats plugin.",
+  "requirements": {
+    "paseo": ">=0.12.0 <0.13.0"
+  }
+}
