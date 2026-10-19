@@ -3,6 +3,7 @@ import React from "react";
 import { Pressable, Text, View } from "react-native";
 import type { CardView, Preset, Tag } from "../../shared/vibe/contract";
 import { useHost } from "../common/ctx";
+import { SessionBadge } from "../badges/SessionBadge";
 import { Muted } from "../common/ui";
 import { PRIORITY_LABELS } from "./logic";
 
@@ -68,6 +69,7 @@ export function CardItem({
         <Text style={{ color: theme.colors.foreground, fontSize: 14 }} numberOfLines={3}>
           {card.title}
         </Text>
+        <SessionBadge cardId={card.id} />
         {card.tags.length > 0 || preset ? (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
             {card.tags.map((id) => (

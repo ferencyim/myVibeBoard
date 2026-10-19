@@ -5,6 +5,8 @@ import React from "react";
 import { Text, View } from "react-native";
 import { boardSettings } from "../shared/settings";
 import { boardSummaryRpc } from "../shared/rpc";
+import { useSessionsData } from "./common/api";
+import { waitingCount } from "./sessions/logic";
 
 /** Sidebar row with the number of cards that are not done yet. */
 export function BoardSidebarItem({ theme, currentScreen, openScreen }: PluginSidebarItemProps) {
@@ -28,6 +30,26 @@ export function BoardSidebarItem({ theme, currentScreen, openScreen }: PluginSid
             style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999, backgroundColor: theme.colors.surface2 }}
           >
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>{open}</Text>
+          </View>
+        ) : undefined
+      }
+    />
+  );
+}
+
+/** Sidebar row of the session overview; the badge counts sessions waiting for your answer. */
+export function SessionsSidebarItem({ theme, currentScreen, openScreen }: PluginSidebarItemProps) {
+  const waiting = waitingCount(useSessionsData().sessions);
+  return (
+    <SidebarRow
+      icon="MessageSquare"
+      label="会话汇总"
+      active={currentScreen?.screenId === "sessions"}
+      onPress={() => openScreen({ screenId: "sessions" })}
+      trailing={
+        waiting > 0 ? (
+          <View style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999, backgroundColor: theme.colors.statusDanger }}>
+            <Text style={{ color: theme.colors.accentForeground, fontSize: 11, fontWeight: "600" }}>{waiting}</Text>
           </View>
         ) : undefined
       }

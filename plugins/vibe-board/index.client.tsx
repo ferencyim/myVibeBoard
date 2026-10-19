@@ -1,6 +1,7 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { BoardScreen } from "./client/board/BoardScreen";
-import { BoardSettingsScreen, BoardSidebarItem } from "./client/sidebar";
+import { SessionsScreen } from "./client/sessions/SessionsScreen";
+import { BoardSettingsScreen, BoardSidebarItem, SessionsSidebarItem } from "./client/sidebar";
 
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
@@ -16,6 +17,10 @@ export default function contribute(client: PluginClientContext) {
       title: "Vibe Board",
       Component: BoardSidebarItem,
     }),
+
+    // 会话汇总: waiting sessions on top, offline-capable (data from the phone replica).
+    client.addScreen({ id: "sessions", title: "会话汇总", Component: SessionsScreen }),
+    client.addSidebarHeaderItem({ id: "sessions", title: "会话汇总", Component: SessionsSidebarItem }),
 
     client.addSettingsScreen({
       id: "preferences",
@@ -43,6 +48,17 @@ export default function contribute(client: PluginClientContext) {
       context: "global",
       onSelect({ openScreen }) {
         openScreen({ screenId: "board" });
+      },
+    }),
+
+    client.addCommandCenterItem({
+      id: "open-sessions",
+      title: "Vibe Board: 会话汇总",
+      icon: "MessageSquare",
+      keywords: ["sessions", "waiting", "reply", "会话"],
+      context: "global",
+      onSelect({ openScreen }) {
+        openScreen({ screenId: "sessions" });
       },
     }),
   ];

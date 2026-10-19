@@ -82,3 +82,27 @@ export const replySendRpc = defineRpc({
   input: replyInput,
   output: z.object({ sent: z.boolean(), duplicate: z.boolean() }),
 });
+
+export const REPLY_STATUSES = ["pending", "sending", "sent", "stale", "cancelled"] as const;
+
+export const localStatusRpc = defineRpc({
+  name: "vibe.local.status",
+  /** Is the answer coming from the phone's local replica (offline)? The daemon always answers
+   *  `offline: false`; the App answers it locally with `offline: true`, `asOf` = serverNow of the
+   *  last successful sync ("截至 hh:mm") and the replies still waiting to be sent. */
+  input: z.object({}),
+  output: z.object({
+    offline: z.boolean(),
+    asOf: z.number().nullable(),
+    replies: z.array(
+      z.object({
+        id: z.string(),
+        cardId: z.string(),
+        questionId: z.string(),
+        text: z.string(),
+        status: z.enum(REPLY_STATUSES),
+        staleReason: z.string().optional(),
+      }),
+    ),
+  }),
+});

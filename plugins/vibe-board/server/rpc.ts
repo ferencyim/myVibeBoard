@@ -104,6 +104,7 @@ export function registerBoardRpcs(
 
   const { dispatcher, lifecycle, sync, replies } = extras;
   if (sync) server.handle(rpc.syncExchangeRpc, (input) => sync.exchange(input as never));
+  server.handle(rpc.localStatusRpc, () => ({ offline: false, asOf: Date.now(), replies: [] }));
   if (replies) {
     server.handle(rpc.replyCheckRpc, (input, { paseo }) => {
       extras.onPaseo?.(paseo);

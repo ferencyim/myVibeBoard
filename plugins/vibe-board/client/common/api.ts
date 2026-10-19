@@ -32,6 +32,9 @@ export function useBoardApi() {
     attachmentsUpload: useRpc(rpc.attachmentsUploadRpc),
     attachmentsDownload: useRpc(rpc.attachmentsDownloadRpc),
     attachmentsDelete: useRpc(rpc.attachmentsDeleteRpc),
+    sessionsList: useRpc(rpc.sessionsListRpc),
+    replySend: useRpc(rpc.replySendRpc),
+    localStatus: useRpc(rpc.localStatusRpc),
   };
 }
 
@@ -81,3 +84,25 @@ export function useRefresh() {
 }
 
 export const queryKey = (...parts: unknown[]) => [ROOT, ...parts];
+
+/** All sessions (polled); one shared query serves the overview screen and every card badge. */
+export function useSessionsData() {
+  const api = useBoardApi();
+  const query = useQuery({
+    queryKey: [ROOT, "sessions"],
+    queryFn: () => api.sessionsList({}),
+    refetchInterval: 3000,
+  });
+  return { sessions: query.data?.sessions ?? [], loading: query.isLoading, error: query.error ?? null };
+}
+
+/** Offline state: `asOf` for the read-only banner and the replies queued on the phone. */
+export function useLocalStatus() {
+  const api = useBoardApi();
+  const query = useQuery({
+    queryKey: [ROOT, "local-status"],
+    queryFn: () => api.localStatus({}),
+    refetchInterval: 3000,
+  });
+  return query.data ?? { offline: false, asOf: null, replies: [] };
+}

@@ -17,12 +17,23 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+const SESSION_STATE_LABELS: Record<string, string> = {
+  waiting: "会话在等你回复",
+  error: "会话出错",
+  ended: "会话已结束",
+};
+
 const col = (v: unknown) => COLUMN_LABELS[v as keyof typeof COLUMN_LABELS] ?? String(v);
 
 export function describeEvent(event: Pick<CardEvent, "type" | "body">): string {
   const body = event.body;
   if (typeof body === "string") return body;
   if (!isRecord(body)) return body == null ? "" : String(body);
+  if (body.kind === "reply") return `已回复：${String(body.text ?? "")}`;
+  if (body.kind === "reply_stale") {
+    const why = body.reason === "already_answered" ? "问题已被回答" : "问题已不存在";
+    return `离线回复未发送（${why}）：${String(body.text ?? "")}`;
+  }
   if (typeof body.text === "string") return body.text;
   switch (body.kind) {
     case "created":
@@ -38,7 +49,7 @@ export function describeEvent(event: Pick<CardEvent, "type" | "body">): string {
   }
   if (typeof body.kind === "string" && body.kind.startsWith("session_")) {
     const message = typeof body.message === "string" && body.message ? `：${body.message}` : "";
-    return `会话${body.kind.slice("session_".length)}${message}`;
+    return `${SESSION_STATE_LABELS[body.kind.slice("session_".length)] ?? body.kind}${message}`;
   }
   if (event.type === "switch_agent") return `${String(body.from)} → ${String(body.to)}`;
   if (event.type === "compaction") return `已压缩上下文（${String(body.strategy ?? "")}）`;
