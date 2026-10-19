@@ -1,0 +1,79 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import type pino from "pino";
+import { describe, expect, test } from "vitest";
+
+import { resolvePushConfig, toMinimalPayload } from "./push-config.js";
+import { PushService } from "./push-service.js";
+
+const logger = (() => {
+  const l = {
+    child: () => l,
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  };
+  return l as unknown as pino.Logger;
+})();
+
+describe("resolvePushConfig", () => {
+  test("without config behaves like upstream", () => {
+    expect(resolvePushConfig(undefined, {})).toEqual({ gateway: undefined, minimalPayload: false });
+  });
+
+  test("gateway enables minimal payload by default and env token wins", () => {
+    const cfg = resolvePushConfig(
+      { push: { gateway: "http://127.0.0.1:8787", gatewayToken: "file" } },
+      { PASEO_PUSH_GATEWAY_TOKEN: "env" },
+    );
+    expect(cfg).toEqual({
+      gateway: { url: "http://127.0.0.1:8787", authToken: "env" },
+      minimalPayload: true,
+    });
+  });
+});
+
+describe("minimal payload", () => {
+  test("contains only project name and event type, no assistant text", () => {
+    const payload = toMinimalPayload(
+      {
+        title: "Agent finished",
+        body: "SECRET assistant preview",
+        data: { serverId: "s", agentId: "a", workspaceId: "w", reason: "permission" },
+      },
+      "myProject",
+    );
+    expect(payload.title).toBe("myProject");
+    expect(payload.body).toBe("Needs your approval");
+    expect(JSON.stringify(payload)).not.toContain("SECRET");
+  });
+});
+
+describe("PushService gateway delivery", () => {
+  test("posts native tokens with bearer auth and revokes on 404", async () => {
+    const seen: Array<{ auth?: string; body: Record<string, unknown> }> = [];
+    const respond = (req: IncomingMessage, res: ServerResponse, raw: string) => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      seen.push({ auth: req.headers.authorization, body });
+      res.statusCode = body.token === "gone" ? 404 : 200;
+      res.end("{}");
+    };
+    const server = createServer(async (req, res) => {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      respond(req, res, raw);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const revoked: string[] = [];
+    const service = new PushService(logger, (t) => revoked.push(t), { url, authToken: "tok" });
+
+    await service.sendPush(["fcm-1", "gone"], { title: "P", body: "Finished", data: { a: 1 } });
+    server.close();
+
+    expect(seen.map((s) => s.auth)).toEqual(["Bearer tok", "Bearer tok"]);
+    expect(seen[0].body).toEqual({ token: "fcm-1", title: "P", body: "Finished", data: { a: 1 } });
+    expect(revoked).toEqual(["gone"]);
+  });
+});

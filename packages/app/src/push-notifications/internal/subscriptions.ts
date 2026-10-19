@@ -43,6 +43,15 @@ async function resolveToken(serverId: string): Promise<string | null> {
     });
   }
 
+  // Android: native FCM token, delivered through the self-hosted push gateway.
+  if (Platform.OS === "android") {
+    const native = await Notifications.getDevicePushTokenAsync();
+    const nativeToken = typeof native.data === "string" ? native.data.trim() : "";
+    if (!nativeToken) return cached;
+    await AsyncStorage.setItem(key, nativeToken);
+    return nativeToken;
+  }
+
   const projectId = getExpoProjectId();
   if (!projectId) {
     console.warn("[PushNotifications] Missing EAS projectId; cannot fetch Expo push token");

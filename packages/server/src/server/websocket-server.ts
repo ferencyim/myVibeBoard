@@ -63,6 +63,13 @@ import {
   type PushNotifications,
   type PushNotificationSender,
 } from "./push/index.js";
+import { loadPersistedConfig } from "./persisted-config.js";
+import {
+  resolvePushConfig,
+  toMinimalPayload,
+  toMinimalTerminalPayload,
+  type ResolvedPushConfig,
+} from "./push/push-config.js";
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
@@ -556,6 +563,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly daemonConfigStore: DaemonConfigStore;
   private readonly pushNotifications: PushNotifications;
   private readonly pushNotificationSender: PushNotificationSender;
+  private readonly pushConfig: ResolvedPushConfig;
   private readonly mcpBaseUrl: string | null;
   private speech!: SpeechService | null;
   private terminalManager!: TerminalManager | null;
@@ -743,8 +751,10 @@ export class VoiceAssistantWebSocketServer {
     };
 
     const pushLogger = this.logger.child({ module: "push" });
+    this.pushConfig = resolvePushConfig(loadPersistedConfig(paseoHome, pushLogger).daemon);
     this.pushNotifications = createPushNotifications({
       logger: pushLogger,
+      gateway: this.pushConfig.gateway,
       filePath: join(paseoHome, "push-tokens.json"),
     });
     this.pushNotificationSender = pushNotificationSender ?? this.pushNotifications;
@@ -2574,6 +2584,17 @@ export class VoiceAssistantWebSocketServer {
     };
   }
 
+  private async resolveProjectName(workspaceId: string | undefined): Promise<string | null> {
+    if (!workspaceId) return null;
+    try {
+      const workspace = await this.workspaceRegistry.get(workspaceId);
+      const project = workspace ? await this.projectRegistry.get(workspace.projectId) : null;
+      return project?.displayName ?? workspace?.displayName ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   private async broadcastAgentAttention(params: {
     agentId: string;
     provider: AgentProvider;
@@ -2616,6 +2637,10 @@ export class VoiceAssistantWebSocketServer {
       permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
     });
 
+    const pushPayload = this.pushConfig.minimalPayload
+      ? toMinimalPayload(notification, await this.resolveProjectName(agent.workspaceId))
+      : notification;
+
     const plan = computeNotificationPlan({
       allStates,
       focusTarget: { kind: "agent", id: params.agentId },
@@ -2624,7 +2649,7 @@ export class VoiceAssistantWebSocketServer {
     });
 
     if (plan.shouldPush) {
-      void this.pushNotificationSender.send(notification).catch((err) => {
+      void this.pushNotificationSender.send(pushPayload).catch((err) => {
         this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
       });
     }
@@ -2720,19 +2745,20 @@ export class VoiceAssistantWebSocketServer {
 
     const title = terminalAttentionTitle(params.reason);
     const body = params.terminalName;
+    const terminalData = {
+      serverId: this.serverId,
+      terminalId: params.terminalId,
+      cwd: params.cwd,
+      ...(workspaceId ? { workspaceId } : {}),
+    };
 
     if (plan.shouldPush) {
       void this.pushNotificationSender
-        .send({
-          title,
-          body,
-          data: {
-            serverId: this.serverId,
-            terminalId: params.terminalId,
-            cwd: params.cwd,
-            ...(workspaceId ? { workspaceId } : {}),
-          },
-        })
+        .send(
+          this.pushConfig.minimalPayload
+            ? toMinimalTerminalPayload(await this.resolveProjectName(workspaceId), terminalData)
+            : { title, body, data: terminalData },
+        )
         .catch((err) => {
           this.logger.warn(
             { err, terminalId: params.terminalId },
