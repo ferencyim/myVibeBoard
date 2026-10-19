@@ -88,6 +88,7 @@ export function buildDispatchBrief(input: BriefInput): string {
       `You are the worker for card ${card.key}. Read it with \`vibe-board show ${card.key}\` (MCP \`vibe_show\`). ` +
         `Report progress or ask a question with \`vibe-board comment ${card.key} --body "..."\`. ` +
         `Attach result files with \`vibe-board attachment add ${card.key} --file <path>\`. ` +
+        `Commit your finished work on the worktree branch before you end the round (the board merges that branch after approval and never touches uncommitted changes). ` +
         `You cannot move the card: when your round ends with no open question, the board moves it to verifying.`,
     ),
     preset.runtimeEnv ? section("Runtime environment", preset.runtimeEnv) : "",

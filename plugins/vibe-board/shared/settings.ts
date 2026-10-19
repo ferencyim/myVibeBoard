@@ -10,6 +10,10 @@ export const boardSettings = defineSettings({
     autoInjectInstructions: z.boolean().default(true),
     defaultView: z.enum(["list", "board"]).default("board"),
     showCompletedInBoard: z.boolean().default(true),
+    /** What happens when a card reaches done: merge its worktree branch, open a PR, or nothing. */
+    finalizeMode: z.enum(["merge", "pr", "none"]).default("merge"),
+    /** Branch to merge into; empty = whatever the project's main checkout is on. */
+    finalizeTargetBranch: z.string().default(""),
   }),
 });
 

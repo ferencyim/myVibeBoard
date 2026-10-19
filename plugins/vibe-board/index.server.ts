@@ -8,6 +8,7 @@ import { BOARD_INSTRUCTIONS_MARKER, buildBoardInstructions } from "./server/mcp/
 import { createDispatcher } from "./server/dispatch";
 import { registerLifecycle } from "./server/lifecycle";
 import { startFinalizer } from "./server/lifecycle/finalize";
+import { createGitFinalizer } from "./server/lifecycle/git-finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
 
@@ -80,7 +81,22 @@ export default function contribute(server: PluginServerContext) {
   const onPaseo = (api: PaseoApi) => void (paseo = api);
   const lifecycle = registerLifecycle(server, { board, onPaseo });
   const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });
-  const finalizer = startFinalizer({ db: runtime.db, board });
+  const finalizer = startFinalizer({
+    db: runtime.db,
+    board,
+    finalize: createGitFinalizer({
+      board,
+      getConfig: async () => {
+        const current = await settings.read();
+        return current.status === "ready"
+          ? {
+              mode: current.values.finalizeMode,
+              targetBranch: current.values.finalizeTargetBranch || undefined,
+            }
+          : { mode: "merge" };
+      },
+    }),
+  });
   registerBoardRpcs(server, board, { dispatcher, lifecycle, onPaseo });
 
   return async () => {
