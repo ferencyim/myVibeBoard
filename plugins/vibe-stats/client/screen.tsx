@@ -19,7 +19,7 @@ import {
   type Period,
   type StatsGroup,
 } from "../shared/rpc";
-import { fmtCost, fmtDuration, fmtPct, fmtRate, fmtTokens, shares } from "./format";
+import { fmtCostNote, fmtDuration, fmtPct, fmtRate, fmtTokens, shares } from "./format";
 
 const PERIOD_LABELS: Record<Period, string> = {
   today: "Today",
@@ -119,7 +119,7 @@ function GroupList({ theme, groups }: { theme: PluginTheme; groups: StatsGroup[]
           <Row
             theme={theme}
             left={g.label}
-            right={`${fmtTokens(weight(g))} · ${fmtCost(g.cost)}`}
+            right={`${fmtTokens(weight(g))} · ${fmtCostNote(g.cost, g.unpricedTokens)}`}
           />
           <View style={{ width: `${(weight(g) / max) * 100}%` }}>
             <Bar
@@ -165,7 +165,7 @@ export function StatsScreen({ theme }: PluginScreenProps) {
     fontSize: 12,
   });
   const refresh = () =>
-    void reindexCall({ full: false }).then(() =>
+    void reindexCall({ full: (o?.totals.unpricedTokens ?? 0) > 0 }).then(() =>
       queryClient.invalidateQueries({ queryKey: ["vibe-stats"] }),
     );
 
@@ -195,7 +195,21 @@ export function StatsScreen({ theme }: PluginScreenProps) {
       {o ? (
         <>
           <Section theme={theme} title="Usage">
-            <Row theme={theme} left="Estimated cost" right={fmtCost(o.totals.cost)} />
+            <Row
+              theme={theme}
+              left="Estimated cost"
+              right={fmtCostNote(o.totals.cost, o.totals.unpricedTokens)}
+            />
+            {o.totals.unpricedTokens > 0 ? (
+              <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+                {fmtTokens(o.totals.unpricedTokens)} tokens are not priced (
+                {o.byModel
+                  .filter((g) => g.unpricedTokens > 0)
+                  .map((g) => g.label)
+                  .join(", ")}
+                ). Provide a LiteLLM-format price file in the Stats settings to include them.
+              </Text>
+            ) : null}
             <Row theme={theme} left="Input" right={fmtTokens(o.totals.input)} />
             <Row theme={theme} left="Output" right={fmtTokens(o.totals.output)} />
             <Row
@@ -290,7 +304,7 @@ export function StatsScreen({ theme }: PluginScreenProps) {
                 <Row
                   theme={theme}
                   left={`${t.key} ${t.title}`}
-                  right={`${fmtTokens(t.tokens)} · ${fmtCost(t.cost)}`}
+                  right={`${fmtTokens(t.tokens)} · ${fmtCostNote(t.cost, t.unpricedTokens)}`}
                 />
                 <Muted theme={theme}>
                   active {fmtDuration(t.durationMs)} · waiting for you {fmtDuration(t.waitingMs)}

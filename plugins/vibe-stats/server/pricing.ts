@@ -17,6 +17,10 @@ const p = (input: number, output: number, cacheRead: number, cacheWrite: number)
   cacheWrite,
 });
 
+// Models whose price is not known: no entry is better than a made-up one. They show as "unpriced" until
+// the user supplies a LiteLLM-format price file (`pricingFile`), which is checked before this list.
+const UNPRICED: RegExp[] = [/fable/, /(opus|sonnet|haiku)-5/, /gpt-6/];
+
 // First match wins.
 const TABLE: Array<[RegExp, Price]> = [
   [/opus-4-?[01](?!\d)|claude-opus-4$|opus-4-2025/, p(15, 75, 1.5, 18.75)],
@@ -37,6 +41,7 @@ export function priceFor(model: string, overrides: PriceOverrides = {}): Price |
   const name = normalize(model);
   const exact = overrides[name] ?? overrides[model];
   if (exact) return exact;
+  if (UNPRICED.some((re) => re.test(name))) return null;
   for (const [re, price] of TABLE) if (re.test(name)) return price;
   return null;
 }

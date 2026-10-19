@@ -35,6 +35,12 @@ export function useBoardApi() {
     sessionsList: useRpc(rpc.sessionsListRpc),
     replySend: useRpc(rpc.replySendRpc),
     localStatus: useRpc(rpc.localStatusRpc),
+    verifyGet: useRpc(rpc.verifyGetRpc),
+    verifyList: useRpc(rpc.verifyListRpc),
+    verifyEvidence: useRpc(rpc.verifyEvidenceRpc),
+    verifyApprove: useRpc(rpc.verifyApproveRpc),
+    verifyReject: useRpc(rpc.verifyRejectRpc),
+    verifyRerun: useRpc(rpc.verifyRerunRpc),
   };
 }
 

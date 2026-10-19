@@ -68,8 +68,11 @@ export interface InstructionFile {
 
 const INSTRUCTION_ORDER = ["project_goals.md", "user_directives.md", "prd.md"];
 
+/** User-edited Markdown may come from a CRLF checkout: everything downstream sees "\n" only. */
+const normalizeEol = (text: string): string => text.replace(/\r\n/g, "\n");
+
 function readText(path: string): string | null {
-  return existsSync(path) ? readFileSync(path, "utf8") : null;
+  return existsSync(path) ? normalizeEol(readFileSync(path, "utf8")) : null;
 }
 
 function atomicWrite(path: string, text: string): void {
@@ -161,7 +164,7 @@ export function createMemoryStore(options: MemoryStoreOptions) {
       names.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
       return names.map((name) => ({
         name,
-        text: readFileSync(join(layout.instructionsDir, name), "utf8"),
+        text: normalizeEol(readFileSync(join(layout.instructionsDir, name), "utf8")),
       }));
     },
 

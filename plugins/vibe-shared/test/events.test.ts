@@ -58,6 +58,7 @@ describe("publishEvent", () => {
         "session.compacted",
         "verification.started",
         "verification.finished",
+        "verification.decision_requested",
         "maintenance.triggered",
         "maintenance.paused",
         "master.alert",

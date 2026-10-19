@@ -30,7 +30,11 @@ export default function contribute(server: PluginServerContext) {
   // The SDK handle only reaches plugins through hook/RPC contexts: keep the newest one.
   let paseo: PaseoApi | null = null;
   const remember = (api: PaseoApi) => void (paseo = api);
-  const agentPorts = { getPaseo: () => paseo, defaultAgent: () => current.defaultAgent };
+  const agentPorts = {
+    getPaseo: () => paseo,
+    defaultAgent: () => current.defaultAgent,
+    presets: () => store.presets.list(),
+  };
 
   const engine = createMaintenanceEngine({
     db,

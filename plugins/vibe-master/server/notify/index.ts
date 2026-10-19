@@ -27,6 +27,7 @@ export interface NotifyOptions {
 const MASTER_ALERT_LABELS: Record<string, string> = {
   quota_low: "Master: quota low",
   quota_error: "Master: quota error",
+  maintenance_paused: "Maintenance rule paused",
 };
 
 export function startNotifyConsumer(options: NotifyOptions): EventConsumer {

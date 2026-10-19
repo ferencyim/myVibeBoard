@@ -18,7 +18,7 @@ export function loadHandoff(
   if (project.repoPath) {
     const path = handoffFile(project.repoPath, card.key);
     try {
-      const text = readFileSync(path, "utf8").trim();
+      const text = readFileSync(path, "utf8").replace(/\r\n/g, "\n").trim();
       if (text) return { path, text };
     } catch {
       // no file: fall back to the card event

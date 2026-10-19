@@ -124,6 +124,38 @@ describe("cards, sessions and tasks", () => {
   });
 });
 
+describe("unpriced models", () => {
+  it("has no built-in price for Claude 5 / gpt-6 models but accepts a price file", () => {
+    const t = { tokensIn: 1_000_000, tokensOut: 0, tokensCacheRead: 0, tokensCacheWrite: 0 };
+    for (const m of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "gpt-6.1-codex"]) {
+      expect(estimateCost(m, t)).toBeNull();
+    }
+    const overrides = parseLiteLlmPrices({ "claude-opus-5-5": { input_cost_per_token: 0.000004 } });
+    expect(estimateCost("claude-opus-5-5", t, overrides)).toBeCloseTo(4);
+  });
+
+  it("reports the tokens that could not be priced instead of a silent zero cost", async () => {
+    const base = tempDir();
+    const db = openTestDb();
+    const fixture = lines(claudeLine("2026-10-01T10:00:00.000Z", "msg_x", "req_x", [1000, 500, 0, 0], "claude-opus-5-5"));
+    write(join(base, "claude", "projects", "p", "s.jsonl"), fixture);
+    await createIndexer({ db, roots: () => rootsFor(base) }).scan();
+    const { totals, byModel } = computeOverview(db, "all");
+    expect(totals.cost).toBe(0);
+    expect(totals.unpricedTokens).toBe(1500);
+    expect(byModel[0]?.unpricedTokens).toBe(1500);
+
+    // A price file added later prices the old rows on the next full re-scan.
+    const prices = parseLiteLlmPrices({ "claude-opus-5-5": { input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 } });
+    const indexer = createIndexer({ db, roots: () => rootsFor(base), prices: () => prices });
+    indexer.resetCursors();
+    await indexer.scan();
+    const after = computeOverview(db, "all").totals;
+    expect(after.unpricedTokens).toBe(0);
+    expect(after.cost).toBeCloseTo(0.002);
+  });
+});
+
 describe("pricing", () => {
   it("prices known families, returns null for unknown models, honours LiteLLM overrides", () => {
     const t = { tokensIn: 1_000_000, tokensOut: 1_000_000, tokensCacheRead: 0, tokensCacheWrite: 0 };

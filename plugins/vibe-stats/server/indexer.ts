@@ -65,14 +65,17 @@ export function createIndexer(options: IndexerOptions) {
        size_bytes = excluded.size_bytes, mtime_ms = excluded.mtime_ms,
        updated_at = excluded.updated_at`,
   );
-  // On a duplicate (same message logged once per content block) only the duration may grow.
+  // On a duplicate (same message logged once per content block) only the duration may grow; a missing
+  // cost is filled in when a re-scan can price it (e.g. after a price file was added).
   const putEvent = db.prepare(
     `INSERT INTO usage_event (ts, provider, model, session_id, tokens_in, tokens_out,
        tokens_cache_read, tokens_cache_write, duration_ms, cost, card_id, dedupe_key)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-     ON CONFLICT(dedupe_key) DO UPDATE SET duration_ms = excluded.duration_ms
-       WHERE excluded.duration_ms IS NOT NULL
-         AND excluded.duration_ms > COALESCE(usage_event.duration_ms, 0)`,
+     ON CONFLICT(dedupe_key) DO UPDATE SET
+       duration_ms = CASE WHEN excluded.duration_ms IS NOT NULL
+         AND excluded.duration_ms > COALESCE(usage_event.duration_ms, 0)
+         THEN excluded.duration_ms ELSE usage_event.duration_ms END,
+       cost = COALESCE(usage_event.cost, excluded.cost)`,
   );
 
   function store(rec: UsageRecord, prices: PriceOverrides): void {

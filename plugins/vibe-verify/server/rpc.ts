@@ -44,7 +44,7 @@ export function registerVerifyRpcs(
 
   server.handle(rpc.verifyEvidenceRpc, ({ evidenceId, thumb }) => {
     const evidence = verify.evidenceById(evidenceId) ?? fail("not_found", `Evidence not found: ${evidenceId}`);
-    const file = thumb && evidence.thumbPath ? evidence.thumbPath : evidence.path;
+    const file = (thumb && verify.ensureThumb(evidence)) || evidence.path;
     let bytes: Buffer;
     try {
       bytes = readFileSync(file);

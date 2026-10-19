@@ -14,6 +14,7 @@ import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
 import { Discussion } from "../planning/Discussion";
 import { PresetSelector, PrioritySelector, TagSelector } from "../presets/selectors";
 import type { ProviderUsageLike } from "../presets/logic";
+import { VerificationPanel } from "../verification/VerificationPanel";
 import { EVENT_TYPE_LABELS, describeEvent } from "./events";
 
 type Tab = "details" | "timeline" | "plans" | "discussion" | "verification";
@@ -109,7 +110,7 @@ export function CardDetail(props: CardDetailProps) {
           />
         ) : null}
         {tab === "verification" ? (
-          <Placeholder title="验证结果" text="结论、检查项、证据缩略图与通过/驳回按钮（WP-21 实现）。" />
+          <VerificationPanel api={api} card={card} reload={reload} />
         ) : null}
       </ScrollView>
     </View>

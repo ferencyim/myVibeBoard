@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtCost, fmtDuration, fmtTokens, shares } from "../client/format";
+import { fmtCost, fmtCostNote, fmtDuration, fmtTokens, shares } from "../client/format";
 
 describe("format helpers", () => {
   it("formats tokens, cost and durations", () => {
@@ -9,6 +9,12 @@ describe("format helpers", () => {
     expect(fmtCost(1.234)).toBe("$1.23");
     expect(fmtDuration(125_000)).toBe("2m 5s");
     expect(fmtDuration(3_660_000)).toBe("1h 1m");
+  });
+
+  it("marks unpriced tokens instead of showing a bare zero", () => {
+    expect(fmtCostNote(1.5, 0)).toBe("$1.50");
+    expect(fmtCostNote(0, 1500)).toBe("price unknown (1.5k tok unpriced)");
+    expect(fmtCostNote(2, 1500)).toBe("$2.00 + 1.5k tok unpriced");
   });
 
   it("computes bar shares and tolerates empty input", () => {

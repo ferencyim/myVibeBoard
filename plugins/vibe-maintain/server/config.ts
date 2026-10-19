@@ -83,7 +83,8 @@ export async function loadConfig(repoPath: string): Promise<LoadedConfig> {
   const errors: string[] = [];
   let text = "";
   try {
-    text = await readFile(join(repoPath, ".vibe", "maintenance.yml"), "utf8");
+    // A CRLF checkout must not look like an edit (the signature) nor leak "\r" into rule values.
+    text = (await readFile(join(repoPath, ".vibe", "maintenance.yml"), "utf8")).replace(/\r\n/g, "\n");
   } catch {
     // No file: built-ins only.
   }
