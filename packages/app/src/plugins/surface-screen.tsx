@@ -13,7 +13,7 @@ import { ScreenTitle } from "@/components/headers/screen-title";
 import { HostFilter } from "@/components/hosts/host-filter";
 import type { HostPickerHost } from "@/components/hosts/host-picker";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
+import { useHosts } from "@/runtime/host-runtime";
 import type { Theme } from "@/styles/theme";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { usePluginHostNavigation } from "./host-navigation";
@@ -136,7 +136,6 @@ export function PluginSurfaceScreen() {
   const plugin = useInstalledPlugin(serverId, pluginId);
   const installations = usePluginInstallations(pluginId);
   const hosts = useHosts();
-  const client = useHostRuntimeClient(serverId);
   const compact = useIsCompactFormFactor();
   const { sidebarItem, surface } = useMemo(
     () => resolvePluginSurfaceContribution(plugin, identity),
@@ -222,7 +221,7 @@ export function PluginSurfaceScreen() {
         <ScreenHeader left={headerLeft} right={headerRight} />
       )}
       <View style={styles.body}>
-        {plugin && surface && client ? (
+        {plugin && surface ? (
           <SurfaceErrorBoundary
             key={`${serverId}/${pluginId}/${identity?.kind}/${contributionId}`}
             installation={plugin}
@@ -238,9 +237,7 @@ export function PluginSurfaceScreen() {
             />
           </SurfaceErrorBoundary>
         ) : (
-          <Text style={styles.errorText}>
-            {plugin && surface ? "Plugin host is offline." : "This plugin surface is unavailable."}
-          </Text>
+          <Text style={styles.errorText}>This plugin surface is unavailable.</Text>
         )}
       </View>
     </View>
