@@ -17,8 +17,7 @@ export function PdfPanel({ document, file, theme, layout }: PluginFilePanelProps
     return (
       <View style={fallbackStyle}>
         <Text style={textStyle}>
-          {file.name} ({Math.round(file.size / 1024)} KB). Android cannot render PDF inline; use
-          Share from the tab menu.
+          {file.name} ({Math.round(file.size / 1024)} KB). Android cannot render PDF inline.
         </Text>
       </View>
     );
