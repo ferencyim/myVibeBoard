@@ -3,7 +3,12 @@ import type { AddressInfo } from "node:net";
 import type pino from "pino";
 import { describe, expect, test } from "vitest";
 
-import { resolvePushConfig, toMinimalPayload } from "./push-config.js";
+import {
+  isRecentAttention,
+  resolvePushConfig,
+  toMinimalPayload,
+  toPluginPayload,
+} from "./push-config.js";
 import { PushService } from "./push-service.js";
 
 const logger = (() => {
@@ -16,6 +21,37 @@ const logger = (() => {
   };
   return l as unknown as pino.Logger;
 })();
+
+describe("plugin notifications", () => {
+  test("minimal mode clips text and drops everything but short string data", () => {
+    const payload = toPluginPayload(
+      {
+        title: "My project",
+        body: "x".repeat(200),
+        data: { cardKey: "VB-1", card: { title: "secret" }, note: "n".repeat(100), n: 3 },
+      },
+      true,
+    );
+    expect(payload).toEqual({
+      title: "My project",
+      body: "x".repeat(40),
+      data: { cardKey: "VB-1" },
+    });
+  });
+
+  test("without minimal mode the payload passes through", () => {
+    const input = { title: "T", body: "B".repeat(100), data: { a: { b: 1 } } };
+    expect(toPluginPayload(input, false)).toEqual(input);
+  });
+
+  test("an attention Paseo handled recently is a duplicate; an old or other one is not", () => {
+    const recent = new Map([["a1:permission", 1_000]]);
+    expect(isRecentAttention(recent, "a1", "permission", 30_000)).toBe(true);
+    expect(isRecentAttention(recent, "a1", "permission", 1_000 + 3 * 60_000)).toBe(false);
+    expect(isRecentAttention(recent, "a1", "finished", 30_000)).toBe(false);
+    expect(isRecentAttention(recent, "a2", "permission", 30_000)).toBe(false);
+  });
+});
 
 describe("resolvePushConfig", () => {
   test("without config behaves like upstream", () => {
