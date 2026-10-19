@@ -47,6 +47,7 @@ class PersistentClientSync extends ClientSync {
   override applyResponse(req: ExchangeRequest, resp: ExchangeResponse) {
     return this.replica.db.transaction(() => {
       const out = super.applyResponse(req, resp);
+      if (resp.ok) this.replica.recordSynced(resp.serverNow);
       this.replica.persist();
       return out;
     });
@@ -79,11 +80,21 @@ export class LocalReplica {
       last: readState(db, "hlc") ?? null,
       onAdvance: (hlc) => writeState(db, "hlc", hlc),
     });
+    const asOf = Number(readState(db, "asOf"));
+    this.asOf = Number.isFinite(asOf) && asOf > 0 ? asOf : null;
     this.replies = new PendingReplyQueue(readJson<PendingReply[]>(db, "replies", []));
   }
 
   static open(db: VibeSqlDb, options: { now?: () => number } = {}): LocalReplica {
     return new LocalReplica(db, options);
+  }
+
+  /** Daemon clock (ms) at the last successful sync: the "as of hh:mm" of the read-only offline data. */
+  asOf: number | null;
+
+  recordSynced(serverNow: number): void {
+    this.asOf = serverNow;
+    writeState(this.db, "asOf", String(serverNow));
   }
 
   get hasPending(): boolean {

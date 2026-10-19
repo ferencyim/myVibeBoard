@@ -17,6 +17,7 @@ import {
   type ClientSync,
   type JsonValue,
 } from "../generated/sync";
+import { queueReply, visibleReplies } from "../replies/queue";
 import type { LocalReplica } from "../store/replica";
 import {
   liveRows,
@@ -375,7 +376,29 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
     return { event: toEvent(rowsOf("card_event").find((r) => r.id === id) as RawRow) };
   }
 
+  function replySend(i: Input) {
+    const card = cardOf(load(), String(i.cardId));
+    queueReply(
+      replica,
+      {
+        id: asString(i.id),
+        cardId: card.id,
+        questionId: String(i.questionId),
+        text: String(i.text ?? ""),
+      },
+      now(),
+    );
+    // Not delivered yet: the sync engine sends it after reconnecting, if the question is still open.
+    return { sent: false, duplicate: false };
+  }
+
   const handlers: Record<string, (input: Input) => unknown> = {
+    "vibe.local.status": () => ({
+      offline: true,
+      asOf: replica.asOf,
+      replies: visibleReplies(replica),
+    }),
+    "vibe.reply.send": replySend,
     "vibe.projects.list": projectsList,
     "vibe.board.summary": boardSummary,
     "vibe.cards.list": cardsList,

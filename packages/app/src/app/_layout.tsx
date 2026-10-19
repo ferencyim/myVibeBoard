@@ -134,6 +134,8 @@ import { buildNotificationRoute, resolveNotificationTarget } from "@/utils/notif
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { PluginCatalogSync } from "@/plugins";
 import { pluginRegistry } from "@/plugins/registry";
+import { VIBE_BOARD_PLUGIN_ID } from "@/vibe/rpc/local-rpc";
+import { resolveVibePushRoute } from "@/vibe/sessions/push-route";
 import { VibeSyncBootstrap } from "@/vibe/sync/vibe-sync-bootstrap";
 import {
   ensureOsNotificationPermission,
@@ -159,6 +161,19 @@ const HostRuntimeBootstrapContext = createContext<HostRuntimeBootstrapState>({
   startupBlocker: { kind: "none" },
 });
 
+/** Hosts a Vibe Board push may belong to: those with the board installed, else every known host. */
+function vibeBoardServerIds(): string[] {
+  const installed = pluginRegistry
+    .getSnapshot()
+    .filter((plugin) => plugin.id === VIBE_BOARD_PLUGIN_ID)
+    .map((plugin) => plugin.serverId);
+  return installed.length > 0
+    ? installed
+    : getHostRuntimeStore()
+        .getHosts()
+        .map((h) => h.serverId);
+}
+
 function PushNotificationRouter() {
   const router = useRouter();
   const lastHandledIdRef = useRef<string | null>(null);
@@ -172,7 +187,8 @@ function PushNotificationRouter() {
       return;
     }
 
-    router.navigate(buildNotificationRoute(data));
+    const vibeRoute = resolveVibePushRoute(data, vibeBoardServerIds());
+    router.navigate(vibeRoute ?? buildNotificationRoute(data));
   });
 
   useEffect(() => {

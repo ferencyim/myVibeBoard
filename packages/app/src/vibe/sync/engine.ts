@@ -3,6 +3,7 @@
 // the online RPC invoker, tests pass a fake daemon.
 
 import type { ExchangeResponse, FlushResult, Rejection, QuestionState } from "../generated/sync";
+import { createLocalVibeRpc } from "../rpc/local-rpc";
 import type { LocalReplica } from "../store/replica";
 
 export const SYNC_INTERVAL_MS = 10_000;
@@ -27,6 +28,27 @@ export function createSyncEngine(deps: { replica: LocalReplica; invoke: SyncInvo
     return outcome.rejected;
   }
 
+  /** A reply that was not sent leaves a note on the card, so the user sees why. */
+  async function noteStaleReplies(ids: string[]): Promise<void> {
+    const rpc = createLocalVibeRpc(replica);
+    for (const reply of replica.replies.list("stale").filter((r) => ids.includes(r.id))) {
+      try {
+        await rpc.invoke("vibe.events.add", {
+          card: reply.cardId,
+          type: "note",
+          body: {
+            kind: "reply_stale",
+            questionId: reply.questionId,
+            text: reply.text,
+            reason: reply.staleReason,
+          },
+        });
+      } catch {
+        // the card is gone; nothing to annotate
+      }
+    }
+  }
+
   async function flushReplies(): Promise<FlushResult | null> {
     if (replica.replies.list("pending").length === 0) return null;
     const payload = (r: { id: string; cardId: string; questionId: string; text: string }) => ({
@@ -41,6 +63,7 @@ export function createSyncEngine(deps: { replica: LocalReplica; invoke: SyncInvo
       send: async (r) => void (await invoke("vibe.reply.send", payload(r))),
     });
     replica.persistReplies();
+    await noteStaleReplies(result.stale);
     return result;
   }
 
