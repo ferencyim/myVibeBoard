@@ -1,9 +1,9 @@
 import type pino from "pino";
 
-import { PushService, type PushPayload } from "./push-service.js";
+import { PushService, type PushGatewayConfig, type PushPayload } from "./push-service.js";
 import { PushTokenStore } from "./token-store.js";
 
-export type { PushPayload };
+export type { PushGatewayConfig, PushPayload };
 
 const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
 
@@ -19,11 +19,16 @@ export function createPushNotifications(options: {
   logger: pino.Logger;
   filePath: string;
   now?: () => number;
+  gateway?: PushGatewayConfig;
   deliver?: (tokens: string[], payload: PushPayload) => Promise<void>;
 }): PushNotifications {
   const now = options.now ?? Date.now;
   const store = new PushTokenStore(options.logger, options.filePath, now, PUSH_TOKEN_LEASE_MS);
-  const service = new PushService(options.logger, (token) => store.revokeToken(token));
+  const service = new PushService(
+    options.logger,
+    (token) => store.revokeToken(token),
+    options.gateway,
+  );
   const deliver =
     options.deliver ??
     ((tokens: string[], payload: PushPayload) => service.sendPush(tokens, payload));
