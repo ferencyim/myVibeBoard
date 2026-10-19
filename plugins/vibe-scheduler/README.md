@@ -54,3 +54,10 @@ Register devices with RPC `scheduler.register_device {kind,name,serial?,avd?}`.
 
 `scheduler.status`, `scheduler.select_agent`, `scheduler.devices`, `scheduler.register_device`,
 `scheduler.remove_device`.
+
+## UI
+
+`index.client.tsx` adds a Scheduler screen (concurrency vs. limits, pause reason, quota levels, waiting cards with the
+reason from `scheduler.status` `deferred`, the device pool with register/remove) and a settings page with every
+setting. Only `react-native` and the host UI modules are used; the screen reads the loose status record through
+`client/format.ts` `parseStatus`.

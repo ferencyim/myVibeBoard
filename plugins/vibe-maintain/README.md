@@ -133,3 +133,8 @@ built from `CheckOutput`.
   rules are effectively daemon-owned until phone-side rule editing exists.
 - Fix mode: the card and session rows are written before the agent is created, so lifecycle events
   cannot arrive before the session exists.
+
+## UI
+
+`index.client.tsx` adds a Maintenance screen (rules per project, trigger, last run, runs today vs. cap, pause state with
+"Resume" and "Run now" buttons over `maintain.resume` / `maintain.run`, maintenance.yml problems) and a settings page.

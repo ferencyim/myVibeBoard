@@ -25,6 +25,7 @@ const RuleView = z.object({
   runsToday: z.number(),
   lastRun: z.unknown().nullable(),
   blocked: z.string().nullable(),
+  projectName: z.string().nullable().default(null),
 });
 
 export const statusRpc = defineRpc({

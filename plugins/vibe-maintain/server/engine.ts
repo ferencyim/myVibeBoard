@@ -714,6 +714,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
             runsToday: runsToday(rule.id),
             lastRun: listRuns(rule.id, 1)[0] ?? null,
             blocked: gate(rule),
+            projectName: store.projects.get(rule.projectId)?.name ?? null,
           };
         }),
         configErrors: Object.fromEntries(
