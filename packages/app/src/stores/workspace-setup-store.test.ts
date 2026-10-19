@@ -60,4 +60,25 @@ describe("workspace-setup-store", () => {
     expect(useWorkspaceSetupStore.getState().claimFailedSetupSurface(identity)).toBe(true);
     expect(useWorkspaceSetupStore.getState().snapshots).toEqual({});
   });
+  it("replaces cached setup details with an empty reconnect snapshot", () => {
+    const identity = { serverId: "server", workspaceId: "workspace" };
+    const store = useWorkspaceSetupStore.getState();
+    store.applySnapshot({
+      ...identity,
+      snapshot: {
+        status: "failed",
+        error: "previous setup failed",
+        detail: {
+          type: "worktree_setup",
+          worktreePath: "/workspace",
+          branchName: "main",
+          commands: [],
+          log: "previous output",
+        },
+      },
+    });
+    expect(Object.values(useWorkspaceSetupStore.getState().snapshots)).toHaveLength(1);
+    store.applySnapshot({ ...identity, snapshot: null });
+    expect(useWorkspaceSetupStore.getState().snapshots).toEqual({});
+  });
 });

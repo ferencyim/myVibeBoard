@@ -221,7 +221,7 @@ function useWorkspaceSetupSnapshot(serverId: string, workspaceId: string, enable
   const client = useHostRuntimeClient(serverId);
   const key = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
   const snapshot = useWorkspaceSetupStore((state) => (key ? (state.snapshots[key] ?? null) : null));
-  const upsertProgress = useWorkspaceSetupStore((state) => state.upsertProgress);
+  const applySnapshot = useWorkspaceSetupStore((state) => state.applySnapshot);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!client || !enabled) return;
@@ -229,12 +229,11 @@ function useWorkspaceSetupSnapshot(serverId: string, workspaceId: string, enable
     const subscription = client.observeWorkspaceSetup(workspaceId);
     const detach = subscription.subscribe({
       snapshot: (response) => {
-        if (response.snapshot)
-          upsertProgress({ serverId, payload: { workspaceId, ...response.snapshot } });
+        applySnapshot({ serverId, workspaceId, snapshot: response.snapshot });
       },
       update: (message) => {
         if (message.type === "workspace_setup_progress")
-          upsertProgress({ serverId, payload: message.payload });
+          applySnapshot({ serverId, workspaceId, snapshot: message.payload });
       },
       error: (failure) => setError(failure instanceof Error ? failure.message : String(failure)),
     });
@@ -244,7 +243,7 @@ function useWorkspaceSetupSnapshot(serverId: string, workspaceId: string, enable
         .release()
         .catch((failure) => console.warn("Failed to release setup observation", failure));
     };
-  }, [client, enabled, serverId, upsertProgress, workspaceId]);
+  }, [client, enabled, serverId, applySnapshot, workspaceId]);
   return { snapshot, error };
 }
 

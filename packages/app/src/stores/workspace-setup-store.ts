@@ -1,6 +1,9 @@
 import { createNameId } from "mnemonic-id";
 import { generateDraftId } from "@/stores/draft-keys";
-import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
+import type {
+  WorkspaceSetupSnapshot as SetupDetailSnapshot,
+  SessionOutboundMessage,
+} from "@getpaseo/protocol/messages";
 import { create } from "zustand";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 
@@ -41,7 +44,11 @@ interface WorkspaceSetupStoreState {
   surfacedFailedSetupKeys: Set<string>;
   beginWorkspaceSetup: (value: PendingWorkspaceSetup) => void;
   clearWorkspaceSetup: () => void;
-  upsertProgress: (input: { serverId: string; payload: WorkspaceSetupProgressPayload }) => void;
+  applySnapshot: (input: {
+    serverId: string;
+    workspaceId: string;
+    snapshot: SetupDetailSnapshot | null;
+  }) => void;
   applySetupStatus: (input: {
     serverId: string;
     workspaceId: string;
@@ -76,22 +83,14 @@ export const useWorkspaceSetupStore = create<WorkspaceSetupStoreState>()((set) =
   clearWorkspaceSetup: () => {
     set({ pendingWorkspaceSetup: null });
   },
-  upsertProgress: ({ serverId, payload }) => {
-    const key = buildWorkspaceSetupKey({ serverId, workspaceId: payload.workspaceId });
-    if (!key) {
-      return;
-    }
-
+  applySnapshot: ({ serverId, workspaceId, snapshot }) => {
+    const key = buildWorkspaceSetupKey({ serverId, workspaceId });
+    if (!key) return;
     set((state) => {
-      return {
-        snapshots: {
-          ...state.snapshots,
-          [key]: {
-            ...payload,
-            updatedAt: Date.now(),
-          },
-        },
-      };
+      const snapshots = { ...state.snapshots };
+      if (snapshot) snapshots[key] = { ...snapshot, workspaceId, updatedAt: Date.now() };
+      else delete snapshots[key];
+      return { snapshots };
     });
   },
   applySetupStatus: ({ serverId, workspaceId, status }) => {

@@ -333,12 +333,22 @@ export async function waitForWorkspaceSetupProgress(
 export function observeSetupPanelTraffic(page: Page) {
   const subscriptions: Array<{ workspaceId: string; subscriptionId: string }> = [];
   const releases = new Set<string>();
+  const requests: string[] = [];
+  let legacySetupDemand = false;
   const outputWorkspaces: string[] = [];
   page.on("websocket", (socket) => {
     socket.on("framesent", ({ payload }) => {
       const frame = JSON.parse(String(payload));
-      if (frame.type === "session" && frame.message?.type === "subscription.release.request")
+      if (frame.type !== "session") return;
+      if (frame.message?.type === "subscription.release.request")
         releases.add(frame.message.subscriptionId);
+      if (frame.message?.type === "workspace.setup.subscribe.request")
+        requests.push(frame.message.workspaceId);
+      if (
+        frame.message?.type === "session.events.set_subscription.request" &&
+        frame.message.events.includes("workspace_setup_progress")
+      )
+        legacySetupDemand = true;
     });
     socket.on("framereceived", ({ payload }) => {
       const frame = JSON.parse(String(payload));
@@ -351,12 +361,15 @@ export function observeSetupPanelTraffic(page: Page) {
   });
   return {
     async expectNoDemand() {
+      expect(requests).toEqual([]);
+      expect(legacySetupDemand).toBe(false);
       expect(subscriptions).toEqual([]);
       expect(outputWorkspaces).toEqual([]);
     },
     async expectSubscribed(workspaceId: string, count: number) {
       await expect.poll(() => subscriptions.length).toBe(count);
       expect(subscriptions[count - 1].workspaceId).toBe(workspaceId);
+      expect(requests).toEqual(Array(count).fill(workspaceId));
     },
     async expectReleased(index: number) {
       await expect.poll(() => releases.has(subscriptions[index].subscriptionId)).toBe(true);
