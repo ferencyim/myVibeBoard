@@ -60,6 +60,11 @@ describe("publishEvent", () => {
         "verification.finished",
         "maintenance.triggered",
         "plan.updated",
+        "scheduler.admitted",
+        "scheduler.dispatch_failed",
+        "scheduler.quota_low",
+        "scheduler.paused",
+        "scheduler.resumed",
       ].sort(),
     );
   });

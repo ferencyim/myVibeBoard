@@ -258,6 +258,8 @@ describe("rpc contract", () => {
     registerBoardRpcs({ handle: (def: { name: string }) => handled.push(def.name) } as never, board, {
       dispatcher: {} as never,
       lifecycle: {} as never,
+      sync: {} as never,
+      replies: {} as never,
     });
     const names = Object.values(rpc.VIBE_BOARD_RPCS).map((r) => r.name);
     expect(new Set(names).size).toBe(names.length);

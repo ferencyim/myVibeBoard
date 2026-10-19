@@ -1,0 +1,8 @@
+{
+  "id": "vibe-scheduler",
+  "name": "Vibe Scheduler",
+  "description": "myVibeBoard scheduler plugin.",
+  "requirements": {
+    "paseo": ">=0.12.0 <0.13.0"
+  }
+}

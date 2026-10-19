@@ -31,6 +31,8 @@ const EXPECTED_TABLES = [
   "vibe_event_dead",
   "sync_meta",
   "sync_tombstone",
+  "sync_field",
+  "sync_tomb",
   "vibe_meta",
   "verification",
   "verification_item",

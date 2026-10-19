@@ -104,3 +104,6 @@ SESSION.md
 .claude/requirements-inbox.log
 .claude/.requirements-state.json
 
+
+# vibe relay deploy: local-only config
+deploy/relay/relay.env

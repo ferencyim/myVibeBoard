@@ -78,6 +78,7 @@ describe("ConnectionOfferV2 (daemon E2E)", () => {
 
   test("emits relay-only offer URL with stable serverId", async () => {
     process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";
+    process.env.PASEO_ALLOW_INSECURE_LISTEN = "1";
 
     const { logger } = createCapturingLogger();
 
@@ -121,6 +122,7 @@ describe("ConnectionOfferV2 (daemon E2E)", () => {
 
   test("persists serverId and daemon keypair across daemon restarts", async () => {
     process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";
+    process.env.PASEO_ALLOW_INSECURE_LISTEN = "1";
 
     const tempHomeRoot = await mkdtemp(path.join(os.tmpdir(), "paseo-offer-home-"));
 
@@ -197,6 +199,7 @@ describe("ConnectionOfferV2 (daemon E2E)", () => {
 
   test("respects --no-relay (CLI) by not emitting a pairing offer", async () => {
     process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";
+    process.env.PASEO_ALLOW_INSECURE_LISTEN = "1";
 
     const tempHome = await mkdtemp(path.join(os.tmpdir(), "paseo-offer-e2e-"));
     const port = await getAvailablePort();
@@ -209,6 +212,7 @@ describe("ConnectionOfferV2 (daemon E2E)", () => {
       ...process.env,
       PASEO_HOME: tempHome,
       PASEO_LISTEN: `0.0.0.0:${port}`,
+      PASEO_ALLOW_INSECURE_LISTEN: "1",
       OPENAI_API_KEY: "",
       PASEO_DICTATION_ENABLED: "0",
       PASEO_VOICE_MODE_ENABLED: "0",

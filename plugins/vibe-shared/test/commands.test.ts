@@ -18,6 +18,23 @@ const types = (s: ReturnType<typeof setup>) =>
   readEvents(s.db, 0, { limit: 1000 }).map((e) => e.type);
 
 describe("projects and cards", () => {
+  it("keeps replica-generated ids and creation times (sync materialization)", () => {
+    const s = setup();
+    const p = seedProject(s);
+    const card = s.store.cards.create(
+      { id: "01CARDFROMPHONE000000000A", createdAt: "2025-12-31T23:00:00.000Z", projectId: p.id, title: "Offline" },
+      "phone",
+    );
+    expect(card.id).toBe("01CARDFROMPHONE000000000A");
+    expect(card.createdAt).toBe("2025-12-31T23:00:00.000Z");
+    const ev = s.store.events.add({ id: "01EVENTFROMPHONE00000000A", createdAt: "2025-12-31T23:30:00.000Z", cardId: card.id, type: "note", authorKind: "user" });
+    expect(ev).toMatchObject({ id: "01EVENTFROMPHONE00000000A", createdAt: "2025-12-31T23:30:00.000Z" });
+    expect(s.store.tags.create("mine", false, "01TAGFROMPHONE00000000AA").id).toBe("01TAGFROMPHONE00000000AA");
+    expect(s.store.presets.create({ id: "01PRESETFROMPHONE000000A", name: "p", provider: "x", model: "y" }).id).toBe("01PRESETFROMPHONE000000A");
+    const meta = s.db.prepare<{ n: number }>("SELECT COUNT(*) AS n FROM sync_meta WHERE table_name = 'card_event' AND row_id = ?").get(ev.id);
+    expect(meta?.n).toBe(6); // every synced field of a new event is stamped
+  });
+
   it("creates cards with sequential keys and publishes card.created", () => {
     const s = setup();
     const p = seedProject(s);

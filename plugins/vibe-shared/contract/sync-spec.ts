@@ -54,6 +54,7 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
     "card",
     ["id"],
     [
+      "project_id",
       "title",
       "description",
       "column",
@@ -68,7 +69,7 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
       "archived_at",
     ],
   ),
-  both("card_event", ["id"], ["body_json"]),
+  both("card_event", ["id"], ["card_id", "type", "author_kind", "author", "created_at", "body_json"]),
   both(
     "preset",
     ["id"],

@@ -11,8 +11,10 @@ community Tasks plugin (see `UPSTREAM.md`, Apache-2.0 `LICENSE`).
 - Agents: MCP server `vibe-board` (tools `vibe_projects|list|show|create|update|comment|attach`) and
   the `vibe-board` CLI (`vibe-board help`). Both are injected into agents by the plugin; they cannot
   move cards between columns.
-- Dispatch and lifecycle (todo -> in_progress -> verifying) are WP-12; the board UI is WP-11
-  (`client/` is still the pre-WP-11 Tasks UI and talks to the removed `tasks.*` RPCs).
+- Dispatch and lifecycle (todo -> in_progress -> verifying) are WP-12. The board UI (WP-11/14)
+  lives in `client/`: `board/` (tabs, five columns, drag, Move-to menu), `detail/` (card detail),
+  `presets/` (pickers, quota from `providers.listUsage()`, manage dialog), `common/`. Pure logic is
+  in `board/logic.ts` and `presets/logic.ts` (unit tested).
 
 ## Development
 
@@ -21,4 +23,32 @@ community Tasks plugin (see `UPSTREAM.md`, Apache-2.0 `LICENSE`).
     pwsh scripts/vibe/dev-daemon.ps1 -Plugin plugins/vibe-board   # from the repo root
 
 `shared/vibe` and `server/vibe` are generated copies of `plugins/vibe-shared` (`npm run
-vibe:sync-shared` at the repo root); do not edit them.
+vibe:sync-shared` at the repo root); do not edit them.
+
+## Phone sync and offline replies (WP-41)
+
+Server side of the App's offline mode; code in `server/sync/`, contracts in `shared/rpc/sync.ts`.
+Call them with `client.invokePluginRpc("vibe-board", name, input)`.
+
+- `vibe.sync.exchange` - request/response are vibe-shared's `ExchangeRequest` / `ExchangeResponse`
+  (`server/vibe/sync/exchange.ts`; the App uses the generated copy and `ClientSync`). Loop while
+  `more`; `snapshot: true` means clear the local synced state first; `rejected[]` lists writes the
+  server refused (reason `column_locked`, `read_only`, ...) - the response already carries the
+  authoritative values, nothing else to do. `serverNow` of an ok response is the "as of hh:mm" time
+  for the read-only tables.
+- Values are raw SQLite cells of `vibe.db` (text / integer / null; `*_json` stay JSON text, flags are
+  0/1), row id = pk joined with ":" (`card_tag`: `<cardId>:<tagId>`; membership rows use the
+  existence marker field `__row`). Phone-writable tables: project (edit only), card, card_event
+  (new `note` events only), preset, tag, card_tag, maintenance_rule (edit only); a new card needs
+  `project_id`, `title`, `column`, `sort_key`. Read-only snapshot + increments: agent_session,
+  plan_version, git_snapshot, verification, verification_item, evidence_file (without file paths),
+  maintenance_run. `key`/`number` of a new card are assigned by the daemon and are not synced.
+- Accepted phone writes go through `createVibeStore` (state machine, HLC stamping, `vibe_event`
+  such as `card.created` / `card.moved` / `card.updated`), so other plugins see them. The phone may
+  only move cards draft <-> todo, delete draft cards without sessions, and never touch built-in tags.
+- `vibe.reply.check` / `vibe.reply.send` - for `PendingReplyQueue.flush`: `check` returns
+  `pending | answered | gone`; `send` re-verifies, answers the Paseo permission/question request
+  (once per reply id) and fails with `[stale]` if the question closed meanwhile or `[unavailable]`
+  if the daemon handle is not ready (retry).
+- The exchange log lives in `sync_field` / `sync_tomb` (core migration 2, cursor = server arrival
+  seq); business tables stay the source of truth and are reconciled on every exchange.
