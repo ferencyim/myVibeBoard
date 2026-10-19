@@ -1,0 +1,1244 @@
+// GENERATED FROM plugins/vibe-shared — DO NOT EDIT (run: node scripts/vibe/sync-shared.mjs)
+// Command layer: the only sanctioned way to write project/card/card_event/agent_session/
+// preset/tag/plan_version (docs/vibe/ARCHITECTURE.md 3.4). Every command, in ONE write
+// transaction:
+//   1. validates input and the state machine,
+//   2. writes the rows,
+//   3. stamps an HLC (updated_hlc + field-level sync_meta for syncable tables, tombstones for
+//      deletes),
+//   4. publishes the matching vibe_event rows.
+// Plugins never write these tables with raw SQL.
+
+import {
+  CARD_KEY_PATTERN,
+  PROJECT_PREFIX_PATTERN,
+  type AuthorKind,
+  type CardColumn,
+  type CardEventType,
+  type CardOrigin,
+  type CardPriority,
+  type PresetEnvironmentKind,
+  type PresetPermissionMode,
+  type ProjectType,
+  type SessionRole,
+  type SessionState,
+} from "../contract/enums";
+import { type Hlc, tickHlc } from "../contract/hlc";
+import { newId } from "../contract/ids";
+import {
+  AgentSessionSchema,
+  CardEventSchema,
+  CardSchema,
+  GitSnapshotSchema,
+  PlanSnapshotSchema,
+  PlanVersionSchema,
+  PresetSchema,
+  ProjectSchema,
+  TagSchema,
+  type AgentSession,
+  type CardEvent,
+  type CardView,
+  type GitSnapshot,
+  type PlanSnapshot,
+  type PlanVersion,
+  type Preset,
+  type Project,
+  type Tag,
+} from "../contract/model";
+import { sortKeyAfter } from "../contract/sort-key";
+import {
+  type MoveActor,
+  StateMachineError,
+  assertSessionTransition,
+  assertTransition,
+  canCreateIn,
+} from "../contract/state-machine";
+import { syncSpec } from "../contract/sync-spec";
+import { publishEvent } from "./events";
+import { decodeRow, decodeRows } from "./rows";
+import type { Row, SqlParam, VibeDb } from "./sqlite";
+
+export class CommandError extends Error {
+  readonly code: "not_found" | "invalid" | "conflict";
+  constructor(code: CommandError["code"], message: string) {
+    super(message);
+    this.name = "CommandError";
+    this.code = code;
+  }
+}
+
+export interface StoreOptions {
+  now?: () => Date;
+  /** Sync device id; default: generated once and kept in vibe_meta. Phone replicas pass their own. */
+  deviceId?: string;
+}
+
+// --- input shapes -----------------------------------------------------------------------------
+
+export interface CreateProjectInput {
+  name: string;
+  prefix: string;
+  repoPath: string;
+  projectType?: ProjectType;
+  defaultPresetId?: string | null;
+  concurrencyLimit?: number | null;
+  devices?: string[];
+  paseoProjectId?: string | null;
+  color?: string | null;
+}
+export type UpdateProjectInput = Partial<Omit<CreateProjectInput, "prefix">> & {
+  archived?: boolean;
+};
+
+export interface CreatePresetInput {
+  name: string;
+  provider: string;
+  model: string;
+  thinking?: string;
+  permissionMode?: PresetPermissionMode;
+  environmentKind?: PresetEnvironmentKind;
+  baseBranch?: string | null;
+  runtimeEnv?: string | null;
+  instructions?: string;
+  builtin?: boolean;
+}
+export type UpdatePresetInput = Partial<CreatePresetInput>;
+
+export interface CreateCardInput {
+  projectId: string;
+  title: string;
+  description?: string;
+  column?: CardColumn;
+  priority?: CardPriority;
+  acceptance?: string;
+  refImages?: string[];
+  /** Default: true if any applied tag defaults to evidence. */
+  needsEvidence?: boolean;
+  presetId?: string | null;
+  suggestedPresetId?: string | null;
+  origin?: CardOrigin;
+  originRef?: string | null;
+  dedupeKey?: string | null;
+  planSessionId?: string | null;
+  parentCardId?: string | null;
+  tagIds?: string[];
+  /** Default: end of the target column. */
+  sortKey?: string;
+  worktree?: string | null;
+}
+
+export interface UpdateCardInput {
+  title?: string;
+  description?: string;
+  priority?: CardPriority;
+  acceptance?: string;
+  refImages?: string[];
+  needsEvidence?: boolean;
+  presetId?: string | null;
+  suggestedPresetId?: string | null;
+  parentCardId?: string | null;
+  planSessionId?: string | null;
+  worktree?: string | null;
+}
+
+export interface MoveCardInput {
+  to: CardColumn;
+  actor: MoveActor;
+  reason?: string;
+  /** Default: end of the target column. */
+  sortKey?: string;
+}
+
+export interface AddCardEventInput {
+  cardId: string;
+  type: CardEventType;
+  authorKind: AuthorKind;
+  author?: string;
+  body?: unknown;
+}
+
+export interface StartSessionInput {
+  cardId: string | null;
+  agentId: string;
+  workspaceId?: string | null;
+  role: SessionRole;
+  provider: string;
+}
+
+export interface DispatchCardInput {
+  cardId: string;
+  agentId: string;
+  workspaceId?: string | null;
+  provider: string;
+  worktree: string | null;
+  presetId?: string | null;
+}
+
+export interface SetSessionStateOptions {
+  /** state=waiting: what the agent asked. */
+  question?: unknown;
+  /** state=error. */
+  message?: string;
+  /** state=ended: completed | canceled | ... */
+  outcome?: string;
+}
+
+export interface ListCardsFilter {
+  projectId?: string;
+  column?: CardColumn;
+  tagId?: string;
+  includeArchived?: boolean;
+  parentCardId?: string;
+}
+
+// --- store ------------------------------------------------------------------------------------
+
+type Enc = (value: never) => SqlParam;
+const asJson: Enc = (v) => JSON.stringify(v);
+const asBool: Enc = (v) => ((v as unknown as boolean) ? 1 : 0);
+const asIs: Enc = (v) => v as unknown as SqlParam;
+
+type FieldMap = Record<string, readonly [column: string, encode: Enc]>;
+
+const PROJECT_FIELDS: FieldMap = {
+  name: ["name", asIs],
+  repoPath: ["repo_path", asIs],
+  projectType: ["project_type", asIs],
+  defaultPresetId: ["default_preset_id", asIs],
+  concurrencyLimit: ["concurrency_limit", asIs],
+  devices: ["devices_json", asJson],
+  paseoProjectId: ["paseo_project_id", asIs],
+  color: ["color", asIs],
+};
+const PRESET_FIELDS: FieldMap = {
+  name: ["name", asIs],
+  provider: ["provider", asIs],
+  model: ["model", asIs],
+  thinking: ["thinking", asIs],
+  permissionMode: ["permission_mode", asIs],
+  environmentKind: ["environment_kind", asIs],
+  baseBranch: ["base_branch", asIs],
+  runtimeEnv: ["runtime_env", asIs],
+  instructions: ["instructions", asIs],
+};
+const CARD_FIELDS: FieldMap = {
+  title: ["title", asIs],
+  description: ["description", asIs],
+  priority: ["priority", asIs],
+  acceptance: ["acceptance", asIs],
+  refImages: ["ref_images_json", asJson],
+  needsEvidence: ["needs_evidence", asBool],
+  presetId: ["preset_id", asIs],
+  suggestedPresetId: ["suggested_preset_id", asIs],
+  parentCardId: ["parent_card_id", asIs],
+  planSessionId: ["plan_session_id", asIs],
+  worktree: ["worktree", asIs],
+};
+
+/** Collects optional WHERE conditions; a condition with an undefined parameter is skipped. */
+class WhereBuilder {
+  private readonly conditions: string[] = [];
+  readonly params: SqlParam[] = [];
+  add(condition: string, ...params: Array<SqlParam | undefined>): void {
+    if (params.length > 0 && params[0] === undefined) return;
+    this.conditions.push(condition);
+    this.params.push(...(params as SqlParam[]));
+  }
+  clause(): string {
+    return this.conditions.length ? `WHERE ${this.conditions.join(" AND ")}` : "";
+  }
+}
+
+export type VibeStore = ReturnType<typeof createVibeStore>;
+
+export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
+  const now = options.now ?? (() => new Date());
+  const iso = () => now().toISOString();
+  let cachedDeviceId = options.deviceId;
+
+  // ---- internals ----
+
+  function deviceId(): string {
+    if (cachedDeviceId) return cachedDeviceId;
+    db.prepare("INSERT OR IGNORE INTO vibe_meta (key, value) VALUES ('device_id', ?)").run(
+      newId(now().getTime()),
+    );
+    cachedDeviceId = db
+      .prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = 'device_id'")
+      .get()!.value;
+    return cachedDeviceId;
+  }
+
+  /** Next HLC; persisted so it stays monotonic across processes (call inside a write txn). */
+  function nextHlc(): Hlc {
+    const prev = db
+      .prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = 'hlc'")
+      .get()?.value;
+    const hlc = tickHlc(prev, now().getTime(), deviceId());
+    db.prepare(
+      "INSERT INTO vibe_meta (key, value) VALUES ('hlc', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(hlc);
+    return hlc;
+  }
+
+  function stampFields(table: string, rowId: string, columns: readonly string[], hlc: Hlc): void {
+    const spec = syncSpec(table);
+    if (!spec || spec.direction !== "both") return;
+    const stmt = db.prepare(
+      `INSERT INTO sync_meta (table_name, row_id, column_name, hlc, device_id) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(table_name, row_id, column_name) DO UPDATE SET hlc = excluded.hlc, device_id = excluded.device_id`,
+    );
+    for (const column of columns)
+      if (spec.fields.includes(column)) stmt.run(table, rowId, column, hlc, deviceId());
+  }
+
+  function tombstone(table: string, rowId: string, hlc: Hlc): void {
+    db.prepare(
+      `INSERT INTO sync_tombstone (table_name, row_id, hlc, device_id, deleted_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(table_name, row_id) DO UPDATE SET hlc = excluded.hlc, device_id = excluded.device_id,
+         deleted_at = excluded.deleted_at`,
+    ).run(table, rowId, hlc, deviceId(), iso());
+    db.prepare("DELETE FROM sync_meta WHERE table_name = ? AND row_id = ?").run(table, rowId);
+  }
+
+  /** UPDATE the mapped fields of `patch` that are present; returns the changed column names. */
+  function patchRow(
+    table: string,
+    id: string,
+    fields: FieldMap,
+    patch: Record<string, unknown>,
+    hlc: Hlc,
+    withUpdatedAt = true,
+  ): { keys: string[]; columns: string[] } {
+    const keys: string[] = [];
+    const columns: string[] = [];
+    const values: SqlParam[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) continue;
+      const mapped = fields[key];
+      if (!mapped) throw new CommandError("invalid", `Unknown field "${key}" for ${table}`);
+      keys.push(key);
+      columns.push(mapped[0]);
+      values.push((mapped[1] as (v: unknown) => SqlParam)(value));
+    }
+    if (columns.length === 0) return { keys, columns };
+    const sets = columns.map((c) => `"${c}" = ?`);
+    sets.push("updated_hlc = ?");
+    values.push(hlc);
+    if (withUpdatedAt) {
+      sets.push("updated_at = ?");
+      values.push(iso());
+    }
+    db.prepare(`UPDATE ${table} SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
+    stampFields(table, id, columns, hlc);
+    return { keys, columns };
+  }
+
+  function emit(
+    type: Parameters<typeof publishEvent>[1]["type"],
+    payload: unknown,
+    refs: { cardId?: string | null; projectId?: string | null },
+  ): void {
+    publishEvent(
+      db,
+      { type, payload, cardId: refs.cardId ?? null, projectId: refs.projectId ?? null } as never,
+      now,
+    );
+  }
+
+  function insertCardEvent(input: AddCardEventInput, hlc: Hlc): CardEvent {
+    const id = newId(now().getTime());
+    db.prepare(
+      `INSERT INTO card_event (id, card_id, type, author_kind, author, body_json, created_at, updated_hlc)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      input.cardId,
+      input.type,
+      input.authorKind,
+      input.author ?? "",
+      JSON.stringify(input.body ?? {}),
+      iso(),
+      hlc,
+    );
+    stampFields("card_event", id, ["body_json"], hlc);
+    return decodeRow(CardEventSchema, db.prepare("SELECT * FROM card_event WHERE id = ?").get(id)!);
+  }
+
+  function rawCard(id: string): Row {
+    const row = db.prepare("SELECT * FROM card WHERE id = ?").get(id);
+    if (!row) throw new CommandError("not_found", `Card not found: ${id}`);
+    return row;
+  }
+
+  function viewOf(row: Row): CardView {
+    const tags = db
+      .prepare<{ tag_id: string }>("SELECT tag_id FROM card_tag WHERE card_id = ? ORDER BY tag_id")
+      .all(row.id as string)
+      .map((r) => r.tag_id);
+    return { ...decodeRow(CardSchema, row), tags };
+  }
+
+  function lastSortKey(projectId: string, column: CardColumn): string | null {
+    return (
+      db
+        .prepare<{ k: string | null }>(
+          `SELECT MAX(sort_key) AS k FROM card WHERE project_id = ? AND "column" = ? AND archived_at IS NULL`,
+        )
+        .get(projectId, column)?.k ?? null
+    );
+  }
+
+  function mustProject(id: string): Project {
+    const row = db.prepare("SELECT * FROM project WHERE id = ?").get(id);
+    if (!row) throw new CommandError("not_found", `Project not found: ${id}`);
+    return decodeRow(ProjectSchema, row);
+  }
+
+  function writeCardTags(cardId: string, tagIds: readonly string[], hlc: Hlc): boolean {
+    const wanted = new Set(tagIds);
+    const have = new Set(
+      db
+        .prepare<{ tag_id: string }>("SELECT tag_id FROM card_tag WHERE card_id = ?")
+        .all(cardId)
+        .map((r) => r.tag_id),
+    );
+    let changed = false;
+    for (const tagId of wanted) {
+      if (have.has(tagId)) continue;
+      if (!db.prepare("SELECT 1 AS x FROM tag WHERE id = ?").get(tagId)) {
+        throw new CommandError("not_found", `Tag not found: ${tagId}`);
+      }
+      db.prepare("INSERT INTO card_tag (card_id, tag_id, updated_hlc) VALUES (?, ?, ?)").run(
+        cardId,
+        tagId,
+        hlc,
+      );
+      db.prepare("DELETE FROM sync_tombstone WHERE table_name = 'card_tag' AND row_id = ?").run(
+        `${cardId}:${tagId}`,
+      );
+      changed = true;
+    }
+    for (const tagId of have) {
+      if (wanted.has(tagId)) continue;
+      db.prepare("DELETE FROM card_tag WHERE card_id = ? AND tag_id = ?").run(cardId, tagId);
+      tombstone("card_tag", `${cardId}:${tagId}`, hlc);
+      changed = true;
+    }
+    return changed;
+  }
+
+  const write = <T>(fn: (hlc: Hlc) => T): T =>
+    db.immediate(() => {
+      const hlc = nextHlc();
+      return fn(hlc);
+    });
+
+  // ---- projects ----
+
+  const projects = {
+    create(input: CreateProjectInput): Project {
+      if (!PROJECT_PREFIX_PATTERN.test(input.prefix)) {
+        throw new CommandError(
+          "invalid",
+          `Invalid project prefix "${input.prefix}" (A-Z0-9, starts with a letter, max 10)`,
+        );
+      }
+      return write((hlc) => {
+        const id = newId(now().getTime());
+        try {
+          db.prepare(
+            `INSERT INTO project (id, name, prefix, repo_path, project_type, default_preset_id, concurrency_limit,
+               devices_json, paseo_project_id, color, created_at, updated_at, updated_hlc)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            id,
+            input.name,
+            input.prefix,
+            input.repoPath,
+            input.projectType ?? "other",
+            input.defaultPresetId ?? null,
+            input.concurrencyLimit ?? null,
+            JSON.stringify(input.devices ?? []),
+            input.paseoProjectId ?? null,
+            input.color ?? null,
+            iso(),
+            iso(),
+            hlc,
+          );
+        } catch (error) {
+          if (String(error).includes("UNIQUE"))
+            throw new CommandError("conflict", `Project prefix "${input.prefix}" already exists`);
+          throw error;
+        }
+        stampFields(
+          "project",
+          id,
+          Object.values(PROJECT_FIELDS).map((f) => f[0]),
+          hlc,
+        );
+        return mustProject(id);
+      });
+    },
+    update(id: string, patch: UpdateProjectInput): Project {
+      return write((hlc) => {
+        mustProject(id);
+        const { archived, ...rest } = patch;
+        patchRow("project", id, PROJECT_FIELDS, rest, hlc);
+        if (archived !== undefined) {
+          db.prepare(
+            "UPDATE project SET archived_at = ?, updated_at = ?, updated_hlc = ? WHERE id = ?",
+          ).run(archived ? iso() : null, iso(), hlc, id);
+          stampFields("project", id, ["archived_at"], hlc);
+        }
+        return mustProject(id);
+      });
+    },
+    get: (id: string): Project | undefined => {
+      const row = db.prepare("SELECT * FROM project WHERE id = ?").get(id);
+      return row ? decodeRow(ProjectSchema, row) : undefined;
+    },
+    list(includeArchived = false): Project[] {
+      return decodeRows(
+        ProjectSchema,
+        db
+          .prepare(
+            `SELECT * FROM project ${includeArchived ? "" : "WHERE archived_at IS NULL"} ORDER BY created_at, id`,
+          )
+          .all(),
+      );
+    },
+  };
+
+  // ---- presets & tags ----
+
+  function mustPreset(id: string): Preset {
+    const row = db.prepare("SELECT * FROM preset WHERE id = ?").get(id);
+    if (!row) throw new CommandError("not_found", `Preset not found: ${id}`);
+    return decodeRow(PresetSchema, row);
+  }
+
+  const presets = {
+    create(input: CreatePresetInput): Preset {
+      return write((hlc) => {
+        const id = newId(now().getTime());
+        try {
+          db.prepare(
+            `INSERT INTO preset (id, name, provider, model, thinking, permission_mode, environment_kind, base_branch,
+               runtime_env, instructions, builtin, created_at, updated_at, updated_hlc)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            id,
+            input.name,
+            input.provider,
+            input.model,
+            input.thinking ?? "",
+            input.permissionMode ?? "accept-edits",
+            input.environmentKind ?? "project-default",
+            input.baseBranch ?? null,
+            input.runtimeEnv ?? null,
+            input.instructions ?? "",
+            input.builtin ? 1 : 0,
+            iso(),
+            iso(),
+            hlc,
+          );
+        } catch (error) {
+          if (String(error).includes("UNIQUE"))
+            throw new CommandError("conflict", `Preset "${input.name}" already exists`);
+          throw error;
+        }
+        stampFields(
+          "preset",
+          id,
+          Object.values(PRESET_FIELDS).map((f) => f[0]),
+          hlc,
+        );
+        return mustPreset(id);
+      });
+    },
+    update(id: string, patch: UpdatePresetInput): Preset {
+      return write((hlc) => {
+        mustPreset(id);
+        const { builtin: _ignored, ...rest } = patch;
+        patchRow("preset", id, PRESET_FIELDS, rest, hlc);
+        return mustPreset(id);
+      });
+    },
+    delete(id: string): void {
+      write((hlc) => {
+        mustPreset(id);
+        db.prepare("UPDATE project SET default_preset_id = NULL WHERE default_preset_id = ?").run(
+          id,
+        );
+        db.prepare("UPDATE card SET preset_id = NULL WHERE preset_id = ?").run(id);
+        db.prepare("UPDATE card SET suggested_preset_id = NULL WHERE suggested_preset_id = ?").run(
+          id,
+        );
+        db.prepare("DELETE FROM preset WHERE id = ?").run(id);
+        tombstone("preset", id, hlc);
+      });
+    },
+    get: (id: string): Preset | undefined => {
+      const row = db.prepare("SELECT * FROM preset WHERE id = ?").get(id);
+      return row ? decodeRow(PresetSchema, row) : undefined;
+    },
+    list: (): Preset[] =>
+      decodeRows(PresetSchema, db.prepare("SELECT * FROM preset ORDER BY name").all()),
+  };
+
+  const tags = {
+    list: (): Tag[] =>
+      decodeRows(TagSchema, db.prepare("SELECT * FROM tag ORDER BY builtin DESC, rowid").all()),
+    create(name: string, evidence = false): Tag {
+      return write((hlc) => {
+        const id = newId(now().getTime());
+        try {
+          db.prepare(
+            "INSERT INTO tag (id, name, evidence, builtin, updated_hlc) VALUES (?, ?, ?, 0, ?)",
+          ).run(id, name, evidence ? 1 : 0, hlc);
+        } catch (error) {
+          if (String(error).includes("UNIQUE"))
+            throw new CommandError("conflict", `Tag "${name}" already exists`);
+          throw error;
+        }
+        stampFields("tag", id, ["name", "evidence"], hlc);
+        return decodeRow(TagSchema, db.prepare("SELECT * FROM tag WHERE id = ?").get(id)!);
+      });
+    },
+    /** Custom tags only; the default vocabulary is fixed. */
+    delete(id: string): void {
+      write((hlc) => {
+        const row = db.prepare<{ builtin: number }>("SELECT builtin FROM tag WHERE id = ?").get(id);
+        if (!row) throw new CommandError("not_found", `Tag not found: ${id}`);
+        if (row.builtin) throw new CommandError("invalid", "Built-in tags cannot be deleted");
+        for (const r of db
+          .prepare<{ card_id: string }>("SELECT card_id FROM card_tag WHERE tag_id = ?")
+          .all(id)) {
+          tombstone("card_tag", `${r.card_id}:${id}`, hlc);
+        }
+        db.prepare("DELETE FROM tag WHERE id = ?").run(id);
+        tombstone("tag", id, hlc);
+      });
+    },
+  };
+
+  // ---- cards ----
+
+  const cards = {
+    get(idOrKey: string): CardView | undefined {
+      const row = CARD_KEY_PATTERN.test(idOrKey)
+        ? db.prepare("SELECT * FROM card WHERE key = ?").get(idOrKey)
+        : db.prepare("SELECT * FROM card WHERE id = ?").get(idOrKey);
+      return row ? viewOf(row) : undefined;
+    },
+
+    list(filter: ListCardsFilter = {}): CardView[] {
+      const w = new WhereBuilder();
+      w.add("c.project_id = ?", filter.projectId);
+      w.add('c."column" = ?', filter.column);
+      w.add("c.parent_card_id = ?", filter.parentCardId);
+      w.add(
+        "EXISTS (SELECT 1 FROM card_tag t WHERE t.card_id = c.id AND t.tag_id = ?)",
+        filter.tagId,
+      );
+      if (!filter.includeArchived) w.add("c.archived_at IS NULL");
+      return db
+        .prepare(`SELECT c.* FROM card c ${w.clause()} ORDER BY c.sort_key, c.id`)
+        .all(...w.params)
+        .map(viewOf);
+    },
+
+    create(input: CreateCardInput, actor: MoveActor = "user", author = ""): CardView {
+      const column = input.column ?? "draft";
+      const origin = input.origin ?? "manual";
+      if (!input.title.trim()) throw new CommandError("invalid", "Card title is required");
+      if (!canCreateIn(column, origin, actor)) {
+        throw new StateMachineError(
+          "illegal_create",
+          `"${actor}" may not create a ${origin} card in "${column}"`,
+        );
+      }
+      return write((hlc) => {
+        const project = mustProject(input.projectId);
+        const id = newId(now().getTime());
+        const number = project.nextNumber;
+        const key = `${project.prefix}-${number}`;
+        const tagIds = input.tagIds ?? [];
+        let needsEvidence = input.needsEvidence;
+        if (needsEvidence === undefined) {
+          needsEvidence = tagIds.some(
+            (t) =>
+              db.prepare<{ evidence: number }>("SELECT evidence FROM tag WHERE id = ?").get(t)
+                ?.evidence === 1,
+          );
+        }
+        db.prepare("UPDATE project SET next_number = next_number + 1 WHERE id = ?").run(project.id);
+        db.prepare(
+          `INSERT INTO card (id, project_id, number, key, title, description, "column", sort_key, priority, acceptance,
+             ref_images_json, needs_evidence, preset_id, suggested_preset_id, worktree, origin, origin_ref, dedupe_key,
+             plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          id,
+          project.id,
+          number,
+          key,
+          input.title.trim(),
+          input.description ?? "",
+          column,
+          input.sortKey ?? sortKeyAfter(lastSortKey(project.id, column)),
+          input.priority ?? "none",
+          input.acceptance ?? "",
+          JSON.stringify(input.refImages ?? []),
+          needsEvidence ? 1 : 0,
+          input.presetId ?? null,
+          input.suggestedPresetId ?? null,
+          input.worktree ?? null,
+          origin,
+          input.originRef ?? null,
+          input.dedupeKey ?? null,
+          input.planSessionId ?? null,
+          input.parentCardId ?? null,
+          iso(),
+          iso(),
+          hlc,
+        );
+        stampFields("card", id, syncSpec("card")!.fields, hlc);
+        writeCardTags(id, tagIds, hlc);
+        insertCardEvent(
+          {
+            cardId: id,
+            type: "status",
+            authorKind: actor === "user" || actor === "phone" ? "user" : "system",
+            author,
+            body: { kind: "created", column, origin },
+          },
+          hlc,
+        );
+        emit(
+          "card.created",
+          { key, title: input.title.trim(), column, origin },
+          { cardId: id, projectId: project.id },
+        );
+        return viewOf(rawCard(id));
+      });
+    },
+
+    update(id: string, patch: UpdateCardInput): CardView {
+      return write((hlc) => {
+        const before = rawCard(id);
+        if (patch.title !== undefined && !patch.title.trim())
+          throw new CommandError("invalid", "Card title is required");
+        const { keys } = patchRow("card", id, CARD_FIELDS, patch as Record<string, unknown>, hlc);
+        if (keys.length > 0)
+          emit(
+            "card.updated",
+            { fields: keys },
+            { cardId: id, projectId: before.project_id as string },
+          );
+        return viewOf(rawCard(id));
+      });
+    },
+
+    setTags(id: string, tagIds: readonly string[]): CardView {
+      return write((hlc) => {
+        const before = rawCard(id);
+        if (writeCardTags(id, tagIds, hlc)) {
+          db.prepare("UPDATE card SET updated_at = ? WHERE id = ?").run(iso(), id);
+          emit(
+            "card.updated",
+            { fields: ["tags"] },
+            { cardId: id, projectId: before.project_id as string },
+          );
+        }
+        return viewOf(rawCard(id));
+      });
+    },
+
+    /** Change order inside a column (fractional key). Not a state transition. */
+    reorder(id: string, sortKey: string): CardView {
+      return write((hlc) => {
+        const before = rawCard(id);
+        patchRowSort(id, sortKey, hlc);
+        emit(
+          "card.updated",
+          { fields: ["sortKey"] },
+          { cardId: id, projectId: before.project_id as string },
+        );
+        return viewOf(rawCard(id));
+      });
+    },
+
+    /** Move between columns. The state machine decides who may do what; see contract/state-machine.ts. */
+    move(id: string, input: MoveCardInput): CardView {
+      return write((hlc) => {
+        const before = rawCard(id);
+        const from = before.column as CardColumn;
+        assertTransition(from, input.to, input.actor);
+        if (from === "todo" && input.to === "in_progress") {
+          const live = db
+            .prepare(
+              "SELECT 1 AS x FROM agent_session WHERE card_id = ? AND role = 'worker' AND state NOT IN ('ended','error')",
+            )
+            .get(id);
+          if (!live)
+            throw new CommandError(
+              "invalid",
+              "A card can only enter in_progress through dispatch (needs a live worker session)",
+            );
+        }
+        applyMove(before, input, hlc);
+        return viewOf(rawCard(id));
+      });
+    },
+
+    archive(id: string, archived = true): CardView {
+      return write((hlc) => {
+        const before = rawCard(id);
+        db.prepare(
+          "UPDATE card SET archived_at = ?, updated_at = ?, updated_hlc = ? WHERE id = ?",
+        ).run(archived ? iso() : null, iso(), hlc, id);
+        stampFields("card", id, ["archived_at"], hlc);
+        emit(
+          "card.updated",
+          { fields: ["archivedAt"] },
+          { cardId: id, projectId: before.project_id as string },
+        );
+        return viewOf(rawCard(id));
+      });
+    },
+
+    /** Hard delete; only drafts that never ran. Leaves a tombstone for sync. */
+    delete(id: string): void {
+      write((hlc) => {
+        const before = rawCard(id);
+        if (before.column !== "draft")
+          throw new CommandError("invalid", "Only draft cards can be deleted; archive others");
+        if (db.prepare("SELECT 1 AS x FROM agent_session WHERE card_id = ?").get(id)) {
+          throw new CommandError("invalid", "Card has sessions; archive it instead");
+        }
+        for (const r of db
+          .prepare<{ id: string }>("SELECT id FROM card_event WHERE card_id = ?")
+          .all(id))
+          tombstone("card_event", r.id, hlc);
+        for (const r of db
+          .prepare<{ tag_id: string }>("SELECT tag_id FROM card_tag WHERE card_id = ?")
+          .all(id)) {
+          tombstone("card_tag", `${id}:${r.tag_id}`, hlc);
+        }
+        db.prepare("UPDATE card SET parent_card_id = NULL WHERE parent_card_id = ?").run(id);
+        db.prepare("DELETE FROM card WHERE id = ?").run(id);
+        tombstone("card", id, hlc);
+        emit(
+          "card.deleted",
+          { key: before.key },
+          { cardId: id, projectId: before.project_id as string },
+        );
+      });
+    },
+
+    /**
+     * todo -> in_progress as one atomic step: creates the worker session, records worktree and
+     * session start, and moves the card as "dispatcher".
+     */
+    dispatch(input: DispatchCardInput): { card: CardView; session: AgentSession } {
+      return write((hlc) => {
+        const before = rawCard(input.cardId);
+        assertTransition(before.column as CardColumn, "in_progress", "dispatcher");
+        const session = insertSession(
+          {
+            cardId: input.cardId,
+            agentId: input.agentId,
+            workspaceId: input.workspaceId,
+            role: "worker",
+            provider: input.provider,
+          },
+          hlc,
+        );
+        db.prepare(
+          "UPDATE card SET worktree = ?, preset_id = COALESCE(?, preset_id), updated_hlc = ? WHERE id = ?",
+        ).run(input.worktree, input.presetId ?? null, hlc, input.cardId);
+        applyMove(before, { to: "in_progress", actor: "dispatcher" }, hlc);
+        emit(
+          "card.dispatched",
+          {
+            sessionId: session.id,
+            agentId: input.agentId,
+            worktree: input.worktree,
+            presetId: input.presetId ?? null,
+          },
+          { cardId: input.cardId, projectId: before.project_id as string },
+        );
+        return { card: viewOf(rawCard(input.cardId)), session };
+      });
+    },
+  };
+
+  function patchRowSort(id: string, sortKey: string, hlc: Hlc): void {
+    db.prepare("UPDATE card SET sort_key = ?, updated_at = ?, updated_hlc = ? WHERE id = ?").run(
+      sortKey,
+      iso(),
+      hlc,
+      id,
+    );
+    stampFields("card", id, ["sort_key"], hlc);
+  }
+
+  function applyMove(before: Row, input: MoveCardInput, hlc: Hlc): void {
+    const id = before.id as string;
+    const projectId = before.project_id as string;
+    const from = before.column as CardColumn;
+    db.prepare(
+      `UPDATE card SET "column" = ?, sort_key = ?, updated_at = ?, updated_hlc = ? WHERE id = ?`,
+    ).run(
+      input.to,
+      input.sortKey ?? sortKeyAfter(lastSortKey(projectId, input.to)),
+      iso(),
+      hlc,
+      id,
+    );
+    stampFields("card", id, ["column", "sort_key"], hlc);
+    insertCardEvent(
+      {
+        cardId: id,
+        type: "status",
+        authorKind: input.actor === "user" || input.actor === "phone" ? "user" : "system",
+        author: input.actor,
+        body: { kind: "moved", from, to: input.to, actor: input.actor, reason: input.reason },
+      },
+      hlc,
+    );
+    emit(
+      "card.moved",
+      { from, to: input.to, actor: input.actor, reason: input.reason },
+      { cardId: id, projectId },
+    );
+  }
+
+  // ---- card events & plan versions ----
+
+  const events = {
+    add(input: AddCardEventInput): CardEvent {
+      return write((hlc) => {
+        const card = rawCard(input.cardId);
+        const created = insertCardEvent(input, hlc);
+        if (input.type === "evaluation") {
+          emit(
+            "card.assessed",
+            { cardEventId: created.id },
+            { cardId: input.cardId, projectId: card.project_id as string },
+          );
+        }
+        return created;
+      });
+    },
+    list: (cardId: string): CardEvent[] =>
+      decodeRows(
+        CardEventSchema,
+        db
+          .prepare("SELECT * FROM card_event WHERE card_id = ? ORDER BY created_at, id")
+          .all(cardId),
+      ),
+  };
+
+  const plans = {
+    /** Append the next plan version (1, 2, ...) for a card. */
+    save(cardId: string, snapshot: PlanSnapshot): PlanVersion {
+      const parsed = PlanSnapshotSchema.parse(snapshot);
+      return write(() => {
+        const card = rawCard(cardId);
+        const next =
+          (db
+            .prepare<{ v: number | null }>(
+              "SELECT MAX(version) AS v FROM plan_version WHERE card_id = ?",
+            )
+            .get(cardId)?.v ?? 0) + 1;
+        const id = newId(now().getTime());
+        db.prepare(
+          "INSERT INTO plan_version (id, card_id, version, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)",
+        ).run(id, cardId, next, JSON.stringify(parsed), iso());
+        emit("plan.updated", { version: next }, { cardId, projectId: card.project_id as string });
+        return decodeRow(
+          PlanVersionSchema,
+          db.prepare("SELECT * FROM plan_version WHERE id = ?").get(id)!,
+        );
+      });
+    },
+    list: (cardId: string): PlanVersion[] =>
+      decodeRows(
+        PlanVersionSchema,
+        db.prepare("SELECT * FROM plan_version WHERE card_id = ? ORDER BY version").all(cardId),
+      ),
+  };
+
+  // ---- agent sessions ----
+
+  function mustSession(id: string): AgentSession {
+    const row = db.prepare("SELECT * FROM agent_session WHERE id = ?").get(id);
+    if (!row) throw new CommandError("not_found", `Session not found: ${id}`);
+    return decodeRow(AgentSessionSchema, row);
+  }
+
+  function projectOfCard(cardId: string | null): string | null {
+    if (!cardId) return null;
+    return (
+      db.prepare<{ project_id: string }>("SELECT project_id FROM card WHERE id = ?").get(cardId)
+        ?.project_id ?? null
+    );
+  }
+
+  function insertSession(input: StartSessionInput, hlc: Hlc): AgentSession {
+    if (input.cardId) rawCard(input.cardId);
+    const id = newId(now().getTime());
+    try {
+      db.prepare(
+        `INSERT INTO agent_session (id, card_id, agent_id, workspace_id, role, current_provider, state,
+           last_activity_at, started_at, updated_hlc)
+         VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?)`,
+      ).run(
+        id,
+        input.cardId,
+        input.agentId,
+        input.workspaceId ?? null,
+        input.role,
+        input.provider,
+        iso(),
+        iso(),
+        hlc,
+      );
+    } catch (error) {
+      if (String(error).includes("UNIQUE"))
+        throw new CommandError("conflict", `Agent already has a session: ${input.agentId}`);
+      throw error;
+    }
+    if (input.cardId) {
+      insertCardEvent(
+        {
+          cardId: input.cardId,
+          type: "status",
+          authorKind: "system",
+          author: input.role,
+          body: {
+            kind: "session_started",
+            sessionId: id,
+            role: input.role,
+            provider: input.provider,
+          },
+        },
+        hlc,
+      );
+    }
+    emit(
+      "session.started",
+      { sessionId: id, agentId: input.agentId, role: input.role, provider: input.provider },
+      { cardId: input.cardId, projectId: projectOfCard(input.cardId) },
+    );
+    return mustSession(id);
+  }
+
+  /** session.* bus events and the card timeline entry for a state change. */
+  function announceSessionState(
+    s: AgentSession,
+    to: SessionState,
+    opts: SetSessionStateOptions,
+    hlc: Hlc,
+  ): void {
+    const refs = { cardId: s.cardId, projectId: projectOfCard(s.cardId) };
+    const base = { sessionId: s.id, agentId: s.agentId };
+    if (to === "waiting") emit("session.waiting", { ...base, question: opts.question }, refs);
+    else if (to === "working" && s.state === "waiting") emit("session.answered", base, refs);
+    else if (to === "ended") emit("session.ended", { ...base, outcome: opts.outcome }, refs);
+    else if (to === "error") {
+      emit("session.error", { ...base, message: opts.message ?? "unknown error" }, refs);
+    }
+    if (s.cardId && (to === "waiting" || to === "ended" || to === "error")) {
+      insertCardEvent(
+        {
+          cardId: s.cardId,
+          type: "status",
+          authorKind: "system",
+          author: s.role,
+          body: {
+            kind: `session_${to}`,
+            sessionId: s.id,
+            outcome: opts.outcome,
+            message: opts.message,
+          },
+        },
+        hlc,
+      );
+    }
+  }
+
+  const sessions = {
+    start: (input: StartSessionInput): AgentSession => write((hlc) => insertSession(input, hlc)),
+
+    get: (id: string): AgentSession | undefined => {
+      const row = db.prepare("SELECT * FROM agent_session WHERE id = ?").get(id);
+      return row ? decodeRow(AgentSessionSchema, row) : undefined;
+    },
+    getByAgent: (agentId: string): AgentSession | undefined => {
+      const row = db.prepare("SELECT * FROM agent_session WHERE agent_id = ?").get(agentId);
+      return row ? decodeRow(AgentSessionSchema, row) : undefined;
+    },
+    list(
+      filter: { cardId?: string; states?: readonly SessionState[]; role?: SessionRole } = {},
+    ): AgentSession[] {
+      const w = new WhereBuilder();
+      w.add("card_id = ?", filter.cardId);
+      w.add("role = ?", filter.role);
+      if (filter.states?.length) {
+        w.add(`state IN (${filter.states.map(() => "?").join(",")})`, ...filter.states);
+      }
+      return decodeRows(
+        AgentSessionSchema,
+        db
+          .prepare(`SELECT * FROM agent_session ${w.clause()} ORDER BY started_at, id`)
+          .all(...w.params),
+      );
+    },
+
+    /** Validated state change; maintains waiting_since/pending_question and emits session.* events. */
+    setState(id: string, to: SessionState, opts: SetSessionStateOptions = {}): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        assertSessionTransition(s.state, to);
+        const t = iso();
+        const sets: string[] = ["state = ?", "last_activity_at = ?", "updated_hlc = ?"];
+        const params: SqlParam[] = [to, t, hlc];
+        if (to === "waiting") {
+          sets.push("waiting_since = ?", "pending_question_json = ?");
+          params.push(
+            s.state === "waiting" ? (s.waitingSince ?? t) : t,
+            JSON.stringify(opts.question ?? s.pendingQuestion ?? null),
+          );
+        } else {
+          sets.push("waiting_since = NULL", "pending_question_json = NULL");
+        }
+        if (to === "ended") {
+          sets.push("ended_at = ?");
+          params.push(t);
+        }
+        if (to === "error") {
+          sets.push("error_message = ?");
+          params.push(opts.message ?? "unknown error");
+        }
+        if (to === "working" && s.state === "error") sets.push("error_message = NULL");
+        db.prepare(`UPDATE agent_session SET ${sets.join(", ")} WHERE id = ?`).run(...params, id);
+
+        if (s.state !== to) announceSessionState(s, to, opts, hlc);
+        return mustSession(id);
+      });
+    },
+
+    /** Update cache expiry / activity without a state change (compaction scheduling). */
+    touch(
+      id: string,
+      patch: { cacheExpiresAt?: string | null; lastActivityAt?: string },
+    ): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        db.prepare(
+          "UPDATE agent_session SET cache_expires_at = ?, last_activity_at = ?, updated_hlc = ? WHERE id = ?",
+        ).run(
+          patch.cacheExpiresAt === undefined ? s.cacheExpiresAt : patch.cacheExpiresAt,
+          patch.lastActivityAt ?? iso(),
+          hlc,
+          id,
+        );
+        return mustSession(id);
+      });
+    },
+
+    /** Subscription / provider switch inside a session; recorded in history and as a card event. */
+    switchProvider(id: string, to: string, reason?: string): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        if (s.currentProvider === to) return s;
+        const history = [...s.switchHistory, { from: s.currentProvider, to, at: iso(), reason }];
+        db.prepare(
+          "UPDATE agent_session SET current_provider = ?, switch_history_json = ?, updated_hlc = ? WHERE id = ?",
+        ).run(to, JSON.stringify(history), hlc, id);
+        if (s.cardId) {
+          insertCardEvent(
+            {
+              cardId: s.cardId,
+              type: "switch_agent",
+              authorKind: "system",
+              author: s.role,
+              body: { sessionId: id, from: s.currentProvider, to, reason },
+            },
+            hlc,
+          );
+        }
+        emit(
+          "session.switched",
+          { sessionId: id, agentId: s.agentId, from: s.currentProvider, to },
+          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+        );
+        return mustSession(id);
+      });
+    },
+
+    recordCompaction(id: string, strategy = "compact"): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        if (s.cardId) {
+          insertCardEvent(
+            {
+              cardId: s.cardId,
+              type: "compaction",
+              authorKind: "system",
+              author: s.role,
+              body: { sessionId: id, strategy },
+            },
+            hlc,
+          );
+        }
+        db.prepare("UPDATE agent_session SET updated_hlc = ? WHERE id = ?").run(hlc, id);
+        emit(
+          "session.compacted",
+          { sessionId: id, agentId: s.agentId, strategy },
+          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+        );
+        return mustSession(id);
+      });
+    },
+  };
+
+  // ---- git snapshot ----
+
+  const gitSnapshots = {
+    upsert(snapshot: Omit<GitSnapshot, "takenAt"> & { takenAt?: string }): GitSnapshot {
+      return write(() => {
+        mustProject(snapshot.projectId);
+        db.prepare(
+          `INSERT INTO git_snapshot (project_id, branch, ahead, behind, dirty_files, diff_stat, taken_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(project_id) DO UPDATE SET branch = excluded.branch, ahead = excluded.ahead,
+             behind = excluded.behind, dirty_files = excluded.dirty_files, diff_stat = excluded.diff_stat,
+             taken_at = excluded.taken_at`,
+        ).run(
+          snapshot.projectId,
+          snapshot.branch,
+          snapshot.ahead,
+          snapshot.behind,
+          snapshot.dirtyFiles,
+          snapshot.diffStat,
+          snapshot.takenAt ?? iso(),
+        );
+        return decodeRow(
+          GitSnapshotSchema,
+          db.prepare("SELECT * FROM git_snapshot WHERE project_id = ?").get(snapshot.projectId)!,
+        );
+      });
+    },
+    get: (projectId: string): GitSnapshot | undefined => {
+      const row = db.prepare("SELECT * FROM git_snapshot WHERE project_id = ?").get(projectId);
+      return row ? decodeRow(GitSnapshotSchema, row) : undefined;
+    },
+  };
+
+  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, deviceId, db };
+}
