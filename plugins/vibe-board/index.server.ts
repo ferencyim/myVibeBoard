@@ -6,6 +6,7 @@ import { resolveVibeHome } from "./server/vibe/db";
 import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
 import { BOARD_INSTRUCTIONS_MARKER, buildBoardInstructions } from "./server/mcp/instructions";
 import { createDispatcher } from "./server/dispatch";
+import { startAdmissionConsumer } from "./server/dispatch/admission";
 import { registerLifecycle } from "./server/lifecycle";
 import { startFinalizer } from "./server/lifecycle/finalize";
 import { registerBoardRpcs } from "./server/rpc";
@@ -81,12 +82,22 @@ export default function contribute(server: PluginServerContext) {
   const onPaseo = (api: PaseoApi) => void (paseo = api);
   const lifecycle = registerLifecycle(server, { board, onPaseo });
   const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });
+  const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, onError: (e) => console.error("vibe-board admission:", e) });
   const finalizer = startFinalizer({ db: runtime.db, board });
   const sync = createSyncService({ db: runtime.db, store: runtime.store });
   const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
-  registerBoardRpcs(server, board, { dispatcher, lifecycle, onPaseo, sync, replies });
+  // Any RPC (e.g. the UI polling) refreshes the SDK handle, so scheduler-admitted dispatches work
+  // without a prior agent event.
+  const tracked = Object.create(server) as typeof server;
+  tracked.handle = (contract, handler) =>
+    server.handle(contract, (input, context) => {
+      onPaseo(context.paseo);
+      return handler(input, context);
+    });
+  registerBoardRpcs(tracked, board, { dispatcher, lifecycle, onPaseo, sync, replies });
 
   return async () => {
+    await admission.stop();
     lifecycle.close();
     await finalizer.stop();
     await (bridge ?? (await bridgeReady))?.close();

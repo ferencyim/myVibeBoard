@@ -45,6 +45,35 @@ export const EVENT_PAYLOADS = {
   }),
   "maintenance.triggered": z.object({ ruleId: z.string(), runId: z.string() }),
   "plan.updated": z.object({ version: z.number().int() }),
+  // vibe-scheduler (WP-34). `scheduler.admitted` asks vibe-board to dispatch the card now;
+  // vibe-board answers a failed dispatch with `scheduler.dispatch_failed`.
+  "scheduler.admitted": z.object({
+    cardId: z.string(),
+    presetId: z.string().nullable().optional(),
+    provider: z.string().optional(),
+    /** Dev-server port reserved for this card. */
+    port: z.number().int().optional(),
+    deviceIds: z.array(z.string()).optional(),
+  }),
+  "scheduler.dispatch_failed": z.object({ cardId: z.string(), message: z.string() }),
+  "scheduler.quota_low": z.object({
+    provider: z.string(),
+    level: z.enum(["tight", "exhausted"]),
+    remainingPct: z.number().nullable(),
+    resetsAt: z.string().nullable().optional(),
+  }),
+  "scheduler.paused": z.object({
+    reason: z.enum(["memory"]),
+    mem: z.number(),
+    top: z.array(
+      z.object({
+        sessionId: z.string(),
+        cardKey: z.string().nullable().optional(),
+        memBytes: z.number(),
+      }),
+    ),
+  }),
+  "scheduler.resumed": z.object({ reason: z.enum(["memory"]) }),
 } as const;
 
 export type EventType = keyof typeof EVENT_PAYLOADS;
