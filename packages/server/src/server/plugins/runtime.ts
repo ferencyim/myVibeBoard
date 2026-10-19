@@ -4,7 +4,11 @@ import {
   type ProviderStatus,
   type ProviderStatusRequest,
 } from "@getpaseo/plugin/server/provider";
-import type { PluginBeforeRequests, PluginLifecycleEvents } from "@getpaseo/plugin/server";
+import type {
+  PluginBeforeRequests,
+  PluginLifecycleEvents,
+  PluginNotification,
+} from "@getpaseo/plugin/server";
 import { validateBeforeRequest, validateBeforeResult } from "./lifecycle/index.js";
 import { fork } from "node:child_process";
 import { stat } from "node:fs/promises";
@@ -206,6 +210,8 @@ export interface PluginPaseoSessionHost {
     pluginId: string,
     socket: PluginSessionSocket,
   ): Promise<{ closed: Promise<void> }>;
+  /** Delivers a plugin's push request through the daemon's push service. */
+  sendPluginNotification?(pluginId: string, notification: PluginNotification): void;
 }
 
 function resolveWorkerUrl(): URL {
@@ -857,6 +863,10 @@ export class PluginRuntime {
     }
     if (message.type === "settings.changed") {
       this.dependencies.onSettingsChanged?.(loaded.id, message.settingsId);
+      return;
+    }
+    if (message.type === "notify") {
+      this.sessionHost?.sendPluginNotification?.(loaded.id, message.notification);
       return;
     }
     if (message.type.startsWith("provider.")) {

@@ -37,9 +37,8 @@ npm ci && npm run typecheck && npm test
   unchanged, so the same cards are processed. The choice is kept in `<VIBE_HOME>/master/state.json`.
   "highest reasoning" = the last thinking option of the catalog.
 - **Quota**: low quota (own `listUsage` check, or `scheduler.quota_low` for the master's provider) and
-  quota errors only publish a reminder: a `session.error` bus event with message
-  `[master:quota_low|quota_error] ...` (the event vocabulary has no dedicated alert type; the daemon's
-  own push already fires when the master turn errors). It never switches by itself.
+  quota errors only publish a reminder: a `master.alert` bus event (`kind` quota_low|quota_error);
+  `server/notify` pushes it to the phone. It never switches by itself.
   `scheduler.paused/resumed` are shown in the status.
 - **Memory** (`server/memory`): on card done the master replies with a `MemoryUpdate` (state, decisions,
   lessons, index, archive); `files.ts` writes the same marker format vibe-context reads. Budget
