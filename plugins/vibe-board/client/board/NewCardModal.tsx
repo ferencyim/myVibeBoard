@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import type { CardPriority, Preset, Project, Tag } from "../../shared/vibe/contract";
 import type { BoardApi } from "../common/api";
+import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Check, Chip, Dot, Field, TextField } from "../common/ui";
 import type { ProviderUsageLike } from "../presets/logic";
 import { PresetSelector, PrioritySelector, TagSelector } from "../presets/selectors";
@@ -34,6 +35,8 @@ export function NewCardModal({
   onCreated?: (key: string) => void;
 }) {
   const toast = useToast();
+  // Modal content renders in a host portal, outside our context tree: bridge the host value.
+  const host = useHost();
   const [projectId, setProjectId] = useState<string | null>(initialProjectId);
   const [column, setColumn] = useState<"draft" | "todo">(initialColumn);
   const [title, setTitle] = useState("");
@@ -98,6 +101,7 @@ export function NewCardModal({
   return (
     <Modal title="新建卡片" open={open} onOpenChange={(o) => !o && onClose()}>
       <Modal.Content>
+        <HostProvider value={host}>
         <View style={{ gap: 14 }}>
           <Field label="项目">
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
@@ -148,6 +152,7 @@ export function NewCardModal({
             {projectId ? <Dot color={projectColor(projects.find((p) => p.id === projectId) ?? { color: null }, 0)} /> : null}
           </View>
         </View>
+      </HostProvider>
       </Modal.Content>
     </Modal>
   );

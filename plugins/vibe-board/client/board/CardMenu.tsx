@@ -4,6 +4,7 @@ import { Modal } from "@getpaseo/plugin/client/react-native";
 import React from "react";
 import { View } from "react-native";
 import type { CardColumn, CardView } from "../../shared/vibe/contract";
+import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Field, Muted } from "../common/ui";
 import { COLUMN_LABELS, stepNeighbours, userTargets } from "./logic";
 
@@ -24,6 +25,8 @@ export function CardMenu({
   onClose: () => void;
   onAction: (card: CardView, action: MenuAction) => void;
 }) {
+  // Modal content renders in a host portal, outside our context tree: bridge the host value.
+  const host = useHost();
   if (!card) return null;
   const targets = userTargets(card.column);
   const steps = (["top", "up", "down", "bottom"] as const).filter(
@@ -37,6 +40,7 @@ export function CardMenu({
   return (
     <Modal title={`${card.key} ${card.title}`} open onOpenChange={(o) => !o && onClose()}>
       <Modal.Content>
+        <HostProvider value={host}>
         <View style={{ gap: 14 }}>
           <Field label="移动到">
             <View style={{ gap: 8 }}>
@@ -62,6 +66,7 @@ export function CardMenu({
             <Btn icon="Archive" label="归档" onPress={() => act({ type: "archive" })} />
           </View>
         </View>
+      </HostProvider>
       </Modal.Content>
     </Modal>
   );

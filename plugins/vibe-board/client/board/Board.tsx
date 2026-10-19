@@ -69,27 +69,38 @@ export function Board(props: BoardProps) {
 
   const visibleColumns = compact ? [active] : CARD_COLUMNS;
 
-  const startDrag = async (card: CardView) => {
-    const root = await measure(rootRef.current);
-    const own = await measure(cardRefs.current.get(card.id));
+  const measuring = useRef<Promise<void>>(Promise.resolve());
+
+  const startDrag = (card: CardView) => {
+    measured.current = { columns: [], cards: new Map() };
     pan.setValue({ x: 0, y: 0 });
-    setDrag({
-      card,
-      hover: card.column,
-      index: -1,
-      overlay: root && own ? { left: own.x - root.x, top: own.y - root.y, width: own.width } : null,
-    });
-    const columns: Measured["columns"] = [];
-    const cards: Measured["cards"] = new Map();
-    for (const column of visibleColumns) {
-      const rect = await measure(columnRefs.current.get(column));
-      if (rect) columns.push({ column, rect });
-      for (const c of propsRef.current.columns[column]) {
-        const r = await measure(cardRefs.current.get(c.id));
-        if (r) cards.set(c.id, { column, rect: r });
-      }
-    }
-    measured.current = { columns, cards };
+    measuring.current = (async () => {
+      const [root, own] = await Promise.all([
+        measure(rootRef.current),
+        measure(cardRefs.current.get(card.id)),
+      ]);
+      setDrag({
+        card,
+        hover: card.column,
+        index: -1,
+        overlay: root && own ? { left: own.x - root.x, top: own.y - root.y, width: own.width } : null,
+      });
+      const columns: Measured["columns"] = [];
+      const cards: Measured["cards"] = new Map();
+      await Promise.all(
+        visibleColumns.map(async (column) => {
+          const rect = await measure(columnRefs.current.get(column));
+          if (rect) columns.push({ column, rect });
+          await Promise.all(
+            propsRef.current.columns[column].map(async (c) => {
+              const r = await measure(cardRefs.current.get(c.id));
+              if (r) cards.set(c.id, { column, rect: r });
+            }),
+          );
+        }),
+      );
+      measured.current = { columns, cards };
+    })();
   };
 
   const locate = (card: CardView, x: number, y: number) => {
@@ -110,11 +121,13 @@ export function Board(props: BoardProps) {
     if (cur && (cur.hover !== column || cur.index !== index)) setDrag({ ...cur, hover: column, index });
   };
 
-  const endDrag = (card: CardView, x: number, y: number) => {
+  const endDrag = async (card: CardView, x: number, y: number) => {
+    // A very fast drag can end before the layout measurements finished.
+    await measuring.current;
     const { column, index } = locate(card, x, y);
     setDrag(null);
     if (!column) return;
-    props.onDrop(card, planDrop(card, column, index, propsRef.current.columns[column]));
+    propsRef.current.onDrop(card, planDrop(card, column, index, propsRef.current.columns[column]));
   };
 
   const renderColumn = (column: CardColumn) => {
@@ -130,8 +143,8 @@ export function Board(props: BoardProps) {
         ref={(r) => void columnRefs.current.set(column, r as unknown as RefView | null)}
         collapsable={false}
         style={{
-          width: compact ? undefined : 272,
-          flex: compact ? 1 : undefined,
+          // Wide: columns share the width but never get narrower than 240 (then the board scrolls).
+          ...(compact ? { flex: 1 } : { flexGrow: 1, flexShrink: 0, flexBasis: 240, minWidth: 240 }),
           marginRight: compact ? 0 : 10,
           borderRadius: 10,
           padding: 8,
@@ -200,7 +213,7 @@ export function Board(props: BoardProps) {
     <View
       ref={(r) => void (rootRef.current = r as unknown as RefView | null)}
       collapsable={false}
-      style={{ flex: 1 }}
+      style={{ flex: 1, userSelect: "none" } as object}
     >
       {compact ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 6, paddingBottom: 8 }}>
@@ -277,7 +290,7 @@ function DraggableCard({
   refSetter: (ref: RefView | null) => void;
   onStart: (card: CardView) => void;
   onMove: (card: CardView, x: number, y: number, dx: number, dy: number) => void;
-  onEnd: (card: CardView, x: number, y: number) => void;
+  onEnd: (card: CardView, x: number, y: number) => void | Promise<void>;
   children: (handle: React.ReactNode) => React.ReactNode;
 }) {
   const { theme } = useHost();

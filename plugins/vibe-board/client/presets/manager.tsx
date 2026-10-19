@@ -14,7 +14,7 @@ import {
 } from "../../shared/vibe/contract";
 import { errorMessage, projectColor } from "../board/logic";
 import { queryKey, type BoardApi } from "../common/api";
-import { useHost } from "../common/ctx";
+import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
 import {
   ENVIRONMENT_LABELS,
@@ -45,11 +45,13 @@ export interface ManageProps {
 }
 
 export function ManageModal(props: ManageProps) {
-  const { theme } = useHost();
+  const host = useHost(); // Modal content renders in a host portal: bridge the host value.
+  const { theme } = host;
   const [tab, setTab] = useState<Tab>(props.initialTab ?? "projects");
   return (
     <Modal title="管理" open={props.open} onOpenChange={(o) => !o && props.onClose()}>
       <Modal.Content>
+        <HostProvider value={host}>
         <View style={{ gap: 14 }}>
           <View style={{ flexDirection: "row", gap: 6 }}>
             <Chip label="项目" selected={tab === "projects"} onPress={() => setTab("projects")} />
@@ -63,6 +65,7 @@ export function ManageModal(props: ManageProps) {
             数据保存在本机 vibe.db，所有端共享。
           </Text>
         </View>
+      </HostProvider>
       </Modal.Content>
     </Modal>
   );
