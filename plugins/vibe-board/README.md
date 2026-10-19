@@ -11,8 +11,10 @@ community Tasks plugin (see `UPSTREAM.md`, Apache-2.0 `LICENSE`).
 - Agents: MCP server `vibe-board` (tools `vibe_projects|list|show|create|update|comment|attach`) and
   the `vibe-board` CLI (`vibe-board help`). Both are injected into agents by the plugin; they cannot
   move cards between columns.
-- Dispatch and lifecycle (todo -> in_progress -> verifying) are WP-12; the board UI is WP-11
-  (`client/` is still the pre-WP-11 Tasks UI and talks to the removed `tasks.*` RPCs).
+- Dispatch and lifecycle (todo -> in_progress -> verifying) are WP-12. The board UI (WP-11/14)
+  lives in `client/`: `board/` (tabs, five columns, drag, Move-to menu), `detail/` (card detail),
+  `presets/` (pickers, quota from `providers.listUsage()`, manage dialog), `common/`. Pure logic is
+  in `board/logic.ts` and `presets/logic.ts` (unit tested).
 
 ## Development
 
