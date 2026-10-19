@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
 import type { AgentSession, CardView, Preset, Project } from "../vibe/contract";
 import { BoardError, toBoardError, type BoardService } from "../service";
+import { loadHandoff } from "./handoff";
 import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug } from "./brief";
 
 export type DispatchPaseo = Pick<PaseoApi, "projects" | "workspaces">;
@@ -127,11 +128,13 @@ export function createDispatcher(options: DispatcherOptions) {
               }
             : { kind: "directory", path: target.projectRootPath, projectId: target.projectId },
         });
+        const events = store.events.list(card.id);
         const prompt = buildDispatchBrief({
           card,
           project,
           preset,
-          events: store.events.list(card.id),
+          events,
+          handoff: loadHandoff(project, card, events),
           latestPlan: store.plans.list(card.id).at(-1),
           extraInstructions: opts.extraInstructions,
         });

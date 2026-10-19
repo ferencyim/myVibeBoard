@@ -1,5 +1,5 @@
 // Card detail: fields, preset/tag/priority pickers, reference images, timeline, plan versions,
-// plus placeholders for the discussion (WP-33) and verification result (WP-21) tabs.
+// the draft discussion tab (WP-33) and a placeholder for the verification result tab (WP-21).
 
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import { queryKey, type BoardApi } from "../common/api";
 import { useHost } from "../common/ctx";
 import { canPickFile, pickImage } from "../common/pick-file";
 import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
+import { Discussion } from "../planning/Discussion";
 import { PresetSelector, PrioritySelector, TagSelector } from "../presets/selectors";
 import type { ProviderUsageLike } from "../presets/logic";
 import { EVENT_TYPE_LABELS, describeEvent } from "./events";
@@ -98,7 +99,14 @@ export function CardDetail(props: CardDetailProps) {
         ) : null}
         {tab === "plans" ? <Plans plans={data.plans} /> : null}
         {tab === "discussion" ? (
-          <Placeholder title="草稿讨论" text="与总 agent 讨论方案、写回方案版本（WP-33 实现）。" />
+          <Discussion
+            api={api}
+            card={card}
+            events={data.events}
+            sessions={data.sessions}
+            plans={data.plans}
+            reload={reload}
+          />
         ) : null}
         {tab === "verification" ? (
           <Placeholder title="验证结果" text="结论、检查项、证据缩略图与通过/驳回按钮（WP-21 实现）。" />

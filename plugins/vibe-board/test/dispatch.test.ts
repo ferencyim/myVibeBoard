@@ -1,6 +1,10 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDispatcher, type DispatchPaseo } from "../server/dispatch";
 import { buildDispatchBrief, modeIdFor, worktreeSlug } from "../server/dispatch/brief";
+import { handoffFile, loadHandoff } from "../server/dispatch/handoff";
 import { registerLifecycle } from "../server/lifecycle";
 import { startFinalizer } from "../server/lifecycle/finalize";
 import { eventTypes, setupBoard } from "./helpers";
@@ -102,6 +106,68 @@ describe("brief helpers", () => {
     expect(brief).toContain("Be careful.");
     expect(brief).toContain(".vibe/PROJECT_STATE.md");
     expect(brief).toContain("read-only");
+  });
+});
+
+describe("planning hand-off (WP-33)", () => {
+  it("puts the hand-off summary in the brief and keeps discussion notes out of the recent notes", () => {
+    const t = setup();
+    const note = (body: unknown) =>
+      t.store.events.add({ cardId: t.card.id, type: "note", authorKind: "agent", author: "planner", body });
+    note({ kind: "discussion", role: "planner", text: "DISCUSSION CHATTER" });
+    note({ text: "plain owner note" });
+    const events = t.store.events.list(t.card.id);
+    const brief = buildDispatchBrief({
+      card: t.card,
+      project: t.project,
+      preset: t.preset,
+      events,
+      handoff: { path: "/repo/.vibe/sessions/DEMO-1-plan.md", text: "Do A, then B." },
+    });
+    expect(brief).toContain("## Planning hand-off (start here)");
+    expect(brief).toContain("Do A, then B.");
+    expect(brief).toContain("/repo/.vibe/sessions/DEMO-1-plan.md");
+    expect(brief).toContain("plain owner note");
+    expect(brief).not.toContain("DISCUSSION CHATTER");
+    expect(buildDispatchBrief({ card: t.card, project: t.project, preset: t.preset, events })).not.toContain(
+      "Planning hand-off",
+    );
+  });
+
+  it("finds the summary by file convention first, then by the hand-off event", () => {
+    const repo = mkdtempSync(join(tmpdir(), "vibe-board-handoff-"));
+    const card = { key: "DEMO-1" };
+    const event = {
+      id: "e1",
+      cardId: "c1",
+      type: "note" as const,
+      authorKind: "agent" as const,
+      author: "planner",
+      body: { kind: "handoff", text: "from event" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedHlc: "",
+    };
+    expect(loadHandoff({ repoPath: repo }, card, [])).toBeNull();
+    expect(loadHandoff({ repoPath: repo }, card, [event])).toEqual({ path: null, text: "from event" });
+    mkdirSync(join(repo, ".vibe", "sessions"), { recursive: true });
+    writeFileSync(handoffFile(repo, "DEMO-1"), "from file");
+    expect(loadHandoff({ repoPath: repo }, card, [event])).toEqual({
+      path: handoffFile(repo, "DEMO-1"),
+      text: "from file",
+    });
+  });
+
+  it("dispatch hands the summary to the worker's first message", async () => {
+    const t = setup();
+    t.store.events.add({
+      cardId: t.card.id,
+      type: "note",
+      authorKind: "agent",
+      author: "planner",
+      body: { kind: "handoff", text: "FINAL PLAN: do it in two steps", path: null },
+    });
+    await t.dispatcher.dispatch("DEMO-1");
+    expect(t.fake.calls.agent[0].prompt).toContain("FINAL PLAN: do it in two steps");
   });
 });
 
