@@ -13,6 +13,7 @@ import type {
   Runner,
 } from "../vibe/contract/collector";
 import type { EvidenceKind } from "../vibe/contract/enums";
+import { AndroidConfigSchema } from "./android/config";
 
 // --- artifacts -------------------------------------------------------------------------------
 
@@ -111,6 +112,7 @@ export const VerifyConfigSchema = z.object({
       requests: z.array(RequestSampleSchema).default([]),
     })
     .optional(),
+  android: AndroidConfigSchema.optional(),
 });
 export type VerifyConfig = z.infer<typeof VerifyConfigSchema>;
 
@@ -123,7 +125,7 @@ export function loadVerifyConfig(worktreePath: string): VerifyConfig {
 
 // --- real Runner -----------------------------------------------------------------------------
 
-const SHELL_SHIMS = /^(npm|npx|pnpm|yarn)$/;
+const SHELL_SHIMS = /^(npm|npx|pnpm|yarn|maestro)$/;
 
 /** Runs a process to completion. On Windows, `.cmd` shims (npm, npx) are run through a shell. */
 export function createNodeRunner(): Runner {
