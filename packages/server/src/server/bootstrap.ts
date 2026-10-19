@@ -241,6 +241,29 @@ const MCP_DEBUG_SECRET = "[redacted]";
 const DOWNLOAD_OPEN_FLAGS =
   process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
 
+const LOOPBACK_LISTEN_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * Refuse to bind a TCP listener to a non-loopback address without a daemon password.
+ * Set PASEO_ALLOW_INSECURE_LISTEN=1 to opt out explicitly.
+ */
+export function assertDirectListenAuth(input: {
+  listenTarget: ListenTarget;
+  auth: { password?: string } | undefined;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const { listenTarget, auth, env = process.env } = input;
+  if (listenTarget.type !== "tcp" || auth?.password) return;
+  const host = listenTarget.host.toLowerCase();
+  if (LOOPBACK_LISTEN_HOSTS.has(host) || host.startsWith("127.")) return;
+  if (env.PASEO_ALLOW_INSECURE_LISTEN === "1") return;
+  throw new Error(
+    `Refusing to listen on non-loopback address ${listenTarget.host} without a daemon password. ` +
+      "Set PASEO_PASSWORD (or daemon.auth.password), bind to 127.0.0.1, " +
+      "or set PASEO_ALLOW_INSECURE_LISTEN=1 to override.",
+  );
+}
+
 function formatHostForHttpUrl(host: string): string {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
@@ -660,6 +683,7 @@ export async function createPaseoDaemon(
   const agentMcpAuthToken = randomUUID();
 
   const listenTarget = parseListenString(config.listen);
+  assertDirectListenAuth({ listenTarget, auth: config.auth });
 
   const app = express();
   app.set("trust proxy", resolveExpressTrustProxySetting(config));

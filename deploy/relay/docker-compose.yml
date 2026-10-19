@@ -1,0 +1,29 @@
+# Standalone compose project for the official getpaseo/paseo-relay. Deployed only by install.sh
+# (variables come from relay.env). Own project name and own network; touches nothing else.
+name: ${RELAY_PROJECT:-vibe-relay}
+
+services:
+  relay:
+    image: ${RELAY_PROJECT:-vibe-relay}-relay:${RELAY_REF_TAG:?set RELAY_REF_TAG}
+    build:
+      # Docker fetches the repo at the pinned ref itself; no checkout on the host.
+      context: https://github.com/getpaseo/paseo-relay.git#${RELAY_REF:?set RELAY_REF}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RELAY_PORT:?set RELAY_PORT}:${RELAY_CONTAINER_PORT:-4000}"
+    env_file:
+      - ${RELAY_APP_ENV_FILE:?set RELAY_APP_ENV_FILE}
+    networks: [relay-net]
+    privileged: false
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${RELAY_MEM_LIMIT:-512m}
+    cpus: ${RELAY_CPUS:-1.0}
+    pids_limit: ${RELAY_PIDS_LIMIT:-256}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+networks:
+  relay-net:
+    driver: bridge
