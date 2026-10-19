@@ -105,6 +105,8 @@ rules:
   `PERF-INCONCLUSIVE:`; the verification then ends in `doubt` for the owner.
 - **Evidence**: vibe-verify's backend collector measures `backend.perf` in the baseline worktree (before)
   and the fixed worktree (after) and writes `perf-compare.json` (see the vibe-verify README).
+- Real-run note: `createFixLauncher` sets no permission mode, so a Codex worker waits for a human to approve its
+  first shell command (seen in the isolated-daemon run); approve it in the app or give the agent an auto mode.
 - Limits: MySQL/PostgreSQL parsers cover the stock text formats only; fingerprints are literal-stripped
   text, not a SQL parse; one reproduction command per rule (use `{site}` to parametrise it).
 
