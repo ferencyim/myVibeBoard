@@ -274,6 +274,20 @@ describe("scheduler signals", () => {
     await t.runtime.dispose();
   });
 
+  it("reminds the owner when a maintenance rule is paused and only logs triggered runs", async () => {
+    const t = build(() => "");
+    publishEvent(t.board.db, { type: "maintenance.triggered", payload: { ruleId: "r1", runId: "run1" } });
+    publishEvent(t.board.db, {
+      type: "maintenance.paused",
+      payload: { ruleId: "r1", ruleName: "git-health", reason: "rejections", rejections: 3 },
+    });
+    await t.runtime.triggers.consumer.poll();
+    expect(alerts(t.board)).toHaveLength(1);
+    expect(alerts(t.board)[0]).toContain("[master:maintenance_paused]");
+    expect(alerts(t.board)[0]).toContain("git-health");
+    await t.runtime.dispose();
+  });
+
   it("feeds the track record in .vibe/workers/<provider>/MEMORY.md to the selector", () => {
     const board = setupBoard();
     const dir = join(board.repoPath, ".vibe", "workers", "claude");

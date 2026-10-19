@@ -40,6 +40,9 @@ npm ci && npm run typecheck && npm test
   quota errors only publish a reminder: a `master.alert` bus event (`kind` quota_low|quota_error);
   `server/notify` pushes it to the phone. It never switches by itself.
   `scheduler.paused/resumed` are shown in the status.
+- **Maintenance events**: `maintenance.paused` (rule paused after repeated rejections) raises a
+  `master.alert` of kind `maintenance_paused` (pushed like the others); `maintenance.triggered` is only
+  logged, the draft card a run creates goes through the normal draft assessment.
 - **Memory** (`server/memory`): on card done the master replies with a `MemoryUpdate` (state, decisions,
   lessons, index, archive); `files.ts` writes the same marker format vibe-context reads. Budget
   enforcement stays in vibe-context.

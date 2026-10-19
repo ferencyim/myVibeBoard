@@ -4,6 +4,7 @@
 //        -> assess_draft after a quiet period (default 30 s), restarted by every further edit
 //   card.moved -> done                         -> card_done (memory consolidation)
 //   session.waiting of a worker with a card    -> session_help
+//   maintenance.paused                         -> master.alert (maintenance_paused); .triggered is only logged
 // The master's own write-back (suggested preset, plan version, evaluation event) does not
 // restart the debounce: only owner fields count, and the content hash is the final arbiter.
 
@@ -30,6 +31,8 @@ export interface TriggersOptions {
   pollIntervalMs?: number;
   /** vibe-scheduler signals: quota getting low / admission paused or resumed (memory). */
   onScheduler?(event: SchedulerSignal): void;
+  /** vibe-maintain: a rule was paused after repeated rejections (the owner is reminded). */
+  onMaintenancePaused?(event: { ruleName: string; rejections: number }): void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -71,6 +74,8 @@ export function createTriggers(options: TriggersOptions): Triggers {
       "scheduler.quota_low",
       "scheduler.paused",
       "scheduler.resumed",
+      "maintenance.paused",
+      "maintenance.triggered",
     ],
     startAt: "now",
     pollIntervalMs: options.pollIntervalMs,
@@ -83,6 +88,14 @@ export function createTriggers(options: TriggersOptions): Triggers {
       }
       if (isEvent(event, "scheduler.paused")) return options.onScheduler?.({ kind: "paused" });
       if (isEvent(event, "scheduler.resumed")) return options.onScheduler?.({ kind: "resumed" });
+      if (isEvent(event, "maintenance.paused")) {
+        const { ruleName, rejections } = event.payload;
+        return options.onMaintenancePaused?.({ ruleName, rejections });
+      }
+      // The draft a maintenance run creates is assessed through card.created like any other draft.
+      if (isEvent(event, "maintenance.triggered")) {
+        return log(`maintenance rule ${event.payload.ruleId} triggered (run ${event.payload.runId})`);
+      }
       if (!options.enabled()) return;
       const cardId = event.cardId;
       if (isEvent(event, "card.created")) {

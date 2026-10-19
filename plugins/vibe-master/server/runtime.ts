@@ -138,6 +138,13 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   let schedulerPaused = false;
   const triggers = createTriggers({
+    onMaintenancePaused({ ruleName, rejections }) {
+      alerts.raise(
+        "maintenance_paused",
+        ruleName,
+        `Maintenance rule "${ruleName}" was paused after ${rejections} rejected cards; resume it in the maintenance panel`,
+      );
+    },
     onScheduler(signal) {
       if (signal.kind === "paused") schedulerPaused = true;
       else if (signal.kind === "resumed") schedulerPaused = false;
