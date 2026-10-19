@@ -38,9 +38,9 @@ M9 连接与中继 · M10 自动维护（maintenance.yml，git 体检、性能�
 > 仓库公开：主机地址、登录用户等只记在本机 SESSION.md，不入库。
 
 - **Mac 主机**：局域网/Tailscale 上的一台 Mac（SSH 可达），用于跑 iOS 模拟器等需要 macOS 的测试。
-  现状：macOS 26.6.2，只有 Command Line Tools，未装 Xcode / Node / Homebrew——iOS 模拟器取证需用户先装 Xcode。
+  现状：macOS 26.6.2，Xcode 26.6 装在外置盘（需设置 DEVELOPER_DIR，具体路径见 SESSION.md），有 iOS 18.6 / 26.5 模拟器运行时；无 Node / Homebrew。
 - **中继服务器**：一台腾讯云主机（SSH 可达，AlmaLinux 8，Docker + nginx）。该机已在跑其它产品
   （多个其它产品的站点与数据库），部署中继必须隔离：独立容器只监听 127.0.0.1，经新增 nginx 站点对外，
-  不改动其它站点配置；对外域名部署前向用户确认。
+  不改动其它站点配置；对外域名已由用户确定（2026-10-20，见 SESSION.md），复用该主机已有的通配证书。
 - **硬件取证**：暂不做（P3#6 中固件仿真 / 硬件在环推迟，待用户确定芯片平台）。
 - P1 验证证据试点项目（默认，用户未反对）：本仓库自身（Web + 后端）及其 Android App。
