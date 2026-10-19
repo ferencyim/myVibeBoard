@@ -160,7 +160,10 @@ scripts/vibe/         # 同步脚本、本地 e2e 辅助、部署检查
 ### 3.4 插件间通信
 
 1. **数据**：共享 `vibe.db`。所有对 `card`/`card_event`/`agent_session` 的写入必须走 `vibe-shared/db/commands.ts` 的命令函数（执行状态机校验、盖 HLC 时间戳、写 `vibe_event`），禁止裸 SQL 写这些表。
-2. **事件**：`vibe_event(seq AUTOINCREMENT, ts, type, card_id, project_id, payload_json)` 是持久化事件总线。订阅方各自保存游标（`sync_meta` 的 `cursor:<plugin>`），用 `PRAGMA data_version` 判断有无变化后拉取，间隔 500ms。事件类型（WP-01 在 `contract/events.ts` 定死）：`card.created/updated/moved`、`card.assessed`、`card.dispatched`、`session.started/waiting/answered/ended/error/switched/compacted`、`verification.started/finished`、`maintenance.triggered`、`plan.updated`、`scheduler.admitted/dispatch_failed/quota_low/paused/resumed`（WP-34 追加）。
+2. **事件**：`vibe_event(seq AUTOINCREMENT, ts, type, card_id, project_id, payload_json)` 是持久化事件总线。订阅方各自保存游标（`sync_meta` 的 `cursor:<plugin>`），用 `PRAGMA data_version` 判断有无变化后拉取，间隔 500ms。事件类型（WP-01 在 `contract/events.ts` 定死）：`card.created/updated/moved`、`card.assessed`、`card.dispatched`、`session.started/waiting/answered/ended/error/switched/compacted`、`verification.started/finished`、`maintenance.triggered`、`plan.updated`、`scheduler.admitted/dispatch_failed/quota_low/paused/resumed`（WP-34 追加）、`master.alert`（WP-50 追加，总 agent 的提醒，取代原先 `session.error` + `[master:…]` 前缀）。
+
+   **启动即可用的句柄与推送（WP-50，[core]）**：`PluginServerContext` 新增 `paseo`（contribute 时即可用，无需等钩子/RPC，无头 daemon 也能派发）和 `notify({title, body, data, agentAttention})`（经 daemon 推送服务发送；最小正文模式下 daemon 截断标题/正文、只保留短字符串 `data`）。推送消费者在 `plugins/vibe-master/server/notify/`，订阅 `card.moved→verifying`（"Ready to verify"）、worker 的 `session.waiting`（"Needs your answer"）、`master.alert`；标题=项目名，正文=事件类型，data 只带卡片编号。**去重**：Paseo 自己对 agent 的 permission/finished/error 已推送；`session.waiting` 带 `agentAttention={agentId, reason:"permission"}`，daemon 在 2 分钟内处理过同一 agent 同一 reason 的注意事件就不再推（含因用户正在看而有意不推的情形）。`card.moved→verifying` 不去重——它与 Paseo 的 "Finished" 是不同语义，可能同时到达两条。
+
 3. **指令**：需要“让别人做事”时写事件（如 vibe-board 写 `card.created(origin=手动,column=draft)` → vibe-master 在 30s 防抖后评估）。不做插件间 RPC。
 4. **agent 通道**：看板 MCP（回环 HTTP + stdio，沿用 Tasks bridge，工具名改 `vibe_*`）。角色标记通过 `agent.create` 的 `request.env`（`VIBE_ROLE=master|planner|worker|verifier`、`VIBE_CARD_ID`）和 `labels`；MCP 按角色裁剪工具集（verifier 无写代码类、worker 无评估类）。
 5. **UI 通道**：客户端 UI 只经 vibe-board 的 RPC 读数据；其他插件的客户端贡献（stats 页、master 设置）读自家 RPC。

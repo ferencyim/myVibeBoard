@@ -27,7 +27,26 @@ export interface PluginSettings<Schema extends ZodType> {
   subscribe(listener: (state: PluginSettingsState<Schema>) => void | Promise<void>): PluginCleanup;
 }
 
+/** A push notification a plugin asks the daemon to send to the user's paired devices. */
+export interface PluginNotification {
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+  /**
+   * Set when this restates an agent attention Paseo already pushes by itself (for example an agent
+   * waiting for a permission). The daemon skips the push if it handled that attention recently.
+   */
+  agentAttention?: { agentId: string; reason: "permission" | "finished" | "error" };
+}
+
 export interface PluginServerContext extends PluginLifecycleRegistration {
+  /** The plugin's Paseo API, usable as soon as contribute() runs (no hook or RPC needed first). */
+  paseo: PaseoApi;
+  /**
+   * Sends a push notification through the daemon's push service. With minimal payloads enabled the
+   * daemon truncates the text and keeps only short string fields of data; keep content out of it.
+   */
+  notify(notification: PluginNotification): void;
   registerSettings<Schema extends ZodType>(
     definition: import("../settings.js").SettingsDefinition<Schema>,
   ): PluginSettings<Schema>;

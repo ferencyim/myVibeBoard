@@ -1,7 +1,6 @@
 // "Only remind" alerts (quota low / quota error). They are published on the vibe_event bus as a
-// `session.error` of the master session with a `[master:<kind>]` message prefix: the existing
-// event vocabulary has no dedicated alert type, and the daemon's own push already fires when the
-// master agent turn errors. The master is never switched automatically; the owner decides.
+// `master.alert` event; server/notify turns it into a push. The master is never switched
+// automatically; the owner decides.
 
 import { publishEvent, type VibeDb } from "../vibe/db";
 import type { Clock } from "../clock";
@@ -29,10 +28,9 @@ export function createAlerts(options: {
     raise(kind, provider, message) {
       const now = options.clock.now();
       const bucket = Math.floor(now / COOLDOWN_MS[kind]);
-      const text = `[master:${kind}] ${provider}: ${message}`;
       const seq = publishEvent(options.db, {
-        type: "session.error",
-        payload: { sessionId: options.sessionId() ?? "master", message: text },
+        type: "master.alert",
+        payload: { kind, provider, message, sessionId: options.sessionId() ?? "master" },
         dedupeKey: `master-alert:${kind}:${provider}:${bucket}`,
         ts: new Date(now).toISOString(),
       });

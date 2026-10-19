@@ -55,6 +55,7 @@ import type {
 } from "./workspace-git-service.js";
 import type { GitCommandRuntimeMetricsSnapshot } from "../utils/git-command-runtime-metrics.js";
 import { snapshotGitCommandRuntimeMetrics } from "../utils/run-git-command.js";
+import type { PluginNotification } from "@getpaseo/plugin/server";
 import { createPluginClientId, isPluginClientId } from "./plugins/plugin-session-identity.js";
 import type { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { deriveProjectSlug } from "./workspace-git-metadata.js";
@@ -65,8 +66,10 @@ import {
 } from "./push/index.js";
 import { loadPersistedConfig } from "./persisted-config.js";
 import {
+  isRecentAttention,
   resolvePushConfig,
   toMinimalPayload,
+  toPluginPayload,
   toMinimalTerminalPayload,
   type ResolvedPushConfig,
 } from "./push/push-config.js";
@@ -564,6 +567,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly pushNotifications: PushNotifications;
   private readonly pushNotificationSender: PushNotificationSender;
   private readonly pushConfig: ResolvedPushConfig;
+  private readonly recentAttention = new Map<string, number>();
   private readonly mcpBaseUrl: string | null;
   private speech!: SpeechService | null;
   private terminalManager!: TerminalManager | null;
@@ -1021,6 +1025,21 @@ export class VoiceAssistantWebSocketServer {
       this.incrementRuntimeCounter("relayExternalSocketAttached");
     }
     await this.attachSocket(ws, undefined, metadata, false, admission, initialHello);
+  }
+
+  public sendPluginNotification(pluginId: string, notification: PluginNotification): void {
+    const attention = notification.agentAttention;
+    if (
+      attention &&
+      isRecentAttention(this.recentAttention, attention.agentId, attention.reason, Date.now())
+    ) {
+      this.logger.debug({ pluginId, agentId: attention.agentId }, "Skipped duplicate plugin push");
+      return;
+    }
+    const payload = toPluginPayload(notification, this.pushConfig.minimalPayload);
+    void this.pushNotificationSender.send(payload).catch((err) => {
+      this.logger.warn({ err, pluginId }, "Failed to send plugin push notification");
+    });
   }
 
   public async attachPluginSocket(
@@ -2604,6 +2623,7 @@ export class VoiceAssistantWebSocketServer {
     if (!agent?.workspaceId) {
       return;
     }
+    this.recentAttention.set(`${params.agentId}:${params.reason}`, Date.now());
     const clientEntries: Array<{
       ws: WebSocketLike;
       state: ClientPresenceState;
