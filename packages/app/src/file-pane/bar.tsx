@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { PaneContentToolbar } from "@/components/ui/pane-content-toolbar";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { FilePanelBarMenu, type FilePanelChoice } from "@/file-panels";
 import type { Theme } from "@/styles/theme";
 import { FileConflictAlert, type FileConflictAlertState } from "./conflict-alert";
 import type { FileEditorStatus } from "./editor/model";
@@ -20,6 +21,7 @@ export function FilePanelBar({
   cursor,
   vimMode,
   conflict,
+  choice,
 }: {
   size: number;
   lineCount?: number;
@@ -29,6 +31,8 @@ export function FilePanelBar({
   cursor?: { line: number; column: number };
   vimMode?: string | null;
   conflict?: FileConflictAlertState;
+  /** The tab's file panel choice, for the overflow's "Open with…". */
+  choice?: FilePanelChoice;
 }) {
   const { t } = useTranslation();
   const previewModes = [
@@ -108,6 +112,7 @@ export function FilePanelBar({
               options={previewModes}
             />
           ) : null}
+          {choice ? <FilePanelBarMenu choice={choice} /> : null}
         </View>
       </PaneContentToolbar>
       {conflict ? <FileConflictAlert state={conflict} /> : null}

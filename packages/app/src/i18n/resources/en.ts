@@ -1942,6 +1942,23 @@ export const en = {
       creatingAgent: "Creating agent",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "Open .{{extension}} files with",
+        pickerTitleFilename: "Open {{filename}} with",
+        dontAskAgain: "Don't ask me again",
+        use: "Use",
+        openWith: "Open with…",
+        alwaysUseExtension: "Always use for .{{extension}}",
+        alwaysUseFilename: "Always use for {{filename}}",
+        option: "{{title}} — {{owner}}",
+        actions: "File actions",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "Image",
+        },
+      },
       directoryMissing: "Workspace directory not found.",
       loading: "Loading file...",
       noPreview: "No preview available",

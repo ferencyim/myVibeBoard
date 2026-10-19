@@ -1965,6 +1965,23 @@ export const es: TranslationResources = {
       creatingAgent: "Agente creador",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "Abrir archivos .{{extension}} con",
+        pickerTitleFilename: "Abrir {{filename}} con",
+        dontAskAgain: "No volver a preguntar",
+        use: "Usar",
+        openWith: "Abrir con…",
+        alwaysUseExtension: "Usar siempre para .{{extension}}",
+        alwaysUseFilename: "Usar siempre para {{filename}}",
+        option: "{{title}} — {{owner}}",
+        actions: "Acciones del archivo",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "Imagen",
+        },
+      },
       directoryMissing: "No se encontró el directorio de Workspace.",
       loading: "Cargando archivo...",
       noPreview: "No hay vista previa disponible",

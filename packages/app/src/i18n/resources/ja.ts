@@ -1936,6 +1936,23 @@ export const ja: TranslationResources = {
       creatingAgent: "エージェントを作成中",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: ".{{extension}} ファイルを開くアプリ",
+        pickerTitleFilename: "{{filename}} を開くアプリ",
+        dontAskAgain: "今後は確認しない",
+        use: "使用",
+        openWith: "このアプリで開く…",
+        alwaysUseExtension: ".{{extension}} に常に使用",
+        alwaysUseFilename: "{{filename}} に常に使用",
+        option: "{{title}} — {{owner}}",
+        actions: "ファイルの操作",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "画像",
+        },
+      },
       directoryMissing: "ワークスペースディレクトリが見つかりません。",
       loading: "ファイルを読み込み中...",
       noPreview: "プレビューが利用できません",

@@ -17,7 +17,7 @@ import type { Theme } from "@/styles/theme";
 import type { ExplorerFile } from "@/stores/session-store";
 import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import { filePanelExtension } from "./resolve";
-import type { PluginFilePanel } from "./index";
+import type { PluginFilePanel } from "./panels";
 
 interface Props {
   workspaceRoot: string;

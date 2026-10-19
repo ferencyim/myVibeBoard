@@ -1927,6 +1927,23 @@ export const ko: TranslationResources = {
       creatingAgent: "에이전트 생성 중",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: ".{{extension}} 파일 열기 방식",
+        pickerTitleFilename: "{{filename}} 열기 방식",
+        dontAskAgain: "다시 묻지 않기",
+        use: "사용",
+        openWith: "다음으로 열기…",
+        alwaysUseExtension: ".{{extension}}에 항상 사용",
+        alwaysUseFilename: "{{filename}}에 항상 사용",
+        option: "{{title}} — {{owner}}",
+        actions: "파일 작업",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "이미지",
+        },
+      },
       directoryMissing: "워크스페이스 디렉터리를 찾을 수 없습니다.",
       loading: "파일 불러오는 중...",
       noPreview: "사용 가능한 미리보기가 없습니다",

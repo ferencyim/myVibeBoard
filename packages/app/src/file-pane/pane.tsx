@@ -1,13 +1,19 @@
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import type { DaemonClient, FileReadResult } from "@getpaseo/client/internal/daemon-client";
 import { Text, View } from "react-native";
 import { StyleSheet, UnistylesRuntime, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useSessionStore, type ExplorerFile } from "@/stores/session-store";
-import { FilePanelPreview, useFilePanels, type FilePanel } from "@/file-panels";
+import {
+  FilePanelPicker,
+  FilePanelPreview,
+  useFilePanelChoice,
+  type FilePanel,
+  type FilePanelChoice,
+} from "@/file-panels";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
@@ -26,7 +32,7 @@ import { createFileObservationSource } from "./editor/observation-source";
 import { FileEditorView } from "./editor/view";
 import { FileSourceView } from "./source/view";
 import type { FileConflictAlertState } from "./conflict-alert";
-import type { LiveFileModel } from "./live-file/model";
+import type { LiveFileModel, LiveFileSnapshot } from "./live-file/model";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { usePublishPanelInstanceAttributes } from "@/panels/panel-instance-attributes";
 import type { Theme } from "@/styles/theme";
@@ -208,7 +214,6 @@ export function FilePane({
   navigationRevision: number;
 }) {
   const { t } = useTranslation();
-  const { settings } = useAppSettings();
   const isMobile = useIsCompactFormFactor();
   const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview");
 
@@ -249,16 +254,19 @@ export function FilePane({
   });
 
   const targetKey = readTarget ? `${readTarget.cwd}:${readTarget.path}` : null;
-  const candidates = useFilePanels(serverId);
-  const previewLifecycle = useFilePreview({
-    candidates,
-    associations: settings.filePanelAssociations,
+  useEffect(() => setPreviewMode("preview"), [targetKey]);
+  const { panel: resolvedPanel, choice } = useFilePanelChoice({
+    serverId,
+    targetKey,
     path: location.path,
+    file: readyFile(liveFile.snapshot, targetKey),
+    presentable: isPreviewOnScreen({ isActive, previewMode, location }),
+  });
+  const previewLifecycle = useFilePreview({
+    panel: resolvedPanel,
     targetKey,
     liveFileSnapshot: liveFile.snapshot,
   });
-
-  useEffect(() => setPreviewMode("preview"), [targetKey]);
 
   const {
     file: preview,
@@ -282,32 +290,53 @@ export function FilePane({
     previewLifecycle.status === "preparing";
 
   return (
-    <FilePanePresentation
-      bytes={bytes}
-      panel={panel}
-      serverId={serverId}
-      workspaceRoot={normalizedWorkspaceRoot}
-      client={client}
-      readTarget={readTarget}
-      preview={preview}
-      liveFile={liveFile.model}
-      onRetryRead={liveFile.refresh}
-      retryingRead={liveFile.isRetrying}
-      retryLabel={t("common.actions.retry")}
-      filename={getFileNameFromPath(location.path) ?? location.path}
-      previewMode={canTogglePreviewMode ? previewMode : undefined}
-      onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
-      lineCount={lineCount}
-      editable={editable}
-      disconnectedMessage={t("workspace.terminal.hostDisconnected")}
-      errorMessage={errorMessage}
-      isLoading={isLoading}
-      isMobile={isMobile}
-      location={location}
-      navigationRevision={navigationRevision}
-      documentPreviewUri={documentPreviewUri}
-    />
+    <>
+      <FilePanelPicker choice={choice} />
+      <FilePanePresentation
+        bytes={bytes}
+        panel={panel}
+        choice={choice}
+        serverId={serverId}
+        workspaceRoot={normalizedWorkspaceRoot}
+        client={client}
+        readTarget={readTarget}
+        preview={preview}
+        liveFile={liveFile.model}
+        onRetryRead={liveFile.refresh}
+        retryingRead={liveFile.isRetrying}
+        retryLabel={t("common.actions.retry")}
+        filename={getFileNameFromPath(location.path) ?? location.path}
+        previewMode={canTogglePreviewMode ? previewMode : undefined}
+        onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
+        lineCount={lineCount}
+        editable={editable}
+        disconnectedMessage={t("workspace.terminal.hostDisconnected")}
+        errorMessage={errorMessage}
+        isLoading={isLoading}
+        isMobile={isMobile}
+        location={location}
+        navigationRevision={navigationRevision}
+        documentPreviewUri={documentPreviewUri}
+      />
+    </>
   );
+}
+
+/** The read for `targetKey`; right after a retarget the snapshot still holds the previous file. */
+function readyFile(snapshot: LiveFileSnapshot, targetKey: string | null): FileReadResult | null {
+  const observation = snapshot.observation;
+  if (observation?.status !== "ready") return null;
+  const { cwd, path } = observation.version;
+  return targetKey === `${cwd}:${path}` ? observation.file : null;
+}
+
+/** A line target opens Source, so only a plain open puts the Preview slot on screen. */
+function isPreviewOnScreen(input: {
+  isActive: boolean;
+  previewMode: "preview" | "source";
+  location: WorkspaceFileLocation;
+}): boolean {
+  return input.isActive && input.previewMode === "preview" && !input.location.lineStart;
 }
 
 function isEditableTextFile(input: {
@@ -325,6 +354,7 @@ function isEditableTextFile(input: {
 function FilePanePresentation({
   bytes,
   panel,
+  choice,
   serverId,
   workspaceRoot,
   client,
@@ -349,6 +379,7 @@ function FilePanePresentation({
 }: {
   bytes: Uint8Array | null;
   panel: FilePanel | null;
+  choice: FilePanelChoice;
   serverId: string;
   workspaceRoot: string;
   client: DaemonClient | null;
@@ -386,6 +417,7 @@ function FilePanePresentation({
       <EditableFilePane
         bytes={bytes}
         panel={panel}
+        choice={choice}
         documentPreviewUri={documentPreviewUri}
         key={`${serverId}:${readTarget.cwd}:${readTarget.path}`}
         serverId={serverId}
@@ -436,6 +468,7 @@ function FilePanePresentation({
           lineCount={lineCount}
           mode={previewMode}
           onModeChange={onPreviewModeChange}
+          choice={choice}
         />
       ) : null}
       <FilePreviewBody
@@ -460,6 +493,7 @@ function EditableFilePane({
   bytes,
   documentPreviewUri,
   panel,
+  choice,
   serverId,
   workspaceRoot,
   client,
@@ -480,6 +514,7 @@ function EditableFilePane({
   bytes: Uint8Array | null;
   documentPreviewUri: string | null;
   panel: FilePanel | null;
+  choice: FilePanelChoice;
   serverId: string;
   workspaceRoot: string;
   client: DaemonClient;
@@ -614,6 +649,7 @@ function EditableFilePane({
         conflict={conflict}
         mode={mode}
         onModeChange={onModeChange}
+        choice={choice}
       />
       {showSource ? (
         <FileEditorView

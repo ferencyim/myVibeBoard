@@ -1950,6 +1950,23 @@ export const ptBR: TranslationResources = {
       creatingAgent: "Criando agente",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "Abrir arquivos .{{extension}} com",
+        pickerTitleFilename: "Abrir {{filename}} com",
+        dontAskAgain: "Não perguntar novamente",
+        use: "Usar",
+        openWith: "Abrir com…",
+        alwaysUseExtension: "Sempre usar para .{{extension}}",
+        alwaysUseFilename: "Sempre usar para {{filename}}",
+        option: "{{title}} — {{owner}}",
+        actions: "Ações do arquivo",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "Imagem",
+        },
+      },
       directoryMissing: "Diretório do workspace não encontrado.",
       loading: "Carregando arquivo...",
       noPreview: "Nenhuma prévia disponível",

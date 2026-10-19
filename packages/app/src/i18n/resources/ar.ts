@@ -1917,6 +1917,23 @@ export const ar: TranslationResources = {
       creatingAgent: "وكيل الخلق",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "فتح ملفات .{{extension}} باستخدام",
+        pickerTitleFilename: "فتح {{filename}} باستخدام",
+        dontAskAgain: "لا تسألني مرة أخرى",
+        use: "استخدام",
+        openWith: "فتح باستخدام…",
+        alwaysUseExtension: "استخدام دائمًا لـ .{{extension}}",
+        alwaysUseFilename: "استخدام دائمًا لـ {{filename}}",
+        option: "{{title}} — {{owner}}",
+        actions: "إجراءات الملف",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "صورة",
+        },
+      },
       directoryMissing: "لم يتم العثور على دليل Workspace.",
       loading: "جارٍ تحميل الملف...",
       noPreview: "لا تتوفر معاينة",

@@ -1895,6 +1895,23 @@ export const zhCN: TranslationResources = {
       creatingAgent: "正在创建 Agent",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "打开 .{{extension}} 文件的方式",
+        pickerTitleFilename: "打开 {{filename}} 的方式",
+        dontAskAgain: "不再询问",
+        use: "使用",
+        openWith: "打开方式…",
+        alwaysUseExtension: "始终用于 .{{extension}}",
+        alwaysUseFilename: "始终用于 {{filename}}",
+        option: "{{title}} — {{owner}}",
+        actions: "文件操作",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "图片",
+        },
+      },
       directoryMissing: "未找到 workspace 目录。",
       loading: "正在加载文件...",
       noPreview: "没有可用预览",

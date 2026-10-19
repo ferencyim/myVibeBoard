@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 import type { ExplorerFile } from "@/stores/session-store";
 import type { WorkspaceFileLocation } from "@/workspace/file-open";
-import type { FilePanel } from "./index";
+import type { FilePanel } from "./panels";
 import { BuiltinFilePanelPreview } from "./builtin";
 import { PluginFilePanelHost } from "./plugin-host";
 import { bytesDocument, textDocument } from "./document";

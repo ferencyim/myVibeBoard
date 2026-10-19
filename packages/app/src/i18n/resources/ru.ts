@@ -1949,6 +1949,23 @@ export const ru: TranslationResources = {
       creatingAgent: "Создание агента",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "Открывать файлы .{{extension}} с помощью",
+        pickerTitleFilename: "Открывать {{filename}} с помощью",
+        dontAskAgain: "Больше не спрашивать",
+        use: "Использовать",
+        openWith: "Открыть с помощью…",
+        alwaysUseExtension: "Всегда использовать для .{{extension}}",
+        alwaysUseFilename: "Всегда использовать для {{filename}}",
+        option: "{{title}} — {{owner}}",
+        actions: "Действия с файлом",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "Изображение",
+        },
+      },
       directoryMissing: "Каталог рабочего пространства не найден.",
       loading: "Загрузка файла...",
       noPreview: "Предварительный просмотр недоступен",

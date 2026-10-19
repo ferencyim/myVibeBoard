@@ -1962,6 +1962,23 @@ export const fr: TranslationResources = {
       creatingAgent: "Création de l’agent",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: "Ouvrir les fichiers .{{extension}} avec",
+        pickerTitleFilename: "Ouvrir {{filename}} avec",
+        dontAskAgain: "Ne plus demander",
+        use: "Utiliser",
+        openWith: "Ouvrir avec…",
+        alwaysUseExtension: "Toujours utiliser pour .{{extension}}",
+        alwaysUseFilename: "Toujours utiliser pour {{filename}}",
+        option: "{{title}} — {{owner}}",
+        actions: "Actions du fichier",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "Image",
+        },
+      },
       directoryMissing: "Répertoire de l’espace de travail introuvable.",
       loading: "Chargement du fichier…",
       noPreview: "Aucun aperçu disponible",

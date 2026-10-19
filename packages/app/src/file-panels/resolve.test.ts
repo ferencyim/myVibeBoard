@@ -2,7 +2,7 @@ import { createFilePanePreview } from "@/file-pane/preview-lifecycle/model";
 import { builtinFilePanels } from "./catalog";
 import type { FileReadResult } from "@getpaseo/client/internal/daemon-client";
 import type { AttachmentMetadata } from "@/attachments/types";
-import { resolveFilePreviewPanel } from "./resolve";
+import { resolveFileReadPanels } from "./resolve";
 import { describe, expect, it } from "vitest";
 import { resolveFilePanel, type FilePanelCandidate, type FilePanelFile } from "./resolve";
 
@@ -32,6 +32,7 @@ describe("resolveFilePanel", () => {
       panel: alternative,
       candidates: [markdown, alternative],
       selectorKey: "ext:md",
+      associatedPanelId: alternative.id,
     });
   });
   it("ignores an absent association without deleting it", () => {
@@ -44,11 +45,20 @@ describe("resolveFilePanel", () => {
     expect(resolve().panel).toBe(markdown);
     expect(resolve({ candidates: [alternative, markdown] }).panel).toBe(alternative);
   });
+  it("uses a tab choice before the association and ignores a choice that is not a candidate", () => {
+    const associations = { "ext:md": alternative.id };
+    expect(resolve({ associations, choice: markdown.id })).toMatchObject({
+      panel: markdown,
+      associatedPanelId: alternative.id,
+    });
+    expect(resolve({ associations, choice: "plugin:absent/markdown" }).panel).toBe(alternative);
+  });
   it("returns the floor when no selector matches", () => {
     expect(resolve({ file: { ...file, path: "index.ts" } })).toEqual({
       panel: null,
       candidates: [],
       selectorKey: "ext:ts",
+      associatedPanelId: null,
     });
   });
   it("filters text panels for binary files even with an association", () => {
@@ -80,6 +90,7 @@ describe("resolveFilePanel", () => {
       panel: named,
       candidates: [markdown, named],
       selectorKey: "name:README.MD",
+      associatedPanelId: named.id,
     });
     expect(resolve({ file: { ...file, path: "README.md" }, candidates: [named] }).panel).toBeNull();
   });
@@ -99,6 +110,7 @@ describe("resolveFilePanel", () => {
         panel: named,
         candidates: [named],
         selectorKey: "name:Dockerfile",
+        associatedPanelId: null,
       });
     },
   );
@@ -166,12 +178,13 @@ describe("resolved panel resources", () => {
       };
       for (const modifiedAt of ["2026-10-19T00:00:00Z", "2026-10-19T00:00:01Z"]) {
         const raw = { ...read(path, kind), modifiedAt };
-        const panel = resolveFilePreviewPanel({
-          file: raw,
-          path,
-          candidates: builtinFilePanels,
-          associations: {},
-        });
+        const panel =
+          resolveFileReadPanels({
+            file: raw,
+            path,
+            candidates: builtinFilePanels,
+            associations: {},
+          })?.panel ?? null;
         const preview = await createFilePanePreview(raw, panel, persist);
         expect(preview?.bytesPreview).toBeNull();
         expect(preview?.file).not.toHaveProperty("bytes");
@@ -181,12 +194,13 @@ describe("resolved panel resources", () => {
   );
   it("persists and retains bytes only for the selected image panel", async () => {
     const raw = read("picture.png", "image");
-    const panel = resolveFilePreviewPanel({
-      file: raw,
-      path: raw.path,
-      candidates: builtinFilePanels,
-      associations: {},
-    });
+    const panel =
+      resolveFileReadPanels({
+        file: raw,
+        path: raw.path,
+        candidates: builtinFilePanels,
+        associations: {},
+      })?.panel ?? null;
     const writes: Uint8Array[] = [];
     const preview = await createFilePanePreview(raw, panel, async (input) => {
       writes.push(input.bytes);
