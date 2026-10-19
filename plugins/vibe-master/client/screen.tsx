@@ -6,12 +6,22 @@ import {
   type PluginSidebarItemProps,
   type PluginSurfaceProps,
 } from "@getpaseo/plugin/client";
-import { SettingsCard, SettingsInput, SettingsSection, SettingsSwitch, SidebarRow } from "@getpaseo/plugin/client/ui";
+import { SettingsCard, SettingsInput, SettingsSection, SettingsSelect, SettingsSwitch, SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { masterSettings, statusRpc, switchRpc } from "../shared/rpc";
+import { masterSettings, permissionRpc, statusRpc, switchRpc } from "../shared/rpc";
 import { switchChoices, targetLabel, type SwitchChoice } from "./format";
+
+/** Modes a provider may offer; one the provider lacks falls back to auto. */
+const PERMISSION_CHOICES = [
+  { label: "Auto (recommended)", value: "auto" },
+  { label: "Ask for everything (Claude: default)", value: "default" },
+  { label: "Accept file edits (Claude)", value: "acceptEdits" },
+  { label: "Auto-review (Codex)", value: "auto-review" },
+  { label: "Full access (Codex)", value: "full-access" },
+  { label: "Bypass (Claude)", value: "bypassPermissions" },
+] as const;
 
 function Section({ theme, title, children }: { theme: PluginTheme; title: string; children: ReactNode }) {
   return (
@@ -45,6 +55,7 @@ export function MasterScreen({ theme }: PluginScreenProps) {
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
   const switchCall = useRpc(switchRpc);
+  const permissionCall = useRpc(permissionRpc);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,6 +71,19 @@ export function MasterScreen({ theme }: PluginScreenProps) {
     setError(null);
     try {
       await switchCall({ ...choice.request, reason: "switched from the master screen" });
+      await queryClient.invalidateQueries({ queryKey: ["vibe-master"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const choosePermission = async (mode: string) => {
+    setBusy(`permission:${mode}`);
+    setError(null);
+    try {
+      await permissionCall({ mode });
       await queryClient.invalidateQueries({ queryKey: ["vibe-master"] });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -105,6 +129,48 @@ export function MasterScreen({ theme }: PluginScreenProps) {
               </Text>
             ))}
           </Section>
+
+          {s.permission ? (
+            <Section theme={theme} title="Permission mode">
+              <Text style={{ color: theme.colors.foreground }}>
+                {s.permission.auto ? "Auto" : s.permission.label}
+                {s.permission.modeId && s.permission.auto ? ` (${s.permission.label})` : ""}
+                {!s.permission.modeId ? " (provider default)" : ""}
+              </Text>
+              <Muted theme={theme}>
+                {s.permission.source === "switched" ? "Switched by you" : "Default from settings"}. Applies to the master
+                and the planning sessions; a running one restarts in the new mode with the same cards.
+              </Muted>
+              {[
+                { id: "auto", label: "Auto (the provider's automatic approval mode)" },
+                ...s.permission.options.map((o) => ({ id: o.id, label: o.label })),
+                ...(s.permission.source === "switched" ? [{ id: "settings", label: "Follow the settings default" }] : []),
+              ].map((option) => {
+                const active = option.id !== "settings" && (option.id === "auto" ? s.permission!.auto : option.id === s.permission!.modeId && !s.permission!.auto);
+                return (
+                  <Pressable
+                    key={option.id}
+                    disabled={busy !== null || active}
+                    onPress={() => void choosePermission(option.id)}
+                    style={{
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: active ? theme.colors.accent : theme.colors.border,
+                      backgroundColor: theme.colors.surface2,
+                      padding: 10,
+                      opacity: busy !== null && busy !== `permission:${option.id}` ? 0.5 : 1,
+                    }}
+                  >
+                    <Text style={{ color: theme.colors.foreground }}>
+                      {active ? "Current: " : ""}
+                      {option.label}
+                      {busy === `permission:${option.id}` ? " ..." : ""}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </Section>
+          ) : null}
 
           <Section theme={theme} title="Switch subscription">
             <Muted theme={theme}>
@@ -198,6 +264,12 @@ export function MasterSettingsScreen({ theme }: PluginSurfaceProps) {
           label="Thinking option (empty = default, max = highest)"
           initialValue={values.thinking}
           onChangeText={(thinking) => save({ ...values, thinking: thinking.trim() })}
+        />
+        <SettingsSelect
+          label="Permission mode of the master and planners (auto = the provider's automatic mode)"
+          value={values.permissionMode}
+          options={PERMISSION_CHOICES}
+          onValueChange={(permissionMode: string) => save({ ...values, permissionMode })}
         />
         <SettingsInput
           label="Quiet period before assessing a draft (seconds)"

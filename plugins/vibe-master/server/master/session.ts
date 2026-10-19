@@ -8,6 +8,7 @@ import { mkdirSync } from "node:fs";
 import type { MasterSettings, MasterTarget } from "../../shared/rpc";
 import type { AgentSession } from "../vibe/contract";
 import type { VibeStore } from "../vibe/db";
+import { FOLLOW_SETTINGS, type PermissionResolver, type ResolvedPermission } from "../subscription/permission";
 import { isQuotaError } from "../subscription/quota";
 import type { Alerts } from "../subscription/alerts";
 import type { MasterStateFile } from "../subscription/state";
@@ -24,21 +25,13 @@ export interface MasterSessionDeps {
   getPaseo(): MasterPaseo | null;
   settings(): MasterSettings;
   state: MasterStateFile;
+  permission: PermissionResolver;
   /** Static rules (system prompt). */
   rules: string;
   workspace(): string;
   alerts: Alerts;
   log(message: string, error?: unknown): void;
 }
-
-/**
- * Permission mode per provider so MCP tool calls do not stall the master. The master works in an
- * empty scratch workspace and its rules forbid touching code.
- */
-const MODE_BY_PROVIDER: Record<string, string> = {
-  claude: "bypassPermissions",
-  codex: "full-access",
-};
 
 const LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
 
@@ -48,6 +41,13 @@ export interface MasterSession extends MasterAsk {
   /** Provider of the live master, if any. */
   activeProvider(): string | null;
   liveSession(): AgentSession | undefined;
+  /** The permission mode the master runs (or will run) with, and where the choice comes from. */
+  permission(): Promise<{ setting: string; source: "settings" | "switched"; resolved: ResolvedPermission }>;
+  /**
+   * Manual permission switch (`FOLLOW_SETTINGS` = back to the settings default). A running master
+   * is replaced by a fresh agent in the new mode (the Paseo plugin API has no in-place mode change).
+   */
+  setPermission(mode: string): Promise<{ changed: boolean; sessionId: string | null }>;
   switchTo(
     request: TargetRequest,
     reason?: string,
@@ -94,6 +94,12 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     return value;
   }
 
+  const requestedMode = () => deps.state.read().permissionMode ?? deps.settings().permissionMode;
+
+  async function resolvePermission(target: MasterTarget): Promise<ResolvedPermission> {
+    return deps.permission.resolve(target.provider, requestedMode());
+  }
+
   async function retire(session: AgentSession | undefined, outcome: string): Promise<void> {
     if (!session) return;
     moveSession(session, "ended", { outcome });
@@ -105,9 +111,9 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   }
 
   async function spawn(paseo: MasterPaseo, target: MasterTarget): Promise<AgentSession> {
+    const { modeId } = await resolvePermission(target);
     const cwd = deps.workspace();
     mkdirSync(cwd, { recursive: true });
-    const modeId = MODE_BY_PROVIDER[target.provider];
     const created = await paseo.agents.create({
       cwd,
       title: "Vibe Master",
@@ -128,7 +134,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     });
     deps.state.update((s) => ({
       ...s,
-      agent: { agentId: created.id, sessionId: session.id, target },
+      agent: { agentId: created.id, sessionId: session.id, target, modeId },
     }));
     handle = created;
     rulesSent = target.provider === "claude";
@@ -143,11 +149,13 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     const target = await currentTarget();
     const record = deps.state.read().agent;
     const live = liveSession();
+    const { modeId } = await resolvePermission(target);
+    const current = (r: typeof record) => !!r && sameTarget(r.target, target) && (r.modeId ?? null) === modeId;
 
-    if (handle && live && record?.agentId === handle.id && sameTarget(record.target, target)) {
+    if (handle && live && record?.agentId === handle.id && current(record)) {
       return handle;
     }
-    if (!handle && live && record?.agentId === live.agentId && sameTarget(record.target, target)) {
+    if (!handle && live && record?.agentId === live.agentId && current(record)) {
       const candidate = paseo.agents.ref(record.agentId);
       const alive = await candidate.refresh().then(
         (r) => r != null,
@@ -179,6 +187,37 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     currentTarget,
     liveSession,
     activeProvider: () => liveSession()?.currentProvider ?? null,
+
+    async permission() {
+      const override = deps.state.read().permissionMode;
+      const resolved = await resolvePermission(await currentTarget());
+      return {
+        setting: override ?? deps.settings().permissionMode,
+        source: override ? "switched" : "settings",
+        resolved,
+      };
+    },
+
+    async setPermission(mode) {
+      deps.state.update((s) => {
+        const { permissionMode: _drop, ...rest } = s;
+        return mode === FOLLOW_SETTINGS ? rest : { ...rest, permissionMode: mode };
+      });
+      const live = liveSession();
+      const record = deps.state.read().agent;
+      if (!live || record?.agentId !== live.agentId) return { changed: false, sessionId: live?.id ?? null };
+      const paseo = deps.getPaseo();
+      if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
+      const target = await currentTarget();
+      const { modeId } = await resolvePermission(target);
+      if (sameTarget(record.target, target) && (record.modeId ?? null) === modeId) {
+        return { changed: false, sessionId: live.id };
+      }
+      // Start the new agent first: if it cannot start, the old one keeps working.
+      const fresh = await spawn(paseo, target);
+      await retire(live, "mode_changed");
+      return { changed: true, sessionId: fresh.id };
+    },
 
     async ask(prompt, options = {}) {
       let agent: MasterAgentHandle;

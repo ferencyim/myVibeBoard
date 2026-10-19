@@ -46,14 +46,13 @@ const MAX_RESEARCH_ROUNDS = 2;
 const MAX_LOOPS = 10;
 const SCOUT_TIMEOUT_MS = 5 * 60_000;
 const SCOUT_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
-const AGENT_MODE: Record<string, string> = { claude: "bypassPermissions", codex: "full-access" };
 
 export interface PlanningDeps {
   db: VibeDb;
   store: VibeStore;
   getPaseo(): MasterPaseo | null;
   /** The master session: its current subscription decides model/provider of new planners. */
-  master: Pick<MasterSession, "currentTarget">;
+  master: Pick<MasterSession, "currentTarget" | "permission">;
   rules: string;
   /** `<VIBE_HOME>/master`; planner scratch workspaces live under `planning/<KEY>`. */
   dataDir: string;
@@ -85,7 +84,10 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export function createPlanning(deps: PlanningDeps) {
   const { store, db, clock } = deps;
   const log = deps.log ?? (() => undefined);
-  const handles = new Map<string, { agent: MasterAgentHandle; sessionId: string; rulesSent: boolean }>();
+  const handles = new Map<
+    string,
+    { agent: MasterAgentHandle; sessionId: string; rulesSent: boolean; modeId?: string | null }
+  >();
   const chains = new Map<string, Promise<void>>();
   const parked = new Set<string>();
   let cursor = 0;
@@ -163,7 +165,7 @@ export function createPlanning(deps: PlanningDeps) {
     const target = await deps.master.currentTarget();
     const cwd = join(deps.dataDir, "planning", card.key);
     mkdirSync(cwd, { recursive: true });
-    const modeId = AGENT_MODE[target.provider];
+    const modeId = (await deps.master.permission()).resolved.modeId;
     const created = await paseo.agents.create({
       cwd,
       title: `Plan ${card.key} · ${card.title}`.slice(0, 80),
@@ -184,7 +186,7 @@ export function createPlanning(deps: PlanningDeps) {
     });
     store.cards.update(card.id, { planSessionId: session.id });
     const rulesSent = target.provider === "claude";
-    handles.set(card.id, { agent: created, sessionId: session.id, rulesSent });
+    handles.set(card.id, { agent: created, sessionId: session.id, rulesSent, modeId });
     log(`planner ${created.id} for ${card.key} started on ${providerSpec(target)}`);
     return { agent: created, session, rulesSent, fresh: true };
   }
@@ -194,7 +196,15 @@ export function createPlanning(deps: PlanningDeps) {
     const live = liveOf(card.id);
     const cached = handles.get(card.id);
     if (live && cached && cached.sessionId === live.id) {
-      return { agent: cached.agent, session: live, rulesSent: cached.rulesSent, fresh: false };
+      // The permission mode changed since this planner started: no in-place change exists, so the
+      // discussion moves to a fresh planner seeded with the whole thread (the card holds it all).
+      const wanted = (await deps.master.permission()).resolved.modeId;
+      if (cached.modeId === undefined || cached.modeId === wanted) {
+        return { agent: cached.agent, session: live, rulesSent: cached.rulesSent, fresh: false };
+      }
+      log(`planner for ${card.key}: permission mode changed (${cached.modeId} -> ${wanted}), restarting`);
+      await archive(card, "mode_changed");
+      return spawn(card);
     }
     const paseo = deps.getPaseo();
     if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");

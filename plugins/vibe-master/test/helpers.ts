@@ -12,6 +12,7 @@ import type {
   RunResult,
   UsageProviderLike,
 } from "../server/types";
+import { createPermissionResolver } from "../server/subscription/permission";
 import { createVibeStore, migrateOwner, openVibeDb } from "../server/vibe/db";
 
 export function tempDir(prefix = "vibe-master-"): string {
@@ -103,6 +104,22 @@ export const MODELS: Record<string, ModelInfoLike[]> = {
   ],
 };
 
+/** Modes as the Paseo providers list them (claude: static list; codex: auto-review needs a new CLI). */
+export const MODES: Record<string, Array<{ id: string; label: string }>> = {
+  claude: [
+    { id: "plan", label: "Plan Mode" },
+    { id: "default", label: "Always Ask" },
+    { id: "acceptEdits", label: "Accept File Edits" },
+    { id: "auto", label: "Auto mode" },
+    { id: "bypassPermissions", label: "Bypass" },
+  ],
+  codex: [
+    { id: "auto", label: "Default Permissions" },
+    { id: "auto-review", label: "Auto-review" },
+    { id: "full-access", label: "Full Access" },
+  ],
+};
+
 export type Script = (ctx: { provider: string; agentId: string; prompt: string; index: number }) =>
   | Promise<RunResult | string>
   | RunResult
@@ -119,7 +136,11 @@ export interface FakeAgent {
 /** Hand-written PaseoApi stand-in: agents answer through `script`. */
 export function fakePaseo(
   script: Script,
-  options: { usage?: UsageProviderLike[]; failCreate?: (provider: string) => string | null } = {},
+  options: {
+    usage?: UsageProviderLike[];
+    failCreate?: (provider: string) => string | null;
+    modes?: Record<string, Array<{ id: string; label: string }>>;
+  } = {},
 ) {
   const agents: FakeAgent[] = [];
   let usage = options.usage ?? [];
@@ -162,6 +183,7 @@ export function fakePaseo(
     providers: {
       listModels: async (provider) => ({ models: MODELS[provider] ?? [] }),
       listUsage: async () => ({ providers: usage }),
+      listModes: async (provider) => ({ modes: (options.modes ?? MODES)[provider] ?? [] }),
     },
   };
   return {
@@ -170,6 +192,19 @@ export function fakePaseo(
     setUsage(next: UsageProviderLike[]) {
       usage = next;
     },
+  };
+}
+
+/** The slice of the master session that planners use, with the permission mode of `fake`. */
+export function fakeMaster(fake: ReturnType<typeof fakePaseo>, setting: () => string = () => "auto", provider = "claude") {
+  const resolver = createPermissionResolver(() => fake.paseo);
+  return {
+    currentTarget: async () => ({ provider, model: "opus-x", thinking: null }),
+    permission: async () => ({
+      setting: setting(),
+      source: "settings" as const,
+      resolved: await resolver.resolve(provider, setting()),
+    }),
   };
 }
 

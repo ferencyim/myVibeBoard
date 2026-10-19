@@ -14,6 +14,11 @@ export const masterSettings = defineSettings({
     provider: z.string().default("claude"),
     model: z.string().default(""),
     thinking: z.string().default(""),
+    /**
+     * Permission mode of the master and the planning agents: "auto" = the provider's automatic
+     * mode (Claude auto, Codex auto-review), else a concrete Paseo modeId of the provider.
+     */
+    permissionMode: z.string().default("auto"),
     /** Quiet period after a draft was created or edited before the master looks at it. */
     debounceSeconds: z.number().int().min(1).max(600).default(30),
     /** cwd of the master agent. Empty = <VIBE_HOME>/master. */
@@ -50,12 +55,25 @@ export const ProviderInfoSchema = z.object({
 });
 export type ProviderInfo = z.infer<typeof ProviderInfoSchema>;
 
+const PermissionInfo = z.object({
+  /** The setting value: "auto" or a modeId. */
+  setting: z.string(),
+  source: z.enum(["settings", "switched"]),
+  /** Concrete mode in effect for the provider; null = the provider's own default. */
+  modeId: z.string().nullable(),
+  label: z.string(),
+  auto: z.boolean(),
+  options: z.array(z.object({ id: z.string(), label: z.string() })),
+});
+export type PermissionInfo = z.infer<typeof PermissionInfo>;
+
 export const MasterStatusSchema = z.object({
   enabled: z.boolean(),
   /** false until the first hook or RPC handed the plugin a daemon handle. */
   paseoReady: z.boolean(),
   target: Target.nullable(),
   targetSource: z.enum(["settings", "switched"]),
+  permission: PermissionInfo.nullable(),
   session: z
     .object({
       sessionId: z.string(),
@@ -115,4 +133,13 @@ export const wakeRpc = defineRpc({
     force: z.boolean().default(true),
   }),
   output: z.object({ queued: z.boolean(), message: z.string() }),
+});
+
+export const permissionRpc = defineRpc({
+  name: "master.permission",
+  input: z.object({
+    /** "auto", a modeId of the master's provider, or "settings" to follow the settings default. */
+    mode: z.string().min(1),
+  }),
+  output: z.object({ permission: PermissionInfo.nullable(), changed: z.boolean() }),
 });

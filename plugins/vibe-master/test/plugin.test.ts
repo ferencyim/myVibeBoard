@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import contribute from "../index.server";
-import { statusRpc, switchRpc, wakeRpc } from "../shared/rpc";
+import { permissionRpc, statusRpc, switchRpc, wakeRpc } from "../shared/rpc";
 import { assessmentJson, fakePaseo, setupBoard, tempDir, tick } from "./helpers";
 import { createVibeStore, migrateOwner, openVibeDb, publishEvent } from "../server/vibe/db";
 
@@ -68,7 +68,7 @@ describe("plugin entry", () => {
     const fake = fakePaseo(() => assessmentJson());
     const { server, handlers, hooks } = fakeServer();
     const cleanup = contribute(server);
-    expect([...handlers.keys()].sort()).toEqual([statusRpc.name, switchRpc.name, wakeRpc.name].sort());
+    expect([...handlers.keys()].sort()).toEqual([permissionRpc.name, statusRpc.name, switchRpc.name, wakeRpc.name].sort());
     expect(hooks.has("agent.created")).toBe(true);
 
     // seed a project and a draft in the same vibe.db the plugin opened
