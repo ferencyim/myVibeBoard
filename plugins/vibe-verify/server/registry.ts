@@ -10,6 +10,8 @@ import {
 import {
   createAndroidCollector,
   createBackendCollector,
+  createDesktopCollector,
+  createIosCollector,
   createInMemoryLeaseProvider,
   createNodeSpawner,
   createWebCollector,
@@ -23,7 +25,7 @@ export type RunConfigs = Map<string, VerifyConfig>;
 
 export interface RegistryOptions {
   configs: RunConfigs;
-  /** Device leases for Android; WP-34 swaps in the device_lease backed provider. */
+  /** Device leases for Android (index.server.ts passes the device_lease backed provider). */
   leases?: DeviceLeaseProvider;
 }
 
@@ -45,6 +47,24 @@ export function createVerifyRegistry(options: RegistryOptions): CollectorRegistr
         return app;
       },
       flow: (ctx) => resolve(ctx).android?.flow,
+    }),
+  );
+  registry.register(
+    createIosCollector({
+      config: (ctx) => {
+        const ios = resolve(ctx).ios;
+        if (!ios) throw new Error("No ios section in the verify config");
+        return ios;
+      },
+    }),
+  );
+  registry.register(
+    createDesktopCollector({
+      config: (ctx) => {
+        const desktop = resolve(ctx).desktop;
+        if (!desktop) throw new Error("No desktop section in the verify config");
+        return desktop;
+      },
     }),
   );
   return registry;

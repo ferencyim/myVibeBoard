@@ -51,6 +51,23 @@ export interface PipelineResult {
   returned: boolean;
 }
 
+const EXCERPT_CHARS = 6_000;
+
+/** Head and tail of a small text evidence file (logs, reports); undefined for binary kinds. */
+function textExcerpt(file: string, kind: string): string | undefined {
+  if (kind !== "log" && kind !== "report") return undefined;
+  try {
+    const text = readFileSync(file, "utf8");
+    return text.length <= EXCERPT_CHARS
+      ? text
+      : `${text.slice(0, EXCERPT_CHARS / 2)}
+...[cut]...
+${text.slice(-EXCERPT_CHARS / 2)}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createPipeline(deps: PipelineDeps) {
   const { board, verify, registry, runner } = deps;
   const now = deps.now ?? (() => new Date());
@@ -276,7 +293,11 @@ export function createPipeline(deps: PipelineDeps) {
               checks,
               commitHash,
               outputDir,
-              evidence: evidence.map((e) => ({ name: path.basename(e.path), kind: e.kind })),
+              evidence: evidence.map((e) => ({
+                name: path.basename(e.path),
+                kind: e.kind,
+                excerpt: textExcerpt(e.path, e.kind),
+              })),
               notes: verify
                 .items(vid)
                 .filter((i) => i.method === "auto" && i.note)

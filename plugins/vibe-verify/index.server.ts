@@ -10,6 +10,7 @@ import { createVerifyStore } from "./server/store";
 import { createPaseoVerifierLauncher, type VerifierLauncher } from "./server/verifier/agent";
 import { decideVerifierPermission } from "./server/verifier/policy";
 import {
+  createDeviceLeases,
   createEventConsumer,
   createVibeStore,
   migrateOwner,
@@ -19,6 +20,7 @@ import {
 
 export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
+  migrateOwner(db, "scheduler");
   migrateOwner(db, "verify");
   const board = createVibeStore(db);
   const home = resolveVibeHome();
@@ -64,7 +66,7 @@ export default function contribute(server: PluginServerContext) {
   const pipeline = createPipeline({
     board,
     verify,
-    registry: createVerifyRegistry({ configs }),
+    registry: createVerifyRegistry({ configs, leases: createDeviceLeases(db).provider }),
     runner: createNodeRunner(),
     launcher,
     configs,

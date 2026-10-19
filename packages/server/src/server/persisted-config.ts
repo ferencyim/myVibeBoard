@@ -285,6 +285,25 @@ export const PersistedConfigSchema = z
           })
           .strict()
           .optional(),
+        push: z
+          .object({
+            gateway: z
+              .url()
+              .optional()
+              .describe("vibe-push-gateway base URL. Native FCM tokens are delivered through it."),
+            gatewayToken: z
+              .string()
+              .optional()
+              .describe("Bearer token for the gateway. Prefer env PASEO_PUSH_GATEWAY_TOKEN."),
+            minimalPayload: z
+              .boolean()
+              .optional()
+              .describe(
+                "Push body carries only project name and event type. Defaults to true when a gateway is set, false otherwise.",
+              ),
+          })
+          .strict()
+          .optional(),
         serviceProxy: z
           .object({
             // COMPAT(serviceProxyEnabled): added 2026-06-02, remove after 2026-12-02.

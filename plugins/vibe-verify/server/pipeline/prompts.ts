@@ -57,6 +57,15 @@ export interface EvidenceLine {
   name: string;
   label?: string;
   kind: string;
+  /** Text content of small log/report files, inlined because the verifier cannot read outside the worktree. */
+  excerpt?: string;
+}
+
+function evidenceLine(e: EvidenceLine): string {
+  const head = `- ${e.name} [${e.kind}]${e.label ? ` - ${e.label}` : ""}`;
+  if (!e.excerpt) return head;
+  const body = e.excerpt.split("\n").map((l) => `    | ${l}`);
+  return [head, ...body].join("\n");
 }
 
 export interface JudgePromptInput {
@@ -78,7 +87,7 @@ Evidence directory: ${i.outputDir}
 ${numbered(i.checks)}
 
 ## Collected evidence (files in the evidence directory)
-${i.evidence.length ? i.evidence.map((e) => `- ${e.name} [${e.kind}]${e.label ? ` - ${e.label}` : ""}`).join("\n") : "- none"}
+${i.evidence.length ? i.evidence.map(evidenceLine).join("\n") : "- none"}
 
 ## Collector notes
 ${i.notes.length ? i.notes.map((n) => `- ${n}`).join("\n") : "- none"}
