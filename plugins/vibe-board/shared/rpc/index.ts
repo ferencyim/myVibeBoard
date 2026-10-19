@@ -430,6 +430,33 @@ export const sessionsListRpc = defineRpc({
   output: z.object({ sessions: z.array(AgentSessionSchema) }),
 });
 
+// --- dispatch / lifecycle (WP-12) ------------------------------------------------------------
+
+export const cardsDispatchRpc = defineRpc({
+  name: "vibe.cards.dispatch",
+  /** todo -> in_progress: creates the worktree and starts the worker session from the card's
+   *  preset (or `presetId`). Fails with [illegal_transition] unless the card is in todo. */
+  input: z.object({
+    card: cardRef,
+    presetId: z.string().optional(),
+    extraInstructions: z.string().optional(),
+  }),
+  output: z.object({ card: CardViewSchema, session: AgentSessionSchema }),
+});
+
+export const sessionsRecordSwitchRpc = defineRpc({
+  name: "vibe.sessions.record_switch",
+  /** The agent was continued on another provider (switch-provider returned `toAgentId`):
+   *  records the switch on the card and moves the session to the new agent. */
+  input: z.object({
+    fromAgentId: z.string().min(1),
+    toAgentId: z.string().min(1),
+    provider: z.string().min(1),
+    reason: z.string().optional(),
+  }),
+  output: z.object({ session: AgentSessionSchema.nullable() }),
+});
+
 export const VIBE_BOARD_RPCS = {
   projectsListRpc,
   projectsCreateRpc,
@@ -461,4 +488,6 @@ export const VIBE_BOARD_RPCS = {
   attachmentsDownloadRpc,
   attachmentsDeleteRpc,
   sessionsListRpc,
+  cardsDispatchRpc,
+  sessionsRecordSwitchRpc,
 } as const;

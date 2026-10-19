@@ -3,6 +3,8 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import * as rpc from "../shared/rpc";
+import type { Dispatcher } from "./dispatch";
+import type { Lifecycle } from "./lifecycle";
 import type { BoardService } from "./service";
 
 async function listPaseoProjects(paseo: PaseoApi) {
@@ -45,7 +47,18 @@ async function providerCatalog(paseo: PaseoApi) {
   }
 }
 
-export function registerBoardRpcs(server: PluginServerContext, board: BoardService): void {
+export interface BoardRpcExtras {
+  dispatcher?: Dispatcher;
+  lifecycle?: Lifecycle;
+  /** Keeps the newest SDK handle for dispatch outside hooks. */
+  onPaseo?: (paseo: PaseoApi) => void;
+}
+
+export function registerBoardRpcs(
+  server: PluginServerContext,
+  board: BoardService,
+  extras: BoardRpcExtras = {},
+): void {
   server.handle(rpc.projectsListRpc, (input) => board.projects.list(input.includeArchived));
   server.handle(rpc.projectsCreateRpc, (input) => board.projects.create(input));
   server.handle(rpc.projectsUpdateRpc, ({ project, ...patch }) => board.projects.update(project, patch));
@@ -85,5 +98,18 @@ export function registerBoardRpcs(server: PluginServerContext, board: BoardServi
   });
   server.handle(rpc.attachmentsDeleteRpc, (input) => board.attachments.delete(input.attachmentId));
   server.handle(rpc.sessionsListRpc, (input) => board.sessions.list(input.card));
-}
 
+  const { dispatcher, lifecycle } = extras;
+  if (dispatcher) {
+    server.handle(rpc.cardsDispatchRpc, async ({ card, ...input }, { paseo }) => {
+      extras.onPaseo?.(paseo);
+      const { card: moved, session } = await dispatcher.dispatch(card, { ...input, force: true });
+      return { card: moved, session };
+    });
+  }
+  if (lifecycle) {
+    server.handle(rpc.sessionsRecordSwitchRpc, (input) => ({
+      session: lifecycle.recordSwitch(input) ?? null,
+    }));
+  }
+}
