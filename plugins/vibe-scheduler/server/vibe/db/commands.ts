@@ -20,6 +20,7 @@ import {
   type PresetEnvironmentKind,
   type PresetPermissionMode,
   type ProjectType,
+  type SessionComplexity,
   type SessionRole,
   type SessionState,
 } from "../contract/enums";
@@ -102,6 +103,10 @@ export interface CreatePresetInput {
   baseBranch?: string | null;
   runtimeEnv?: string | null;
   instructions?: string;
+  /** Preset ids tried in order when a session on this preset fails. */
+  fallbackPresetIds?: string[] | null;
+  /** scout | worker | reviewer | ... */
+  roleHint?: string | null;
   builtin?: boolean;
 }
 export type UpdatePresetInput = Partial<CreatePresetInput>;
@@ -121,6 +126,7 @@ export interface CreateCardInput {
   needsEvidence?: boolean;
   presetId?: string | null;
   suggestedPresetId?: string | null;
+  reviewerPresetId?: string | null;
   origin?: CardOrigin;
   originRef?: string | null;
   dedupeKey?: string | null;
@@ -141,6 +147,7 @@ export interface UpdateCardInput {
   needsEvidence?: boolean;
   presetId?: string | null;
   suggestedPresetId?: string | null;
+  reviewerPresetId?: string | null;
   parentCardId?: string | null;
   planSessionId?: string | null;
   worktree?: string | null;
@@ -171,6 +178,21 @@ export interface StartSessionInput {
   workspaceId?: string | null;
   role: SessionRole;
   provider: string;
+  complexity?: SessionComplexity | null;
+  reassignedFromSessionId?: string | null;
+}
+
+export interface RecordReassignInput {
+  /** The failed/stalled session to end. */
+  fromSessionId: string;
+  /** Paseo agent id of the replacement. */
+  agentId: string;
+  workspaceId?: string | null;
+  provider: string;
+  /** Why: error | stalled | quota | ... */
+  reason: string;
+  /** Preset the replacement runs on; also written to card.preset_id when given. */
+  presetId?: string | null;
 }
 
 export interface DispatchCardInput {
@@ -204,6 +226,7 @@ export interface ListCardsFilter {
 type Enc = (value: never) => SqlParam;
 const asJson: Enc = (v) => JSON.stringify(v);
 const asBool: Enc = (v) => ((v as unknown as boolean) ? 1 : 0);
+const asJsonOrNull: Enc = (v) => (v === null || v === undefined ? null : JSON.stringify(v));
 const asIs: Enc = (v) => v as unknown as SqlParam;
 
 type FieldMap = Record<string, readonly [column: string, encode: Enc]>;
@@ -228,6 +251,8 @@ const PRESET_FIELDS: FieldMap = {
   baseBranch: ["base_branch", asIs],
   runtimeEnv: ["runtime_env", asIs],
   instructions: ["instructions", asIs],
+  fallbackPresetIds: ["fallback_preset_ids_json", asJsonOrNull],
+  roleHint: ["role_hint", asIs],
 };
 const CARD_FIELDS: FieldMap = {
   title: ["title", asIs],
@@ -238,6 +263,7 @@ const CARD_FIELDS: FieldMap = {
   needsEvidence: ["needs_evidence", asBool],
   presetId: ["preset_id", asIs],
   suggestedPresetId: ["suggested_preset_id", asIs],
+  reviewerPresetId: ["reviewer_preset_id", asIs],
   parentCardId: ["parent_card_id", asIs],
   planSessionId: ["plan_session_id", asIs],
   worktree: ["worktree", asIs],
@@ -533,8 +559,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         try {
           db.prepare(
             `INSERT INTO preset (id, name, provider, model, thinking, permission_mode, environment_kind, base_branch,
-               runtime_env, instructions, builtin, created_at, updated_at, updated_hlc)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               runtime_env, instructions, fallback_preset_ids_json, role_hint, builtin, created_at, updated_at, updated_hlc)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             id,
             input.name,
@@ -546,6 +572,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             input.baseBranch ?? null,
             input.runtimeEnv ?? null,
             input.instructions ?? "",
+            input.fallbackPresetIds ? JSON.stringify(input.fallbackPresetIds) : null,
+            input.roleHint ?? null,
             input.builtin ? 1 : 0,
             iso(),
             iso(),
@@ -583,8 +611,21 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare("UPDATE card SET suggested_preset_id = NULL WHERE suggested_preset_id = ?").run(
           id,
         );
+        db.prepare("UPDATE card SET reviewer_preset_id = NULL WHERE reviewer_preset_id = ?").run(id);
         db.prepare("DELETE FROM preset WHERE id = ?").run(id);
         tombstone("preset", id, hlc);
+        // Drop the deleted id from other presets' fallback chains.
+        for (const other of presets.list()) {
+          if (!other.fallbackPresetIds?.includes(id)) continue;
+          const rest = other.fallbackPresetIds.filter((x) => x !== id);
+          patchRow(
+            "preset",
+            other.id,
+            PRESET_FIELDS,
+            { fallbackPresetIds: rest.length ? rest : null },
+            hlc,
+          );
+        }
       });
     },
     get: (id: string): Preset | undefined => {
@@ -685,9 +726,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare("UPDATE project SET next_number = next_number + 1 WHERE id = ?").run(project.id);
         db.prepare(
           `INSERT INTO card (id, project_id, number, key, title, description, "column", sort_key, priority, acceptance,
-             ref_images_json, needs_evidence, preset_id, suggested_preset_id, worktree, origin, origin_ref, dedupe_key,
-             plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             ref_images_json, needs_evidence, preset_id, suggested_preset_id, reviewer_preset_id, worktree, origin, origin_ref,
+             dedupe_key, plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           id,
           project.id,
@@ -703,6 +744,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           needsEvidence ? 1 : 0,
           input.presetId ?? null,
           input.suggestedPresetId ?? null,
+          input.reviewerPresetId ?? null,
           input.worktree ?? null,
           origin,
           input.originRef ?? null,
@@ -746,6 +788,23 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             { fields: keys },
             { cardId: id, projectId: before.project_id as string },
           );
+        return viewOf(rawCard(id));
+      });
+    },
+
+    /** Pick (or clear with null) the preset that reviews the result of this card. */
+    setReviewer(id: string, presetId: string | null): CardView {
+      return write((hlc) => {
+        const before = rawCard(id);
+        if (presetId !== null) mustPreset(presetId);
+        if (before.reviewer_preset_id !== presetId) {
+          patchRow("card", id, CARD_FIELDS, { reviewerPresetId: presetId }, hlc);
+          emit(
+            "card.updated",
+            { fields: ["reviewerPresetId"] },
+            { cardId: id, projectId: before.project_id as string },
+          );
+        }
         return viewOf(rawCard(id));
       });
     },
@@ -1003,8 +1062,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     try {
       db.prepare(
         `INSERT INTO agent_session (id, card_id, agent_id, workspace_id, role, current_provider, state,
-           last_activity_at, started_at, updated_hlc)
-         VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?)`,
+           last_activity_at, started_at, complexity, reassigned_from_session_id, updated_hlc)
+         VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?)`,
       ).run(
         id,
         input.cardId,
@@ -1014,6 +1073,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         input.provider,
         iso(),
         iso(),
+        input.complexity ?? null,
+        input.reassignedFromSessionId ?? null,
         hlc,
       );
     } catch (error) {
@@ -1080,6 +1141,26 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     }
   }
 
+  function announceUnstalled(s: AgentSession, hlc: Hlc): void {
+    emit(
+      "session.unstalled",
+      { sessionId: s.id, agentId: s.agentId },
+      { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+    );
+    if (s.cardId) {
+      insertCardEvent(
+        {
+          cardId: s.cardId,
+          type: "status",
+          authorKind: "system",
+          author: s.role,
+          body: { kind: "session_unstalled", sessionId: s.id },
+        },
+        hlc,
+      );
+    }
+  }
+
   const sessions = {
     start: (input: StartSessionInput): AgentSession => write((hlc) => insertSession(input, hlc)),
 
@@ -1125,6 +1206,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         } else {
           sets.push("waiting_since = NULL", "pending_question_json = NULL");
         }
+        if (to === "ended" || to === "error") sets.push("stalled_since = NULL");
         if (to === "ended") {
           sets.push("ended_at = ?");
           params.push(t);
@@ -1157,6 +1239,161 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           id,
         );
         return mustSession(id);
+      });
+    },
+
+    /**
+     * Record output from the agent: bumps last_activity_at and, if the session was marked
+     * stalled, clears the mark (session.unstalled). No state change.
+     */
+    touchActivity(id: string, at?: string): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        db.prepare(
+          "UPDATE agent_session SET last_activity_at = ?, stalled_since = NULL, updated_hlc = ? WHERE id = ?",
+        ).run(at ?? iso(), hlc, id);
+        if (s.stalledSince) announceUnstalled(s, hlc);
+        return mustSession(id);
+      });
+    },
+
+    /**
+     * Stall detector: mark a starting/working session as stalled (idempotent; the first
+     * `since` wins). Not a session state - see agent_session.stalled_since.
+     */
+    markStalled(id: string, opts: { since?: string; idleMs?: number } = {}): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        if (s.stalledSince) return s;
+        if (s.state !== "starting" && s.state !== "working")
+          throw new CommandError("invalid", `Session in state "${s.state}" cannot be stalled`);
+        const since = opts.since ?? iso();
+        db.prepare("UPDATE agent_session SET stalled_since = ?, updated_hlc = ? WHERE id = ?").run(
+          since,
+          hlc,
+          id,
+        );
+        emit(
+          "session.stalled",
+          { sessionId: id, agentId: s.agentId, stalledSince: since, idleMs: opts.idleMs },
+          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+        );
+        if (s.cardId) {
+          insertCardEvent(
+            {
+              cardId: s.cardId,
+              type: "status",
+              authorKind: "system",
+              author: s.role,
+              body: { kind: "session_stalled", sessionId: id, since },
+            },
+            hlc,
+          );
+        }
+        return mustSession(id);
+      });
+    },
+
+    /** Clear the stalled mark without touching last_activity_at (no-op if not stalled). */
+    clearStalled(id: string): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        if (!s.stalledSince) return s;
+        db.prepare(
+          "UPDATE agent_session SET stalled_since = NULL, updated_hlc = ? WHERE id = ?",
+        ).run(hlc, id);
+        announceUnstalled(s, hlc);
+        return mustSession(id);
+      });
+    },
+
+    /** Set (or clear with null) the task complexity; emits session.complexity_changed on change. */
+    setComplexity(id: string, complexity: SessionComplexity | null): AgentSession {
+      return write((hlc) => {
+        const s = mustSession(id);
+        if (s.complexity === complexity) return s;
+        db.prepare("UPDATE agent_session SET complexity = ?, updated_hlc = ? WHERE id = ?").run(
+          complexity,
+          hlc,
+          id,
+        );
+        emit(
+          "session.complexity_changed",
+          { sessionId: id, agentId: s.agentId, from: s.complexity, to: complexity },
+          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+        );
+        return mustSession(id);
+      });
+    },
+
+    /**
+     * Failure reassignment in ONE transaction: end the old session (outcome "reassigned"),
+     * start its replacement (same card/role/complexity, reassigned_from_session_id set),
+     * optionally switch card.preset_id, write a switch_agent card event, emit session.reassigned.
+     */
+    recordReassign(input: RecordReassignInput): { from: AgentSession; to: AgentSession } {
+      return write((hlc) => {
+        const old = mustSession(input.fromSessionId);
+        if (old.state === "ended")
+          throw new CommandError("invalid", `Session already ended: ${old.id}`);
+        assertSessionTransition(old.state, "ended");
+        const t = iso();
+        db.prepare(
+          `UPDATE agent_session SET state = 'ended', ended_at = ?, last_activity_at = ?, stalled_since = NULL,
+             waiting_since = NULL, pending_question_json = NULL, updated_hlc = ? WHERE id = ?`,
+        ).run(t, t, hlc, old.id);
+        const ended = mustSession(old.id);
+        announceSessionState(old, "ended", { outcome: "reassigned" }, hlc);
+        const next = insertSession(
+          {
+            cardId: old.cardId,
+            agentId: input.agentId,
+            workspaceId: input.workspaceId,
+            role: old.role,
+            provider: input.provider,
+            complexity: old.complexity,
+            reassignedFromSessionId: old.id,
+          },
+          hlc,
+        );
+        if (old.cardId && input.presetId) {
+          patchRow("card", old.cardId, CARD_FIELDS, { presetId: input.presetId }, hlc);
+        }
+        if (old.cardId) {
+          insertCardEvent(
+            {
+              cardId: old.cardId,
+              type: "switch_agent",
+              authorKind: "system",
+              author: old.role,
+              body: {
+                kind: "reassigned",
+                fromSessionId: old.id,
+                toSessionId: next.id,
+                from: old.currentProvider,
+                to: input.provider,
+                presetId: input.presetId ?? null,
+                reason: input.reason,
+              },
+            },
+            hlc,
+          );
+        }
+        emit(
+          "session.reassigned",
+          {
+            sessionId: next.id,
+            agentId: next.agentId,
+            fromSessionId: old.id,
+            fromAgentId: old.agentId,
+            fromProvider: old.currentProvider,
+            provider: input.provider,
+            presetId: input.presetId ?? null,
+            reason: input.reason,
+          },
+          { cardId: old.cardId, projectId: projectOfCard(old.cardId) },
+        );
+        return { from: ended, to: next };
       });
     },
 

@@ -339,13 +339,17 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     base_branch: "baseBranch",
     runtime_env: "runtimeEnv",
     instructions: "instructions",
+    fallback_preset_ids_json: "fallbackPresetIds",
+    role_hint: "roleHint",
   };
 
   function importPresets(): void {
     for (const p of pendingRows("preset")) {
       const input: Record<string, unknown> = {};
       for (const [col, key] of Object.entries(PRESET_KEYS)) {
-        if (col in p.fields) input[key] = val(p, col);
+        if (col in p.fields) {
+          input[key] = col.endsWith("_json") ? asJson(val(p, col), null) : val(p, col);
+        }
       }
       try {
         if (!bizRow("preset", p.rowId)) {
@@ -395,6 +399,7 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
       else if (c === "needs_evidence") patch.needsEvidence = asBool(v);
       else if (c === "preset_id") patch.presetId = v;
       else if (c === "suggested_preset_id") patch.suggestedPresetId = v;
+      else if (c === "reviewer_preset_id") patch.reviewerPresetId = v;
       else if (c === "parent_card_id") patch.parentCardId = v;
     }
     const attempt = (fn: () => void) => {
@@ -445,6 +450,7 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
               needsEvidence: "needs_evidence" in p.fields ? asBool(val(p, "needs_evidence")) : undefined,
               presetId: (val(p, "preset_id") as string | null | undefined) ?? null,
               suggestedPresetId: (val(p, "suggested_preset_id") as string | null | undefined) ?? null,
+              reviewerPresetId: (val(p, "reviewer_preset_id") as string | null | undefined) ?? null,
             },
             "phone",
             "phone",

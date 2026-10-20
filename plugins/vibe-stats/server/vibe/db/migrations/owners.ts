@@ -47,6 +47,15 @@ CREATE TABLE evidence_file (
 CREATE INDEX idx_evidence_file_v ON evidence_file(verification_id);
 `,
   },
+  {
+    version: 2,
+    name: "review_kind",
+    sql: `
+-- Round 2: a verification (and its items) is either an acceptance check or a model review.
+ALTER TABLE verification ADD COLUMN kind TEXT NOT NULL DEFAULT 'check' CHECK (kind IN ('check','review'));
+ALTER TABLE verification_item ADD COLUMN kind TEXT NOT NULL DEFAULT 'check' CHECK (kind IN ('check','review'));
+`,
+  },
 ];
 
 export const CONTEXT_MIGRATIONS: Migration[] = [

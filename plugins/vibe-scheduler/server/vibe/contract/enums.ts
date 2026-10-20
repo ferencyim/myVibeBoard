@@ -60,10 +60,24 @@ export const SESSION_STATES = ["starting", "working", "waiting", "idle", "ended"
 export type SessionState = (typeof SESSION_STATES)[number];
 export const SessionStateSchema = z.enum(SESSION_STATES);
 
+/** Task complexity as judged by the scout / scheduler (round 2: complexity policy). */
+export const SESSION_COMPLEXITIES = ["short", "multi", "long"] as const;
+export type SessionComplexity = (typeof SESSION_COMPLEXITIES)[number];
+export const SessionComplexitySchema = z.enum(SESSION_COMPLEXITIES);
+
 // --- verification ----------------------------------------------------------------------
 export const JUDGEMENTS = ["pass", "doubt", "fail"] as const;
 export type Judgement = (typeof JUDGEMENTS)[number];
 export const JudgementSchema = z.enum(JUDGEMENTS);
+
+/** `check` = acceptance-check verification (default); `review` = model code review. */
+export const VERIFICATION_KINDS = ["check", "review"] as const;
+export type VerificationKind = (typeof VERIFICATION_KINDS)[number];
+export const VerificationKindSchema = z.enum(VERIFICATION_KINDS);
+
+export const REVIEW_VERDICTS = ["pass", "issues", "severe"] as const;
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
+export const ReviewVerdictSchema = z.enum(REVIEW_VERDICTS);
 
 export const VERIFICATION_MODES = ["evidence", "tests_only"] as const;
 export type VerificationMode = (typeof VERIFICATION_MODES)[number];
