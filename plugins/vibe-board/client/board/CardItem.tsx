@@ -30,6 +30,7 @@ export function CardItem({
   const { theme } = useHost();
   const preset = presetsById.get(card.presetId ?? "") ?? presetsById.get(card.suggestedPresetId ?? "");
   const suggestedOnly = !card.presetId && !!card.suggestedPresetId;
+  const reviewer = presetsById.get(card.reviewerPresetId ?? "");
   return (
     <View
       style={{
@@ -63,6 +64,14 @@ export function CardItem({
             >
               {PRIORITY_LABELS[card.priority]}
             </Text>
+          ) : null}
+          {card.reviewerPresetId ? (
+            <View
+              accessibilityLabel={`复核模型：${reviewer?.name ?? "已指定"}`}
+              style={{ paddingHorizontal: 5, borderRadius: 4, backgroundColor: theme.colors.surface2 }}
+            >
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>复核</Text>
+            </View>
           ) : null}
           {card.needsEvidence ? <Icon name="Camera" size={12} color={theme.colors.foregroundMuted} /> : null}
         </View>

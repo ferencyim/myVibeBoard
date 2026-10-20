@@ -29,6 +29,7 @@ const MASTER_ALERT_LABELS: Record<string, string> = {
   quota_error: "Master: quota error",
   maintenance_paused: "Maintenance rule paused",
   permission_wait: "Master: waiting for permission",
+  review_loop: "Review: repeated severe issues",
 };
 
 export function startNotifyConsumer(options: NotifyOptions): EventConsumer {

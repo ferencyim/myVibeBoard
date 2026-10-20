@@ -14,7 +14,9 @@ import {
   needsAttention,
   previewKind,
   provenance,
+  reviewSeverity,
   simulatedNotice,
+  splitReview,
   textExcerpt,
   unattachedEvidence,
 } from "../client/verification/logic";
@@ -235,5 +237,21 @@ describe("verification service (reads vibe-verify tables, queues decisions)", ()
     const server = { handle: (def: { name: string }) => handled.push(def.name) } as never;
     registerBoardRpcs(server, board, { verify: createVerifyService({ db: runtime.db, board }) });
     for (const def of Object.values(rpc.VIBE_VERIFY_UI_RPCS)) expect(handled).toContain(def.name);
+  });
+});
+
+describe("review items", () => {
+  const item = (kind: "check" | "review", method: string) => ({ kind, method });
+  it("groups kind=review separately, worst severity first", () => {
+    const items = [
+      item("review", "review:minor"),
+      item("check", "auto"),
+      item("review", "review:severe"),
+      item("review", "review:major"),
+    ];
+    const { checks, reviews } = splitReview(items);
+    expect(checks).toHaveLength(1);
+    expect(reviews.map(reviewSeverity)).toEqual(["severe", "major", "minor"]);
+    expect(reviewSeverity(item("review", "review"))).toBeUndefined();
   });
 });

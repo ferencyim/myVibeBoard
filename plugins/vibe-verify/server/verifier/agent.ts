@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
 import { z } from "zod";
+import { REVIEWER_SYSTEM_PROMPT } from "../review";
 import { JudgementSchema, type CardView, type Preset, type Project } from "../vibe/contract";
 
 export interface VerifierRun {
@@ -29,6 +30,8 @@ export interface LaunchInput {
   cwd: string;
   workspaceId: string | null;
   outputDir: string;
+  /** reviewer = model code review (same read-only guards, different prompt); default verifier. */
+  role?: "verifier" | "reviewer";
 }
 
 export interface VerifierLauncher {
@@ -119,10 +122,10 @@ export function createPaseoVerifierLauncher(options: PaseoLauncherOptions): Veri
         : input.provider;
       const create = {
         agentId,
-        title: `${input.card.key} verify`,
-        labels: { cardKey: input.card.key, cardId: input.card.id, role: "verifier" },
+        title: `${input.card.key} ${input.role === "reviewer" ? "review" : "verify"}`,
+        labels: { cardKey: input.card.key, cardId: input.card.id, role: input.role ?? "verifier" },
         env: { VIBE_ROLE: "verifier", VIBE_CARD_ID: input.card.id, VIBE_CARD_KEY: input.card.key },
-        config: { provider: spec, systemPrompt: VERIFIER_SYSTEM_PROMPT },
+        config: { provider: spec, systemPrompt: input.role === "reviewer" ? REVIEWER_SYSTEM_PROMPT : VERIFIER_SYSTEM_PROMPT },
       };
       const handle = input.workspaceId
         ? await paseo.workspaces.ref(input.workspaceId).agents.create(create)
