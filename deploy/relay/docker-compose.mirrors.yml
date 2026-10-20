@@ -1,0 +1,38 @@
+# Optional override for hosts that cannot reach hex.pm / deb.debian.org (e.g. mainland China).
+# Enabled by RELAY_BUILD_MIRRORS=1. It replaces the relay's Dockerfile with an inline copy of the upstream
+# Dockerfile at the pinned RELAY_REF, plus mirror settings. When you bump RELAY_REF, re-diff this copy against
+# https://github.com/getpaseo/paseo-relay/blob/<RELAY_REF>/Dockerfile and update it.
+services:
+  relay:
+    build:
+      dockerfile_inline: |
+        FROM hexpm/elixir:1.20.2-erlang-29.0.2-debian-bookworm-20260623-slim AS build
+        WORKDIR /app
+        ENV MIX_ENV=prod \
+            HEX_MIRROR=${HEX_MIRROR:-https://hexpm.upyun.com} \
+            HEX_HTTP_TIMEOUT=300
+        # `mix local.hex/local.rebar` time out behind the GFW; fetch the archives directly instead.
+        # Hex build must match this image's Elixir/OTP (Elixir 1.20, OTP 29).
+        ADD https://builds.hex.pm/installs/1.20.0/hex-2.5.3-otp-29.ez /tmp/hex.ez
+        ADD https://github.com/erlang/rebar3/releases/download/3.27.3/rebar3 /tmp/rebar3
+        COPY mix.exs mix.lock ./
+        RUN mix archive.install --force /tmp/hex.ez \
+            && chmod +x /tmp/rebar3 && mix local.rebar --force rebar3 /tmp/rebar3 \
+            && mix deps.get --only prod
+        COPY config config
+        COPY lib lib
+        RUN mix compile && mix release
+
+        FROM debian:bookworm-slim
+        RUN sed -i "s|deb.debian.org|${DEBIAN_MIRROR:-mirrors.tencent.com}|g" /etc/apt/sources.list.d/debian.sources \
+            && apt-get update && apt-get install -y --no-install-recommends libstdc++6 libsctp1 openssl ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=build /app/_build/prod/rel/paseo_relay ./
+        ENV HOME=/app \
+            PASEO_RELAY_HOST=0.0.0.0 \
+            PASEO_RELAY_PORT=4000 \
+            PASEO_RELAY_DRAIN=false
+        EXPOSE 4000
+        ENTRYPOINT ["/app/bin/paseo_relay"]
+        CMD ["start"]

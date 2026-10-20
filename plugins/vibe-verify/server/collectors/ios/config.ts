@@ -38,6 +38,11 @@ export const IosAppConfigSchema = z.object({
 export const IosConfigSchema = z.object({
   /** ssh host alias of the Mac; plugin option / VIBE_MAC_HOST take precedence. */
   host: z.string().optional(),
+  /**
+   * DEVELOPER_DIR on the Mac when xcode-select does not point at the wanted Xcode (e.g. Xcode on
+   * an external disk). Plugin option / VIBE_MAC_DEVELOPER_DIR take precedence.
+   */
+  developerDir: z.string().optional(),
   /** Simulator name or UDID (ctx.deviceId wins). */
   device: z.string().optional(),
   app: IosAppConfigSchema,

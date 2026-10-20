@@ -18,6 +18,7 @@ interface FakeMac {
   crashFiles?: string[];
   launchFails?: boolean;
   alreadyBooted?: boolean;
+  noDeveloperDir?: boolean;
 }
 
 function fakeMac(o: FakeMac = {}) {
@@ -33,7 +34,8 @@ function fakeMac(o: FakeMac = {}) {
       return {};
     }
     const cmd = sshCommand(call);
-    if (cmd.startsWith("uname")) {
+    if (cmd.includes("uname && xcodebuild")) {
+      if (o.noDeveloperDir && cmd.includes("[ -d")) return { exitCode: 3, stdout: "VIBE_NO_DEVELOPER_DIR\n" };
       if (o.sshFails) return { exitCode: 255, stderr: "ssh: Could not resolve hostname" };
       const out = `${o.uname ?? "Darwin"}\n`;
       if (!o.xcode) return { exitCode: 127, stdout: out, stderr: "xcodebuild: command not found" };
@@ -83,10 +85,44 @@ describe("ios collector detect()", () => {
 
   it("explains missing Xcode, non-macOS and ssh failures", async () => {
     const make = (m: FakeMac) => createIosCollector({ host: "macbox", config: config() }).detect(makeCtx({ runner: fakeMac(m) }));
-    expect((await make({ xcode: false })).reason).toMatch(/Xcode is not installed/);
+    expect((await make({ xcode: false })).reason).toMatch(/Xcode is not usable.*developerDir/);
     expect((await make({ xcode: false, uname: "Linux" })).reason).toMatch(/not macOS/);
     expect((await make({ sshFails: true })).reason).toMatch(/ssh to the Mac failed: ssh: Could not resolve/);
     expect((await make({ xcode: true, simctl: false })).reason).toMatch(/simctl not found/);
+  });
+
+  it("probes with DEVELOPER_DIR and reports an unmounted disk", async () => {
+    delete process.env.VIBE_MAC_DEVELOPER_DIR;
+    const dir = "/Volumes/Disk/Xcode.app/Contents/Developer";
+    const runner = fakeMac({ xcode: true });
+    const c = createIosCollector({ host: "macbox", developerDir: dir, config: config() });
+    expect(await c.detect(makeCtx({ runner }))).toEqual({ available: true });
+    const probe = sshCommand(runner.calls[0]);
+    expect(probe).toContain(`export DEVELOPER_DIR='${dir}'; [ -d '${dir}' ]`);
+    const missing = await createIosCollector({ host: "macbox", developerDir: dir, config: config() }).detect(
+      makeCtx({ runner: fakeMac({ noDeveloperDir: true }) }),
+    );
+    expect(missing.available).toBe(false);
+    expect(missing.reason).toMatch(/does not exist on the Mac.*disk.*mounted/);
+  });
+
+  it("takes developerDir from env, then verify config", async () => {
+    process.env.VIBE_MAC_DEVELOPER_DIR = "/env/Developer";
+    try {
+      const runner = fakeMac({ xcode: true });
+      await createIosCollector({ host: "macbox", config: { ...config(), developerDir: "/cfg/Developer" } }).detect(
+        makeCtx({ runner }),
+      );
+      expect(sshCommand(runner.calls[0])).toContain("export DEVELOPER_DIR='/env/Developer'");
+      delete process.env.VIBE_MAC_DEVELOPER_DIR;
+      const runner2 = fakeMac({ xcode: true });
+      await createIosCollector({ host: "macbox", config: { ...config(), developerDir: "/cfg/Developer" } }).detect(
+        makeCtx({ runner: runner2 }),
+      );
+      expect(sshCommand(runner2.calls[0])).toContain("export DEVELOPER_DIR='/cfg/Developer'");
+    } finally {
+      delete process.env.VIBE_MAC_DEVELOPER_DIR;
+    }
   });
 
   it("rejects a hostile host alias instead of running ssh", async () => {

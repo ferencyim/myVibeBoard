@@ -25,6 +25,8 @@ import { RemoteMacExecutor, assertValidRemotePath, shQuote } from "./remote-mac"
 export interface IosCollectorOptions {
   /** ssh alias of the Mac. Default: VIBE_MAC_HOST env, then `ios.host` of verify.json. */
   host?: string;
+  /** DEVELOPER_DIR on the Mac. Default: VIBE_MAC_DEVELOPER_DIR env, then `ios.developerDir`. */
+  developerDir?: string;
   /** Default: `ios` section of `<worktree>/.vibe/verify.json`. */
   config?: IosConfig | ((ctx: CollectorContext) => IosConfig);
   sshPath?: string;
@@ -66,22 +68,24 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
     if (!configured) throw new Error("No ios section in .vibe/verify.json and no config option");
     return configured;
   };
-  const resolveHost = (ctx: CollectorContext): string | undefined => {
-    let fromConfig: string | undefined;
+  const configField = (ctx: CollectorContext, field: "host" | "developerDir"): string | undefined => {
     try {
-      fromConfig =
-        typeof options.config === "object"
-          ? options.config.host
-          : loadVerifyConfig(ctx.worktreePath).ios?.host;
+      return typeof options.config === "object"
+        ? options.config[field]
+        : loadVerifyConfig(ctx.worktreePath).ios?.[field];
     } catch {
-      // an invalid verify.json is reported by collect()
+      return undefined; // an invalid verify.json is reported by collect()
     }
-    return options.host ?? process.env.VIBE_MAC_HOST ?? fromConfig;
   };
+  const resolveHost = (ctx: CollectorContext): string | undefined =>
+    options.host ?? process.env.VIBE_MAC_HOST ?? configField(ctx, "host");
+  const resolveDeveloperDir = (ctx: CollectorContext): string | undefined =>
+    options.developerDir || process.env.VIBE_MAC_DEVELOPER_DIR || configField(ctx, "developerDir") || undefined;
   const newExec = (ctx: CollectorContext, host: string) =>
     new RemoteMacExecutor(ctx.runner, host, {
       sshPath: options.sshPath,
       scpPath: options.scpPath,
+      developerDir: resolveDeveloperDir(ctx),
       signal: ctx.signal,
     });
 
@@ -96,12 +100,24 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
     } catch (e) {
       return { available: false, reason: msg(e) };
     }
-    // Spec probe: `uname && xcodebuild -version`, plus simctl presence.
-    const r = await exec.shell("uname && xcodebuild -version && xcrun --find simctl", {
-      timeoutMs: 30_000,
-    });
+    const developerDir = resolveDeveloperDir(ctx);
+    // Spec probe: `uname && xcodebuild -version`, plus simctl presence. With a developerDir, a
+    // missing directory (external disk not mounted) is reported on its own.
+    const probe = "uname && xcodebuild -version && xcrun --find simctl";
+    const r = await exec.shell(
+      developerDir
+        ? `[ -d ${shQuote(developerDir)} ] || { echo VIBE_NO_DEVELOPER_DIR; exit 3; }; ${probe}`
+        : probe,
+      { timeoutMs: 30_000 },
+    );
     if (r.timedOut) return { available: false, reason: `ssh to ${host} timed out` };
     const out = r.stdout;
+    if (developerDir && out.includes("VIBE_NO_DEVELOPER_DIR")) {
+      return {
+        available: false,
+        reason: `developerDir ${developerDir} does not exist on the Mac (is the external disk with Xcode mounted?)`,
+      };
+    }
     if (r.exitCode === 0) {
       return out.startsWith("Darwin")
         ? { available: true }
@@ -115,7 +131,12 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
       return { available: false, reason: "remote host is not macOS" };
     }
     if (!/Xcode/.test(out)) {
-      return { available: false, reason: "Xcode is not installed on the Mac (xcodebuild -version failed)" };
+      return {
+        available: false,
+        reason: developerDir
+          ? `xcodebuild -version failed with DEVELOPER_DIR=${developerDir}: ${detail}`
+          : `Xcode is not usable on the Mac (xcodebuild -version failed${detail ? `: ${detail}` : ""}); if Xcode is installed elsewhere (e.g. an external disk) set ios.developerDir / VIBE_MAC_DEVELOPER_DIR`,
+      };
     }
     return { available: false, reason: "xcrun simctl not found on the Mac (Xcode command line tools?)" };
   }

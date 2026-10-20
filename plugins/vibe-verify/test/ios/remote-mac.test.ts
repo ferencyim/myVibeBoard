@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   RemoteMacExecutor,
+  assertValidDeveloperDir,
   assertValidHost,
   assertValidRemotePath,
   shQuote,
@@ -63,5 +64,24 @@ describe("RemoteMacExecutor", () => {
     expect(r.calls[0].command).toBe("myscp");
     expect(r.calls[0].args.slice(-4)).toEqual(["-r", "--", "/local/App.app", "macbox:/tmp/w/App.app"]);
     expect(r.calls[1].args.slice(-3)).toEqual(["--", "macbox:/tmp/w/a.png", "/out/a.png"]);
+  });
+});
+
+describe("developerDir", () => {
+  it("is exported before every remote command, quoted", async () => {
+    const runner = createScriptedRunner(() => ({}));
+    const mac = new RemoteMacExecutor(runner, "macbox", { developerDir: "/Volumes/My Disk/X.app/Contents/Developer" });
+    await mac.exec(["xcrun", "simctl", "list"]);
+    await mac.shell("cd '/tmp' && xcodebuild -version");
+    const cmds = runner.calls.map((c) => String(c.args[c.args.length - 1]));
+    expect(cmds[0]).toBe("export DEVELOPER_DIR='/Volumes/My Disk/X.app/Contents/Developer'; 'xcrun' 'simctl' 'list'");
+    expect(cmds[1]).toMatch(/^export DEVELOPER_DIR='[^']+'; cd '\/tmp' && xcodebuild/);
+  });
+  it("leaves commands untouched without it and rejects relative paths", async () => {
+    const runner = createScriptedRunner(() => ({}));
+    await new RemoteMacExecutor(runner, "macbox").shell("uname");
+    expect(runner.calls[0].args[runner.calls[0].args.length - 1]).toBe("uname");
+    expect(() => assertValidDeveloperDir("relative/dir")).toThrow();
+    expect(() => assertValidDeveloperDir("/a\nb")).toThrow();
   });
 });

@@ -24,6 +24,10 @@ expect_contains "$out" "proxy_read_timeout 3600s;" "long timeout"
 expect_contains "$out" "+ nginx -t" "nginx -t is run"
 expect_contains "$out" "nginx-summary" "nginx -T summary backup"
 expect_contains "$out" "up -d --build" "compose up"
+expect_contains "$out" "VIBE_PUSH_AUTH_TOKEN=<random-hex generated at install>" "push token generated into env file (placeholder in dry-run)"
+expect_contains "$out" "push gateway /healthz" "push smoke check"
+expect_contains "$out" "ssl_certificate     /etc/ssl/vibe-relay/fullchain.pem;" "existing cert referenced by path"
+expect_absent "$out" "openssl x509" "certificate is never modified or inspected in dry-run"
 expect_absent "$out" "@" "no unreplaced @placeholders@"
 # nginx -t must come before reload
 pos_t="$(grep -n '^+ nginx -t' <<<"$out" | head -1 | cut -d: -f1)"
@@ -34,10 +38,21 @@ pos_r="$(grep -n '^+ nginx -s reload' <<<"$out" | head -1 | cut -d: -f1)"
 sed -e 's/<PINNED_TAG_OR_SHA>/v0.0.0-example/' -e 's/^PUSH_PORT=.*/PUSH_PORT=/' "$DIR/relay.env.example" >"$TMP/nopush.env"
 out2="$(bash "$DIR/install.sh" --env-file "$TMP/nopush.env" --dry-run 2>&1)"
 expect_absent "$out2" "location /push/" "no push location when PUSH_PORT empty"
+expect_absent "$out2" "VIBE_PUSH_AUTH_TOKEN" "no push env file when PUSH_PORT empty"
 
 # placeholder ref and missing vars are rejected
 bash "$DIR/install.sh" --env-file "$DIR/relay.env.example" --dry-run >/dev/null 2>&1 && bad "placeholder RELAY_REF rejected" || ok "placeholder RELAY_REF rejected"
 env -u RELAY_DOMAIN bash "$DIR/install.sh" --dry-run >/dev/null 2>&1 && bad "missing vars rejected" || ok "missing vars rejected"
+
+# compose: both services bind loopback only, relay needs no env file
+c="$(cat "$DIR/docker-compose.yml")"
+expect_contains "$c" '127.0.0.1:${RELAY_PORT' "relay port bound to loopback"
+expect_contains "$c" '127.0.0.1:${PUSH_PORT' "push port bound to loopback"
+expect_absent "$c" "RELAY_APP_ENV_FILE" "relay has no app env file requirement"
+
+# PUSH_PORT equal to RELAY_PORT is rejected
+sed -e 's/<PINNED_TAG_OR_SHA>/v0.0.0-example/' -e 's/^PUSH_PORT=.*/PUSH_PORT=14000/' "$DIR/relay.env.example" >"$TMP/clash.env"
+bash "$DIR/install.sh" --env-file "$TMP/clash.env" --dry-run >/dev/null 2>&1 && bad "PUSH_PORT == RELAY_PORT rejected" || ok "PUSH_PORT == RELAY_PORT rejected"
 
 # uninstall dry-run
 uout="$(bash "$DIR/uninstall.sh" --env-file "$TMP/relay.env" --dry-run 2>&1)"; rc=$?
@@ -55,7 +70,7 @@ else echo "skip - shellcheck not installed"; fi
 
 : >"$TMP/app.env"
 if command -v docker >/dev/null; then
-  (cd "$DIR" && RELAY_REF=v0 RELAY_REF_TAG=v0 RELAY_PORT=14000 RELAY_APP_ENV_FILE="$TMP/app.env" \
+  (cd "$DIR" && RELAY_REF=v0 RELAY_REF_TAG=v0 RELAY_PORT=14000 PUSH_PORT=18787 PUSH_ENV_FILE="$TMP/app.env" COMPOSE_PROFILES=push \
     docker compose -f docker-compose.yml config -q) && ok "docker compose config" || bad "docker compose config"
 else echo "skip - docker not installed (docker compose config not run)"; fi
 

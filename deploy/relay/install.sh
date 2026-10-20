@@ -47,7 +47,7 @@ rollback() {
     cp -f "$SITE_PREV" "$SITE_FILE" && log "restored previous $SITE_FILE"
   fi
   if [ "$STACK_CREATED" = 1 ]; then
-    docker compose --project-name "$RELAY_PROJECT" -f "$COMPOSE_FILE" down || true
+    docker compose --project-name "$RELAY_PROJECT" "${COMPOSE_FILES[@]}" down || true
   fi
 }
 
@@ -59,6 +59,15 @@ preflight() {
   require_root_and_tools
   [ -r "$TLS_CERT" ] || die "TLS_CERT not readable: $TLS_CERT"
   [ -r "$TLS_KEY" ] || die "TLS_KEY not readable: $TLS_KEY"
+  if command -v openssl >/dev/null && ! openssl x509 -in "$TLS_CERT" -noout -checkhost "$RELAY_DOMAIN" 2>/dev/null | grep -q 'does match'; then
+    die "TLS_CERT does not cover $RELAY_DOMAIN (read-only check; the certificate is never modified)"
+  fi
+  if [ -n "$PUSH_PORT" ]; then
+    [ -f "$SCRIPT_DIR/../../services/vibe-push-gateway/Dockerfile" ] || die "PUSH_PORT is set but services/vibe-push-gateway is not next to deploy/ (copy both directories)"
+    if ss -ltn 2>/dev/null | grep -qE "127\.0\.0\.1:${PUSH_PORT}[[:space:]]" && [ -z "$(docker compose --project-name "$RELAY_PROJECT" ps -q 2>/dev/null)" ]; then
+      die "127.0.0.1:$PUSH_PORT is already in use by something else"
+    fi
+  fi
   if [ -e "$SITE_FILE" ] && ! grep -qF "$SITE_MARKER" "$SITE_FILE"; then
     die "$SITE_FILE exists and was not created by vibe-relay; refusing to touch it (pick another NGINX_SITE_NAME)"
   fi
@@ -84,11 +93,15 @@ else
   nginx -T 2>&1 | grep -E 'configuration file|server_name|listen' >"$STATE_DIR/nginx-summary-$STAMP.txt" || true
 fi
 
-# 2. relay app env file (secrets live only here; created empty, mode 600)
-APP_ENV_CREATED=""
-if [ "$DRY_RUN" = 1 ] || [ ! -e "$RELAY_APP_ENV_FILE" ]; then
-  : | write_file "$RELAY_APP_ENV_FILE" 600
-  APP_ENV_CREATED="$RELAY_APP_ENV_FILE"
+# 2. push gateway env file (holds the generated shared token; mode 600; never printed)
+PUSH_ENV_CREATED=""
+if [ -n "$PUSH_PORT" ] && { [ "$DRY_RUN" = 1 ] || [ ! -e "$PUSH_ENV_FILE" ]; }; then
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "VIBE_PUSH_AUTH_TOKEN=<random-hex generated at install>" | write_file "$PUSH_ENV_FILE" 600
+  else
+    echo "VIBE_PUSH_AUTH_TOKEN=$(openssl rand -hex 32)" | write_file "$PUSH_ENV_FILE" 600
+  fi
+  PUSH_ENV_CREATED="$PUSH_ENV_FILE"
 fi
 
 # 3. build + start the container (loopback-only port)
@@ -114,15 +127,21 @@ trap - ERR
 {
   echo "SITE_FILE=$SITE_FILE"
   echo "RELAY_PROJECT=$RELAY_PROJECT"
-  echo "APP_ENV_CREATED=$APP_ENV_CREATED"
+  echo "PUSH_ENV_CREATED=$PUSH_ENV_CREATED"
   echo "INSTALLED_AT=$STAMP"
 } | write_file "$MANIFEST" 600
 
 # 6. non-fatal smoke check
 if [ "$DRY_RUN" = 1 ]; then
-  echo "+ curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:$RELAY_PORT/"
+  echo "+ curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:$RELAY_PORT/health (and push gateway /healthz)"
 else
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$RELAY_PORT/" || true)"
-  log "relay answered HTTP ${code:-none} on 127.0.0.1:$RELAY_PORT (any code means it is up)"
+  sleep 3
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$RELAY_PORT/health" || true)"
+  log "relay /health answered HTTP ${code:-none} on 127.0.0.1:$RELAY_PORT (expect 200)"
+  if [ -n "$PUSH_PORT" ]; then
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$PUSH_PORT/healthz" || true)"
+    log "push gateway /healthz answered HTTP ${code:-none} on 127.0.0.1:$PUSH_PORT (expect 200)"
+  fi
 fi
 log "Done. Daemon config: relay endpoint ${RELAY_DOMAIN}:443, useTls=true."
+[ -z "$PUSH_PORT" ] || log "Push gateway token (daemon PASEO_PUSH_GATEWAY_TOKEN): see $PUSH_ENV_FILE"

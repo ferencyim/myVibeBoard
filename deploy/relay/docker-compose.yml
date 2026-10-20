@@ -11,8 +11,9 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${RELAY_PORT:?set RELAY_PORT}:${RELAY_CONTAINER_PORT:-4000}"
-    env_file:
-      - ${RELAY_APP_ENV_FILE:?set RELAY_APP_ENV_FILE}
+    # The relay needs no secrets; every setting is optional (PASEO_RELAY_* in its README).
+    environment:
+      PASEO_RELAY_MEMORY_WATERMARK_BYTES: ${RELAY_MEMORY_WATERMARK_BYTES:-0}
     networks: [relay-net]
     privileged: false
     cap_drop: [ALL]
@@ -20,6 +21,30 @@ services:
     mem_limit: ${RELAY_MEM_LIMIT:-512m}
     cpus: ${RELAY_CPUS:-1.0}
     pids_limit: ${RELAY_PIDS_LIMIT:-256}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Optional push gateway (services/vibe-push-gateway); started only with COMPOSE_PROFILES=push
+  # (lib.sh sets it when PUSH_PORT is non-empty). Dry-run unless a FCM service account is added.
+  push:
+    profiles: [push]
+    image: ${RELAY_PROJECT:-vibe-relay}-push:local
+    build:
+      context: ../../services/vibe-push-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PUSH_PORT:-18787}:8787"
+    env_file:
+      - ${PUSH_ENV_FILE:-/dev/null}
+    networks: [relay-net]
+    privileged: false
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
