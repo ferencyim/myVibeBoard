@@ -45,7 +45,20 @@ const LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
 const MAX_RESEARCH_ROUNDS = 2;
 const MAX_LOOPS = 10;
 const SCOUT_TIMEOUT_MS = 5 * 60_000;
+/** Read-only mode of the known providers; any other provider is looked up in its mode catalog. */
 const SCOUT_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
+const READ_ONLY_MODE = /^(plan|read[-_ ]?only)$/i;
+
+async function scoutModeOf(paseo: MasterPaseo, provider: string): Promise<string | undefined> {
+  const known = SCOUT_MODE[provider];
+  if (known) return known;
+  try {
+    const res = await paseo.providers.listModes?.(provider);
+    return res?.modes?.find((m) => READ_ONLY_MODE.test(m.id) || READ_ONLY_MODE.test(m.label))?.id;
+  } catch {
+    return undefined; // the provider's default mode
+  }
+}
 
 export interface PlanningDeps {
   db: VibeDb;
@@ -302,7 +315,7 @@ export function createPlanning(deps: PlanningDeps) {
       return requests.map((r) => ({ ...r, ok: false, answer: `cannot run a scout: ${why}` }));
     }
     const target = await deps.master.currentTarget();
-    const modeId = SCOUT_MODE[target.provider];
+    const modeId = await scoutModeOf(paseo, target.provider);
     return Promise.all(
       requests.map(async (r): Promise<ResearchItem> => {
         let agent: MasterAgentHandle | null = null;
@@ -351,6 +364,7 @@ export function createPlanning(deps: PlanningDeps) {
       tags,
       recommendedPresetId: preset?.id ?? null,
       ...(plan.notes ? { notes: plan.notes } : {}),
+      ...(plan.files?.length ? { files: plan.files } : {}),
     };
     const latest = store.plans.list(card.id).at(-1);
     if (latest && JSON.stringify(latest.snapshot) === JSON.stringify(snapshot)) return latest.version;

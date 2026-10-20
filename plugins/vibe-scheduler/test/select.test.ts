@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_PROFILES,
   mergeProfiles,
+  NEUTRAL_TIER,
+  type AgentProfile,
   neededTier,
   parseWorkerHistory,
   selectAgent,
@@ -17,6 +18,41 @@ const quota = (over: Record<string, ProviderQuota> = {}) => ({
   kimi: ok,
   deepseek: ok,
   ...over,
+});
+
+// Explicit capability table (settings.agentProfiles); the built-in table is derived from providers.
+const OVERRIDES: AgentProfile[] = [
+  { id: "claude", provider: "claude", tier: 3, strengths: ["refactor", "architecture", "bug", "backend", "android", "web"] },
+  { id: "codex", provider: "codex", tier: 3, strengths: ["bug", "backend", "test", "web", "refactor"] },
+  { id: "kimi", provider: "kimi", tier: 2, strengths: ["web", "docs", "frontend"] },
+  { id: "deepseek", provider: "deepseek", tier: 1, strengths: ["docs", "test", "chore", "backend"] },
+];
+const DEFAULT_PROFILES = mergeProfiles(OVERRIDES);
+
+describe("capability table from providers", () => {
+  it("gives every provider of the catalog a neutral profile, unknown ones included", () => {
+    const t = mergeProfiles([], ["my-plugin-agent", "opencode", "my-plugin-agent", ""]);
+    expect(t).toEqual([
+      { id: "my-plugin-agent", provider: "my-plugin-agent", tier: NEUTRAL_TIER, strengths: [] },
+      { id: "opencode", provider: "opencode", tier: NEUTRAL_TIER, strengths: [] },
+    ]);
+  });
+
+  it("lets agentProfiles override a derived entry and add extra agents", () => {
+    const t = mergeProfiles(
+      [
+        { id: "opencode", provider: "opencode", tier: 3, strengths: ["web"] },
+        { id: "opencode-fast", provider: "opencode", tier: 1, strengths: [] },
+      ],
+      ["opencode", "other"],
+    );
+    expect(t.map((p) => [p.id, p.tier])).toEqual([["opencode", 3], ["other", NEUTRAL_TIER], ["opencode-fast", 1]]);
+  });
+
+  it("can select an unknown provider with no declared strengths", () => {
+    const s = selectAgent(mergeProfiles([], ["opencode"]), { tags: ["x"], priority: "medium" }, { quota: {} });
+    expect(s.agentId).toBe("opencode");
+  });
 });
 
 describe("selectAgent", () => {

@@ -1,11 +1,12 @@
-# 四个 Agent 接入指南（P0#4）
+# Agent 接入指南（P0#4）
 
-目标：Paseo 里只保留 Claude Code、Codex、Kimi、DeepSeek 四个 agent，其余 provider 全部关闭。
+目标：按你的需要启用 Paseo 支持的 provider。Claude Code、Codex、Kimi、DeepSeek 只是本文的**示例**，不是必须、也不是仅有的四个：
+Paseo 支持的任何 provider（内置、ACP 目录里的、插件提供的）启用后，看板、总 agent、调度器都会自动把它当作可选 agent，不需要改代码。
 **本文不替你登录任何服务，也不含任何凭据。** 所有登录都在终端里由你自己完成。
 
 ## 方案：只用用户级配置，不改 packages/ 核心
 
-- 关闭其他 provider：在 `~/.paseo/config.json`（即 `$PASEO_HOME/config.json`）的 `agents.providers` 下写 `enabled: false`。这是 Paseo 的标准机制，对内置 provider 和插件 provider 都有效，无需改核心代码。
+- 启用/关闭任意 provider：在 `~/.paseo/config.json`（即 `$PASEO_HOME/config.json`）的 `agents.providers` 下写 `enabled: false`。这是 Paseo 的标准机制，`enabled: true` 启用、`false` 关闭，对内置 provider 和插件 provider 都有效，无需改核心代码。不想用的可以关，想用的随时开。
 - Kimi：Paseo 内置 ACP 目录（`packages/app/src/data/acp-provider-catalog.ts`，id `kimi`，命令 `kimi acp`），在 App 里添加即可，等价于手写 `extends: "acp"`。
 - DeepSeek：用仓库内的 `plugins/deepseek-harness/`（来源见该目录 `UPSTREAM.md`），以目录插件方式安装，provider id 为 `deepseek-harness`。
 - 本仓库的三个社区插件（`vibe-board`、`switch-provider`、`deepseek-harness`）是独立项目，不是内置插件；是否启用由 `pluginsEnabled` 和 `plugins` 决定。
@@ -16,7 +17,7 @@
 内置插件 provider：`antigravity`、`muse`、`hoplite`（hoplite 仅在 `agents.providers` 里出现时才参与，不写即不启用）。
 ACP 目录里的其他 agent 只有被添加后才会出现。
 
-配置示例（保留四个，关闭其余；Kimi、DeepSeek 见下文）：
+配置示例（示例：启用 claude、codex，关闭其余；Kimi、DeepSeek 见下文，其他 provider 照此增删即可）：
 
 ```json
 {
@@ -113,9 +114,23 @@ paseo reload
    - 注意 dsh 默认会向 DeepSeek 随请求上传会话日志的一部分（`session-log-deepseek`，SDK profile 文档），如不希望可在其 profile 里按官方文档关闭；另可设 `DSH_TELEMETRY_MODE=DISABLED` 关闭遥测。
 6. 已知限制（来自插件文档）：dsh 不回放历史，daemon 重启或 agent reload 后上下文还在，但时间线显示为空；不支持 provider 斜杠命令、steering、plan；Paseo 的额外系统提示不会传给 dsh；Windows 与手机客户端未经作者测试。
 
+## 启用其他任意 provider
+
+1. 内置 provider（如 `copilot`、`opencode`、`pi`）：在 `agents.providers.<id>` 写 `enabled: true`，并按其 CLI 要求安装、登录。
+2. ACP 目录里的 agent：App 设置 → Providers → 添加 ACP provider 目录，选中即可（等价于手写 `extends: "acp"` 与 `command`）。
+3. 插件 provider：`paseo plugin install <插件目录>`，装好后在 provider 列表里出现，必要时同样用 `enabled` 控制。
+4. 看板侧无需额外配置：预设（preset）里选这个 provider 即可；总 agent 的推荐、调度器的并发上限与额度闸门都以 provider id 为键，自动覆盖新 provider。
+   - 调度器的能力表（`vibe-scheduler` 设置 `agentProfiles`）为每个 provider 自动生成一条中性默认档（tier 2、无擅长标签）；想让它更偏好/更回避某个 agent，
+     在 `agentProfiles` 里加同 id 的条目覆盖 tier、擅长标签（`strengths`）和支持的平台（`platforms`）。
+   - 每 provider 并发上限用 `providerLimits`，如 `opencode=1`。
+   - 总 agent 自己的 provider/模型由其订阅设置选择；总 agent 的权限模式 `auto` 对未知 provider 会去找名为 `auto` 的模式，找不到就用该 provider 的默认模式，不会报错。
+5. 用量统计（`vibe-stats`）内置解析器只覆盖 Claude Code、Codex、Kimi、DeepSeek 的本地日志；其他 CLI 的会话仍可正常使用，只是不进入 token 统计（不会报错）。
+   需要统计时新增解析器：在 `plugins/vibe-stats/server/parsers.ts` 实现 `Parser`（`provider` 与 `parseLine`，返回统一的用量记录）并登记到 `PARSERS`，
+   在 `paths.ts` 里补日志目录与文件匹配规则，在 `shared/rpc.ts` 的 `PROVIDERS` 加上 id，再给模型补价格（`pricing.ts` 或 `pricingFile`）。
+
 ## 验证清单
 
-1. `paseo provider ls`（或 App 的 provider 列表）只出现 Claude、Codex、Kimi、DeepSeek Harness 四项。
+1. `paseo provider ls`（或 App 的 provider 列表）出现你启用的 provider（示例配置下为 Claude、Codex、Kimi、DeepSeek Harness），没有你不想要的。
 2. 每个 agent 各开一个会话发一句话，确认可回复；再用手机端从同一守护进程发起一次。
 3. 缺少的 CLI 在 provider 列表里会显示不可用及原因，按原因补装即可。
 

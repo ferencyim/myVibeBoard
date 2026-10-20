@@ -57,6 +57,21 @@ describe("reply parsing", () => {
 });
 
 describe("draft assessment write-back", () => {
+  it("stores the expected files in the plan version; replies without files stay valid", async () => {
+    const board = setupBoard();
+    const withFiles = board.draft("Add dark mode toggle");
+    const { assessor } = assessorFor(board, [assessmentJson({ files: ["src/theme/**", "src/app.ts"] })]);
+    await assessor.assess(withFiles.key);
+    const plan = board.store.plans.list(withFiles.id).at(-1)!;
+    expect(plan.snapshot.files).toEqual(["src/theme/**", "src/app.ts"]);
+
+    const without = board.draft("Another card");
+    const second = assessorFor(board, [assessmentJson()]);
+    await second.assessor.assess(without.key);
+    expect(board.store.plans.list(without.id).at(-1)!.snapshot.files).toBeUndefined();
+    expect(parseReply(assessmentJson(), AssessmentSchema)).toMatchObject({ ok: true, value: { files: [] } });
+  });
+
   it("writes the evaluation comment, the plan checks and the suggested preset, and moves nothing", async () => {
     const board = setupBoard();
     const card = board.draft("Add dark mode toggle", { priority: "high" });

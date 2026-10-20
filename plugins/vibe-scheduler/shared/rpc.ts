@@ -34,6 +34,8 @@ export const schedulerSettings = defineSettings({
     tickSeconds: z.number().int().min(1).max(600).default(5),
     sampleSeconds: z.number().int().min(5).max(3600).default(15),
     sampleRetentionDays: z.number().int().min(1).max(365).default(7),
+    /** Hold back a todo card whose plan's files overlap a running card of the same project. */
+    conflictAvoidance: z.boolean().default(true),
     /** Capability table entries; same id replaces the built-in entry. */
     agentProfiles: z.array(AgentProfileSchema).default([]),
   }),

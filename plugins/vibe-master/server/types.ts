@@ -45,6 +45,8 @@ export interface MasterPaseo {
   providers: {
     listModels(provider: string): Promise<{ models?: ModelInfoLike[]; error?: string | null }>;
     listUsage(): Promise<{ providers: UsageProviderLike[] }>;
+    /** Optional like listModes: every provider Paseo knows (built in or from a plugin). */
+    listAvailable?(): Promise<{ providers: Array<{ provider: string; available?: boolean }> }>;
     /** Optional so hand-written fakes stay small; the real PaseoApi always has it. */
     listModes?(provider: string): Promise<{ modes?: Array<{ id: string; label: string }>; error?: string | null }>;
   };

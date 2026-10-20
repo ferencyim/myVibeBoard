@@ -211,17 +211,23 @@ function pickEarlier(a: string | null | undefined, b: string | null): string | n
   return a < b ? a : b;
 }
 
-/** Built-in capability table; override or extend through the plugin settings. */
-export const DEFAULT_PROFILES: AgentProfile[] = [
-  { id: "claude", provider: "claude", tier: 3, strengths: ["refactor", "architecture", "bug", "backend", "android", "web"] },
-  { id: "codex", provider: "codex", tier: 3, strengths: ["bug", "backend", "test", "web", "refactor"] },
-  { id: "kimi", provider: "kimi", tier: 2, strengths: ["web", "docs", "frontend"] },
-  { id: "deepseek", provider: "deepseek", tier: 1, strengths: ["docs", "test", "chore", "backend"] },
-];
+/** Tier given to a provider nobody described: neither cheap nor strongest. */
+export const NEUTRAL_TIER = 2;
 
-/** Merge settings entries over the defaults (same id replaces). */
-export function mergeProfiles(extra: readonly AgentProfile[]): AgentProfile[] {
-  const byId = new Map(DEFAULT_PROFILES.map((p) => [p.id, p]));
+/**
+ * Capability table derived from the providers that actually exist (usage catalog, presets, ...):
+ * every provider id gets one neutral profile (id = provider, tier 2, no declared strengths), so any
+ * Paseo provider - built in or from a plugin - is selectable without code changes. Settings entries
+ * (`agentProfiles`) replace the profile with the same id or add new ones (several agents per provider).
+ */
+export function mergeProfiles(
+  extra: readonly AgentProfile[],
+  providerIds: Iterable<string> = [],
+): AgentProfile[] {
+  const byId = new Map<string, AgentProfile>();
+  for (const id of providerIds) {
+    if (id && !byId.has(id)) byId.set(id, { id, provider: id, tier: NEUTRAL_TIER, strengths: [] });
+  }
   for (const p of extra) byId.set(p.id, p);
   return [...byId.values()];
 }

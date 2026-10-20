@@ -185,7 +185,9 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
 
   /** Entry for the master agent (WP-32) through the `scheduler.selectAgent` RPC. */
   async function select(task: TaskNeeds, repoPath?: string) {
-    const profiles = mergeProfiles(settings.agentProfiles);
+    // Providers come from what exists: the usage catalog and the presets in use.
+    const providerIds = [...Object.keys(quota), ...store.presets.list().map((p) => p.provider)];
+    const profiles = mergeProfiles(settings.agentProfiles, providerIds);
     const running = scheduler.status().running.byProvider;
     const devicesFree: Record<string, number> = {};
     const busy = new Set(leases.activeLeases().map((l) => l.device_id));

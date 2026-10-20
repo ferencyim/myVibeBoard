@@ -357,6 +357,15 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
           options={PRIORITIES.map((p) => ({ label: p, value: p }))}
           onValueChange={(tightMinPriority) => save({ ...values, tightMinPriority })}
         />
+        <SettingsSelect
+          label="Avoid parallel cards on the same files"
+          value={values.conflictAvoidance ? "on" : "off"}
+          options={[
+            { label: "On", value: "on" },
+            { label: "Off", value: "off" },
+          ]}
+          onValueChange={(v) => save({ ...values, conflictAvoidance: v === "on" })}
+        />
         {field("Dev server port base", "devPortBase", 1024, 65000)}
         {field("Dev server port span", "devPortSpan", 10, 5000)}
         {field("Device lease (minutes)", "deviceLeaseMinutes", 1, 100000)}

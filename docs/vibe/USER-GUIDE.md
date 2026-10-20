@@ -71,9 +71,9 @@ daemon 监听非回环地址时必须设置密码）。模拟器里访问宿主�
 
 连上 daemon 后，App 会收到插件界面；`vibe-board` 的界面还会缓存到手机本地（见第 9 节），之后断网也能打开看板。
 
-## 3. 四个 agent 的配置
+## 3. agent 的配置
 
-Claude Code、Codex、Kimi Code、DeepSeek 的安装、登录与 `agents.providers` 配置见 [AGENTS-SETUP.md](AGENTS-SETUP.md)
+Claude Code、Codex、Kimi Code、DeepSeek 只是示例，Paseo 支持的任何 provider（含插件 provider）都可以按需启用；安装、登录、`agents.providers` 配置与如何启用其他 provider 见 [AGENTS-SETUP.md](AGENTS-SETUP.md)
 （本文不重复；所有登录都由你在终端里自己完成）。要点：
 
 - 卡片用「预设」（preset）选 agent：provider、模型、思考档位、权限模式（`accept-edits` / `auto` / `full`）、环境（项目默认 / 新 worktree 等）、
@@ -138,6 +138,8 @@ Claude Code、Codex、Kimi Code、DeepSeek 的安装、登录与 `agents.provide
 - 限制：全局并发 `globalLimit`、每个 provider `providerLimits`、每个项目 `concurrencyLimit`、设备池（模拟器等独占租约），取最小者。
 - 额度：剩余额度低于 `quotaTightPct` 为紧张（只放行高优先级），低于 `quotaExhaustedPct` 为耗尽（不放行）。
 - 内存：占用达到 `memoryThreshold` 时暂停放行并给出最重的会话，回落 5 个点后恢复。
+- 避免冲突：总 agent 评估/规划时会在方案里列出卡片「涉及的文件」（glob）。同一项目里，待办卡的文件与进行中/待验证卡重叠时会被延后，
+  「等待原因」写明「touches the same files as XXX-12」；没有列文件的卡不受限；可在设置里关掉 `conflictAvoidance`。
 - 端口：为每张放行的卡分配一个开发服务器端口，写进 brief。
 - 「Dispatch now」绕过调度器直接派发。
 
@@ -186,8 +188,8 @@ rules:
 ## 10. 用量统计
 
 `Stats` 页（桌面与手机）：按 agent / 模型 / 项目 / 日的 token 分布、估算费用、输出速度（中位与 P90）、额度窗口、每张卡的效率
-（token、活跃时间、等你回复的时间、压缩次数）、资源使用。数据来自对 Claude Code、Codex、Kimi、DeepSeek 本地日志的增量索引
-（Kimi、DeepSeek 的日志格式尚未实机验证）。Claude 5 系与 gpt-6 的模型价格未知，只显示 token 并标「unpriced」，需要在设置里指定 `pricingFile`。
+（token、活跃时间、等你回复的时间、压缩次数）、资源使用。数据来自对本地日志的增量索引，内置解析器覆盖 Claude Code、Codex、Kimi、DeepSeek
+（Kimi、DeepSeek 的日志格式尚未实机验证；其他 CLI 不会报错但暂不计入，新增解析器的方法见 AGENTS-SETUP.md）。Claude 5 系与 gpt-6 的模型价格未知，只显示 token 并标「unpriced」，需要在设置里指定 `pricingFile`。
 
 ## 11. 手机：离线与推送
 

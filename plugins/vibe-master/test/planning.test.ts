@@ -77,6 +77,7 @@ const planA = {
   tags: ["feature", "unknown-tag"],
   recommendedPreset: "Codex Max",
   notes: "Risk: charts hard-code colors.",
+  files: ["src/settings/**", "src/theme.ts"],
 };
 
 describe("thread state", () => {
@@ -151,6 +152,7 @@ describe("planning session", () => {
     const v1 = t.store.plans.list(card.id);
     expect(v1).toHaveLength(1);
     expect(v1[0]!.snapshot.tags).toEqual(["feature"]);
+    expect(v1[0]!.snapshot.files).toEqual(["src/settings/**", "src/theme.ts"]);
     expect(v1[0]!.snapshot.recommendedPresetId).toBe(t.presets.codex.id);
     expect(t.store.cards.get(card.id)!.suggestedPresetId).toBe(t.presets.codex.id);
 
