@@ -1,0 +1,9 @@
+// Init script: make the RN bundler get an absolute entry file (monorepo server root), without editing generated files.
+allprojects { proj ->
+  if (proj.path == ':app') {
+    proj.afterEvaluate {
+      def entry = new File(proj.rootDir.parentFile, "index.ts").absolutePath.replace("\\", "/")
+      proj.extensions.getByName("react").extraPackagerArgs.set(["--entry-file", entry])
+    }
+  }
+}

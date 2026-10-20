@@ -91,6 +91,48 @@ cd android && ./gradlew.bat assembleDebug --no-daemon              # 首次约 1
 
 未安装到任何设备。`adb devices` 当前列出 2 台模拟器（`emulator-5558`、`emulator-5590`，构建期间曾有第三台 `emulator-5620`），**没有真机**。装机命令（需要时自行执行）：`adb -s <serial> install -r packages/app/android/app/build/outputs/apk/debug/app-debug.apk`。
 
+## 4. Android release APK（可安装包，WP-70）
+
+debug APK 要连 Metro、含全部 ABI、体积 485 MB，不适合分发。release 变体把 JS 打成 Hermes 字节码内置，只打 `arm64-v8a`（真机）+ `x86_64`（模拟器），用 Expo 模板自带的 debug keystore 签名（`android/app/debug.keystore`，随 prebuild 生成，**不新增任何签名材料、不入库**）。
+
+```bash
+# 前置：npm ci；npm run build:app-deps；packages/app/node_modules/react-native-enriched-markdown 已在 PowerShell 下跑过 postinstall（见问题 2）
+export JAVA_HOME='D:\devRepoCaches\jdk21\jdk-21.0.12.1+1' ANDROID_HOME="$LOCALAPPDATA/Android/Sdk" APP_VARIANT=development NODE_ENV=production
+cd packages/app            # 已经 prebuild 过则不必再 prebuild（不要加 --clean，会清掉已有 android/）
+npx expo prebuild --platform android --non-interactive
+cd android
+./gradlew.bat assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64 --no-daemon   --init-script ../../../scripts/vibe/android-release-entry.init.gradle
+```
+
+产物：`packages/app/android/app/build/outputs/apk/release/app-release.apk`（包名 `sh.paseo.debug`，应用名 `Paseo Debug`，不会覆盖官方 Paseo；不含 `google-services.json`，所以没有 FCM 推送能力）。
+产物本身不入库；构建结果见文末「构建记录」。
+
+两个必须知道的坑：
+
+1. **monorepo 入口解析失败**：RN 的 Gradle 插件把入口文件以相对路径 `index.ts` 传给 `expo export:embed`，而 Expo 的 Metro 以 monorepo 根为 server root，报 `Unable to resolve module ./index.ts`。`scripts/vibe/android-release-entry.init.gradle` 是一个 Gradle init script，把入口改成绝对路径，不用改任何生成文件或上游文件。
+2. **Windows 长路径**：在 `D:\devRepoCaches\worktrees\<长名字>` 之类的 worktree 里编，`react-native-enriched-markdown` 的 CMake 目标文件路径超过 260 字符，ninja 报 `Filename longer than 260 characters`（主目录 `D:\devRepo\myVibeBoard` 没有这个问题，因为路径短）。用 `subst` 缩短盘符路径也不行（Node `realpath` 会把 subst 盘符还原成真实路径，导致 Gradle 报 `this and base files have different roots`）。所以 **release 包在主目录构建**（只读地构建，产物都在 .gitignore 里）；worktree 里只做代码修改和测试。
+3. `packages/expo-two-way-audio` 必须先 `npm run build`（`build:app-deps` 已包含），否则 Metro 找不到 `build/index.js`。
+4. adb：本机的 adb 5037 服务如果卡死，可用 `adb -P 5038 ...` 另起一个；该模拟器的控制端口是 5590，adb 端口 5591，新起的 adb server 扫描不到，需要先 `adb connect localhost:5591`，之后序列号是 `localhost:5591`。
+
+### daemon / CLI 与 main 一致
+
+`npm run build:server`（highlight/plugin/relay/protocol/client → server → cli）在 worktree 与主目录分别构建通过，产物 `packages/server/dist`、`packages/cli/dist` 与 main 同源。
+
+### 构建记录
+
+2026-10-19，基于 main `c41bbe70f`（paseo 0.12.0），JDK 21，arm64-v8a + x86_64：
+
+| 项                                                                                 | 值                                                                                     |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 路径                                                                               | `D:\devRepo\myVibeBoard\packagesppndroidppuild\outputspk                               |
+| eleasepp-release.apk`（拷贝在 `D:\devRepoCaches mp\wp70-apkpp-release-final.apk`） |
+| 大小                                                                               | 229,422,766 字节（约 219 MB）                                                          |
+| sha256                                                                             | `cd0205ed7d7c0832b16d3b46c15c2e28e59d853a176cb93abdd0a29b5217e667`                     |
+| 签名                                                                               | Expo 模板 debug keystore；包名 `sh.paseo.debug`，versionCode 12000，versionName 0.12.0 |
+| 首次完整构建耗时                                                                   | 18 分 52 秒（含全部原生编译；增量约 13 分钟）                                          |
+
+冷启动测试：共用的无头模拟器（`emulator-5590`，2 GB 内存、swiftshader 软件渲染、4 核、与其他项目共用）在测试期间 system_server 每约 5 分钟被 Watchdog 杀掉重启（连 Chrome 冷启动都要 16～18 秒，Chrome、gms、documentsui 等无关应用同样 ANR，我们的应用在 Watchdog 重启前已报「failed to complete startup」，即进程尚未执行任何 JS），安装 229 MB 的包也反复被打断，所以未能得到可信的 release 冷启动数字。建议换一台干净的 AVD（或真机）复测。
+
 ## 遇到的问题与解决
 
 1. **JDK 25 导致 Gradle 报 `Unsupported class file major version 69`**：改用 JDK 21（Temurin 解压到 `D:\devRepoCaches\jdk21`），通过 `JAVA_HOME` 指定。`.tool-versions` 要求的就是 java 21。
@@ -103,5 +145,5 @@ cd android && ./gradlew.bat assembleDebug --no-daemon              # 首次约 1
 - 未提交上游源码改动；三端构建均未改动 `packages/` 下任何文件。
 - 桌面端只验证了 unpacked 包能启动并拉起 daemon，未验证窗口内 UI 与连接流程；未出 nsis 安装包。
 - `daemon start` 不尊重 `PASEO_LISTEN`，若要在本机与正式 daemon 并存，需要另行确认配置项（P0 后续再查）。
-- debug APK 体积 485 MB（全 ABI + debug 符号），真机安装可考虑只构建 arm64（`-PreactNativeArchitectures=arm64-v8a`），本次未试。
+- debug APK 体积 485 MB；release 变体只打 arm64-v8a + x86_64，见第 4 节。
 - 每次都要手动设 `JAVA_HOME` 与 `ANDROID_HOME`；如需固化，可在 `packages/app/android/gradle.properties`（被 gitignore）里加 `org.gradle.java.home`。
