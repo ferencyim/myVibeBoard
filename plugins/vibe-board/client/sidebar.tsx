@@ -1,5 +1,5 @@
 import { useRpc, useSettings, type PluginSidebarItemProps, type PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { SettingsCard, SettingsSection, SettingsSwitch, SidebarRow } from "@getpaseo/plugin/client/ui";
+import { SettingsCard, SettingsSection, SettingsSelect, SettingsSwitch, SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { Text, View } from "react-native";
@@ -69,6 +69,7 @@ export function BoardSettingsScreen({ theme }: PluginSurfaceProps) {
   }
   const { values, revision } = settings;
   return (
+    <>
     <SettingsSection title="Agent 集成">
       <SettingsCard>
         <SettingsSwitch
@@ -85,5 +86,44 @@ export function BoardSettingsScreen({ theme }: PluginSurfaceProps) {
         />
       </SettingsCard>
     </SettingsSection>
+      <SettingsSection title="卡死检测与失败改派">
+        <SettingsCard>
+          <SettingsSwitch
+            label="检测卡死的 agent"
+            hint="运行中的会话长时间没有输出时，卡片标记「可能卡住」并推送提醒（等待审批不算）。"
+            value={values.stallDetection}
+            onValueChange={(next) => void settings.save({ ...values, stallDetection: next }, revision)}
+          />
+          <SettingsSelect
+            label="无输出多久算卡住"
+            hint="可在设置文件里用 stallProviderMinutes（如 claude=15,codex=8）按 provider 覆盖。"
+            value={String(values.stallMinutes)}
+            options={STALL_MINUTE_OPTIONS}
+            onValueChange={(next) => void settings.save({ ...values, stallMinutes: Number(next) }, revision)}
+          />
+          <SettingsSelect
+            label="卡住后自动中断并续跑"
+            hint="卡住超过该时间后中断 agent，并发送一次「继续」指令；只做一次。"
+            value={String(values.stallAutoInterruptMinutes)}
+            options={AUTO_INTERRUPT_OPTIONS}
+            onValueChange={(next) =>
+              void settings.save({ ...values, stallAutoInterruptMinutes: Number(next) }, revision)
+            }
+          />
+          <SettingsSwitch
+            label="额度耗尽 / 登录失效时自动改派"
+            hint="执行 agent 失败时，按预设的「失败时改派到」顺序换一个 agent 在同一 worktree 继续。"
+            value={values.failoverEnabled}
+            onValueChange={(next) => void settings.save({ ...values, failoverEnabled: next }, revision)}
+          />
+        </SettingsCard>
+      </SettingsSection>
+    </>
   );
 }
+
+const STALL_MINUTE_OPTIONS = ["1", "5", "10", "15", "20", "30", "60"].map((m) => ({ label: `${m} 分钟`, value: m }));
+const AUTO_INTERRUPT_OPTIONS = [
+  { label: "关闭", value: "0" },
+  ...["5", "10", "20", "30"].map((m) => ({ label: `${m} 分钟后`, value: m })),
+];

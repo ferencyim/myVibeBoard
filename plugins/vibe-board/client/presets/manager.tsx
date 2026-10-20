@@ -22,6 +22,7 @@ import {
   PERMISSION_LABELS,
   draftToPayload,
   presetToDraft,
+  toggleFallback,
   validateDraft,
   type PresetDraft,
   type ProviderUsageLike,
@@ -250,6 +251,24 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
         <Field label="附加指令">
           <TextField multiline value={draft.instructions} onChangeText={(instructions) => patch({ instructions })} />
         </Field>
+        <Field label="失败时改派到（按点选顺序依次尝试；额度耗尽、登录失效、agent 不可用时在同一 worktree 继续）">
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+            {presets
+              .filter((p) => p.id !== editing)
+              .map((p) => {
+                const order = draft.fallbackPresetIds.indexOf(p.id);
+                return (
+                  <Chip
+                    key={p.id}
+                    label={order >= 0 ? `${order + 1}. ${p.name}` : p.name}
+                    selected={order >= 0}
+                    onPress={() => patch({ fallbackPresetIds: toggleFallback(draft.fallbackPresetIds, p.id) })}
+                  />
+                );
+              })}
+          </View>
+          {presets.length <= 1 ? <Muted>先创建其它预设，才能选作备选。</Muted> : null}
+        </Field>
         <View style={{ flexDirection: "row", gap: 8 }}>
           <Btn variant="primary" label="保存" onPress={save} />
           <Btn label="取消" onPress={() => setEditing(null)} />
@@ -266,6 +285,9 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
             <Text style={{ fontWeight: "600" }}>{p.name}</Text>
             <Muted>
               {p.provider} / {p.model}
+              {p.fallbackPresetIds?.length
+                ? `  →  ${p.fallbackPresetIds.map((id) => presets.find((x) => x.id === id)?.name ?? "?").join(" → ")}`
+                : ""}
             </Muted>
           </View>
           <QuotaBadge provider={p.provider} usage={usage} />

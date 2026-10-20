@@ -18,6 +18,15 @@ export const boardSettings = defineSettings({
     scoutMaxParallel: z.number().int().min(1).max(16).default(4),
     /** Per-scout timeout in seconds; on timeout only the findings so far are returned. */
     scoutTimeoutSec: z.number().int().min(10).max(3600).default(300),
+    /** Stall watchdog: mark a working session with no output for this long (card shows "may be stuck"). */
+    stallDetection: z.boolean().default(true),
+    stallMinutes: z.number().min(1).default(10),
+    /** Per-provider override of stallMinutes, e.g. "claude=15,codex=8". */
+    stallProviderMinutes: z.string().default(""),
+    /** After this many more minutes stalled, interrupt the agent and send one "continue" prompt (0 = off). */
+    stallAutoInterruptMinutes: z.number().min(0).default(0),
+    /** A worker failing on quota / login / provider errors moves to the preset's fallback chain. */
+    failoverEnabled: z.boolean().default(true),
   }),
 });
 

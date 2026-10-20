@@ -6,9 +6,12 @@ import { publishEvent, resolveVibeHome } from "./server/vibe/db";
 import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
 import { BOARD_INSTRUCTIONS_MARKER, buildBoardInstructions } from "./server/mcp/instructions";
 import { createDispatcher } from "./server/dispatch";
+import { convertNative } from "./server/dispatch/convert";
+import { createReassigner } from "./server/dispatch/reassign";
 import { startAdmissionConsumer } from "./server/dispatch/admission";
 import { registerLifecycle } from "./server/lifecycle";
 import { startFinalizer } from "./server/lifecycle/finalize";
+import { createWatchdog, DEFAULT_STALL_CONFIG, parseProviderMinutes } from "./server/lifecycle/watchdog";
 import { createGitFinalizer } from "./server/lifecycle/git-finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
@@ -101,8 +104,64 @@ export default function contribute(server: PluginServerContext) {
   // Hosts that expose the handle at start-up (server.paseo) let dispatch run with no UI attached;
   // older hosts only hand it over through hook/RPC contexts, which keep refreshing it below.
   const onPaseo = (api: PaseoApi) => void (paseo = api);
-  const lifecycle = registerLifecycle(server, { board, onPaseo });
-  const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });
+  const failoverEnabled = async () => {
+    const current = await settings.read();
+    return current.status !== "ready" || current.values.failoverEnabled;
+  };
+  // The reassigner needs the lifecycle (tracker) and the lifecycle needs the reassigner (onFailure):
+  // the callback resolves it lazily.
+  let reassigner: ReturnType<typeof createReassigner> | null = null;
+  const lifecycle = registerLifecycle(server, {
+    board,
+    onPaseo,
+    onFailure: async (session, failure) => {
+      if (!reassigner || !(await failoverEnabled())) return false;
+      const result = await reassigner.reassign(session.id, failure);
+      if (!result.reassigned && session.cardId) {
+        board.store.events.add({
+          cardId: session.cardId,
+          type: "status",
+          authorKind: "system",
+          author: "failover",
+          body: {
+            kind: "failover_failed",
+            category: failure.category,
+            text: `No agent could take over (${result.reason}${result.attempts.length ? `: ${result.attempts.join("; ")}` : ""}).`,
+          },
+        });
+      }
+      return result.reassigned !== null;
+    },
+  });
+  reassigner = createReassigner({
+    board,
+    getPaseo: () => paseo,
+    tracker: lifecycle,
+    convert: convertNative,
+    guardImport: (workspaceId, fn) => lifecycle.withoutSwitchRecord(workspaceId, fn),
+    log: (m, e) => console.error(`[vibe-board failover] ${m}`, e ?? ""),
+  });
+  const dispatcher = createDispatcher({
+    board,
+    getPaseo: () => paseo,
+    tracker: lifecycle,
+    failoverEnabled,
+  });
+  const watchdog = createWatchdog({
+    board,
+    getPaseo: () => paseo,
+    getConfig: async () => {
+      const current = await settings.read();
+      if (current.status !== "ready") return DEFAULT_STALL_CONFIG;
+      return {
+        enabled: current.values.stallDetection,
+        minutes: current.values.stallMinutes,
+        providerMinutes: parseProviderMinutes(current.values.stallProviderMinutes),
+        autoInterruptMinutes: current.values.stallAutoInterruptMinutes,
+      };
+    },
+  });
+  watchdog.start();
   const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, onError: (e) => console.error("vibe-board admission:", e) });
   const sync = createSyncService({ db: runtime.db, store: runtime.store });
   const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
@@ -141,6 +200,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   return async () => {
+    watchdog.stop();
     await admission.stop();
     lifecycle.close();
     await finalizer.stop();

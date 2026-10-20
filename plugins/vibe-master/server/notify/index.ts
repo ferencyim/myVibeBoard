@@ -2,6 +2,9 @@
 //   card.moved -> verifying    "Ready to verify"
 //   session.waiting (worker)   "Needs your answer"  (Paseo already pushes the agent's own
 //                              permission/question; agentAttention lets the daemon drop the twin)
+//   session.stalled (worker)   "Agent stalled"  (watchdog: no output for too long; session.unstalled is silent)
+//   session.reassigned         "Agent switched"  (a failed worker continued on a fallback preset)
+//   session.error (worker)     "Agent failed"    (no fallback took over; agentAttention drops the daemon twin)
 //   master.alert               "Master: quota low" etc. (the reminders of the master agent)
 // Title = project name, body = event type, data = card key (+ agentId for session.waiting): never card text, so the push stays
 // within the daemon's minimal-payload rule.
@@ -41,6 +44,20 @@ export function startNotifyConsumer(options: NotifyOptions): EventConsumer {
     return (projectId ? store.projects.get(projectId)?.name : undefined) ?? "Vibe Board";
   }
 
+  function sessionPush(
+    event: VibeEvent,
+    session: NonNullable<ReturnType<typeof store.sessions.get>>,
+    kind: string,
+    body: string,
+  ): PushNotification {
+    const card = session.cardId ? store.cards.get(session.cardId) : undefined;
+    return {
+      title: projectName({ ...event, cardId: session.cardId ?? event.cardId }),
+      body,
+      data: { event: kind, ...(card ? { cardKey: card.key } : {}), agentId: session.agentId },
+    };
+  }
+
   function toNotification(event: VibeEvent): PushNotification | null {
     if (isEvent(event, "card.moved")) {
       if (event.payload.to !== "verifying") return null;
@@ -68,6 +85,24 @@ export function startNotifyConsumer(options: NotifyOptions): EventConsumer {
         ...(agentId ? { agentAttention: { agentId, reason: "permission" as const } } : {}),
       };
     }
+    if (isEvent(event, "session.stalled")) {
+      const session = store.sessions.get(event.payload.sessionId);
+      if (!session || session.role === "master") return null;
+      return sessionPush(event, session, "session.stalled", "Agent stalled");
+    }
+    if (isEvent(event, "session.reassigned")) {
+      const session = store.sessions.get(event.payload.sessionId);
+      if (!session) return null;
+      return sessionPush(event, session, "session.reassigned", "Agent switched");
+    }
+    if (isEvent(event, "session.error")) {
+      const session = store.sessions.get(event.payload.sessionId);
+      if (!session || session.role !== "worker") return null;
+      return {
+        ...sessionPush(event, session, "session.error", "Agent failed"),
+        agentAttention: { agentId: session.agentId, reason: "error" as const },
+      };
+    }
     if (isEvent(event, "master.alert")) {
       return {
         title: "Vibe Board",
@@ -81,7 +116,7 @@ export function startNotifyConsumer(options: NotifyOptions): EventConsumer {
   const consumer = createEventConsumer({
     db: options.db,
     consumer: "vibe-master-notify",
-    types: ["card.moved", "session.waiting", "master.alert"],
+    types: ["card.moved", "session.waiting", "session.stalled", "session.reassigned", "session.error", "master.alert"],
     // A restart must not replay old events as fresh pushes.
     startAt: "now",
     pollIntervalMs: options.pollIntervalMs,

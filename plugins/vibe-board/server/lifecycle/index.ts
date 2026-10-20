@@ -7,7 +7,10 @@
 //                           expectSystemTurn() (compaction, ...) only updates the session state.
 //   turn_ended completed    session -> idle; no open question -> card in_progress -> verifying
 //                           (not after a system turn)
-//   turn_ended failed       session -> error (card stays in_progress, the badge shows the error)
+//   turn_ended failed       a provider-side failure (quota, login, provider/model unavailable) of a worker is
+//                           handed to options.onFailure (failover to the preset's fallback chain); otherwise,
+//                           or when nothing took over, session -> error (the badge shows the error)
+//   every hook above        touchActivity: feeds the stall watchdog and clears a stalled mark
 //   permission_requested    a worker writing .vibe/sessions/*.md in its worktree is approved at once;
 //                           otherwise session -> waiting (waiting_since + pending_question: the red dot)
 //   permission_resolved     last pending request resolved -> session -> working (session.answered)
@@ -23,6 +26,7 @@ import type { AgentSession, SessionState } from "../vibe/contract";
 import type { AgentTracker } from "../dispatch";
 import type { BoardService } from "../service";
 import { approveSessionNoteWrite, mayWriteFile } from "./auto-approve";
+import { classifyFailure, isReassignable, type FailureCategory } from "./error-class";
 import { consumeSystemTurn } from "./system-turn";
 
 export type LifecycleRegistration = Pick<PluginLifecycleRegistration, "on" | "before">;
@@ -34,6 +38,14 @@ export interface LifecycleOptions {
   log?: (message: string, error?: unknown) => void;
   /** Directory of the system-turn markers (default `$VIBE_HOME/system-turns`; tests override). */
   systemTurnDir?: string;
+  /**
+   * A worker's turn failed for a reassignable reason. Resolve true when another agent took over
+   * (the session was ended as reassigned); false/throw leaves the session in `error`.
+   */
+  onFailure?: (
+    session: AgentSession,
+    failure: { message: string; category: FailureCategory },
+  ) => Promise<boolean>;
 }
 
 interface Question {
@@ -53,6 +65,8 @@ export interface Lifecycle extends AgentTracker {
     provider: string;
     reason?: string;
   }): AgentSession | undefined;
+  /** Run `fn` while `import` session opens in the workspace are not treated as a provider switch. */
+  withoutSwitchRecord<T>(workspaceId: string | null, fn: () => Promise<T>): Promise<T>;
   close(): void;
 }
 
@@ -70,6 +84,8 @@ export function registerLifecycle(
   const expected = new Map<string, Array<(s: AgentSession) => void>>();
   /** agents whose running turn was started by a plugin, not the user */
   const systemTurns = new Set<string>();
+  /** workspaces whose `import` session opens belong to a failover, not to switch-provider */
+  const importGuards = new Map<string, number>();
 
   function safe(label: string, fn: () => void): void {
     try {
@@ -95,6 +111,12 @@ export function registerLifecycle(
     if (current.state === "ended") return;
     if (current.state === to && to !== "waiting" && to !== "error") return;
     store.sessions.setState(s.id, to, opts);
+  }
+
+  /** Agent output / progress: feeds the stall watchdog, clears a stalled mark. */
+  function touch(s: AgentSession) {
+    const current = store.sessions.get(s.id) ?? s;
+    if (current.state !== "ended") store.sessions.touchActivity(s.id);
   }
 
   function moveCard(s: AgentSession, to: "verifying" | "in_progress", reason: string) {
@@ -145,6 +167,18 @@ export function registerLifecycle(
       return next;
     },
 
+    async withoutSwitchRecord(workspaceId, fn) {
+      if (!workspaceId) return fn();
+      importGuards.set(workspaceId, (importGuards.get(workspaceId) ?? 0) + 1);
+      try {
+        return await fn();
+      } finally {
+        const left = (importGuards.get(workspaceId) ?? 1) - 1;
+        if (left > 0) importGuards.set(workspaceId, left);
+        else importGuards.delete(workspaceId);
+      }
+    },
+
     close() {
       for (const off of offs) off();
     },
@@ -160,6 +194,7 @@ export function registerLifecycle(
       withSession(agent.id, "turn_started", (s) => {
         pending.delete(agent.id);
         setState(s, "working");
+        touch(s);
         if (!system) moveCard(s, "in_progress", "user continued the session");
       });
     }),
@@ -170,7 +205,22 @@ export function registerLifecycle(
       withSession(agent.id, "turn_ended", (s) => {
         if (outcome.kind === "failed") {
           pending.delete(agent.id);
-          setState(s, "error", { message: outcome.error.message });
+          const message = outcome.error.message;
+          const category = classifyFailure(message, outcome.error.code);
+          if (s.role === "worker" && options.onFailure && isReassignable(category)) {
+            // Async: the session stays as it is until a fallback took over or none did.
+            void options
+              .onFailure(s, { message, category })
+              .catch((error) => {
+                log("failover failed", error);
+                return false;
+              })
+              .then((taken) => {
+                if (!taken) safe("turn_failed", () => setState(s, "error", { message }));
+              });
+            return;
+          }
+          setState(s, "error", { message });
           return;
         }
         syncCompactions(
@@ -180,6 +230,7 @@ export function registerLifecycle(
         if (pending.get(agent.id)?.size) return; // still waiting for an answer
         if ((store.sessions.get(s.id) ?? s).state === "waiting") return;
         setState(s, "idle", { outcome: outcome.kind });
+        touch(s);
         if (outcome.kind === "completed" && !system) {
           moveCard(s, "verifying", "round completed, no open question");
         }
@@ -202,6 +253,7 @@ export function registerLifecycle(
           open.set(request.id, question);
           pending.set(agent.id, open);
           setState(s, "waiting", { question: { ...question, pending: open.size } });
+          touch(s); // waiting for the user is never a stall
         });
       // Only a worker's file-writing tool request can be a session-note write; the rest stays synchronous.
       const owner = mayWriteFile(request) ? store.sessions.getByAgent(agent.id) : undefined;
@@ -230,6 +282,7 @@ export function registerLifecycle(
         if (open?.size) return;
         pending.delete(agent.id);
         if ((store.sessions.get(s.id) ?? s).state === "waiting") setState(s, "working");
+        touch(s);
       });
     }),
 
@@ -239,6 +292,7 @@ export function registerLifecycle(
     // switch-provider imports the converted session as a new agent in the same workspace.
     server.before("agent.session_open", ({ request }) => {
       if (request.reason !== "import" || !request.workspaceId) return;
+      if (importGuards.has(request.workspaceId)) return;
       const live = store.sessions
         .list({ states: LIVE_STATES })
         .find((s) => s.workspaceId === request.workspaceId && s.agentId !== request.agentId);

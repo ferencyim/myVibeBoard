@@ -52,3 +52,23 @@ Call them with `client.invokePluginRpc("vibe-board", name, input)`.
   if the daemon handle is not ready (retry).
 - The exchange log lives in `sync_field` / `sync_tomb` (core migration 2, cursor = server arrival
   seq); business tables stay the source of truth and are reconciled on every exchange.
+
+## Stall watchdog and failover (WP-82 / WP-84)
+
+- **Stall watchdog** (`server/lifecycle/watchdog.ts`): every 30 s, working/starting sessions of
+  worker, verifier, reviewer and planner roles are compared with the timestamp of the agent's newest
+  timeline item; no output for `stallMinutes` (default 10; `stallProviderMinutes` such as
+  `claude=15,codex=8` overrides per provider) -> `sessions.markStalled` (event `session.stalled`,
+  card event, red "可能卡住" card badge, phone push "Agent stalled"). Output, a new turn, a permission
+  request or the session ending clears it (`session.unstalled`). `waiting` sessions are never listed.
+  `stallAutoInterruptMinutes > 0` interrupts a stalled agent once and sends a "continue" prompt.
+- **Failover** (`server/dispatch/reassign.ts`, classifier `server/lifecycle/error-class.ts`): a
+  worker whose turn fails with a quota / login / model / provider-unavailable error (pattern table,
+  add rules there) continues on the next preset of the failed preset's `fallbackPresetIds`, in the
+  same worktree. Claude <-> Codex sessions are converted to a native session (txcript, via the
+  switch-provider plugin's folder, `dispatch/convert.ts`); any other pair, or a failed conversion,
+  gets the dispatch brief plus a Markdown transcript in `<worktree>/.vibe/sessions/`. The swap is
+  `sessions.recordReassign` (card timeline `switch_agent` + `failover` events, push "Agent switched").
+  No fallback left -> the session stays in `error` (push "Agent failed"). A dispatch whose agent
+  cannot even start walks the same chain. Switch: setting `failoverEnabled`; chain editor: Manage ->
+  presets -> "失败时改派到".
