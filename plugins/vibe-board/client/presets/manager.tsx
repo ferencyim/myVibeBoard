@@ -218,13 +218,13 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
           </View>
           <TextField value={draft.provider} onChangeText={(provider) => patch({ provider })} autoCapitalize="none" />
         </Field>
-        <Field label="模型">
+        <Field label="模型（必填）">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {models.map((m) => (
               <Chip key={m.id} label={m.name} selected={draft.model === m.id} onPress={() => patch({ model: m.id })} />
             ))}
           </View>
-          <TextField value={draft.model} onChangeText={(model) => patch({ model })} autoCapitalize="none" />
+          <TextField value={draft.model} onChangeText={(model) => patch({ model })} placeholder="必填：点选上方模型或手动输入" autoCapitalize="none" />
         </Field>
         <Field label="用途">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>

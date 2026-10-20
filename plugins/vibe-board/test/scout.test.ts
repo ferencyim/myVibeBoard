@@ -58,7 +58,7 @@ function setup(
     headOf: async () => "head1",
     platform: env.platform ?? "linux",
   });
-  return { ...ctx, card, cheap, scout, created, published, behaviour, peak: () => peak };
+  return { ...ctx, paseo, card, cheap, scout, created, published, behaviour, peak: () => peak };
 }
 
 const tasks = (n: number) => Array.from({ length: n }, (_, i) => ({ goal: `goal ${i}` }));
@@ -115,6 +115,15 @@ describe("scout service", () => {
     const forced = setup({ preset: "Cheap" }, { platform: "win32" });
     await forced.scout.run(forced.card.key, tasks(1));
     expect(forced.created[0].config).toMatchObject({ provider: "codex/gpt-5-mini", modeId: "full-access" });
+  });
+
+  it("completes a model-less preset from the provider catalog and notes it", async () => {
+    const withCatalog = setup();
+    withCatalog.board.store.presets.update(withCatalog.cheap.id, { model: "" });
+    (withCatalog.paseo as any).providers.listModels = async () => ({ models: [{ id: "gpt-5-mini", isDefault: true }] });
+    await withCatalog.scout.run(withCatalog.card.key, tasks(1));
+    expect(withCatalog.created[0].config.provider).toBe("codex/gpt-5-mini");
+    expect(JSON.stringify(withCatalog.board.events.list(withCatalog.card.key).events.at(-1)!.body)).toContain("has no model");
   });
 
   it("honours the parallel cap", async () => {

@@ -12,9 +12,10 @@ import type { AgentSession, CardView, Preset, Project } from "../vibe/contract";
 import { BoardError, toBoardError, type BoardService } from "../service";
 import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { loadHandoff } from "./handoff";
+import { ensurePresetModel, type ModelCatalog } from "./model";
 import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug } from "./brief";
 
-export type DispatchPaseo = Pick<PaseoApi, "projects" | "workspaces">;
+export type DispatchPaseo = Pick<PaseoApi, "projects" | "workspaces"> & ModelCatalog;
 
 /** Hand-off to the lifecycle listener so events fired before the session row exists are not lost. */
 export interface AgentTracker {
@@ -143,7 +144,17 @@ export function createDispatcher(options: DispatcherOptions) {
         const failover = (await (options.failoverEnabled?.() ?? true)) !== false;
         const queue = [preset];
         for (let i = 0; i < queue.length; i++) {
-          const current = queue[i]!;
+          const resolved = await ensurePresetModel(paseo, queue[i]!);
+          const current = resolved.preset;
+          if (resolved.note) {
+            store.events.add({
+              cardId: card.id,
+              type: "note",
+              authorKind: "system",
+              author: "dispatch",
+              body: { kind: "model_default", text: resolved.note },
+            });
+          }
           const prompt = buildDispatchBrief({
             card,
             project,

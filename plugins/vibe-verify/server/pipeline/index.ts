@@ -169,6 +169,7 @@ export function createPipeline(deps: PipelineDeps) {
         outputDir: input.outputDir,
         role: "reviewer",
       });
+      if (agent.note) notes.push(`Review: ${agent.note}`);
       sessionId = board.sessions.start({
         cardId: card.id,
         agentId: agent.agentId,
@@ -371,6 +372,7 @@ export function createPipeline(deps: PipelineDeps) {
             workspaceId: worker?.workspaceId ?? null,
             outputDir,
           });
+          if (verifierAgent.note) notes.push(verifierAgent.note);
           verify.setVerifier(vid, verifierAgent.agentId);
           verifierSessionId = board.sessions.start({
             cardId: card.id,

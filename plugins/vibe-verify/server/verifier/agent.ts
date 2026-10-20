@@ -18,6 +18,8 @@ export interface VerifierRun {
 export interface VerifierAgent {
   readonly agentId: string;
   readonly provider: string;
+  /** Set when the launcher had to fill in a missing model (shown in the verification notes). */
+  readonly note?: string;
   run(prompt: string): Promise<VerifierRun>;
   close(): Promise<void>;
 }
@@ -99,7 +101,19 @@ export function parseJsonLoose(text: string): unknown {
 
 // --- Paseo-backed launcher -------------------------------------------------------------------
 
-export type VerifierPaseo = Pick<PaseoApi, "workspaces" | "agents">;
+export type VerifierPaseo = Pick<PaseoApi, "workspaces" | "agents"> &
+  Partial<{ providers: Pick<PaseoApi["providers"], "listModels"> }>;
+
+/** Presets saved before the model became mandatory may have none: use the provider's default model. */
+export async function defaultModelOf(paseo: VerifierPaseo, provider: string): Promise<string | undefined> {
+  try {
+    const res = await paseo.providers?.listModels(provider);
+    const models = res?.models?.filter((m) => m.isSelectable !== false) ?? [];
+    return (models.find((m) => m.isDefault) ?? models[0])?.id;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface PaseoLauncherOptions {
   getPaseo: () => VerifierPaseo | null;
@@ -115,11 +129,16 @@ export function createPaseoVerifierLauncher(options: PaseoLauncherOptions): Veri
       const paseo = options.getPaseo();
       if (!paseo) throw new Error("Verification needs an active Paseo daemon connection");
       const agentId = (options.newAgentId ?? randomUUID)();
-      const spec = input.model
-        ? input.model.startsWith(`${input.provider}/`)
-          ? input.model
-          : `${input.provider}/${input.model}`
-        : input.provider;
+      let model = input.model;
+      let note: string | undefined;
+      if (!model) {
+        model = await defaultModelOf(paseo, input.provider);
+        if (!model) {
+          throw new Error(`The preset has no model and ${input.provider} offers no default model; edit the preset and pick one`);
+        }
+        note = `The preset has no model; using ${input.provider}'s default model ${model}.`;
+      }
+      const spec = model.startsWith(`${input.provider}/`) ? model : `${input.provider}/${model}`;
       const create = {
         agentId,
         title: `${input.card.key} ${input.role === "reviewer" ? "review" : "verify"}`,
@@ -135,6 +154,7 @@ export function createPaseoVerifierLauncher(options: PaseoLauncherOptions): Veri
       return {
         agentId,
         provider: input.provider,
+        note,
         async run(prompt) {
           let result = await handle.run(prompt, { timeoutMs: roundTimeout });
           // "permission": the round paused on a request; the policy hook answers it, then we resume.

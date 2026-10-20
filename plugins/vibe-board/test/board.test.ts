@@ -527,3 +527,13 @@ describe("plugin entry", () => {
     vi.unstubAllEnvs();
   });
 });
+
+describe("preset model is mandatory", () => {
+  it("rejects a blank model on create and update but keeps legacy rows editable", () => {
+    const { board } = setupBoard();
+    expect(() => board.presets.create({ name: "A", provider: "claude", model: " " })).toThrow(/needs a model/);
+    const { preset } = board.presets.create({ name: "A", provider: "claude", model: "sonnet" });
+    expect(() => board.presets.update(preset.id, { model: "" })).toThrow(/needs a model/);
+    expect(board.presets.update(preset.id, { name: "B" }).preset.name).toBe("B");
+  });
+});

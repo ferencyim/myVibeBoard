@@ -392,9 +392,16 @@ export function createBoardService(runtime: BoardRuntime) {
     },
     presets: {
       list: () => ({ presets: store.presets.list() }),
-      create: (input: Parameters<typeof store.presets.create>[0]) => guard(() => ({ preset: store.presets.create(input) })),
+      create: (input: Parameters<typeof store.presets.create>[0]) =>
+        guard(() => {
+          if (!input.model?.trim()) throw new BoardError("invalid", "A preset needs a model");
+          return { preset: store.presets.create(input) };
+        }),
       update: (id: string, patch: Parameters<typeof store.presets.update>[1]) =>
-        guard(() => ({ preset: store.presets.update(id, patch) })),
+        guard(() => {
+          if (patch.model !== undefined && !patch.model.trim()) throw new BoardError("invalid", "A preset needs a model");
+          return { preset: store.presets.update(id, patch) };
+        }),
       delete: (id: string) =>
         guard(() => {
           store.presets.delete(id);

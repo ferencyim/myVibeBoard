@@ -172,6 +172,26 @@ describe("planning hand-off (WP-33)", () => {
 });
 
 describe("dispatch", () => {
+  it("completes a preset without a model from the provider catalog and notes it on the card", async () => {
+    const t = setup();
+    t.store.presets.update(t.preset.id, { model: "" });
+    (t.fake.paseo as any).providers = {
+      listModels: async () => ({ models: [{ id: "other", isDefault: false }, { id: "gpt-5-codex", isDefault: true }] }),
+    };
+    await t.dispatcher.dispatch("DEMO-1");
+    expect(t.fake.calls.agent[0].config.provider).toBe("codex/gpt-5-codex");
+    const note = t.store.events.list(t.card.id).find((e) => (e.body as any)?.kind === "model_default");
+    expect(JSON.stringify(note?.body)).toContain("gpt-5-codex");
+  });
+
+  it("fails clearly when a model-less preset's provider has no default model", async () => {
+    const t = setup();
+    t.store.presets.update(t.preset.id, { model: "" });
+    (t.fake.paseo as any).providers = { listModels: async () => ({ models: [] }) };
+    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/has no model/);
+    expect(t.fake.calls.agent).toHaveLength(0);
+  });
+
   it("creates a worktree workspace and a worker agent from the preset, then records the session", async () => {
     const t = setup();
     const result = await t.dispatcher.dispatch("DEMO-1");

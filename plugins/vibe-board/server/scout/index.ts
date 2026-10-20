@@ -9,9 +9,10 @@ import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
 import { selectAgent, type AgentProfile, type Preset, type SelectContext } from "../vibe/contract";
 import { BoardError, type BoardService } from "../service";
+import { ensurePresetModel } from "../dispatch/model";
 
 export type ScoutPaseo = Pick<PaseoApi, "agents"> & {
-  providers?: Pick<PaseoApi["providers"], "listModes">;
+  providers?: Pick<PaseoApi["providers"], "listModes" | "listModels">;
 };
 
 export const SCOUT_KINDS = ["locate", "inventory", "research"] as const;
@@ -307,6 +308,15 @@ export function createScoutService(options: ScoutServiceOptions) {
       }
     }
 
+    let modelNote: string | null = null;
+    try {
+      const filled = await ensurePresetModel(options.getPaseo(), preset);
+      preset = filled.preset;
+      modelNote = filled.note;
+    } catch (error) {
+      throw new BoardError("unavailable", error instanceof Error ? error.message : String(error));
+    }
+
     const head = await headOf(cwd);
     options.publish?.("scout.started", card.id, card.projectId, { scoutPresetId: preset.id, strictReadOnly: readOnly.strict });
 
@@ -337,7 +347,7 @@ export function createScoutService(options: ScoutServiceOptions) {
     const cached = results.filter((r) => r.cached).length;
     const summary = `Scouts (${preset.name}${readOnly.strict ? "" : ", NOT strictly read-only: prompt-enforced"}): ${ok}/${results.length} ok${cached ? `, ${cached} cached` : ""}. ${results
       .map((r) => `[${r.status}] ${r.goal}`)
-      .join(" | ")}`;
+      .join(" | ")}${modelNote ? " " + modelNote : ""}`;
     options.publish?.("scout.finished", card.id, card.projectId, {
       scoutPresetId: preset.id,
       strictReadOnly: readOnly.strict,

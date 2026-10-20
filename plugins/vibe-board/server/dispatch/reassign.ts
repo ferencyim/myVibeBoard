@@ -19,6 +19,7 @@ import type { PaseoApi } from "@getpaseo/client";
 import type { AgentSession, CardView, Preset } from "../vibe/contract";
 import type { BoardService } from "../service";
 import type { AgentTracker } from "./index";
+import { ensurePresetModel } from "./model";
 import { buildDispatchBrief, modeIdFor, providerSpec } from "./brief";
 import { loadHandoff } from "./handoff";
 import type { FailureCategory } from "../lifecycle/error-class";
@@ -261,7 +262,24 @@ export function createReassigner(deps: ReassignDeps) {
     inflight.add(old.id);
     const attempts: string[] = [];
     try {
-      for (const preset of candidates) {
+      for (const candidate of candidates) {
+        let preset: Preset;
+        try {
+          const resolved = await ensurePresetModel(paseo, candidate);
+          preset = resolved.preset;
+          if (resolved.note) {
+            store.events.add({
+              cardId: card.id,
+              type: "note",
+              authorKind: "system",
+              author: "failover",
+              body: { kind: "model_default", text: resolved.note },
+            });
+          }
+        } catch (error) {
+          attempts.push(candidate.name + ": " + (error instanceof Error ? error.message : String(error)));
+          continue;
+        }
         const unusable = await providerUsable(paseo, preset.provider);
         if (unusable) {
           attempts.push(`${preset.name}: ${unusable}`);

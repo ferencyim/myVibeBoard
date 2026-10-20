@@ -23,7 +23,7 @@ const minor = {
 };
 const clean = { verdict: "pass", summary: "Looks fine", issues: [] };
 
-function setup(options: { maxReviewReturns?: number; replies: unknown[]; reviewer?: boolean }) {
+function setup(options: { maxReviewReturns?: number; replies: unknown[]; reviewer?: boolean; launchNote?: string }) {
   const db = openVibeDb({ path: ":memory:" });
   migrateOwner(db, "verify");
   const board = createVibeStore(db);
@@ -52,6 +52,7 @@ function setup(options: { maxReviewReturns?: number; replies: unknown[]; reviewe
       return {
         agentId: `reviewer-${launched.length}`,
         provider: input.provider,
+        note: options.launchNote,
         run: async (prompt) => {
           prompts.push(prompt);
           const reply = replies.shift();
@@ -94,6 +95,12 @@ function setup(options: { maxReviewReturns?: number; replies: unknown[]; reviewe
 }
 
 describe("model review", () => {
+  it("records the launcher's note about a filled-in default model in the verification notes", async () => {
+    const h = setup({ replies: [clean], launchNote: "The preset has no model; using codex's default model gpt-5." });
+    const result = await h.pipeline.run(h.cardId);
+    expect(h.verify.detail(result!.verificationId)!.notes.join(" ")).toContain("using codex's default model gpt-5");
+  });
+
   it("a severe issue sends the card back to the worker with the review text", async () => {
     const h = setup({ replies: [severe] });
     const result = await h.pipeline.run(h.cardId);
