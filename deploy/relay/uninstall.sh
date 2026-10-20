@@ -44,14 +44,14 @@ compose down --rmi local --remove-orphans
 
 # 3. state files we created (non-recursive); keep the app env file if it has content
 if [ "$DRY_RUN" = 1 ]; then
-  echo "+ remove $MANIFEST, $STATE_DIR/nginx-summary-*.txt, $STATE_DIR/*.prev-*; remove $RELAY_APP_ENV_FILE if empty; rmdir $STATE_DIR if empty"
+  echo "+ remove $MANIFEST, $STATE_DIR/nginx-summary-*.txt, $STATE_DIR/*.prev-*; remove $PUSH_ENV_FILE if install.sh created it; rmdir $STATE_DIR if empty"
 else
-  rm -f "${MANIFEST:?}" "${STATE_DIR:?}"/nginx-summary-*.txt "${STATE_DIR:?}"/*.prev-*
-  if [ -f "$RELAY_APP_ENV_FILE" ] && [ ! -s "$RELAY_APP_ENV_FILE" ]; then
-    rm -f "${RELAY_APP_ENV_FILE:?}"
-  elif [ -f "$RELAY_APP_ENV_FILE" ]; then
-    log "kept $RELAY_APP_ENV_FILE (has content); delete it by hand if no longer needed"
+  if [ -f "$MANIFEST" ] && grep -q '^PUSH_ENV_CREATED=.' "$MANIFEST"; then
+    rm -f "${PUSH_ENV_FILE:?}"
+  elif [ -f "$PUSH_ENV_FILE" ]; then
+    log "kept $PUSH_ENV_FILE (not created by install.sh); delete it by hand if no longer needed"
   fi
+  rm -f "${MANIFEST:?}" "${STATE_DIR:?}"/nginx-summary-*.txt "${STATE_DIR:?}"/*.prev-*
   rmdir "$STATE_DIR" 2>/dev/null || true
 fi
 log "Rollback complete."

@@ -66,11 +66,14 @@ load_env() {
   : "${RELAY_PIDS_LIMIT:=256}"
   : "${PUSH_PORT:=}"
   : "${STATE_DIR:=/var/lib/vibe-relay}"
-  : "${RELAY_APP_ENV_FILE:=$STATE_DIR/relay-app.env}"
+  : "${PUSH_ENV_FILE:=$STATE_DIR/push-gateway.env}"
+  : "${RELAY_MEMORY_WATERMARK_BYTES:=0}"
   : "${RELAY_REF:=unset}"
   : "${RELAY_PORT:=0}"
   RELAY_REF_TAG="${RELAY_REF//\//-}"
-  export RELAY_PROJECT RELAY_PORT RELAY_REF RELAY_REF_TAG RELAY_CONTAINER_PORT RELAY_APP_ENV_FILE
+  export RELAY_PROJECT RELAY_PORT RELAY_REF RELAY_REF_TAG RELAY_CONTAINER_PORT PUSH_ENV_FILE PUSH_PORT
+  export RELAY_MEMORY_WATERMARK_BYTES
+  if [ -n "$PUSH_PORT" ]; then export COMPOSE_PROFILES=push; else unset COMPOSE_PROFILES; fi
   export RELAY_MEM_LIMIT RELAY_CPUS RELAY_PIDS_LIMIT
   SITE_FILE="$NGINX_CONF_DIR/$NGINX_SITE_NAME"
   COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
@@ -86,6 +89,8 @@ validate_install_env() {
   [[ "$RELAY_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "invalid RELAY_DOMAIN: $RELAY_DOMAIN"
   [[ "$RELAY_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || die "invalid RELAY_REF (placeholder?): $RELAY_REF"
   [[ "$RELAY_PORT" =~ ^[0-9]+$ ]] || die "RELAY_PORT must be a number"
+  [[ "$RELAY_MEMORY_WATERMARK_BYTES" =~ ^[0-9]+$ ]] || die "RELAY_MEMORY_WATERMARK_BYTES must be a number"
+  [ -z "$PUSH_PORT" ] || [ "$PUSH_PORT" != "$RELAY_PORT" ] || die "PUSH_PORT must differ from RELAY_PORT"
   [[ "$RELAY_CONTAINER_PORT" =~ ^[0-9]+$ ]] || die "RELAY_CONTAINER_PORT must be a number"
   [[ -z "$PUSH_PORT" || "$PUSH_PORT" =~ ^[0-9]+$ ]] || die "PUSH_PORT must be a number or empty"
   [[ "$NGINX_SITE_NAME" =~ ^[A-Za-z0-9._-]+\.conf$ ]] || die "NGINX_SITE_NAME must be a plain file name ending in .conf"
