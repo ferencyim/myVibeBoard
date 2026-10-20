@@ -68,6 +68,14 @@ export const ENVIRONMENT_LABELS: Record<PresetEnvironmentKind, string> = {
   "new-worktree": "新建 worktree",
 };
 
+/** Preset purpose (roleHint); "" = unspecified. */
+export const ROLE_HINT_LABELS: Record<string, string> = {
+  "": "不指定",
+  worker: "执行",
+  scout: "探路",
+  reviewer: "复核",
+};
+
 export interface PresetDraft {
   name: string;
   provider: string;
@@ -80,6 +88,7 @@ export interface PresetDraft {
   instructions: string;
   /** Ordered preset ids to continue on when an agent on this preset fails (quota, login, ...). */
   fallbackPresetIds: string[];
+  roleHint: string;
 }
 
 export const EMPTY_PRESET_DRAFT: PresetDraft = {
@@ -93,6 +102,7 @@ export const EMPTY_PRESET_DRAFT: PresetDraft = {
   runtimeEnv: "",
   instructions: "",
   fallbackPresetIds: [],
+  roleHint: "",
 };
 
 export function presetToDraft(p: Preset): PresetDraft {
@@ -107,6 +117,7 @@ export function presetToDraft(p: Preset): PresetDraft {
     runtimeEnv: p.runtimeEnv ?? "",
     instructions: p.instructions,
     fallbackPresetIds: p.fallbackPresetIds ?? [],
+    roleHint: p.roleHint ?? "",
   };
 }
 
@@ -128,6 +139,7 @@ export function draftToPayload(d: PresetDraft) {
     runtimeEnv: d.runtimeEnv.trim() || null,
     instructions: d.instructions,
     fallbackPresetIds: d.fallbackPresetIds.length ? d.fallbackPresetIds : null,
+    roleHint: (d.roleHint || null) as "worker" | "scout" | "reviewer" | null,
   };
 }
 

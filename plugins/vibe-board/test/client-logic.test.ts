@@ -23,6 +23,7 @@ import {
   type ProviderUsageLike,
 } from "../client/presets/logic";
 import { DEFAULT_TAGS, type CardView, type Preset } from "../shared/vibe/contract";
+import { presetsCreateRpc, presetsUpdateRpc } from "../shared/rpc";
 import { setupBoard } from "./helpers";
 
 function card(over: Partial<CardView> & { id: string }): CardView {
@@ -244,6 +245,7 @@ describe("preset persistence round trip", () => {
       runtimeEnv: "",
       instructions: "be brief",
       fallbackPresetIds: [] as string[],
+      roleHint: "scout",
     };
     expect(validateDraft(draft)).toBeNull();
     expect(validateDraft({ ...draft, model: " " })).not.toBeNull();
@@ -252,6 +254,21 @@ describe("preset persistence round trip", () => {
     expect(presetToDraft(listed)).toEqual(draft);
     const updated = board.presets.update(preset.id, draftToPayload({ ...draft, baseBranch: "" }));
     expect(updated.preset.baseBranch).toBeNull();
+    expect(updated.preset.roleHint).toBe("scout");
+    expect(listed.roleHint).toBe("scout");
+    const cleared = board.presets.update(preset.id, draftToPayload({ ...draft, roleHint: "" }));
+    expect(cleared.preset.roleHint).toBeNull();
+  });
+
+  it("presets RPCs accept roleHint and reject unknown purposes and a blank model", () => {
+    const base = { name: "P", provider: "claude", model: "sonnet" };
+    for (const roleHint of ["worker", "scout", "reviewer", null]) {
+      expect(presetsCreateRpc.input.safeParse({ ...base, roleHint }).success).toBe(true);
+      expect(presetsUpdateRpc.input.safeParse({ presetId: "x", roleHint }).success).toBe(true);
+    }
+    expect(presetsCreateRpc.input.safeParse({ ...base, roleHint: "boss" }).success).toBe(false);
+    expect(presetsCreateRpc.input.safeParse({ ...base, model: "  " }).success).toBe(false);
+    expect(presetsUpdateRpc.input.safeParse({ presetId: "x", model: "" }).success).toBe(false);
   });
 });
 

@@ -70,6 +70,8 @@ const projectFields = {
   color: z.string().nullable(),
 };
 
+export const PRESET_ROLE_HINTS = ["worker", "scout", "reviewer"] as const;
+
 const presetFields = {
   name: nonBlank,
   provider: nonBlank,
@@ -82,6 +84,8 @@ const presetFields = {
   instructions: z.string(),
   /** Ordered failover chain: preset ids to continue on when a session on this preset fails. */
   fallbackPresetIds: z.array(z.string()).nullable(),
+  /** Purpose: worker | scout | reviewer; null = unspecified. */
+  roleHint: z.enum(PRESET_ROLE_HINTS).nullable(),
 };
 
 const cardEditable = {
@@ -353,6 +357,7 @@ export const presetsCreateRpc = defineRpc({
     runtimeEnv: presetFields.runtimeEnv.optional(),
     instructions: presetFields.instructions.optional(),
     fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
+    roleHint: presetFields.roleHint.optional(),
   }),
   output: z.object({ preset: PresetSchema }),
 });
@@ -371,6 +376,7 @@ export const presetsUpdateRpc = defineRpc({
     runtimeEnv: presetFields.runtimeEnv.optional(),
     instructions: presetFields.instructions.optional(),
     fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
+    roleHint: presetFields.roleHint.optional(),
   }),
   output: z.object({ preset: PresetSchema }),
 });

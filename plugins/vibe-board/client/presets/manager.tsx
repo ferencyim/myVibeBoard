@@ -20,6 +20,7 @@ import {
   ENVIRONMENT_LABELS,
   EMPTY_PRESET_DRAFT,
   PERMISSION_LABELS,
+  ROLE_HINT_LABELS,
   draftToPayload,
   presetToDraft,
   toggleFallback,
@@ -225,6 +226,13 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
           </View>
           <TextField value={draft.model} onChangeText={(model) => patch({ model })} autoCapitalize="none" />
         </Field>
+        <Field label="用途">
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+            {Object.entries(ROLE_HINT_LABELS).map(([value, label]) => (
+              <Chip key={value} label={label} selected={draft.roleHint === value} onPress={() => patch({ roleHint: value })} />
+            ))}
+          </View>
+        </Field>
         <Field label="思考强度">
           <TextField value={draft.thinking} onChangeText={(thinking) => patch({ thinking })} placeholder="可留空" autoCapitalize="none" />
         </Field>
@@ -285,6 +293,7 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
             <Text style={{ fontWeight: "600" }}>{p.name}</Text>
             <Muted>
               {p.provider} / {p.model}
+              {p.roleHint ? `  [${ROLE_HINT_LABELS[p.roleHint] ?? p.roleHint}]` : ""}
               {p.fallbackPresetIds?.length
                 ? `  →  ${p.fallbackPresetIds.map((id) => presets.find((x) => x.id === id)?.name ?? "?").join(" → ")}`
                 : ""}
