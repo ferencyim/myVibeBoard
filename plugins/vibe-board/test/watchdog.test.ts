@@ -22,9 +22,16 @@ function setup(config: Partial<StallConfig> = {}) {
   const start = Date.parse(store.sessions.get(session.id)!.lastActivityAt);
   let nowMs = start;
   /** what the daemon reports for agent a1 */
-  const agent = { updatedAt: new Date(start).toISOString(), pendingPermissions: [] as unknown[] };
+  const agent = { updatedAt: new Date(start).toISOString() };
   const send = vi.fn(async (_: string) => {});
-  const paseo = { agents: { ref: () => ({ refresh: async () => ({ agent }), send }) } } as any;
+  const paseo = {
+    agents: {
+      ref: () => ({
+        timeline: { refetch: async () => ({ entries: [{ timestamp: agent.updatedAt, item: {} }] }) },
+        send,
+      }),
+    },
+  } as any;
   const watchdog = createWatchdog({
     board: t.board,
     getPaseo: () => paseo,
@@ -62,21 +69,15 @@ describe("stall watchdog", () => {
     expect(badgeOf(t.row())).toMatchObject({ label: "可能卡住", tone: "danger" });
   });
 
-  it("does not count a waiting session (state or pending permission) as stalled", async () => {
+  it("does not count a waiting session as stalled", async () => {
     const t = setup();
     t.store.sessions.setState(t.session.id, "waiting", { question: { requestId: "r" } });
     t.advance(60 * MIN);
     await t.watchdog.tick();
     expect(t.row().stalledSince).toBeNull();
-
-    const u = setup();
-    u.agent.pendingPermissions.push({ id: "r1" });
-    u.advance(60 * MIN);
-    await u.watchdog.tick();
-    expect(u.row().stalledSince).toBeNull();
   });
 
-  it("agent output (updatedAt) postpones the stall and clears an existing mark", async () => {
+  it("new timeline output postpones the stall and clears an existing mark", async () => {
     const t = setup();
     t.advance(9 * MIN);
     // updatedAt is compared with the session's recorded activity, not the injected clock

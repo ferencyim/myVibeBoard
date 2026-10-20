@@ -3,9 +3,8 @@
 // a session state; activity (touchActivity) or the session ending clears it.
 //
 // Paseo has no per-item hook, so activity comes from two places: the turn/permission hooks in
-// lifecycle (they call touchActivity) and this poll, which reads the agent snapshot's `updatedAt`
-// (the daemon bumps it on every timeline item). A pending permission means the agent is waiting
-// for the user, never stalled.
+// lifecycle (they call touchActivity) and this poll, which reads the timestamp of the agent's newest
+// timeline item. Waiting for a permission/question is the session state `waiting` (never listed here).
 
 import type { PaseoApi } from "@getpaseo/client";
 import type { AgentSession } from "../vibe/contract";
@@ -68,20 +67,21 @@ export function createWatchdog(options: WatchdogOptions) {
   let timer: ReturnType<typeof setInterval> | null = null;
   let running = false;
 
-  /** Newest agent output time the daemon reports, or null when it cannot tell. */
+  /**
+   * Time of the newest timeline item (the agent's real output) the daemon holds, or null when it
+   * cannot tell. The snapshot's `updatedAt` is no use: reading the agent itself bumps it.
+   */
   async function agentActivity(
     paseo: Pick<PaseoApi, "agents"> | null,
     session: AgentSession,
-  ): Promise<{ at: number; waiting: boolean } | null> {
+  ): Promise<number | null> {
     if (!paseo) return null;
     try {
-      const agent = (await paseo.agents.ref(session.agentId).refresh())?.agent;
-      if (!agent) return null;
-      const at = Date.parse(agent.updatedAt);
-      return {
-        at: Number.isFinite(at) ? at : 0,
-        waiting: (agent.pendingPermissions?.length ?? 0) > 0,
-      };
+      const page = await paseo.agents
+        .ref(session.agentId)
+        .timeline.refetch({ direction: "tail", limit: 1, projection: "projected" });
+      const at = Date.parse(String(page.entries.at(-1)?.timestamp ?? ""));
+      return Number.isFinite(at) ? at : null;
     } catch {
       return null;
     }
@@ -91,13 +91,9 @@ export function createWatchdog(options: WatchdogOptions) {
     const activity = await agentActivity(paseo, session);
     let current = store.sessions.get(session.id);
     if (!current || (current.state !== "working" && current.state !== "starting")) return;
-    if (activity?.waiting) {
-      if (current.stalledSince) store.sessions.clearStalled(current.id);
-      return;
-    }
     const recorded = Date.parse(current.lastActivityAt);
-    if (activity && activity.at > recorded + TOUCH_GRANULARITY_MS) {
-      current = store.sessions.touchActivity(current.id, new Date(activity.at).toISOString());
+    if (activity !== null && activity > recorded + TOUCH_GRANULARITY_MS) {
+      current = store.sessions.touchActivity(current.id, new Date(activity).toISOString());
     }
     const idleMs = now() - Date.parse(current.lastActivityAt);
     if (!current.stalledSince) {
