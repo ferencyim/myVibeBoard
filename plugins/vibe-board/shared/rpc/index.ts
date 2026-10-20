@@ -80,6 +80,8 @@ const presetFields = {
   baseBranch: z.string().nullable(),
   runtimeEnv: z.string().nullable(),
   instructions: z.string(),
+  /** Ordered failover chain: preset ids to continue on when a session on this preset fails. */
+  fallbackPresetIds: z.array(z.string()).nullable(),
 };
 
 const cardEditable = {
@@ -346,6 +348,7 @@ export const presetsCreateRpc = defineRpc({
     baseBranch: presetFields.baseBranch.optional(),
     runtimeEnv: presetFields.runtimeEnv.optional(),
     instructions: presetFields.instructions.optional(),
+    fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
   }),
   output: z.object({ preset: PresetSchema }),
 });
@@ -363,6 +366,7 @@ export const presetsUpdateRpc = defineRpc({
     baseBranch: presetFields.baseBranch.optional(),
     runtimeEnv: presetFields.runtimeEnv.optional(),
     instructions: presetFields.instructions.optional(),
+    fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
   }),
   output: z.object({ preset: PresetSchema }),
 });

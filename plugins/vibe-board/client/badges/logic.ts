@@ -40,6 +40,11 @@ export function badgeOf(session: AgentSession | null): CardBadge | null {
       return { label: "出错", tone: "danger", detail: session.errorMessage ?? undefined };
     case "working":
     case "starting":
+      // Stall watchdog marker (not a session state): no output for a long time.
+      if (session.stalledSince) {
+        const idle = Math.max(1, Math.round((Date.now() - Date.parse(session.lastActivityAt)) / 60_000));
+        return { label: "可能卡住", tone: "danger", detail: `${idle} 分钟无输出` };
+      }
       return { label: "运行中", tone: "active" };
     case "idle":
       return { label: "已停下", tone: "muted" };

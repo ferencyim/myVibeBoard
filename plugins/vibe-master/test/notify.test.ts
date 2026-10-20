@@ -91,3 +91,54 @@ describe("push notifier", () => {
     await consumer.stop();
   });
 });
+
+describe("stall / failover pushes", () => {
+  function workerSession() {
+    const ctx = start();
+    const { board } = ctx;
+    const card = board.store.cards.create({ projectId: board.project.id, title: "Secret title" }, "user");
+    board.store.cards.move(card.id, { to: "todo", actor: "user" });
+    const { session } = board.store.cards.dispatch({ cardId: card.id, agentId: "worker-1", provider: "claude", worktree: null });
+    board.store.sessions.setState(session.id, "working");
+    return { ...ctx, card, session };
+  }
+
+  it("pushes session.stalled with project name, card key and agent id only; unstall is silent", async () => {
+    const { board, sent, consumer, card, session } = workerSession();
+    board.store.sessions.markStalled(session.id, { idleMs: 600_000 });
+    board.store.sessions.touchActivity(session.id);
+    await consumer.poll();
+    expect(sent).toEqual([
+      { title: "Demo", body: "Agent stalled", data: { event: "session.stalled", cardKey: card.key, agentId: "worker-1" } },
+    ]);
+    expect(JSON.stringify(sent)).not.toContain("Secret title");
+    await consumer.stop();
+  });
+
+  it("pushes a reassignment once", async () => {
+    const { board, sent, consumer, card, session } = workerSession();
+    board.store.sessions.recordReassign({ fromSessionId: session.id, agentId: "worker-2", provider: "codex", reason: "quota: limit" });
+    await consumer.poll();
+    expect(sent).toEqual([
+      { title: "Demo", body: "Agent switched", data: { event: "session.reassigned", cardKey: card.key, agentId: "worker-2" } },
+    ]);
+    await consumer.stop();
+  });
+
+  it("pushes a worker error (deduped against Paseo's own push) but not other roles", async () => {
+    const { board, sent, consumer, card, session } = workerSession();
+    board.store.sessions.setState(session.id, "error", { message: "login expired" });
+    const planner = board.store.sessions.start({ cardId: card.id, role: "planner", agentId: "p1", provider: "claude" });
+    board.store.sessions.setState(planner.id, "error", { message: "x" });
+    await consumer.poll();
+    expect(sent).toEqual([
+      {
+        title: "Demo",
+        body: "Agent failed",
+        data: { event: "session.error", cardKey: card.key, agentId: "worker-1" },
+        agentAttention: { agentId: "worker-1", reason: "error" },
+      },
+    ]);
+    await consumer.stop();
+  });
+});

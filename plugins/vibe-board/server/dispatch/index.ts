@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
 import type { AgentSession, CardView, Preset, Project } from "../vibe/contract";
 import { BoardError, toBoardError, type BoardService } from "../service";
+import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { loadHandoff } from "./handoff";
 import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug } from "./brief";
 
@@ -44,6 +45,8 @@ export interface DispatcherOptions {
   /** Scheduler gate; resolve false (or throw) to refuse. Default: always admit. */
   admit?: (card: CardView) => boolean | Promise<boolean>;
   newAgentId?: () => string;
+  /** Failover on (default true): an agent that cannot even start for a provider-side reason tries the preset's fallbacks. */
+  failoverEnabled?: () => boolean | Promise<boolean>;
 }
 
 const normalizePath = (p: string) => p.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
@@ -108,6 +111,7 @@ export function createDispatcher(options: DispatcherOptions) {
       const project = store.projects.get(card.projectId);
       if (!project) throw new BoardError("not_found", `Project not found: ${card.projectId}`);
       const preset = pickPreset(card, project, opts.presetId);
+      let usedPreset = preset;
 
       let workspaceId = "";
       let worktree: string | null = null;
@@ -129,54 +133,95 @@ export function createDispatcher(options: DispatcherOptions) {
             : { kind: "directory", path: target.projectRootPath, projectId: target.projectId },
         });
         const events = store.events.list(card.id);
-        const prompt = buildDispatchBrief({
-          card,
-          project,
-          preset,
-          events,
-          handoff: loadHandoff(project, card, events),
-          latestPlan: store.plans.list(card.id).at(-1),
-          extraInstructions: opts.extraInstructions,
-        });
-        const modeId = modeIdFor(preset.provider, preset.permissionMode);
-        const id = (agentId = (options.newAgentId ?? randomUUID)());
-        tracker?.expect(id);
-        const env: Record<string, string> = {
-          VIBE_ROLE: "worker",
-          VIBE_CARD_ID: card.id,
-          VIBE_CARD_KEY: card.key,
-        };
-        if (preset.runtimeEnv) env.VIBE_RUNTIME_ENV = preset.runtimeEnv;
+        const handoff = loadHandoff(project, card, events);
+        const latestPlan = store.plans.list(card.id).at(-1);
         workspaceId = workspace.id;
         worktree = useWorktree ? workspace.directory : null;
-        await workspace.agents.create({
-          agentId: id,
-          title,
-          prompt,
-          labels: { cardKey: card.key, cardId: card.id, role: "worker", preset: preset.name },
-          env,
-          config: {
-            provider: providerSpec(preset),
-            ...(preset.thinking && preset.thinking !== "default"
-              ? { thinkingOptionId: preset.thinking }
-              : {}),
-            ...(modeId ? { modeId } : {}),
-          },
-        });
+
+        // The chosen preset first; when the agent cannot start for a provider-side reason
+        // (login expired, model unknown, provider missing, ...) its fallbackPresetIds in order.
+        const failover = (await (options.failoverEnabled?.() ?? true)) !== false;
+        const queue = [preset];
+        for (let i = 0; i < queue.length; i++) {
+          const current = queue[i]!;
+          const prompt = buildDispatchBrief({
+            card,
+            project,
+            preset: current,
+            events,
+            handoff,
+            latestPlan,
+            extraInstructions: opts.extraInstructions,
+          });
+          const modeId = modeIdFor(current.provider, current.permissionMode);
+          const id = (options.newAgentId ?? randomUUID)();
+          tracker?.expect(id);
+          const env: Record<string, string> = {
+            VIBE_ROLE: "worker",
+            VIBE_CARD_ID: card.id,
+            VIBE_CARD_KEY: card.key,
+          };
+          if (current.runtimeEnv) env.VIBE_RUNTIME_ENV = current.runtimeEnv;
+          try {
+            await workspace.agents.create({
+              agentId: id,
+              title,
+              prompt,
+              labels: { cardKey: card.key, cardId: card.id, role: "worker", preset: current.name },
+              env,
+              config: {
+                provider: providerSpec(current),
+                ...(current.thinking && current.thinking !== "default"
+                  ? { thinkingOptionId: current.thinking }
+                  : {}),
+                ...(modeId ? { modeId } : {}),
+              },
+            });
+            agentId = id;
+            usedPreset = current;
+            break;
+          } catch (error) {
+            tracker?.release(id);
+            const message = error instanceof Error ? error.message : String(error);
+            const category = classifyFailure(message);
+            if (i === 0 && failover && isReassignable(category)) {
+              for (const fid of preset.fallbackPresetIds ?? []) {
+                const next = store.presets.list().find((p) => p.id === fid);
+                if (next && !queue.some((q) => q.id === next.id)) queue.push(next);
+              }
+            }
+            if (i + 1 >= queue.length) throw error;
+            store.events.add({
+              cardId: card.id,
+              type: "status",
+              authorKind: "system",
+              author: "failover",
+              body: {
+                kind: "failover",
+                fromPresetId: current.id,
+                toPresetId: queue[i + 1]!.id,
+                category,
+                method: "restart",
+                text: `${current.provider}/${current.model} could not start (${category}: ${message}); trying ${queue[i + 1]!.name}.`,
+              },
+            });
+          }
+        }
       } catch (error) {
         return recordFailure(card, error);
       }
 
+      const startedId = agentId as unknown as string; // set by the start loop above
       const result = store.cards.dispatch({
         cardId: card.id,
-        agentId,
+        agentId: startedId,
         workspaceId,
-        provider: preset.provider,
+        provider: usedPreset.provider,
         worktree,
-        presetId: preset.id,
+        presetId: usedPreset.id,
       });
-      await tracker?.bind(agentId);
-      return { ...result, workspaceId, agentId };
+      await tracker?.bind(startedId);
+      return { ...result, workspaceId, agentId: startedId };
     } catch (error) {
       if (agentId) tracker?.release(agentId);
       throw toBoardError(error);

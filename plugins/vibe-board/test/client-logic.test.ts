@@ -243,6 +243,7 @@ describe("preset persistence round trip", () => {
       baseBranch: "main",
       runtimeEnv: "",
       instructions: "be brief",
+      fallbackPresetIds: [] as string[],
     };
     expect(validateDraft(draft)).toBeNull();
     expect(validateDraft({ ...draft, model: " " })).not.toBeNull();

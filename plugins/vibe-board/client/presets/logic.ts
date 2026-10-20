@@ -78,6 +78,8 @@ export interface PresetDraft {
   baseBranch: string;
   runtimeEnv: string;
   instructions: string;
+  /** Ordered preset ids to continue on when an agent on this preset fails (quota, login, ...). */
+  fallbackPresetIds: string[];
 }
 
 export const EMPTY_PRESET_DRAFT: PresetDraft = {
@@ -90,6 +92,7 @@ export const EMPTY_PRESET_DRAFT: PresetDraft = {
   baseBranch: "",
   runtimeEnv: "",
   instructions: "",
+  fallbackPresetIds: [],
 };
 
 export function presetToDraft(p: Preset): PresetDraft {
@@ -103,7 +106,13 @@ export function presetToDraft(p: Preset): PresetDraft {
     baseBranch: p.baseBranch ?? "",
     runtimeEnv: p.runtimeEnv ?? "",
     instructions: p.instructions,
+    fallbackPresetIds: p.fallbackPresetIds ?? [],
   };
+}
+
+/** Toggle `id` in the ordered chain: selecting appends (order = click order), selecting again removes. */
+export function toggleFallback(chain: readonly string[], id: string): string[] {
+  return chain.includes(id) ? chain.filter((x) => x !== id) : [...chain, id];
 }
 
 /** Draft -> RPC payload (blank optional strings become null). */
@@ -118,6 +127,7 @@ export function draftToPayload(d: PresetDraft) {
     baseBranch: d.baseBranch.trim() || null,
     runtimeEnv: d.runtimeEnv.trim() || null,
     instructions: d.instructions,
+    fallbackPresetIds: d.fallbackPresetIds.length ? d.fallbackPresetIds : null,
   };
 }
 
