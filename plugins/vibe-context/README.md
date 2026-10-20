@@ -49,3 +49,28 @@ turn timeline; this module adds one only when that did not happen, strategy `han
   probes the local `claude --help` / `--version` once at start; if Claude Code compacts idle
   sessions itself, claude is skipped. `NATIVE_MIN_VERSION` is null until the release is confirmed.
 - A compaction turn that stops on an approval waits up to 10 min for the user, then is retried later.
+
+## server/complexity (WP-83)
+
+Conversation complexity -> context strategy. `classifyComplexity` (pure, `classify.ts`) turns the
+turns of a session into `short` / `multi` / `long`; the scheduler reads the turns from vibe-stats'
+`usage_event` (`usage.ts`, read-only, tolerant of a missing table) for the CLI session ids of the
+agent (`CompactionHost.cliSessionIds`: persistence.sessionId / nativeHandle / runtimeInfo.sessionId),
+after each turn and on every tick, and stores the result with `sessions.setComplexity`. The change
+event `session.complexity_changed` is emitted by the command layer; the card timeline reads it
+(or the session's `complexity`), this module writes no extra note.
+
+- A "turn" is one `usage_event` row (one model round, rows with no tokens ignored), so agentic
+  turns count several times; hence the thresholds are settings.
+- Default rules (settings group `complexity`): short <= 3 turns, multi 4-14, long = 15+ turns, or
+  summed cacheRead >= 1,000,000, or >= 25% of turns with context (input + cacheRead + cacheWrite)
+  >= 177,047 tokens. Any long rule wins, so a single bloated turn is long.
+- short: no extra action. multi: (re-)injection after a compaction or in a handoff prompt inlines
+  at most `tightMemoryTokens` (1000) of memory, larger files become pointers. long: additionally
+  compacted at the next idle tick even if the cache is not near expiry (`earlyCompactLong`), merged
+  with the TTL trigger (one compaction per idle period). Providers without `/compact`, or a session
+  that is long again after `handoffAfterCompactions` (2) early compactions, are handed over to a
+  new session (existing handoff branch).
+- After a compaction only usage newer than it counts, so a compacted session drops back to
+  short/multi. The counters are in memory (reset on daemon restart).
+- `complexity.enabled=false` turns the whole policy off (no classification, TTL behaviour only).

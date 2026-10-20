@@ -3,6 +3,7 @@
 import { dirname } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { complexitySettings, type ComplexitySettingsValues } from "../complexity";
 import { buildContextBlock } from "../inject";
 import { createMemoryStore } from "../memory/store";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "../vibe/db";
@@ -11,6 +12,7 @@ import { expectSystemTurn } from "./system-turn";
 import { createCompactionScheduler, type CompactionConfig, type CompactionHost } from "./scheduler";
 import { compactionSettings } from "./settings";
 
+export * from "../complexity";
 export * from "./native";
 export * from "./policy";
 export * from "./scheduler";
@@ -30,6 +32,8 @@ export interface CompactionOptions {
 export function registerCompaction(server: PluginServerContext, options: CompactionOptions = {}) {
   const log = options.log ?? ((m) => console.log(m));
   const settings = server.registerSettings(compactionSettings);
+  const complexity = server.registerSettings(complexitySettings);
+  let complexityValues: ComplexitySettingsValues | undefined;
   let config: CompactionConfig = { enabled: true, ttlSeconds: {} };
   let intervalMs = 20_000;
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
@@ -43,6 +47,16 @@ export function registerCompaction(server: PluginServerContext, options: Compact
   };
   void settings.read().then(apply);
   const unsubscribe = settings.subscribe(apply);
+  const applyComplexity = (state: Awaited<ReturnType<typeof complexity.read>>) => {
+    if (state.status !== "ready") {
+      log(`vibe-context: complexity settings invalid, keeping previous: ${state.error}`);
+      return;
+    }
+    complexityValues = state.values;
+    log(`vibe-context: complexity settings: ${JSON.stringify(state.values)}`);
+  };
+  void complexity.read().then(applyComplexity);
+  const unsubscribeComplexity = complexity.subscribe(applyComplexity);
 
   const db = openVibeDb(options.dbPath ? { path: options.dbPath } : {});
   migrateOwner(db, "core");
@@ -82,15 +96,26 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     async archive(agentId) {
       await handle().agents.ref(agentId).archive();
     },
+    async cliSessionIds(agentId) {
+      const agent = (await handle().agents.ref(agentId).refresh())?.agent;
+      const ids = [
+        agent?.persistence?.sessionId,
+        agent?.persistence?.nativeHandle,
+        agent?.runtimeInfo?.sessionId,
+      ];
+      return [...new Set(ids.filter((id): id is string => !!id))];
+    },
   };
 
   const scheduler = createCompactionScheduler({
     store,
     host,
-    config: () => config,
-    buildContext: (cwd) =>
+    config: () => ({ ...config, complexity: complexityValues }),
+    usageDb: db,
+    buildContext: (cwd, maxMemoryTokens) =>
       buildContextBlock(
         createMemoryStore({ projectRoot: cwd, userHome, contextWindowTokens: 200_000 }),
+        { maxMemoryTokens },
       ),
     settleMs: options.settleMs,
     log,
@@ -110,6 +135,9 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     server.on("agent.turn_ended", ({ agent }, ctx) => {
       paseo = ctx.paseo;
       scheduler.onTurnEnded(agent);
+      scheduler
+        .refreshComplexity(agent)
+        .catch((error) => log(`vibe-context: complexity failed: ${String(error)}`));
     }),
     server.on("agent.closed", ({ agent }) => scheduler.onAgentGone(agent.id)),
     server.on("agent.archived", ({ agent }) => scheduler.onAgentGone(agent.id)),
@@ -132,6 +160,7 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     if (timer) clearTimeout(timer);
     for (const off of offs) off();
     unsubscribe();
+    unsubscribeComplexity();
     db.close();
   };
 }

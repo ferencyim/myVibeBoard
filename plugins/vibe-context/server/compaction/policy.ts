@@ -31,13 +31,16 @@ export interface WindowInput {
   nowMs: number;
   marginMs: number;
   alreadyCompacted: boolean;
+  /** Long conversation (WP-83): compact at this idle moment whatever the cache state. */
+  force?: boolean;
 }
 
 /** `null` means: compact now. */
 export function skipReason(i: WindowInput): SkipReason | null {
   if (i.state !== "idle") return "not-idle";
-  if (i.cacheExpiresAtMs === null) return "no-expiry";
   if (i.alreadyCompacted) return "already-compacted";
+  if (i.force) return null;
+  if (i.cacheExpiresAtMs === null) return "no-expiry";
   const left = i.cacheExpiresAtMs - i.nowMs;
   if (left <= 0) return "cache-cold";
   if (left > i.marginMs) return "cache-hot";
