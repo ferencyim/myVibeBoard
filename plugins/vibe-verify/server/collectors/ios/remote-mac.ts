@@ -25,7 +25,21 @@ export function assertValidRemotePath(p: string): string {
   return p;
 }
 
+/** Absolute path on the Mac; it is always shell-quoted, so spaces are fine. */
+export function assertValidDeveloperDir(p: string): string {
+  if (!p.startsWith("/") || /[\x00\r\n]/.test(p)) {
+    throw new Error(`Invalid developerDir (absolute path on the Mac expected): ${JSON.stringify(p)}`);
+  }
+  return p;
+}
+
 export interface RemoteMacOptions {
+  /**
+   * Xcode developer directory on the Mac (e.g. `<XCODE_APP>/Contents/Developer`), exported as
+   * DEVELOPER_DIR in front of every remote command; needed when xcode-select points at the
+   * Command Line Tools or Xcode lives on an external disk.
+   */
+  developerDir?: string;
   sshPath?: string;
   scpPath?: string;
   connectTimeoutSec?: number;
@@ -41,6 +55,7 @@ export class RemoteMacExecutor {
   private readonly ssh: string;
   private readonly scp: string;
   private readonly baseOpts: string[];
+  private readonly envPrefix: string;
 
   constructor(
     private readonly runner: Runner,
@@ -48,6 +63,9 @@ export class RemoteMacExecutor {
     private readonly options: RemoteMacOptions = {},
   ) {
     this.host = assertValidHost(host);
+    this.envPrefix = options.developerDir
+      ? `export DEVELOPER_DIR=${shQuote(assertValidDeveloperDir(options.developerDir))}; `
+      : "";
     this.ssh = options.sshPath ?? "ssh";
     this.scp = options.scpPath ?? "scp";
     this.baseOpts = [
@@ -62,7 +80,7 @@ export class RemoteMacExecutor {
 
   /** Runs a shell command string on the Mac (the caller quotes with `shQuote`). */
   shell(command: string, o: RemoteCallOptions = {}): Promise<RunResult> {
-    return this.runner.run(this.ssh, [...this.baseOpts, this.host, command], {
+    return this.runner.run(this.ssh, [...this.baseOpts, this.host, this.envPrefix + command], {
       timeoutMs: o.timeoutMs ?? 60_000,
       signal: this.options.signal,
     });

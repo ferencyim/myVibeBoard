@@ -34,7 +34,21 @@ write this block.
   no passwords). The host is only an ssh alias from the user's `~/.ssh/config` (`<MAC_HOST>`): plugin option
   `host`, env `VIBE_MAC_HOST`, or `ios.host` in verify.json. `detect()` runs `uname && xcodebuild -version`
   and reports why the Mac is unusable. Scratch files stay in `/tmp/vibe-verify/<run>` on the Mac (never deleted
-  recursively). Real run (needs Xcode on the Mac, pending): `VIBE_E2E_IOS=1 VIBE_MAC_HOST=<alias> npm test`.
+  recursively).
+  **Xcode not selected by `xcode-select`** (Command Line Tools active, or Xcode on an external disk): set
+  `developerDir` (plugin option, env `VIBE_MAC_DEVELOPER_DIR`, or `ios.developerDir` in verify.json, an absolute
+  path such as `<XCODE_APP>/Contents/Developer`). Every remote command is then prefixed with
+  `export DEVELOPER_DIR=...;`, and `detect()` reports a missing directory as "is the external disk mounted?".
+  `dispose()` stops only what the run started (recorder, app, and the simulator only if the run booted it).
+  Verified on a real Mac (WP-73, Xcode 26.6, iOS 18.6 simulator): boot, `app.appPath` sync + install,
+  `app.build` remote `xcodebuild` + install, launch, screenshots, recordVideo (mp4), crash-report scan, GIF,
+  pre-running simulator left running. Sample: `docs/vibe/screens/ios-evidence-sample.png`.
+  Real run: `VIBE_E2E_IOS=1 VIBE_MAC_HOST=<alias> [VIBE_MAC_DEVELOPER_DIR=...] [VIBE_E2E_IOS_DEVICE="iPhone 16"]
+  [VIBE_E2E_IOS_APP=<local .app>] [VIBE_E2E_IOS_BUILD_CWD=<project dir on the Mac>] npm test`. A test app is a
+  single-file SwiftUI project (`EvidenceApp.swift` + a minimal `project.pbxproj`, bundle id
+  `com.example.vibeverify.evidence`, `GENERATE_INFOPLIST_FILE=YES`) built with
+  `xcodebuild -scheme EvidenceApp -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO build`.
+  On Windows Git Bash set the env vars from PowerShell (MSYS rewrites `/Volumes/...` values).
 - `server/collectors/desktop`: `createDesktopCollector` starts the built app, waits for its window, takes
   window screenshots (Windows: PowerShell + user32 PrintWindow; macOS: full-screen `screencapture`, degraded),
   builds a GIF from the step frames, keeps stdout/stderr, and stops only the process it started. For
