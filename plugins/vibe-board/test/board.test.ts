@@ -281,6 +281,12 @@ describe("rpc contract", () => {
 
     const created = await call(rpc.cardsCreateRpc, { project: "DEMO", title: "Via rpc" });
     expect(created.card.column).toBe("draft");
+    const { preset: reviewer } = board.presets.create({ name: "Rev", provider: "codex", model: "m" });
+    const withReviewer = await call(rpc.cardsUpdateRpc, { card: created.card.key, reviewerPresetId: reviewer.id });
+    expect(withReviewer.card.reviewerPresetId).toBe(reviewer.id);
+    expect((await call(rpc.cardsUpdateRpc, { card: created.card.key, reviewerPresetId: null })).card.reviewerPresetId).toBeNull();
+    const viaCreate = await call(rpc.cardsCreateRpc, { project: "DEMO", title: "Reviewed", reviewerPresetId: reviewer.id });
+    expect(viaCreate.card.reviewerPresetId).toBe(reviewer.id);
     const moved = await call(rpc.cardsMoveRpc, { card: created.card.key, to: "todo" });
     expect(moved.card.column).toBe("todo");
     const uploaded = await call(rpc.attachmentsUploadRpc, {

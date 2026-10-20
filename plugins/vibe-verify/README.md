@@ -77,3 +77,19 @@ Plugin RPCs (`shared/rpc.ts`): `vibe.verify.get`, `vibe.verify.list`, `vibe.veri
 
 Evidence lives in `$VIBE_HOME/verify/<card key>/<verification id>/`. Baseline worktrees for web before/after
 go under `$VIBE_WORKTREE_ROOT` (default `$VIBE_HOME/worktrees`; on Windows point it at D:).
+
+## Model review (WP-80)
+
+A card with `reviewerPresetId` gets an extra read-only reviewer agent (that preset's provider/model, same
+permission hook, tree-snapshot guard and `VIBE_ROLE=verifier` MCP as the verifier) after the checks of every
+verification. It receives the diff (merge-base of HEAD with the preset's base branch / main / master, working tree
+included), the card text and the latest plan, and answers `{verdict, summary, issues[{severity, file?, line?, text}]}`.
+Sequential (after the checks) so the tree is stable and the findings of checks and review go to the worker in one return.
+
+- Items: `verification_item.kind = review`; one per issue with method `review:<severity>`, or one `review` row (pass).
+  `severe` -> `fail` (card verifying -> in_progress, actor verifier, reason "review found severe issues", the
+  reject event carries `reviewReturn: true`; the worker gets the findings as prompt); `major`/`minor` -> `doubt`.
+- Events: `review.started`, `review.finished` (verdict `pass|issues|severe`).
+- Loop guard: after `VIBE_REVIEW_MAX_RETURNS` (default 3) consecutive review-caused returns, severe issues are only
+  `doubt` and a `master.alert` of kind `review_loop` is published (vibe-master notify pushes it).
+- A reviewer that cannot start, answers garbage or modifies the tree gives a `doubt` row, never a return.

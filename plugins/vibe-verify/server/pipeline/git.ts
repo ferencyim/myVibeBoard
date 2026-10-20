@@ -65,3 +65,38 @@ export async function removeWorktree(
   const r = await git(runner, repoCwd, ["worktree", "remove", worktreePath]);
   return r.exitCode === 0 ? undefined : (r.stderr || r.stdout).trim();
 }
+
+const DIFF_LIMIT = 80_000;
+
+/**
+ * The change under review: working tree against the merge-base of HEAD with the first existing
+ * candidate branch (so committed and uncommitted edits are both included). Without a base,
+ * falls back to the uncommitted changes only. The text is truncated, never empty-handed.
+ */
+export async function changeDiff(
+  runner: Runner,
+  cwd: string,
+  candidates: ReadonlyArray<string | null | undefined>,
+): Promise<{ base: string | undefined; stat: string; diff: string; truncated: boolean }> {
+  let base: string | undefined;
+  for (const branch of candidates.filter((b): b is string => !!b)) {
+    const mb = await git(runner, cwd, ["merge-base", "HEAD", branch]);
+    const hash = mb.exitCode === 0 ? mb.stdout.trim() : "";
+    if (hash) {
+      base = hash;
+      break;
+    }
+  }
+  const range = base ? [base] : ["HEAD"];
+  const [stat, diff] = await Promise.all([
+    git(runner, cwd, ["diff", "--stat", ...range, "--", ".", ":(exclude).vibe"]),
+    git(runner, cwd, ["diff", ...range, "--", ".", ":(exclude).vibe"]),
+  ]);
+  const text = diff.stdout;
+  return {
+    base,
+    stat: stat.stdout.trim(),
+    diff: text.length > DIFF_LIMIT ? text.slice(0, DIFF_LIMIT) : text,
+    truncated: text.length > DIFF_LIMIT,
+  };
+}

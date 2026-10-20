@@ -110,11 +110,14 @@ export function buildFailurePrompt(input: {
   source: "verifier" | "user";
   failed: readonly FailedItem[];
   comment?: string;
+  review?: boolean;
 }): string {
   const head =
     input.source === "user"
       ? `Your work on ${input.card.key} was rejected by the user.`
-      : `Independent verification of ${input.card.key} (commit ${input.commitHash}) found failing checks, so the card was sent back to you.`;
+      : input.review
+        ? `Independent code review of ${input.card.key} (commit ${input.commitHash}) found severe problems (listed below together with any failing checks), so the card was sent back to you.`
+        : `Independent verification of ${input.card.key} (commit ${input.commitHash}) found failing checks, so the card was sent back to you.`;
   const body = input.failed.length
     ? input.failed
         .map(

@@ -27,8 +27,11 @@ import {
   needsAttention,
   previewKind,
   provenance,
+  SEVERITY_LABELS,
+  reviewSeverity,
   shortHash,
   simulatedNotice,
+  splitReview,
   textExcerpt,
   unattachedEvidence,
   type Conclusion,
@@ -93,6 +96,7 @@ export function VerificationPanel({ api, card, reload }: VerificationPanelProps)
   const decidable = canDecide(card.column) && latest;
   const notice = simulatedNotice(detail.evidence);
   const loose = unattachedEvidence(detail.items, detail.evidence);
+  const split = splitReview(detail.items);
 
   const act = async (fn: () => Promise<unknown>, done?: () => void) => {
     setBusy(true);
@@ -166,8 +170,8 @@ export function VerificationPanel({ api, card, reload }: VerificationPanelProps)
         </Muted>
       ))}
 
-      {detail.items.length === 0 ? <Muted size={13}>没有检查项。</Muted> : null}
-      {detail.items.map((item) => (
+      {split.checks.length === 0 ? <Muted size={13}>没有检查项。</Muted> : null}
+      {split.checks.map((item) => (
         <ItemRow
           key={item.id}
           item={item}
@@ -177,6 +181,16 @@ export function VerificationPanel({ api, card, reload }: VerificationPanelProps)
           onOpen={setViewer}
         />
       ))}
+
+      {split.reviews.length > 0 ? (
+        <Field label="复核意见">
+          <View style={{ gap: 8 }}>
+            {split.reviews.map((item) => (
+              <ReviewRow key={item.id} item={item} />
+            ))}
+          </View>
+        </Field>
+      ) : null}
 
       {loose.length > 0 ? (
         <Field label="其它证据">
@@ -270,6 +284,47 @@ function ItemRow({
       {item.method ? <Muted size={11}>方法：{item.method}</Muted> : null}
       {item.note ? <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{item.note}</Text> : null}
       {evidence.length > 0 ? <EvidenceStrip evidence={evidence} api={api} onOpen={onOpen} /> : null}
+    </View>
+  );
+}
+
+/** One finding of the model review, coloured by severity (severe red, major amber, minor muted). */
+function ReviewRow({ item }: { item: VerificationItem }) {
+  const { theme } = useHost();
+  const severity = reviewSeverity(item);
+  const color = !severity
+    ? item.judgement === "pass"
+      ? theme.colors.statusSuccess
+      : theme.colors.statusWarning
+    : severity === "severe"
+      ? theme.colors.statusDanger
+      : severity === "major"
+        ? theme.colors.statusWarning
+        : theme.colors.foregroundMuted;
+  return (
+    <View
+      style={{
+        gap: 4,
+        padding: 10,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderLeftWidth: 4,
+        borderColor: theme.colors.border,
+        borderLeftColor: color,
+        backgroundColor: theme.colors.surface1,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+        <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: color }}>
+          <Text style={{ color: theme.colors.surface0, fontSize: 11, fontWeight: "700" }}>
+            {severity ? SEVERITY_LABELS[severity] : item.judgement === "pass" ? "通过" : "存疑"}
+          </Text>
+        </View>
+        <Text style={{ flex: 1, color: theme.colors.foreground, fontSize: 14 }}>
+          {severity ? item.checkText : item.note || item.checkText}
+        </Text>
+      </View>
+      {severity && item.note ? <Muted size={11}>{item.note}</Muted> : null}
     </View>
   );
 }

@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   type CardView,
+  type Project,
   type CollectorContext,
   type CollectorRegistry,
   type EvidenceArtifact,
@@ -18,14 +19,22 @@ import {
   type Runner,
   type VerificationItem,
 } from "../vibe/contract";
-import type { VibeStore } from "../vibe/db";
+import { publishEvent, type VibeStore } from "../vibe/db";
 import { VerifyConfigSchema, loadVerifyConfig, type PerfConfig, type VerifyConfig } from "../collectors/common";
 import { type VerifierLauncher, type PickVerifier, VerdictSchema, parseJsonLoose, pickDifferentProvider } from "../verifier/agent";
 import { aggregate, SUMMARY, type VerifyStore } from "../store";
 import { runAutoChecks, splitChecks } from "./checks";
-import { prepareBaseline, type Baseline, removeWorktree, sameSnapshot, snapshotTree, headCommit } from "./git";
+import { changeDiff, prepareBaseline, type Baseline, removeWorktree, sameSnapshot, snapshotTree, headCommit } from "./git";
 import { buildFailurePrompt, buildJudgePrompt, buildSetupPrompt, type FailedItem } from "./prompts";
 import type { RunConfigs } from "../registry";
+import {
+  ReviewSchema,
+  buildReviewPrompt,
+  issueJudgement,
+  issueLocation,
+  reviewVerdict,
+  type ReviewIssue,
+} from "../review";
 
 export interface PipelineDeps {
   board: VibeStore;
@@ -37,6 +46,8 @@ export interface PipelineDeps {
   /** Sends a prompt to the worker agent; false = could not be delivered. */
   notifyWorker: (agentId: string, prompt: string) => Promise<boolean>;
   pickVerifier?: PickVerifier;
+  /** Consecutive review-triggered returns after which a severe review is only "doubt" (default 3). */
+  maxReviewReturns?: number;
   /** Where baseline worktrees are created (Windows: must be on D:). */
   worktreeRoot: string;
   now?: () => Date;
@@ -83,6 +94,191 @@ export function createPipeline(deps: PipelineDeps) {
   const log = deps.log ?? ((m, e) => console.error(`[vibe-verify] ${m}`, e ?? ""));
   const pick = deps.pickVerifier ?? pickDifferentProvider;
   const active = new Set<string>();
+  const maxReviewReturns = deps.maxReviewReturns ?? 3;
+
+  /** Length of the newest-first run of reject events that were caused by a model review. */
+  const reviewReturnsInARow = (cardId: string) => {
+    let n = 0;
+    for (const e of board.events.list(cardId).reverse()) {
+      if (e.type !== "reject") continue;
+      if ((e.body as { reviewReturn?: boolean } | null)?.reviewReturn) n++;
+      else break;
+    }
+    return n;
+  };
+
+  /**
+   * Model review of the change by the card's reviewer preset. Runs after the checks (on a stable,
+   * already verified tree, so the read-only snapshot guard is unambiguous; findings of both end up
+   * in one return to the worker). Findings become verification items of kind "review".
+   */
+  async function runReview(input: {
+    card: CardView;
+    project: Project;
+    worktree: string;
+    commitHash: string;
+    vid: string;
+    outputDir: string;
+    notes: string[];
+    allowReturn: boolean;
+  }): Promise<void> {
+    const { card, vid, notes } = input;
+    const preset = board.presets.list().find((p) => p.id === card.reviewerPresetId);
+    const doubt = (text: string) => {
+      const item = verify.addItem(vid, { text: "Model review", method: "review", kind: "review" });
+      verify.judgeItem(item.id, "doubt", text);
+      notes.push(`Review: ${text}`);
+    };
+    const publish = (type: "review.started" | "review.finished", payload: object) =>
+      publishEvent(
+        board.db,
+        { type, cardId: card.id, projectId: input.project.id, payload } as never,
+        now,
+      );
+    const finish = (
+      verdict: "pass" | "issues" | "severe",
+      issues: string[],
+      summary: string,
+      sessionId?: string,
+    ) =>
+      publish("review.finished", {
+        verdict,
+        issues,
+        summary,
+        reviewerPresetId: card.reviewerPresetId,
+        sessionId,
+        verificationId: vid,
+      });
+    if (!preset) {
+      doubt("The reviewer preset no longer exists");
+      finish("issues", ["Reviewer preset missing"], "Review skipped");
+      return;
+    }
+
+    const worker = workerSession(card.id);
+    let agent: Awaited<ReturnType<VerifierLauncher["launch"]>> | undefined;
+    let sessionId: string | undefined;
+    try {
+      agent = await deps.launcher.launch({
+        card,
+        project: input.project,
+        provider: preset.provider,
+        model: preset.model || undefined,
+        cwd: input.worktree,
+        workspaceId: worker?.workspaceId ?? null,
+        outputDir: input.outputDir,
+        role: "reviewer",
+      });
+      sessionId = board.sessions.start({
+        cardId: card.id,
+        agentId: agent.agentId,
+        workspaceId: worker?.workspaceId ?? null,
+        role: "verifier",
+        provider: agent.provider,
+      }).id;
+      publish("review.started", {
+        reviewerPresetId: preset.id,
+        provider: preset.provider,
+        model: preset.model || undefined,
+        sessionId,
+        commitHash: input.commitHash,
+      });
+
+      const change = await changeDiff(runner, input.worktree, [preset.baseBranch, "main", "master"]);
+      const before = await snapshotTree(runner, input.worktree);
+      const result = await agent.run(
+        buildReviewPrompt({
+          card,
+          plan: board.plans.list(card.id).at(-1),
+          worktree: input.worktree,
+          commitHash: input.commitHash,
+          baseCommit: change.base,
+          stat: change.stat,
+          diff: change.diff,
+          truncated: change.truncated,
+        }),
+      );
+      const after = await snapshotTree(runner, input.worktree);
+      if (!sameSnapshot(before, after)) {
+        doubt("The reviewer modified the code; its review is void");
+        finish("issues", ["Reviewer modified the code"], "Review void", sessionId);
+        return;
+      }
+      const raw = parseJsonLoose(result.text);
+      const parsed = raw === undefined ? undefined : ReviewSchema.safeParse(raw);
+      if (result.status !== "idle" || !parsed?.success) {
+        const why =
+          result.status !== "idle"
+            ? `reviewer round ended with status ${result.status}`
+            : "no valid review result";
+        doubt(`Review could not be completed: ${why}`);
+        finish("issues", [`Review could not be completed: ${why}`], "", sessionId);
+        return;
+      }
+      const review = parsed.data;
+      const issues: ReviewIssue[] =
+        review.issues.length === 0 && review.verdict && review.verdict !== "pass"
+          ? [
+              {
+                severity: review.verdict === "severe" ? "severe" : "major",
+                text: review.summary || "The reviewer reported problems without details",
+              },
+            ]
+          : review.issues;
+      if (issues.length === 0) {
+        const item = verify.addItem(vid, { text: "Model review", method: "review", kind: "review" });
+        verify.judgeItem(item.id, "pass", review.summary);
+      }
+      for (const issue of issues) {
+        const item = verify.addItem(vid, {
+          text: issue.text,
+          method: `review:${issue.severity}`,
+          kind: "review",
+        });
+        verify.judgeItem(item.id, issueJudgement(issue.severity, input.allowReturn), issueLocation(issue));
+      }
+      if (review.summary) notes.push(`Review: ${review.summary}`);
+      const verdict = reviewVerdict({ ...review, issues });
+      finish(
+        verdict,
+        issues.map((i) => [`[${i.severity}]`, issueLocation(i), i.text].filter(Boolean).join(" ")),
+        review.summary,
+        sessionId,
+      );
+      if (verdict === "severe" && !input.allowReturn) {
+        notes.push(
+          `Review: severe issues, but the card was already sent back ${maxReviewReturns} times because of reviews; left to the user`,
+        );
+        publishEvent(
+          board.db,
+          {
+            type: "master.alert",
+            cardId: card.id,
+            projectId: input.project.id,
+            payload: {
+              kind: "review_loop",
+              message: `${card.key}: the reviewer still reports severe issues after ${maxReviewReturns} automatic returns; please look at it yourself.`,
+            },
+            dedupeKey: `review-loop:${card.id}:${vid}`,
+          },
+          now,
+        );
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      doubt(`Review could not be completed: ${message}`);
+      finish("issues", [`Review could not be completed: ${message}`], "", sessionId);
+    } finally {
+      if (agent) await agent.close().catch(() => undefined);
+      if (sessionId) {
+        try {
+          board.sessions.setState(sessionId, "ended", { outcome: "completed" });
+        } catch {
+          // already ended by the lifecycle listener
+        }
+      }
+    }
+  }
 
   const workerSession = (cardId: string) => {
     const workers = board.sessions.list({ cardId, role: "worker" });
@@ -368,6 +564,20 @@ export function createPipeline(deps: PipelineDeps) {
       }
     }
 
+    // ---- model review (optional, card.reviewerPresetId) ----------------------------------
+    if (card.reviewerPresetId && !voided) {
+      await runReview({
+        card,
+        project,
+        worktree,
+        commitHash,
+        vid,
+        outputDir,
+        notes,
+        allowReturn: reviewReturnsInARow(card.id) < maxReviewReturns,
+      });
+    }
+
     // ---- conclude -----------------------------------------------------------------------
     let finalItems = verify.items(vid);
     if (voided) {
@@ -408,6 +618,7 @@ export function createPipeline(deps: PipelineDeps) {
         commitHash,
         failed: failed.map((i) => toFailed(i, verify.evidence(vid))),
         source: "verifier",
+        review: failed.some((i) => i.kind === "review"),
       });
     }
     return { verificationId: vid, conclusion, voided, returned };
@@ -415,7 +626,8 @@ export function createPipeline(deps: PipelineDeps) {
 
   function toFailed(item: VerificationItem, evidence: ReturnType<VerifyStore["evidence"]>): FailedItem {
     const own = evidence.filter((e) => item.evidenceIds.includes(e.id) || e.itemId === item.id);
-    return { text: item.checkText, note: item.note, evidenceFiles: own.map((e) => e.path) };
+    const severity = item.method.startsWith("review:") ? `[${item.method.slice(7)}] ` : "";
+    return { text: `${severity}${item.checkText}`, note: item.note, evidenceFiles: own.map((e) => e.path) };
   }
 
   /** verifying -> in_progress and the failure text to the original worker session. */
@@ -427,6 +639,8 @@ export function createPipeline(deps: PipelineDeps) {
       failed: FailedItem[];
       source: "verifier" | "user";
       comment?: string;
+      /** A model review (not only a failed check) caused the return. */
+      review?: boolean;
     },
   ): Promise<boolean> {
     const card = board.cards.get(cardId);
@@ -435,14 +649,24 @@ export function createPipeline(deps: PipelineDeps) {
     board.cards.move(card.id, {
       to: "in_progress",
       actor: input.source === "user" ? "user" : "verifier",
-      reason: input.source === "user" ? "user rejected" : "verification failed",
+      reason:
+        input.source === "user"
+          ? "user rejected"
+          : input.review
+            ? "review found severe issues"
+            : "verification failed",
     });
     board.events.add({
       cardId: card.id,
       type: "reject",
       authorKind: input.source === "user" ? "user" : "system",
       author: input.source === "user" ? "user" : "verifier",
-      body: { text: input.comment ?? "Verification failed", verificationId: input.verificationId, prompt },
+      body: {
+        text: input.comment ?? (input.review ? "Review found severe issues" : "Verification failed"),
+        verificationId: input.verificationId,
+        prompt,
+        ...(input.review ? { reviewReturn: true } : {}),
+      },
     });
     const worker = workerSession(card.id);
     let delivered = false;

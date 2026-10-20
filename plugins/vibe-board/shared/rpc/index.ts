@@ -91,6 +91,8 @@ const cardEditable = {
   refImages: z.array(z.string()),
   needsEvidence: z.boolean(),
   presetId: z.string().nullable(),
+  /** Preset of the model that reviews the result (null = no review). */
+  reviewerPresetId: z.string().nullable(),
   parentCardId: z.string().nullable(),
   tagIds: z.array(z.string()),
 };
@@ -208,6 +210,7 @@ export const cardsCreateRpc = defineRpc({
     refImages: cardEditable.refImages.optional(),
     needsEvidence: cardEditable.needsEvidence.optional(),
     presetId: cardEditable.presetId.optional(),
+    reviewerPresetId: cardEditable.reviewerPresetId.optional(),
     parentCardId: cardEditable.parentCardId.optional(),
     tagIds: cardEditable.tagIds.optional(),
     sortKey: z.string().optional(),
@@ -226,6 +229,7 @@ export const cardsUpdateRpc = defineRpc({
     refImages: cardEditable.refImages.optional(),
     needsEvidence: cardEditable.needsEvidence.optional(),
     presetId: cardEditable.presetId.optional(),
+    reviewerPresetId: cardEditable.reviewerPresetId.optional(),
     parentCardId: cardEditable.parentCardId.optional(),
     tagIds: cardEditable.tagIds.optional(),
   }),
