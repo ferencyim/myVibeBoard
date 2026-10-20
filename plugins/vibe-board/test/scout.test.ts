@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { callMcpTool, MCP_TOOLS, toolsForRole } from "../server/mcp/tools";
-import { createScoutService, pickScoutPreset, readOnlyModeFor, trimSummary, type ScoutConfig } from "../server/scout";
+import { createScoutService, pickScoutPreset, readOnlyConfigFor, trimSummary, type ScoutConfig } from "../server/scout";
 import { setupBoard } from "./helpers";
 
 function setup(config: Partial<ScoutConfig> = {}) {
@@ -63,7 +63,12 @@ describe("scout service", () => {
     expect(t.created[0]).toMatchObject({
       labels: { role: "scout", cardKey: "DEMO-1" },
       env: { VIBE_ROLE: "scout" },
-      config: { provider: "codex/gpt-5-mini", modeId: "read-only" },
+      config: {
+        provider: "codex/gpt-5-mini",
+        ...(process.platform === "win32"
+          ? { modeId: "full-access" }
+          : { options: { sandbox_mode: "read-only", approval_policy: "never" } }),
+      },
     });
     expect(t.created.every((c) => c.archived)).toBe(true);
     expect(t.published).toEqual(["scout.started", "scout.finished"]);
@@ -118,9 +123,10 @@ describe("scout preset selection", () => {
   });
 
   it("maps provider read-only modes and trims long summaries", () => {
-    expect(readOnlyModeFor("claude")).toBe("plan");
-    expect(readOnlyModeFor("codex")).toBe("read-only");
-    expect(readOnlyModeFor("kimi")).toBeUndefined();
+    expect(readOnlyConfigFor("claude")).toEqual({ modeId: "plan" });
+    expect(readOnlyConfigFor("codex", "linux").options).toMatchObject({ sandbox_mode: "read-only" });
+    expect(readOnlyConfigFor("codex", "win32")).toEqual({ modeId: "full-access" });
+    expect(readOnlyConfigFor("kimi")).toEqual({});
     const long = Array.from({ length: 30 }, (_, i) => `l${i}`).join("\n");
     expect(trimSummary(long).split("\n")).toHaveLength(21);
   });

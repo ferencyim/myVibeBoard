@@ -69,12 +69,28 @@ You are a read-only scout working for another coding agent. Answer ONE question 
 - Be fast: search and read only what the question needs.
 - Reply with at most ${SUMMARY_MAX_LINES} lines of plain text, no preamble. Every finding is one line "path:line - what it is" (relative paths). Say explicitly when something was not found.`;
 
-/** Provider read-only mode id (undefined: provider default; the prompt still forbids writes). */
-export function readOnlyModeFor(provider: string): string | undefined {
+/**
+ * Read-only settings per provider: claude has a "plan" mode; codex has no read-only mode id, so
+ * its sandbox is set through provider options (never asks, never writes). The codex read-only
+ * sandbox cannot run shell commands on Windows (read-only: fails to initialise, workspace-write:
+ * stalls; both verified), so there it runs unsandboxed (full-access) with only the prompt forbidding
+ * writes. Other providers keep their default and rely on the prompt.
+ */
+export function readOnlyConfigFor(
+  provider: string,
+  platform: string = process.platform,
+): {
+  modeId?: string;
+  options?: Record<string, unknown>;
+} {
   const p = provider.toLowerCase();
-  if (p === "claude") return "plan";
-  if (p === "codex") return "read-only";
-  return undefined;
+  if (p === "claude") return { modeId: "plan" };
+  if (p === "codex") {
+    return platform === "win32"
+      ? { modeId: "full-access" }
+      : { options: { sandbox_mode: "read-only", approval_policy: "never" } };
+  }
+  return {};
 }
 
 const specOf = (preset: Pick<Preset, "provider" | "model">) =>
@@ -186,7 +202,7 @@ export function createScoutService(options: ScoutServiceOptions) {
     const base = { goal: task.goal, kind: task.kind };
     const paseo = options.getPaseo();
     if (!paseo) return { ...base, status: "failed", summary: "No active Paseo daemon connection" };
-    const modeId = readOnlyModeFor(ctx.preset.provider);
+    const readOnly = readOnlyConfigFor(ctx.preset.provider);
     let handle: Awaited<ReturnType<ScoutPaseo["agents"]["create"]>> | null = null;
     try {
       handle = await paseo.agents.create({
@@ -198,7 +214,7 @@ export function createScoutService(options: ScoutServiceOptions) {
         config: {
           provider: specOf(ctx.preset),
           systemPrompt: SCOUT_SYSTEM_PROMPT,
-          ...(modeId ? { modeId } : {}),
+          ...readOnly,
         },
       });
       const result = await handle.run(buildPrompt(task), { timeoutMs: ctx.timeoutMs });
