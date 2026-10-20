@@ -119,6 +119,7 @@ export function toCard(r: RawRow, prefix: string, tags: string[]): CardView {
     needsEvidence: flag(r.v.needs_evidence),
     presetId: strOrNull(r.v.preset_id),
     suggestedPresetId: strOrNull(r.v.suggested_preset_id),
+    reviewerPresetId: strOrNull(r.v.reviewer_preset_id),
     worktree: strOrNull(r.v.worktree),
     origin: str(r.v.origin, "manual") as CardView["origin"],
     originRef: strOrNull(r.v.origin_ref),
@@ -158,6 +159,8 @@ export function toPreset(r: RawRow): Preset {
     baseBranch: strOrNull(r.v.base_branch),
     runtimeEnv: strOrNull(r.v.runtime_env),
     instructions: str(r.v.instructions),
+    fallbackPresetIds: json<string[] | null>(r.v.fallback_preset_ids_json, null),
+    roleHint: strOrNull(r.v.role_hint),
     builtin: flag(r.v.builtin),
     createdAt: str(r.v.created_at) || iso(r.wall),
     updatedAt: str(r.v.updated_at) || iso(r.wall),
@@ -192,6 +195,9 @@ export function toSession(r: RawRow): AgentSession {
     startedAt: str(r.v.started_at),
     endedAt: strOrNull(r.v.ended_at),
     errorMessage: strOrNull(r.v.error_message),
+    stalledSince: strOrNull(r.v.stalled_since),
+    complexity: strOrNull(r.v.complexity) as AgentSession["complexity"],
+    reassignedFromSessionId: strOrNull(r.v.reassigned_from_session_id),
     updatedHlc: "",
   };
 }
