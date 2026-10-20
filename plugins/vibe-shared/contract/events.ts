@@ -2,7 +2,13 @@
 // The event type list is fixed here; add types only by changing this file (and the docs).
 
 import { z } from "zod";
-import { CardColumnSchema, CardOriginSchema, JudgementSchema } from "./enums";
+import {
+  CardColumnSchema,
+  CardOriginSchema,
+  JudgementSchema,
+  ReviewVerdictSchema,
+  SessionComplexitySchema,
+} from "./enums";
 import { MOVE_ACTORS } from "./state-machine";
 
 const SessionRef = z.object({ sessionId: z.string(), agentId: z.string().optional() });
@@ -37,6 +43,56 @@ export const EVENT_PAYLOADS = {
   "session.error": SessionRef.extend({ message: z.string() }),
   "session.switched": SessionRef.extend({ from: z.string(), to: z.string() }),
   "session.compacted": SessionRef.extend({ strategy: z.string().optional() }),
+  // Round 2. Stall detection: stalled_since is a marker, not a session state.
+  "session.stalled": SessionRef.extend({
+    stalledSince: z.string(),
+    /** ms without output when detected. */
+    idleMs: z.number().int().optional(),
+  }),
+  "session.unstalled": SessionRef,
+  // Failure reassignment: `fromSessionId` was ended and `sessionId` (the new one) replaces it.
+  "session.reassigned": SessionRef.extend({
+    fromSessionId: z.string(),
+    fromAgentId: z.string().optional(),
+    fromProvider: z.string(),
+    provider: z.string(),
+    presetId: z.string().nullable().optional(),
+    reason: z.string(),
+  }),
+  "session.complexity_changed": SessionRef.extend({
+    from: SessionComplexitySchema.nullable(),
+    to: SessionComplexitySchema.nullable(),
+  }),
+  // Model review of a card's result (after the worker finishes). Published by the reviewer plugin.
+  "review.started": z.object({
+    reviewerPresetId: z.string().nullable().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    sessionId: z.string().optional(),
+    commitHash: z.string().optional(),
+  }),
+  "review.finished": z.object({
+    verdict: ReviewVerdictSchema,
+    /** Short issue summaries; empty when verdict=pass. */
+    issues: z.array(z.string()).default([]),
+    summary: z.string().optional(),
+    reviewerPresetId: z.string().nullable().optional(),
+    sessionId: z.string().optional(),
+    verificationId: z.string().optional(),
+  }),
+  // Cheap-model scouting before dispatch (complexity / files / plan hints).
+  "scout.started": z.object({
+    scoutPresetId: z.string().nullable().optional(),
+    sessionId: z.string().optional(),
+  }),
+  "scout.finished": z.object({
+    scoutPresetId: z.string().nullable().optional(),
+    sessionId: z.string().optional(),
+    outcome: z.enum(["ok", "failed"]),
+    complexity: SessionComplexitySchema.nullable().optional(),
+    files: z.array(z.string()).optional(),
+    summary: z.string().optional(),
+  }),
   "verification.started": z.object({ verificationId: z.string() }),
   "verification.finished": z.object({
     verificationId: z.string(),

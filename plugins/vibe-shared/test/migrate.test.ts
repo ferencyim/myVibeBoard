@@ -83,9 +83,9 @@ describe("migrations", () => {
     const { db } = openTestDb();
     const result = migrateOwner(db, "verify");
     expect(getSchemaVersion(db, "core")).toBe(latestVersion("core"));
-    expect(getSchemaVersion(db, "verify")).toBe(1);
+    expect(getSchemaVersion(db, "verify")).toBe(latestVersion("verify"));
     expect(getSchemaVersion(db, "stats")).toBe(0);
-    expect(result.applied).toEqual([1]);
+    expect(result.applied).toEqual(MIGRATIONS.verify.map((m) => m.version));
     expect(tableNames(db)).not.toContain("usage_event");
     db.close();
   });

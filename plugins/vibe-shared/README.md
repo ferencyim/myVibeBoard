@@ -31,6 +31,29 @@ outside a plugin directory).
   create a card / card_event on a phone (`card.project_id`, `card_event.card_id/type/author_kind/author/created_at`);
   `cards.create`, `events.add`, `tags.create`, `presets.create` accept an optional replica-generated `id`.
 
+## Round 2 additions (core migration 3, verify migration 2)
+
+Additive and nullable; shared by the round-2 work packages.
+
+- `card.reviewer_preset_id` (`reviewerPresetId`, synced both ways): `cards.setReviewer(id, presetId | null)`
+  (validates the preset; also settable via `cards.update` / `cards.create`).
+- `preset.fallback_preset_ids_json` (`fallbackPresetIds: string[] | null`, ordered failover chain) and
+  `preset.role_hint` (`roleHint`, e.g. `scout` | `worker` | `reviewer`), both synced; `presets.create/update`
+  accept them. Deleting a preset scrubs it from cards' reviewer and other presets' chains.
+- `PlanSnapshot.files?: string[]` - globs the plan touches (scheduler conflict check).
+- `agent_session.stalled_since`, `complexity` (`short|multi|long`), `reassigned_from_session_id`
+  (`last_activity_at` already existed). **No `stalled` session state**: stalling is a marker, so the
+  session state machine and every existing consumer of `state` are unchanged; the marker is cleared by
+  activity or when the session ends/errors.
+  Commands: `sessions.touchActivity(id, at?)`, `markStalled(id, {since?, idleMs?})`, `clearStalled(id)`,
+  `setComplexity(id, complexity | null)`, `recordReassign({fromSessionId, agentId, provider, reason, ...})`
+  (one transaction: ends the old session with outcome `reassigned`, starts the replacement, sets
+  `card.preset_id`, writes a `switch_agent` card event).
+- Events: `session.stalled`, `session.unstalled`, `session.reassigned`, `session.complexity_changed`,
+  `review.started`, `review.finished` (`verdict: pass|issues|severe`, `issues: string[]`),
+  `scout.started`, `scout.finished`.
+- `verification.kind` / `verification_item.kind`: `check` (default) | `review`.
+
 ## Commands
 
     npm ci && npm run typecheck && npm test

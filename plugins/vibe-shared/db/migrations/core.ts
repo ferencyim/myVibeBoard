@@ -256,4 +256,20 @@ CREATE TABLE sync_tomb (
 CREATE INDEX idx_sync_tomb_seq ON sync_tomb(seq);
 `,
   },
+  {
+    version: 3,
+    name: "round2",
+    sql: `
+-- Round 2 (reviewer model, fallback chain, stall detection, complexity, reassignment).
+-- Additive and nullable: old rows keep working. agent_session.state is deliberately NOT
+-- extended with 'stalled'; stalled_since marks it so existing state flows are unaffected.
+ALTER TABLE card ADD COLUMN reviewer_preset_id TEXT;
+ALTER TABLE preset ADD COLUMN fallback_preset_ids_json TEXT;
+ALTER TABLE preset ADD COLUMN role_hint TEXT;
+ALTER TABLE agent_session ADD COLUMN stalled_since TEXT;
+ALTER TABLE agent_session ADD COLUMN complexity TEXT
+  CHECK (complexity IS NULL OR complexity IN ('short','multi','long'));
+ALTER TABLE agent_session ADD COLUMN reassigned_from_session_id TEXT;
+`,
+  },
 ];

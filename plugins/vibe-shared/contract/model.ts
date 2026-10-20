@@ -20,8 +20,10 @@ import {
   PresetEnvironmentKindSchema,
   PresetPermissionModeSchema,
   ProjectTypeSchema,
+  SessionComplexitySchema,
   SessionRoleSchema,
   SessionStateSchema,
+  VerificationKindSchema,
   VerificationModeSchema,
 } from "./enums";
 
@@ -65,6 +67,8 @@ export const CardSchema = z.object({
   needsEvidence: z.boolean(),
   presetId: z.string().nullable(),
   suggestedPresetId: z.string().nullable(),
+  /** Preset used to review this card's result; null = default. Phone-writable. */
+  reviewerPresetId: z.string().nullable(),
   worktree: z.string().nullable(),
   origin: CardOriginSchema,
   /** For origin=maintenance: the maintenance_rule id that produced the card. */
@@ -103,6 +107,8 @@ export const PlanSnapshotSchema = z.object({
   tags: z.array(z.string()),
   recommendedPresetId: z.string().nullable(),
   notes: z.string().optional(),
+  /** Files/directories (globs) the plan touches; the scheduler uses them to avoid parallel conflicts. */
+  files: z.array(z.string()).optional(),
 });
 export type PlanSnapshot = z.infer<typeof PlanSnapshotSchema>;
 
@@ -127,6 +133,10 @@ export const PresetSchema = z.object({
   /** Runtime environment the agent runs in (e.g. android-emulator, web-dev-server). */
   runtimeEnv: z.string().nullable(),
   instructions: z.string(),
+  /** Preset ids to fall back to, in order, when a session on this preset fails; null = none. */
+  fallbackPresetIds: z.array(z.string()).nullable(),
+  /** Selector hint: scout | worker | reviewer | ... (free text); null = unspecified. */
+  roleHint: z.string().nullable(),
   builtin: z.boolean(),
   createdAt: Iso,
   updatedAt: Iso,
@@ -182,6 +192,14 @@ export const AgentSessionSchema = z.object({
   startedAt: Iso,
   endedAt: Iso.nullable(),
   errorMessage: z.string().nullable(),
+  /**
+   * Set when the session produced no output for too long (stall detector). Not a session state:
+   * the state machine is unchanged; cleared as soon as activity resumes or the session ends.
+   */
+  stalledSince: Iso.nullable(),
+  complexity: SessionComplexitySchema.nullable(),
+  /** The failed session this one replaced (failure reassignment). */
+  reassignedFromSessionId: z.string().nullable(),
   updatedHlc: Hlc,
 });
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
@@ -207,6 +225,7 @@ export const VerificationSchema = z.object({
   conclusion: JudgementSchema.nullable(),
   verifierAgentId: z.string().nullable(),
   mode: VerificationModeSchema,
+  kind: VerificationKindSchema,
   startedAt: Iso,
   finishedAt: Iso.nullable(),
 });
@@ -215,6 +234,7 @@ export type Verification = z.infer<typeof VerificationSchema>;
 export const VerificationItemSchema = z.object({
   id: z.string(),
   verificationId: z.string(),
+  kind: VerificationKindSchema,
   position: z.number().int(),
   checkText: z.string(),
   method: z.string(),

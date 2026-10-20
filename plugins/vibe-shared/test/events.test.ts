@@ -68,6 +68,14 @@ describe("publishEvent", () => {
         "scheduler.quota_low",
         "scheduler.paused",
         "scheduler.resumed",
+        "session.stalled",
+        "session.unstalled",
+        "session.reassigned",
+        "session.complexity_changed",
+        "review.started",
+        "review.finished",
+        "scout.started",
+        "scout.finished",
       ].sort(),
     );
   });
