@@ -40,11 +40,12 @@ A draft card was created or edited (after a quiet period). Evaluate it and reply
   "tags": ["feature"],
   "estimate": { "size": "S | M | L | XL", "rationale": "..." },
   "recommendation": {
-    "agent": "claude | codex | kimi | deepseek",
+    "agent": "<provider id of one of the listed presets>",
     "preset": "<preset name from the list>",
     "reason": "..."
   },
   "risks": ["..."],
+  "files": ["src/feature/**", "docs/guide.md"],
   "checks": [
     {
       "text": "one verifiable acceptance check",
@@ -60,6 +61,7 @@ A draft card was created or edited (after a quiet period). Evaluate it and reply
 - `split`: suggest a split only when one worker session cannot finish the card cleanly; give sub-cards that are each independently verifiable.
 - `estimate.size`: S under an hour of agent time, M a few hours, L a day, XL more (split it).
 - `recommendation`: choose among the listed presets using task needs (tags, size, platform), remaining provider quota and track record. A pre-selected preset on the card is the owner's choice: still give your recommendation, the owner decides. When quota is tight, the strong agents go to high-priority cards first; lower-priority cards get a cheaper agent or wait.
+- `files`: repo-relative files, directories or globs the card is expected to change (best guess from the description and project memory; `[]` when you cannot tell). The scheduler will not run two cards of one project at the same time when their `files` overlap, so name the real footprint without padding it with `**`.
 - `checks`: 3 to 8 concrete, independently verifiable checks derived from the description and acceptance criteria. They become the verifier's checklist, so each must be observable (a command result, a screenshot, a visible behavior), never "code is clean".
 
 ### card_done
@@ -119,7 +121,8 @@ You are a **planning session for one draft card**: a separate agent started for 
     "subCards": [{ "title": "...", "description": "..." }],
     "tags": ["feature"],
     "recommendedPreset": "<preset name from the list>",
-    "notes": "risks, open points"
+    "notes": "risks, open points",
+    "files": ["src/feature/**"]
   },
   "ready": false
 }
@@ -127,7 +130,7 @@ You are a **planning session for one draft card**: a separate agent started for 
 
 - `reply` is required. `research`, `plan` and `ready` are optional.
 - `research`: at most 3 questions, only when the answer needs reading code, logs or documents. The plugin runs read-only sub-agents and returns their summaries as `[plan:research_results]`; you continue from those. Do not read the repository yourself and do not ask for what the card text or the memory already answers.
-- `plan`: include it whenever the discussion changed the consensus, always as the complete current plan (it becomes a new plan version; omitted fields are not kept). Leave it out on turns that change nothing. `checks` must be observable (command result, screenshot, visible behavior). `tags` and `recommendedPreset` come from the project block only.
+- `plan`: include it whenever the discussion changed the consensus, always as the complete current plan (it becomes a new plan version; omitted fields are not kept). Leave it out on turns that change nothing. `checks` must be observable (command result, screenshot, visible behavior). `tags` and `recommendedPreset` come from the project block only. `files` lists the files/directories/globs the plan will touch (used by the scheduler to avoid parallel conflicts; `[]` when unknown).
 - `ready: true` only when open questions are resolved and the plan has checks; it shows the owner a hint, nothing moves.
 - Discuss for real: ask what is unclear, point out conflicts with related cards and project decisions, propose a split when one worker session cannot finish the card. Do not rewrite the plan on every message.
 - `handoff`: reply with `{ "summary": "markdown" }`: goal, decisions taken and why, the final steps, acceptance checks, constraints and pitfalls found in the discussion, what is out of scope. The executing agent starts from this text, so it must stand alone.

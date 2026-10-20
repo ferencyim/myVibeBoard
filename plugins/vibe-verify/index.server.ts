@@ -75,6 +75,7 @@ export default function contribute(server: PluginServerContext) {
       await paseo.agents.ref(agentId).send(prompt);
       return true;
     },
+    maxReviewReturns: Number(process.env.VIBE_REVIEW_MAX_RETURNS) || 3,
     worktreeRoot: process.env.VIBE_WORKTREE_ROOT?.trim() || join(home, "worktrees"),
     log,
   });

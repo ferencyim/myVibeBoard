@@ -141,6 +141,25 @@ export function textExcerpt(base64: string, max = 4000): { text: string; truncat
   return text.length > max ? { text: text.slice(0, max), truncated: true } : { text, truncated: false };
 }
 
+export type ReviewSeverity = "severe" | "major" | "minor";
+
+export const SEVERITY_LABELS: Record<ReviewSeverity, string> = { severe: "严重", major: "主要", minor: "次要" };
+
+/** Severity of a review item (vibe-verify stores it as method "review:<severity>"); undefined for the "pass" row. */
+export function reviewSeverity(item: Pick<VerificationItem, "method">): ReviewSeverity | undefined {
+  const s = item.method.startsWith("review:") ? item.method.slice(7) : "";
+  return s === "severe" || s === "major" || s === "minor" ? s : undefined;
+}
+
+/** Splits the items into acceptance checks and the model review's findings (kind=review), worst first. */
+export function splitReview<T extends Pick<VerificationItem, "kind" | "method">>(items: readonly T[]) {
+  const rank = (i: T) => ["severe", "major", "minor"].indexOf(reviewSeverity(i) ?? "minor");
+  return {
+    checks: items.filter((i) => i.kind !== "review"),
+    reviews: items.filter((i) => i.kind === "review").sort((a, b) => rank(a) - rank(b)),
+  };
+}
+
 /** The user may decide only while the card sits in verifying. */
 export const canDecide = (column: string) => column === "verifying";
 

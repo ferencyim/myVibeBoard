@@ -20,6 +20,8 @@ export const PlanTurnSchema = z.object({
       tags: z.array(text).default([]),
       recommendedPreset: z.string().optional(),
       notes: z.string().optional(),
+      /** Files/directories (globs) the plan touches; the scheduler avoids running overlapping cards in parallel. */
+      files: z.array(text).default([]),
     })
     .optional(),
   /** A hint for the owner ("the plan can be executed"); never moves anything. */

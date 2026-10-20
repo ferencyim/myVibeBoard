@@ -13,6 +13,7 @@ import { quotaFor } from "./quota";
 import { topSessions, type ResourceSnapshot } from "./resources";
 import { PRIORITY_RANK, type Priority, type ProviderQuota } from "./vibe/contract";
 import type { PortAllocator } from "./ports";
+import { findOverlap } from "./overlap";
 
 type Store = ReturnType<typeof createVibeStore>;
 
@@ -24,6 +25,8 @@ export interface SchedulerConfig {
   leaseTtlMinutes: number;
   retryCooldownSeconds: number;
   maxAdmitAttempts: number;
+  /** Hold back a card whose planned files overlap a running card of the same project. */
+  conflictAvoidance: boolean;
 }
 
 export const DEFAULT_CONFIG: SchedulerConfig = {
@@ -34,6 +37,7 @@ export const DEFAULT_CONFIG: SchedulerConfig = {
   leaseTtlMinutes: 240,
   retryCooldownSeconds: 120,
   maxAdmitAttempts: 3,
+  conflictAvoidance: true,
 };
 
 export interface SchedulerDeps {
@@ -157,6 +161,28 @@ export function createScheduler(deps: SchedulerDeps) {
     return { total, byProvider, byProject };
   }
 
+  /** Planned files (globs) of a card: the latest plan version's `files`; empty when none declared. */
+  function plannedFiles(cardId: string): string[] {
+    const versions = store.plans.list(cardId);
+    return versions[versions.length - 1]?.snapshot.files ?? [];
+  }
+
+  /** Key of a running (or just admitted) card of the project whose files overlap `files`, if any. */
+  function conflictWith(projectId: string, cardId: string, files: string[]): string | null {
+    const busy = new Map<string, string>();
+    for (const column of ["in_progress", "verifying"] as const) {
+      for (const c of store.cards.list({ projectId, column })) busy.set(c.id, c.key);
+    }
+    for (const a of pending.values()) {
+      const c = store.cards.get(a.cardId);
+      if (c?.projectId === projectId) busy.set(c.id, c.key);
+    }
+    for (const [id, key] of busy) {
+      if (id !== cardId && findOverlap(files, plannedFiles(id))) return key;
+    }
+    return null;
+  }
+
   function updateMemoryGate(config: SchedulerConfig) {
     const snap = deps.resources();
     if (!snap) return;
@@ -258,6 +284,14 @@ export function createScheduler(deps: SchedulerDeps) {
       if (project.concurrencyLimit != null && (counts.byProject[project.id] ?? 0) >= project.concurrencyLimit) {
         deferred[card.key] = `project limit ${project.concurrencyLimit} reached`;
         continue;
+      }
+      if (config.conflictAvoidance) {
+        const files = plannedFiles(card.id);
+        const other = files.length ? conflictWith(card.projectId, card.id, files) : null;
+        if (other) {
+          deferred[card.key] = `touches the same files as ${other}`;
+          continue;
+        }
       }
       const q = quotaFor(quota, provider);
       if (q.level === "exhausted") {

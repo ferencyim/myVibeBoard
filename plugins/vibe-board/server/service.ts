@@ -101,6 +101,7 @@ export interface CardCreateInput {
   refImages?: string[];
   needsEvidence?: boolean;
   presetId?: string | null;
+  reviewerPresetId?: string | null;
   parentCardId?: string | null;
   tagIds?: string[];
   sortKey?: string;
@@ -114,6 +115,7 @@ export interface CardUpdateInput {
   refImages?: string[];
   needsEvidence?: boolean;
   presetId?: string | null;
+  reviewerPresetId?: string | null;
   parentCardId?: string | null;
   tagIds?: string[];
 }
@@ -240,6 +242,7 @@ export function createBoardService(runtime: BoardRuntime) {
             refImages: input.refImages,
             needsEvidence: input.needsEvidence,
             presetId: input.presetId,
+            reviewerPresetId: input.reviewerPresetId,
             parentCardId: input.parentCardId ? card(input.parentCardId).id : undefined,
             tagIds: input.tagIds,
             sortKey: input.sortKey,

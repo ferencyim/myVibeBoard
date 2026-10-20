@@ -38,7 +38,6 @@ export interface RuntimeDeps {
 }
 
 const PLANNER_LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
-const KNOWN_PROVIDERS = ["claude", "codex", "kimi", "deepseek"];
 
 export function createMasterRuntime(deps: RuntimeDeps) {
   const clock = deps.clock ?? systemClock;
@@ -242,7 +241,15 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     const paseo = deps.getPaseo();
     if (includeProviders && paseo) {
       const levels = await quota.get();
-      const ids = [...new Set([...KNOWN_PROVIDERS, ...Object.keys(levels)])];
+      // Whatever Paseo offers (any built-in or plugin provider), plus providers with usage data or presets.
+      const catalog = await paseo.providers.listAvailable?.().catch(() => null);
+      const ids = [
+        ...new Set([
+          ...(catalog?.providers ?? []).filter((p) => p.available !== false).map((p) => p.provider),
+          ...Object.keys(levels),
+          ...store.presets.list().map((p) => p.provider),
+        ]),
+      ];
       const listed = await Promise.all(
         ids.map(async (id): Promise<ProviderInfo | null> => {
           try {

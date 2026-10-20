@@ -30,7 +30,11 @@ export default function contribute(server: PluginServerContext) {
 
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
-    runtime.setSettings({ ...DEFAULT_SETTINGS, ...state.values } as RuntimeSettings);
+    runtime.setSettings({
+      ...DEFAULT_SETTINGS,
+      ...state.values,
+      leaseTtlMinutes: state.values.deviceLeaseMinutes,
+    } as RuntimeSettings);
   };
   const ready = settings.read().then(apply);
   const stopSettings = settings.subscribe(apply);

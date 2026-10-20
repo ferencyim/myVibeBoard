@@ -17,6 +17,11 @@ VIBE_E2E_SAMPLE=1 npx vitest run test/resources.test.ts   # one real machine sam
   `scheduler.dispatch_failed` and the slot is released (retry with back-off, then give up after
   `maxAdmitAttempts`). The UI's "Dispatch now" button still dispatches directly and skips the
   scheduler.
+- **Conflict avoidance** (`server/overlap.ts`, setting `conflictAvoidance`, default on): a todo card
+  whose latest plan version's `files` (globs, written by the master's assessment/planning) overlap
+  the `files` of a card of the same project that is in_progress/verifying (or just admitted) is
+  deferred with `touches the same files as <KEY>` in `status.deferred`. Cards without `files` are
+  never held back; "Dispatch now" ignores it. `globsOverlap` is pure and conservative.
 - **Limits**: global `globalLimit`, per provider `providerLimits`, per project
   `project.concurrencyLimit`, and the device pool (exclusive `device_lease`; a card whose preset
   `runtimeEnv` needs an emulator/simulator/board waits while none is free. If no device of that kind
@@ -37,8 +42,8 @@ VIBE_E2E_SAMPLE=1 npx vitest run test/resources.test.ts   # one real machine sam
   on the machine and persisted in `$VIBE_HOME/scheduler/ports.json`; released with the card. The
   admission consumer adds the port to the dispatch brief.
 - **Sub-agent selection** (`vibe-shared/contract/select.ts`, pure, shared by the master): `selectAgent(profiles, task, ctx)` ranks
-  agents by quota, machine pressure, capability table (`agentProfiles` setting over built-in
-  defaults), tag/platform strengths, tier vs size/priority, track record parsed from
+  agents by quota, machine pressure, capability table (one neutral tier-2 profile per provider found in the usage catalog and presets,
+  so any Paseo provider works; the `agentProfiles` setting overrides or adds entries), tag/platform strengths, tier vs size/priority, track record parsed from
   `<repo>/.vibe/workers/<agent>/MEMORY.md` (bullets with a check/cross or success/fail marker and
   `#tags`) and current load; a user pre-selection always wins. Exposed as RPC
   `scheduler.select_agent`; the file has no imports and lives in vibe-shared so vibe-master uses the same code.

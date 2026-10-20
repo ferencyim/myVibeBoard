@@ -50,7 +50,10 @@ export interface VerifyStore {
   /** Creates and records the thumbnail of an image evidence file that has none; returns its path. */
   ensureThumb(evidence: EvidenceFile): string | null;
   setVerifier(verificationId: string, agentId: string): void;
-  addItem(verificationId: string, check: { text: string; method: string }): VerificationItem;
+  addItem(
+    verificationId: string,
+    check: { text: string; method: string; kind?: "check" | "review" },
+  ): VerificationItem;
   judgeItem(itemId: string, judgement: Judgement, note: string, evidenceIds?: string[]): void;
   addEvidence(verificationId: string, itemId: string | null, artifact: EvidenceArtifact): EvidenceFile;
   finish(verificationId: string, conclusion: Judgement, projectId: string | null): void;
@@ -143,8 +146,8 @@ export function createVerifyStore(
           )
           .get(verificationId)?.n ?? 0;
       db.prepare(
-        `INSERT INTO verification_item (id, verification_id, position, check_text, method) VALUES (?, ?, ?, ?, ?)`,
-      ).run(id, verificationId, position, check.text, check.method);
+        `INSERT INTO verification_item (id, verification_id, kind, position, check_text, method) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(id, verificationId, check.kind ?? "check", position, check.text, check.method);
       return decodeRow(
         VerificationItemSchema,
         db.prepare("SELECT * FROM verification_item WHERE id = ?").get(id)!,

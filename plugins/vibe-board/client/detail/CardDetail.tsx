@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import React, { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { type CardView, type Preset, type Project, type Tag } from "../../shared/vibe/contract";
+import { ReviewerSelect } from "../board/ReviewerSelect";
 import { COLUMN_LABELS, errorMessage, evidenceDefault, userTargets } from "../board/logic";
 import { queryKey, type BoardApi } from "../common/api";
 import { useHost } from "../common/ctx";
@@ -251,6 +252,14 @@ function Details({
           suggestedId={card.suggestedPresetId}
           usage={usage}
           onChange={(presetId) => update({ card: card.id, presetId })}
+        />
+      </Field>
+
+      <Field label="复核模型" hint="任务完成后由该模型 review 代码改动；发现严重问题会自动退回执行 agent。">
+        <ReviewerSelect
+          presets={presets}
+          value={card.reviewerPresetId}
+          onChange={(reviewerPresetId) => update({ card: card.id, reviewerPresetId })}
         />
       </Field>
 

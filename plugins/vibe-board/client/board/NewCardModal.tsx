@@ -7,6 +7,7 @@ import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Check, Chip, Dot, Field, TextField } from "../common/ui";
 import type { ProviderUsageLike } from "../presets/logic";
 import { PresetSelector, PrioritySelector, TagSelector } from "../presets/selectors";
+import { ReviewerSelect } from "./ReviewerSelect";
 import { COLUMN_LABELS, errorMessage, evidenceDefault, projectColor } from "./logic";
 
 export function NewCardModal({
@@ -47,6 +48,7 @@ export function NewCardModal({
   const [needsEvidence, setNeedsEvidence] = useState(false);
   const [evidenceTouched, setEvidenceTouched] = useState(false);
   const [presetId, setPresetId] = useState<string | null>(null);
+  const [reviewerPresetId, setReviewerPresetId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -70,6 +72,7 @@ export function NewCardModal({
     setNeedsEvidence(false);
     setEvidenceTouched(false);
     setPresetId(null);
+    setReviewerPresetId(null);
   };
 
   const submit = async () => {
@@ -86,6 +89,7 @@ export function NewCardModal({
         tagIds,
         needsEvidence,
         presetId,
+        reviewerPresetId,
       });
       reset();
       refresh();
@@ -145,6 +149,9 @@ export function NewCardModal({
           />
           <Field label="执行 Agent 预设">
             <PresetSelector presets={presets} value={presetId} usage={usage} onChange={setPresetId} />
+          </Field>
+          <Field label="复核模型" hint="任务完成后由该模型 review 代码改动；发现严重问题会自动退回。">
+            <ReviewerSelect presets={presets} value={reviewerPresetId} onChange={setReviewerPresetId} />
           </Field>
           <View style={{ flexDirection: "row", gap: 8 }}>
             <Btn variant="primary" label="创建" disabled={busy || !title.trim() || !projectId} onPress={submit} />

@@ -38,7 +38,7 @@ export const AssessmentSchema = z
     tags: z.array(text).default([]),
     estimate: z.object({ size: z.enum(SIZES), rationale: text }),
     recommendation: z.object({
-      /** Provider/agent id, e.g. claude, codex, kimi, deepseek. */
+      /** Provider/agent id, any provider id listed in the project block (for example claude or codex). */
       agent: text,
       /** Name or id of one of the listed presets; the plugin resolves it to card.suggested_preset_id. */
       preset: z.string().optional(),
@@ -47,6 +47,8 @@ export const AssessmentSchema = z
       reason: text,
     }),
     risks: z.array(text).default([]),
+    /** Files/directories (globs, repo-relative) the card is expected to touch; empty when unknown. */
+    files: z.array(text).default([]),
     /** Acceptance checks, written to the card (plan version) for vibe-verify. */
     checks: z.array(z.object({ text, method: z.string().optional() })).min(1),
   })

@@ -121,6 +121,7 @@ export function renderAssessment(a: Assessment, applied: AppliedAssessment): str
       (applied.adjustment ? `\n(${applied.adjustment})` : ""),
   );
   if (a.risks.length) lines.push("Risks:", bullet(a.risks));
+  if (a.files.length) lines.push("Expected files:", bullet(a.files));
   lines.push(
     "Acceptance checks:",
     bullet(a.checks.map((c) => (c.method ? `${c.text} (${c.method})` : c.text))),
@@ -295,6 +296,7 @@ export function createAssessor(deps: AssessDeps) {
         tags,
         recommendedPresetId: preset?.id ?? null,
         notes: a.risks.length ? `Risks:\n${bullet(a.risks)}` : undefined,
+        ...(a.files.length ? { files: a.files } : {}),
       });
       if ((preset?.id ?? null) !== card.suggestedPresetId) {
         store.cards.update(card.id, { suggestedPresetId: preset?.id ?? null });
