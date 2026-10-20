@@ -1,6 +1,7 @@
 // Optional UI automation for Electron apps through Playwright `_electron` (loaded lazily).
 
 import type { DesktopStep } from "./config";
+import { loadPlaywright } from "../playwright-types";
 
 export interface ElectronSession {
   /** PNG of the first window. */
@@ -23,8 +24,7 @@ export interface ElectronDriver {
 export function createPlaywrightElectronDriver(): ElectronDriver {
   return {
     async launch(spec) {
-      // Opaque specifier: the plugin bundler must not inline playwright (resolved at run time).
-      const { _electron } = (await import(["play", "wright"].join(""))) as typeof import("playwright");
+      const { _electron } = await loadPlaywright();
       const app = await _electron.launch({
         executablePath: spec.executablePath,
         args: spec.args,

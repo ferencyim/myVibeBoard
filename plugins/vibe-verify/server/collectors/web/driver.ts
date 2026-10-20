@@ -1,6 +1,7 @@
 // Browser seam for the web collector. Tests inject a fake BrowserDriver; production uses
 // Playwright (loaded lazily so the plugin loads without a browser installed).
 import type { WebStep } from "../common";
+import { loadPlaywright, type PwBrowser } from "../playwright-types";
 
 export interface Viewport {
   width: number;
@@ -25,13 +26,9 @@ export interface BrowserDriver {
 }
 
 export function createPlaywrightDriver(): BrowserDriver {
-  type PW = typeof import("playwright");
-  type Browser = Awaited<ReturnType<PW["chromium"]["launch"]>>;
-  let browser: Browser | undefined;
-  // Opaque specifier: the plugin bundler must not inline playwright (it is resolved at run time).
-  const loadPlaywright = (): Promise<PW> => import(["play", "wright"].join("")) as Promise<PW>;
+  let browser: PwBrowser | undefined;
 
-  async function launch(): Promise<Browser> {
+  async function launch(): Promise<PwBrowser> {
     if (!browser) {
       const { chromium } = await loadPlaywright();
       browser = await chromium.launch();
