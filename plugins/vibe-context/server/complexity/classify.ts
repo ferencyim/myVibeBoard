@@ -1,14 +1,16 @@
-// Conversation complexity (WP-83): short / multi / long from effective turns and cache reads.
-// Pure. One "turn" is one model round as logged in usage_event (one API call), so long agentic
-// turns count several times; the thresholds are settings for that reason.
+// Conversation complexity (WP-83): short / multi / long from effective agent turns and cache reads.
+// Pure. A "turn" is one Paseo agent turn (turn_started .. turn_ended) that a plugin did not start
+// itself; a turn can contain dozens of model calls (usage_event rows), which count as ONE turn.
 
 import type { SessionComplexity } from "../vibe/contract";
 
-export interface TurnUsage {
-  tokensIn: number;
-  tokensOut: number;
+export interface TurnStats {
+  /** Effective agent turns since the last compaction. */
+  turns: number;
+  /** Summed cacheRead of all model calls since the last compaction. */
   cacheRead: number;
-  cacheWrite: number;
+  /** Per turn: the largest context (input + cacheRead + cacheWrite) of any call inside it. */
+  turnPeaks: readonly number[];
 }
 
 export interface ComplexityThresholds {
@@ -18,7 +20,7 @@ export interface ComplexityThresholds {
   longMinTurns: number;
   /** Accumulated cacheRead at or above this is "long" (default 1,000,000). */
   longCacheRead: number;
-  /** A turn whose context (input + cache read + cache write) reaches this is "heavy". */
+  /** A turn whose peak context reaches this is "heavy". */
   heavyTurnContext: number;
   /** Share of heavy turns at or above this is "long" (default 0.25). */
   heavyTurnShare: number;
@@ -32,26 +34,17 @@ export const DEFAULT_THRESHOLDS: ComplexityThresholds = {
   heavyTurnShare: 0.25,
 };
 
-export const turnContext = (t: TurnUsage): number => t.tokensIn + t.cacheRead + t.cacheWrite;
-
-/** Turns that did something (an all-zero usage row is noise). */
-export const effectiveTurns = (turns: readonly TurnUsage[]): TurnUsage[] =>
-  turns.filter((t) => t.tokensIn + t.tokensOut + t.cacheRead + t.cacheWrite > 0);
-
 export function classifyComplexity(
-  all: readonly TurnUsage[],
+  stats: TurnStats,
   thresholds: ComplexityThresholds = DEFAULT_THRESHOLDS,
 ): SessionComplexity {
-  const turns = effectiveTurns(all);
-  if (turns.length === 0) return "short";
-  const cacheRead = turns.reduce((sum, t) => sum + t.cacheRead, 0);
-  const heavy = turns.filter((t) => turnContext(t) >= thresholds.heavyTurnContext).length;
+  const heavy = stats.turnPeaks.filter((p) => p >= thresholds.heavyTurnContext).length;
   if (
-    turns.length >= thresholds.longMinTurns ||
-    cacheRead >= thresholds.longCacheRead ||
-    heavy / turns.length >= thresholds.heavyTurnShare
+    stats.turns >= thresholds.longMinTurns ||
+    stats.cacheRead >= thresholds.longCacheRead ||
+    (stats.turns > 0 && heavy / stats.turns >= thresholds.heavyTurnShare)
   ) {
     return "long";
   }
-  return turns.length > thresholds.shortMaxTurns ? "multi" : "short";
+  return stats.turns > thresholds.shortMaxTurns ? "multi" : "short";
 }

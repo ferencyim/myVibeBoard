@@ -31,6 +31,8 @@ export function strategyFor(provider: string): InjectionStrategy | null {
 export interface InjectionOptions extends ContextOptions {
   git?: GitRunner;
   userHome?: string;
+  /** Per-directory memory budget (complexity policy): tight for multi-turn / long cards. */
+  budgetFor?: (cwd: string) => number | undefined;
   log?: (message: string) => void;
 }
 
@@ -51,7 +53,10 @@ export async function injectContext(
     userHome: options.userHome ?? resolveVibeHome(),
     contextWindowTokens: 200_000,
   });
-  const block = buildContextBlock(store, options);
+  const block = buildContextBlock(store, {
+    ...options,
+    maxMemoryTokens: options.budgetFor?.(cwd) ?? options.maxMemoryTokens,
+  });
   if (!block) return null;
   if (strategy === "system-prompt") {
     const current = request.config.systemPrompt ?? "";

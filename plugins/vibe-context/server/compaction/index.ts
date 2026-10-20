@@ -8,7 +8,7 @@ import { buildContextBlock } from "../inject";
 import { createMemoryStore } from "../memory/store";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "../vibe/db";
 import { detectNativeIdleCompaction } from "./native";
-import { expectSystemTurn } from "./system-turn";
+import { expectSystemTurn, peekSystemTurn } from "./system-turn";
 import { createCompactionScheduler, type CompactionConfig, type CompactionHost } from "./scheduler";
 import { compactionSettings } from "./settings";
 
@@ -112,6 +112,7 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     host,
     config: () => ({ ...config, complexity: complexityValues }),
     usageDb: db,
+    isSystemTurn: (agentId) => peekSystemTurn(agentId, markerHome),
     buildContext: (cwd, maxMemoryTokens) =>
       buildContextBlock(
         createMemoryStore({ projectRoot: cwd, userHome, contextWindowTokens: 200_000 }),
