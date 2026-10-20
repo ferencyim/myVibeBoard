@@ -39,6 +39,8 @@ export type AssessOutcome =
 export interface AppliedAssessment {
   suggestedPresetId: string | null;
   presetName: string | null;
+  /** Reviewer advice shown in the comment only; the card is not changed. */
+  reviewer: { presetName: string | null; reason: string } | null;
   adjustment: string | null;
   planVersion: number;
   tags: string[];
@@ -94,6 +96,14 @@ export function resolvePreset(
   return (model && sameAgent.find((p) => p.model.toLowerCase().includes(model))) || sameAgent[0] || null;
 }
 
+/** Only advice: recommended and the card has no reviewer yet. The name must resolve to a listed preset. */
+function reviewerAdvice(a: Assessment, card: CardView, presets: Preset[]): AppliedAssessment["reviewer"] {
+  if (!a.reviewer?.recommend || card.reviewerPresetId) return null;
+  const wanted = a.reviewer.presetName?.trim().toLowerCase();
+  const found = wanted ? presets.find((p) => p.id === a.reviewer!.presetName || p.name.toLowerCase() === wanted) : null;
+  return { presetName: found?.name ?? null, reason: a.reviewer.reason };
+}
+
 function bullet(items: string[]): string {
   return items.map((i) => `- ${i}`).join("\n");
 }
@@ -120,6 +130,12 @@ export function renderAssessment(a: Assessment, applied: AppliedAssessment): str
     `Recommended agent: ${applied.presetName ?? a.recommendation.agent} - ${a.recommendation.reason}` +
       (applied.adjustment ? `\n(${applied.adjustment})` : ""),
   );
+  if (applied.reviewer) {
+    const who = applied.reviewer.presetName ? ` ${applied.reviewer.presetName}` : "";
+    lines.push(
+      `Recommended model review:${who}${applied.reviewer.reason ? ` - ${applied.reviewer.reason}` : ""} (pick the reviewer on the card yourself)`,
+    );
+  }
   if (a.risks.length) lines.push("Risks:", bullet(a.risks));
   if (a.files.length) lines.push("Expected files:", bullet(a.files));
   lines.push(
@@ -304,6 +320,7 @@ export function createAssessor(deps: AssessDeps) {
       const applied: AppliedAssessment = {
         suggestedPresetId: preset?.id ?? null,
         presetName: preset?.name ?? null,
+        reviewer: reviewerAdvice(a, card, input.presets),
         adjustment,
         planVersion: plan.version,
         tags,

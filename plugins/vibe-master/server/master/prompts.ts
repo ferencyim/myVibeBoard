@@ -29,7 +29,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
       (p) =>
-        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` thinking=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}`,
+        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` thinking=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}${p.roleHint ? ` role=${p.roleHint}` : ""}`,
     );
   const cards = [...input.openCards]
     .sort(

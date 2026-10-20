@@ -46,6 +46,15 @@ export const AssessmentSchema = z
       thinking: z.string().optional(),
       reason: text,
     }),
+    /** Optional: should a model review the result? The owner picks the reviewer on the card. */
+    reviewer: z
+      .object({
+        recommend: z.boolean(),
+        /** Name or id of one of the listed presets (preferably a different provider than the worker). */
+        presetName: z.string().optional(),
+        reason: z.string().default(""),
+      })
+      .optional(),
     risks: z.array(text).default([]),
     /** Files/directories (globs, repo-relative) the card is expected to touch; empty when unknown. */
     files: z.array(text).default([]),

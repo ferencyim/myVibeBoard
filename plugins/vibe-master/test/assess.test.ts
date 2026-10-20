@@ -57,6 +57,42 @@ describe("reply parsing", () => {
 });
 
 describe("draft assessment write-back", () => {
+  it("shows an optional reviewer recommendation in the comment only, never on the card", async () => {
+    const board = setupBoard();
+    const risky = board.draft("Migrate the database");
+    const { assessor } = assessorFor(board, [
+      assessmentJson({ reviewer: { recommend: true, presetName: "Codex Max", reason: "touches migrations" } }),
+    ]);
+    const outcome = await assessor.assess(risky.key);
+    if (outcome.status !== "assessed") throw new Error("expected an assessment");
+    expect(outcome.applied.reviewer).toEqual({ presetName: "Codex Max", reason: "touches migrations" });
+    const body = board.store.events.list(risky.id).find((e) => e.type === "evaluation")!.body as { text: string };
+    expect(body.text).toContain("Recommended model review: Codex Max - touches migrations");
+    expect(board.store.cards.get(risky.id)!.reviewerPresetId).toBeNull();
+
+    // not recommended, an unknown preset name, or a reviewer the owner already set
+    const quiet = board.draft("Rename a label");
+    const none = assessorFor(board, [
+      assessmentJson({ reviewer: { recommend: false, reason: "tiny" } }),
+      assessmentJson({ reviewer: { recommend: true, presetName: "Nope", reason: "r" } }),
+      assessmentJson({ reviewer: { recommend: true, presetName: "Codex Max", reason: "r" } }),
+    ]);
+    const o1 = await none.assessor.assess(quiet.key);
+    if (o1.status !== "assessed") throw new Error("expected an assessment");
+    expect(o1.applied.reviewer).toBeNull();
+    const o2 = await none.assessor.assess(quiet.key, { force: true });
+    if (o2.status !== "assessed") throw new Error("expected an assessment");
+    expect(o2.applied.reviewer).toEqual({ presetName: null, reason: "r" });
+    board.store.cards.update(quiet.id, { reviewerPresetId: board.presets.codex.id });
+    const o3 = await none.assessor.assess(quiet.key, { force: true });
+    if (o3.status !== "assessed") throw new Error("expected an assessment");
+    expect(o3.applied.reviewer).toBeNull();
+
+    expect(parseReply(assessmentJson(), AssessmentSchema)).toMatchObject({ ok: true });
+    expect(parseReply(assessmentJson({ reviewer: { recommend: true } }), AssessmentSchema).ok).toBe(true);
+    expect(parseReply(assessmentJson({ reviewer: { presetName: "x" } }), AssessmentSchema).ok).toBe(false);
+  });
+
   it("stores the expected files in the plan version; replies without files stay valid", async () => {
     const board = setupBoard();
     const withFiles = board.draft("Add dark mode toggle");

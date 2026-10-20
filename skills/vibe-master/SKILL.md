@@ -44,6 +44,7 @@ A draft card was created or edited (after a quiet period). Evaluate it and reply
     "preset": "<preset name from the list>",
     "reason": "..."
   },
+  "reviewer": { "recommend": false, "presetName": "<preset name from the list>", "reason": "..." },
   "risks": ["..."],
   "files": ["src/feature/**", "docs/guide.md"],
   "checks": [
@@ -61,6 +62,7 @@ A draft card was created or edited (after a quiet period). Evaluate it and reply
 - `split`: suggest a split only when one worker session cannot finish the card cleanly; give sub-cards that are each independently verifiable.
 - `estimate.size`: S under an hour of agent time, M a few hours, L a day, XL more (split it).
 - `recommendation`: choose among the listed presets using task needs (tags, size, platform), remaining provider quota and track record. A pre-selected preset on the card is the owner's choice: still give your recommendation, the owner decides. When quota is tight, the strong agents go to high-priority cards first; lower-priority cards get a cheaper agent or wait.
+- `reviewer` (optional): say whether a model review of the result is worth it (risky or cross-cutting change, security, data migration, non-trivial logic). When yes, `presetName` is a listed preset on a different provider than the one you recommended for the work, preferring presets with `role=reviewer`. Only a suggestion shown in your evaluation: the owner sets the reviewer on the card. Omit it or use `recommend: false` for small, low-risk cards.
 - `files`: repo-relative files, directories or globs the card is expected to change (best guess from the description and project memory; `[]` when you cannot tell). The scheduler will not run two cards of one project at the same time when their `files` overlap, so name the real footprint without padding it with `**`.
 - `checks`: 3 to 8 concrete, independently verifiable checks derived from the description and acceptance criteria. They become the verifier's checklist, so each must be observable (a command result, a screenshot, a visible behavior), never "code is clean".
 
