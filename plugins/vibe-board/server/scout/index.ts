@@ -10,7 +10,9 @@ import type { PaseoApi } from "@getpaseo/client";
 import { selectAgent, type AgentProfile, type Preset, type SelectContext } from "../vibe/contract";
 import { BoardError, type BoardService } from "../service";
 
-export type ScoutPaseo = Pick<PaseoApi, "agents">;
+export type ScoutPaseo = Pick<PaseoApi, "agents"> & {
+  providers?: Pick<PaseoApi["providers"], "listModes">;
+};
 
 export const SCOUT_KINDS = ["locate", "inventory", "research"] as const;
 export type ScoutKind = (typeof SCOUT_KINDS)[number];
@@ -58,6 +60,8 @@ export interface ScoutServiceOptions {
     payload: Record<string, unknown>,
   ) => void;
   newAgentId?: () => string;
+  /** Default process.platform; decides whether codex can use its read-only sandbox. */
+  platform?: string;
   /** HEAD commit of a directory (cache key). Default: git rev-parse. */
   headOf?: (cwd: string) => Promise<string>;
   now?: () => number;
@@ -91,6 +95,34 @@ export function readOnlyConfigFor(
       : { options: { sandbox_mode: "read-only", approval_policy: "never" } };
   }
   return {};
+}
+
+export interface ReadOnlySetup {
+  config: { modeId?: string; options?: Record<string, unknown> };
+  /** true = the provider itself blocks writes; false = only the prompt forbids them. */
+  strict: boolean;
+}
+
+const READ_ONLY_MODE = /^(plan|read[-_ ]?only)$/i;
+
+/** Read-only setup per provider; unknown providers are strict only if listModes offers plan/read-only. */
+export async function resolveReadOnly(
+  provider: string,
+  paseo: ScoutPaseo | null,
+  platform: string = process.platform,
+): Promise<ReadOnlySetup> {
+  const p = provider.toLowerCase();
+  const config = readOnlyConfigFor(p, platform);
+  if (p === "claude") return { config, strict: true };
+  if (p === "codex") return { config, strict: platform !== "win32" };
+  try {
+    const res = await paseo?.providers?.listModes?.(p);
+    const mode = res?.modes?.find((m) => READ_ONLY_MODE.test(m.id));
+    if (mode) return { config: { modeId: mode.id }, strict: true };
+  } catch {
+    // no catalog: fall through to prompt-only
+  }
+  return { config, strict: false };
 }
 
 const specOf = (preset: Pick<Preset, "provider" | "model">) =>
@@ -197,12 +229,12 @@ export function createScoutService(options: ScoutServiceOptions) {
 
   async function runOne(
     task: NormTask,
-    ctx: { cardId: string; cardKey: string; cwd: string; preset: Preset; timeoutMs: number },
+    ctx: { cardId: string; cardKey: string; cwd: string; preset: Preset; readOnly: ReadOnlySetup; timeoutMs: number },
   ): Promise<ScoutResult> {
     const base = { goal: task.goal, kind: task.kind };
     const paseo = options.getPaseo();
     if (!paseo) return { ...base, status: "failed", summary: "No active Paseo daemon connection" };
-    const readOnly = readOnlyConfigFor(ctx.preset.provider);
+    const readOnly = ctx.readOnly.config;
     let handle: Awaited<ReturnType<ScoutPaseo["agents"]["create"]>> | null = null;
     try {
       handle = await paseo.agents.create({
@@ -252,13 +284,31 @@ export function createScoutService(options: ScoutServiceOptions) {
 
     const config = await options.getConfig();
     currentLimit = Math.min(SCOUT_MAX_PARALLEL_LIMIT, Math.max(1, Math.floor(config.maxParallel) || 4));
-    const preset = pickScoutPreset(board.presets.list().presets, config.preset);
+    const presets = board.presets.list().presets;
+    const platform = options.platform ?? process.platform;
+    let preset = pickScoutPreset(presets, config.preset);
     if (!preset) {
       throw new BoardError("unavailable", "No preset available for scouts (create one or set scoutPreset)");
     }
+    let readOnly = await resolveReadOnly(preset.provider, options.getPaseo(), platform);
+    const explicit = !!config.preset.trim() && presets.some((p) => p.id === config.preset.trim() || p.name.toLowerCase() === config.preset.trim().toLowerCase());
+    // Windows: codex has no working read-only sandbox, so prefer a preset whose provider can really block writes.
+    if (!readOnly.strict && !explicit && platform === "win32") {
+      const setups = new Map<string, ReadOnlySetup>();
+      for (const candidate of presets) {
+        const key = candidate.provider.toLowerCase();
+        if (!setups.has(key)) setups.set(key, await resolveReadOnly(key, options.getPaseo(), platform));
+      }
+      const strictPresets = presets.filter((c) => setups.get(c.provider.toLowerCase())?.strict);
+      const better = pickScoutPreset(strictPresets, "");
+      if (better) {
+        preset = better;
+        readOnly = setups.get(better.provider.toLowerCase())!;
+      }
+    }
 
     const head = await headOf(cwd);
-    options.publish?.("scout.started", card.id, card.projectId, { scoutPresetId: preset.id });
+    options.publish?.("scout.started", card.id, card.projectId, { scoutPresetId: preset.id, strictReadOnly: readOnly.strict });
 
     const results = await Promise.all(
       norm.map((task) => {
@@ -271,7 +321,7 @@ export function createScoutService(options: ScoutServiceOptions) {
         if (existing) return existing;
         const pending = gate
           .run(() =>
-            runOne(task, { cardId: card.id, cardKey: card.key, cwd, preset, timeoutMs: config.timeoutMs }),
+            runOne(task, { cardId: card.id, cardKey: card.key, cwd, preset, readOnly, timeoutMs: config.timeoutMs }),
           )
           .then((result) => {
             if (result.status === "ok") cache.set(cacheKey, { at: now(), result });
@@ -285,17 +335,18 @@ export function createScoutService(options: ScoutServiceOptions) {
 
     const ok = results.filter((r) => r.status === "ok").length;
     const cached = results.filter((r) => r.cached).length;
-    const summary = `Scouts (${preset.name}): ${ok}/${results.length} ok${cached ? `, ${cached} cached` : ""}. ${results
+    const summary = `Scouts (${preset.name}${readOnly.strict ? "" : ", NOT strictly read-only: prompt-enforced"}): ${ok}/${results.length} ok${cached ? `, ${cached} cached` : ""}. ${results
       .map((r) => `[${r.status}] ${r.goal}`)
       .join(" | ")}`;
     options.publish?.("scout.finished", card.id, card.projectId, {
       scoutPresetId: preset.id,
+      strictReadOnly: readOnly.strict,
       outcome: ok > 0 ? "ok" : "failed",
       summary: summary.slice(0, 1000),
     });
     board.events.add(
       card.id,
-      { type: "note", authorKind: "system", author: "scout", body: { kind: "scout", text: summary } },
+      { type: "note", authorKind: "system", author: "scout", body: { kind: "scout", text: summary, strictReadOnly: readOnly.strict } },
     );
     return { preset: preset.name, results };
   }

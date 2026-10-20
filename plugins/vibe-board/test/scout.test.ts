@@ -3,11 +3,15 @@ import { callMcpTool, MCP_TOOLS, toolsForRole } from "../server/mcp/tools";
 import { createScoutService, pickScoutPreset, readOnlyConfigFor, trimSummary, type ScoutConfig } from "../server/scout";
 import { setupBoard } from "./helpers";
 
-function setup(config: Partial<ScoutConfig> = {}) {
+function setup(
+  config: Partial<ScoutConfig> = {},
+  env: { platform?: string; modes?: Record<string, string[]>; extraPresets?: Array<[string, string, string]> } = {},
+) {
   const ctx = setupBoard();
   ctx.board.projects.create({ name: "Demo", prefix: "DEMO", repoPath: "/tmp/demo", projectType: "web" });
   const cheap = ctx.board.presets.create({ name: "Cheap", provider: "codex", model: "gpt-5-mini" }).preset;
   ctx.board.presets.create({ name: "Big", provider: "claude", model: "opus" });
+  for (const [name, provider, model] of env.extraPresets ?? []) ctx.board.presets.create({ name, provider, model });
   const { card } = ctx.board.cards.create({ project: "DEMO", title: "A" });
 
   const created: any[] = [];
@@ -15,6 +19,11 @@ function setup(config: Partial<ScoutConfig> = {}) {
   let peak = 0;
   const behaviour = { delayMs: 20, hang: new Set<string>() };
   const paseo = {
+    providers: {
+      listModes: async (provider: string) => ({
+        modes: (env.modes?.[provider] ?? []).map((id) => ({ id, label: id })),
+      }),
+    },
     agents: {
       create: async (opts: any) => {
         created.push(opts);
@@ -47,6 +56,7 @@ function setup(config: Partial<ScoutConfig> = {}) {
     getConfig: () => ({ preset: "", maxParallel: 4, timeoutMs: 1000, ...config }),
     publish: (type) => void published.push(type),
     headOf: async () => "head1",
+    platform: env.platform ?? "linux",
   });
   return { ...ctx, card, cheap, scout, created, published, behaviour, peak: () => peak };
 }
@@ -65,15 +75,46 @@ describe("scout service", () => {
       env: { VIBE_ROLE: "scout" },
       config: {
         provider: "codex/gpt-5-mini",
-        ...(process.platform === "win32"
-          ? { modeId: "full-access" }
-          : { options: { sandbox_mode: "read-only", approval_policy: "never" } }),
+        options: { sandbox_mode: "read-only", approval_policy: "never" },
       },
     });
     expect(t.created.every((c) => c.archived)).toBe(true);
     expect(t.published).toEqual(["scout.started", "scout.finished"]);
     const note = t.board.events.list(t.card.key).events.at(-1)!;
     expect(JSON.stringify(note.body)).toContain("3/3 ok");
+  });
+
+  it("on Windows prefers a provider with a real read-only mode (claude plan)", async () => {
+    const t = setup({}, { platform: "win32" });
+    const out = await t.scout.run(t.card.key, tasks(1));
+    expect(out.preset).toBe("Big");
+    expect(t.created[0].config).toMatchObject({ provider: "claude/opus", modeId: "plan" });
+    expect(t.published).toEqual(["scout.started", "scout.finished"]);
+    expect(JSON.stringify(t.board.events.list(t.card.key).events.at(-1)!.body)).not.toContain("NOT strictly");
+  });
+
+  it("on Windows without a strict provider falls back to codex full-access and says so", async () => {
+    const t = setup({}, { platform: "win32" });
+    for (const preset of t.board.presets.list().presets) {
+      if (preset.name === "Big") t.board.presets.delete(preset.id);
+    }
+    await t.scout.run(t.card.key, tasks(1));
+    expect(t.created[0].config).toMatchObject({ provider: "codex/gpt-5-mini", modeId: "full-access" });
+    const body = JSON.stringify(t.board.events.list(t.card.key).events.at(-1)!.body);
+    expect(body).toContain("NOT strictly read-only");
+    expect(body).toContain("\"strictReadOnly\":false");
+  });
+
+  it("on Windows finds other providers whose listModes offer plan/read-only; an explicit setting wins", async () => {
+    const t = setup({}, { platform: "win32", modes: { kimi: ["default", "plan"] }, extraPresets: [["Kimi", "kimi", "k2"]] });
+    for (const preset of t.board.presets.list().presets) {
+      if (preset.name === "Big") t.board.presets.delete(preset.id);
+    }
+    await t.scout.run(t.card.key, tasks(1));
+    expect(t.created[0].config).toMatchObject({ provider: "kimi/k2", modeId: "plan" });
+    const forced = setup({ preset: "Cheap" }, { platform: "win32" });
+    await forced.scout.run(forced.card.key, tasks(1));
+    expect(forced.created[0].config).toMatchObject({ provider: "codex/gpt-5-mini", modeId: "full-access" });
   });
 
   it("honours the parallel cap", async () => {
