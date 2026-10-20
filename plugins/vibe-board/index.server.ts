@@ -2,7 +2,7 @@ import { delimiter, join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { boardSettings } from "./shared/settings";
-import { resolveVibeHome } from "./server/vibe/db";
+import { publishEvent, resolveVibeHome } from "./server/vibe/db";
 import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
 import { BOARD_INSTRUCTIONS_MARKER, buildBoardInstructions } from "./server/mcp/instructions";
 import { createDispatcher } from "./server/dispatch";
@@ -13,6 +13,7 @@ import { createGitFinalizer } from "./server/lifecycle/git-finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
 import { createReplyService, createSyncService } from "./server/sync";
+import { createScoutService } from "./server/scout";
 import { createVerifyService } from "./server/verify";
 
 export default function contribute(server: PluginServerContext) {
@@ -21,8 +22,26 @@ export default function contribute(server: PluginServerContext) {
   const board = createBoardService(runtime);
   const dataDir = join(resolveVibeHome(), "board");
 
+  // The SDK handle arrives later through hooks/RPCs (see below); scouts read it lazily.
+  let paseo: PaseoApi | null = (server as { paseo?: PaseoApi }).paseo ?? null;
+  const scout = createScoutService({
+    board,
+    getPaseo: () => paseo,
+    getConfig: async () => {
+      const current = await settings.read();
+      const values = current.status === "ready" ? current.values : null;
+      return {
+        preset: values?.scoutPreset ?? "",
+        maxParallel: values?.scoutMaxParallel ?? 4,
+        timeoutMs: (values?.scoutTimeoutSec ?? 300) * 1000,
+      };
+    },
+    publish: (type, cardId, projectId, payload) =>
+      void publishEvent(runtime.db, { type, cardId, projectId, payload } as never),
+  });
+
   let bridge: BoardBridgeHandle | null = null;
-  const bridgeReady = startBoardBridge(board, dataDir)
+  const bridgeReady = startBoardBridge(board, dataDir, scout)
     .then((handle) => (bridge = handle))
     .catch((error) => {
       console.error("Failed to start the vibe-board local bridge:", error);
@@ -81,7 +100,6 @@ export default function contribute(server: PluginServerContext) {
 
   // Hosts that expose the handle at start-up (server.paseo) let dispatch run with no UI attached;
   // older hosts only hand it over through hook/RPC contexts, which keep refreshing it below.
-  let paseo: PaseoApi | null = (server as { paseo?: PaseoApi }).paseo ?? null;
   const onPaseo = (api: PaseoApi) => void (paseo = api);
   const lifecycle = registerLifecycle(server, { board, onPaseo });
   const dispatcher = createDispatcher({ board, getPaseo: () => paseo, tracker: lifecycle });

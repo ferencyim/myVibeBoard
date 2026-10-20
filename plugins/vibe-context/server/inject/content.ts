@@ -18,6 +18,15 @@ const MEMORY_ORDER: readonly ProjectMemoryFile[] = [
   "LESSONS.md",
 ];
 
+/** Only meaningful when the board MCP offers `vibe_scout` (execution and planning sessions). */
+export const SCOUT_GUIDANCE =
+  "## Scouting (if the `vibe_scout` tool is available)\n" +
+  "Before editing in a large repo, call `vibe_scout` once with several independent questions " +
+  "(`kind`: locate / inventory / research) so cheap read-only sub-agents search in parallel; you get back " +
+  "short findings with path:line anchors instead of reading everything yourself. Good for: locating code " +
+  "in an unfamiliar repo, counting/listing usages in bulk, gathering facts from several sources. " +
+  "Skip it for a small change in one or two known files. Verify anchors you rely on before editing.";
+
 export const DEFAULT_MEMORY_TOKENS = 6000;
 
 export interface ContextOptions {
@@ -36,6 +45,8 @@ export function buildContextBlock(store: MemoryStore, options: ContextOptions = 
       "read-only for you: never edit these files; report needed corrections to the master agent " +
       "(for a board task, in a card comment).",
   ];
+
+  parts.push(SCOUT_GUIDANCE);
 
   const directives = store.readUserDirectives()?.trim();
   if (directives) parts.push("## User directives", directives);
