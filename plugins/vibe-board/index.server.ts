@@ -4,7 +4,7 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { boardSettings } from "./shared/settings";
 import { publishEvent, resolveVibeHome } from "./server/vibe/db";
 import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
-import { BOARD_INSTRUCTIONS_MARKER, buildBoardInstructions } from "./server/mcp/instructions";
+import { injectBoard } from "./server/mcp/inject";
 import { createDispatcher } from "./server/dispatch";
 import { convertNative } from "./server/dispatch/convert";
 import { createReassigner } from "./server/dispatch/reassign";
@@ -64,29 +64,11 @@ export default function contribute(server: PluginServerContext) {
   server.before("agent.create", async ({ request }) => {
     const inject = await autoInject();
     const active = bridge ?? (await bridgeReady);
-    const config = { ...request.config };
-
-    if (inject.instructions && !(config.systemPrompt ?? "").includes(BOARD_INSTRUCTIONS_MARKER)) {
-      config.systemPrompt = [config.systemPrompt ?? "", buildBoardInstructions()]
-        .filter(Boolean)
-        .join("\n\n");
-    }
-    if (inject.cliAndMcp && active) {
-      config.mcpServers = {
-        ...config.mcpServers,
-        "vibe-board": {
-          type: "stdio",
-          command: process.execPath,
-          args: [active.mcpScriptPath],
-          env: { VIBE_BOARD_BRIDGE_FILE: active.bridgeFile },
-        },
-      };
-    }
-    return { ...request, config };
+    return injectBoard(request, inject, active, process.execPath);
   });
 
   server.before("agent.session_open", async ({ request }) => {
-    if (!(await autoInject()).cliAndMcp) return;
+    if (request.env?.VIBE_ROLE === "scout" || !(await autoInject()).cliAndMcp) return;
     const active = bridge ?? (await bridgeReady);
     if (!active) return;
     const inherited = request.env.PATH ?? process.env.PATH ?? "";
