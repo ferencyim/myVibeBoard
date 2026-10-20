@@ -93,6 +93,15 @@ describe("git finalizer", () => {
     expect(existsSync(join(dirtyMain.repo, "feature.txt"))).toBe(false);
   });
 
+  it("does not treat untracked .vibe/ files in the main checkout as uncommitted work", async () => {
+    const { repo, card, finalize } = repoWithCard();
+    mkdirSync(join(repo, ".vibe"), { recursive: true });
+    writeFileSync(join(repo, ".vibe", "PROJECT_STATE.md"), "state\n");
+    const result = await finalize(card);
+    expect(result?.summary).toContain("fast-forward");
+    expect(existsSync(join(repo, "feature.txt"))).toBe(true);
+  });
+
   it("archives the card's worker and verifier agents (not the master) before removing the worktree", async () => {
     const { t, wt, card } = repoWithCard();
     const store = t.runtime.store;

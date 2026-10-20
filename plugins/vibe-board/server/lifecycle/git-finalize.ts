@@ -153,8 +153,12 @@ export function createGitFinalizer(options: GitFinalizerOptions): Finalizer {
           `The main checkout is on "${current}", not "${target}"; switch it and merge ${branch} manually.`,
         );
       }
+      // Untracked .vibe/ (project memory, session notes written by the other vibe plugins) is not work to protect.
       const mainDirty = await git(repo, "status", "--porcelain");
-      if (mainDirty.stdout.trim()) {
+      const mainChanges = mainDirty.stdout
+        .split("\n")
+        .filter((l) => l.trim() && !/^\?\? "?\.vibe\//.test(l));
+      if (mainChanges.length > 0) {
         return blocked("main_dirty", "The main checkout has uncommitted changes; merge manually.");
       }
       let merge = await git(repo, "merge", "--ff-only", branch);
