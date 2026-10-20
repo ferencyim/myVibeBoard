@@ -47,7 +47,7 @@ rollback() {
     cp -f "$SITE_PREV" "$SITE_FILE" && log "restored previous $SITE_FILE"
   fi
   if [ "$STACK_CREATED" = 1 ]; then
-    docker compose --project-name "$RELAY_PROJECT" -f "$COMPOSE_FILE" down || true
+    docker compose --project-name "$RELAY_PROJECT" "${COMPOSE_FILES[@]}" down || true
   fi
 }
 

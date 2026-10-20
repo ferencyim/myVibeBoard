@@ -73,10 +73,17 @@ load_env() {
   RELAY_REF_TAG="${RELAY_REF//\//-}"
   export RELAY_PROJECT RELAY_PORT RELAY_REF RELAY_REF_TAG RELAY_CONTAINER_PORT PUSH_ENV_FILE PUSH_PORT
   export RELAY_MEMORY_WATERMARK_BYTES
+  if [ -n "${HEX_MIRROR:-}" ]; then export HEX_MIRROR; fi
+  if [ -n "${DEBIAN_MIRROR:-}" ]; then export DEBIAN_MIRROR; fi
   if [ -n "$PUSH_PORT" ]; then export COMPOSE_PROFILES=push; else unset COMPOSE_PROFILES; fi
   export RELAY_MEM_LIMIT RELAY_CPUS RELAY_PIDS_LIMIT
   SITE_FILE="$NGINX_CONF_DIR/$NGINX_SITE_NAME"
   COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+  # RELAY_BUILD_MIRRORS=1: build through package mirrors (docker-compose.mirrors.yml).
+  COMPOSE_FILES=(-f "$COMPOSE_FILE")
+  if [ "${RELAY_BUILD_MIRRORS:-0}" = 1 ]; then
+    COMPOSE_FILES+=(-f "$SCRIPT_DIR/docker-compose.mirrors.yml")
+  fi
 }
 
 validate_install_env() {
@@ -98,7 +105,7 @@ validate_install_env() {
 }
 
 compose() {
-  run docker compose --project-name "$RELAY_PROJECT" -f "$COMPOSE_FILE" "$@"
+  run docker compose --project-name "$RELAY_PROJECT" "${COMPOSE_FILES[@]}" "$@"
 }
 
 require_root_and_tools() {
