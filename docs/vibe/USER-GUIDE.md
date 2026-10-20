@@ -71,6 +71,21 @@ daemon 监听非回环地址时必须设置密码）。模拟器里访问宿主�
 
 连上 daemon 后，App 会收到插件界面；`vibe-board` 的界面还会缓存到手机本地（见第 9 节），之后断网也能打开看板。
 
+### 2.x 日常使用安装（与官方 Paseo 并存、开机自启）
+
+构建三端后运行（参数里的域名换成你的中继域名；不用中继就省略这两个参数）：
+
+```powershell
+pwsh scripts/vibe/install-local.ps1 -RelayEndpoint <RELAY_DOMAIN>:443 -PushGateway https://<RELAY_DOMAIN>/push
+```
+
+- 安装到 `D:\Programs\myVibeBoard`：`app\`（桌面端）、`plugins\`（插件快照）、`data\paseo`（PASEO_HOME）、`data\vibe`（VIBE_HOME）、`data\electron`（桌面端 userData）。不碰 `~/.paseo` 与官方版，端口默认 6868。
+- 注册当前用户的登录任务「myVibeBoard Daemon」，开机登录后隐藏启动守护进程；开始菜单「myVibeBoard」打开桌面端，它会接入已在运行的守护进程。
+- 推送网关 token 放在 `data\push-gateway.token`（仅当前用户可读），守护进程启动时读入 `PASEO_PUSH_GATEWAY_TOKEN`。
+- 首次安装后按脚本提示用 `paseo.ps1 plugin install` 安装各插件；`paseo.ps1` / `start-daemon.ps1` / `stop-daemon.ps1` 都在安装目录。
+- 更新：重新构建后先 `stop-daemon.ps1` 并关闭桌面端，再运行安装脚本（只覆盖文件，不删除），最后启动任务。
+- 手机：安装 `packages/app/android/app/build/outputs/apk/release/app-release.apk`，在 App 里扫描 `paseo.ps1 daemon pair` 输出的二维码（经中继连接，二维码相当于密码）。
+
 ## 3. agent 的配置
 
 Claude Code、Codex、Kimi Code、DeepSeek 只是示例，Paseo 支持的任何 provider（含插件 provider）都可以按需启用；安装、登录、`agents.providers` 配置与如何启用其他 provider 见 [AGENTS-SETUP.md](AGENTS-SETUP.md)
