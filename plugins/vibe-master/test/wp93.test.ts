@@ -101,13 +101,13 @@ describe("templates", () => {
     board.store.prompts.setOverride("master.wake.assess_draft", "Look at {{card.key}} only");
     const custom = buildAssessMessage({ ...base, prompts: { resolve: board.store.prompts.resolve } });
     expect(custom.startsWith(`Look at ${card.key} only\n\n`)).toBe(true);
-    expect(custom.endsWith("\n\nReply with the assess_draft JSON object only.")).toBe(true);
+    expect(custom.endsWith("\n\n只回复 assess_draft JSON 对象。")).toBe(true);
     expect(custom).toContain('"verdict"');
     expect(custom).toContain('"proposal"');
     const dflt = buildAssessMessage(base);
     expect(dflt.startsWith("[wake:assess_draft]\nPROJ\n")).toBe(true);
-    expect(dflt).toContain(`Key: ${card.key}`);
-    expect(dflt.endsWith("Reply with the assess_draft JSON object only.")).toBe(true);
+    expect(dflt).toContain(`编号：${card.key}`);
+    expect(dflt.endsWith("只回复 assess_draft JSON 对象。")).toBe(true);
   });
 
   it("only mentions requirementsUpdate when requirements maintenance is on", () => {
@@ -118,7 +118,7 @@ describe("templates", () => {
     expect(off).not.toContain("requirementsUpdate");
     const on = buildDoneMessage({ ...input, prompts: defaultPromptPort({ maintainRequirements: true }) });
     expect(on).toContain("requirementsUpdate");
-    expect(on.endsWith("Reply with the card_done JSON object only.")).toBe(true);
+    expect(on.endsWith("只回复 card_done JSON 对象。")).toBe(true);
   });
 
   it("documents every placeholder its default template uses", () => {
@@ -126,7 +126,7 @@ describe("templates", () => {
       expect(unknownPromptPlaceholders(def.defaultText, def.placeholders ?? [])).toEqual([]);
     }
     for (const def of masterPromptDefs().filter((d) => d.key.startsWith("master.wake."))) {
-      expect(def.fixedSuffix).toContain("JSON object only");
+      expect(def.fixedSuffix).toContain("JSON 对象");
     }
   });
 
@@ -146,16 +146,16 @@ describe("project context", () => {
       buildProjectBlock({ project, tags: [], presets: [], openCards: [], requirementsChars: chars });
 
     const full = block(100_000);
-    expect(full).toContain("type web+android");
-    expect(full).toContain("Description: A todo app for cats.");
-    expect(full).toContain("Requirements document (PRODUCT-REQUIREMENTS.md, complete)");
+    expect(full).toContain("类型 web+android");
+    expect(full).toContain("简介：A todo app for cats.");
+    expect(full).toContain("需求文档（PRODUCT-REQUIREMENTS.md，完整）");
 
     const cut = block(50);
     expect(cut).toContain("TRUNCATED");
-    expect(cut).toContain("truncated:");
+    expect(cut).toContain("已截断：");
     expect(cut).not.toContain("line\nline\nline\nline\nline\nline\nline\nline\nline\nline");
 
-    expect(block(0)).not.toContain("Requirements document");
+    expect(block(0)).not.toContain("需求文档");
     // default limit applies when the caller passes nothing
     expect(block()).toContain("TRUNCATED");
   });
@@ -163,10 +163,10 @@ describe("project context", () => {
   it("omits the block when the document is missing or the path escapes the repository", () => {
     const board = setupBoard();
     const project = board.store.projects.get(board.project.id)!;
-    expect(buildProjectBlock({ project, tags: [], presets: [], openCards: [] })).not.toContain("Requirements document");
+    expect(buildProjectBlock({ project, tags: [], presets: [], openCards: [] })).not.toContain("需求文档");
     expect(
       buildProjectBlock({ project: { ...project, requirementsPath: "../x.md" }, tags: [], presets: [], openCards: [] }),
-    ).not.toContain("Requirements document");
+    ).not.toContain("需求文档");
   });
 });
 
@@ -401,8 +401,8 @@ describe("trigger switches", () => {
     runtime.triggers.assessNow(card.id);
     await runtime.queue.idle();
     const prompt = fake.agents[0]!.prompts[0]!;
-    expect(prompt.startsWith(`CUSTOM ${card.key}\n## Project DEMO`)).toBe(true);
-    expect(prompt.endsWith("Reply with the assess_draft JSON object only.")).toBe(true);
+    expect(prompt.startsWith(`CUSTOM ${card.key}\n## 项目 DEMO`)).toBe(true);
+    expect(prompt.endsWith("只回复 assess_draft JSON 对象。")).toBe(true);
     await runtime.dispose();
   });
 });
@@ -473,7 +473,7 @@ describe("requirements maintenance", () => {
     const outcome = await t.consolidator.consolidate(t.card.key);
     expect(outcome.status).toBe("updated");
     expect(t.prompts[0]).toContain("requirementsUpdate");
-    expect(t.prompts[0]).toContain("Requirements document (PRODUCT-REQUIREMENTS.md, complete)");
+    expect(t.prompts[0]).toContain("需求文档（PRODUCT-REQUIREMENTS.md，完整）");
     expect(readFileSync(join(t.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe("# Requirements\n- new decision\n");
     expect(git(t.board.repoPath, "log", "-1", "--format=%s")).toBe(`docs(requirements): Dark mode is required [${t.card.key}]`);
     expect(git(t.board.repoPath, "show", "--name-only", "--format=", "HEAD")).toBe("PRODUCT-REQUIREMENTS.md");

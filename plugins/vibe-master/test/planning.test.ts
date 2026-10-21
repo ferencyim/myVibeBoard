@@ -183,7 +183,7 @@ describe("planning session", () => {
 
   it("runs read-only scouts, shows their findings and feeds them back", async () => {
     const t = setup(({ prompt, agentId }) => {
-      if (prompt.includes("read-only scout")) return "settings.ts holds the theme; about 2 files, small change.";
+      if (prompt.includes("只读探路兵")) return "settings.ts holds the theme; about 2 files, small change.";
       if (prompt.startsWith("[plan:research_results]")) {
         return fence({ reply: "Scout says: small change in settings.ts." });
       }
@@ -240,7 +240,7 @@ describe("planning session", () => {
     t.requestHandoff(card.id);
     await t.planning.tick();
     const text = readFileSync(handoffPath(t.repoPath, card.key), "utf8");
-    expect(text).toContain("# Hand-off: DEMO-1 Fallback");
+    expect(text).toContain("# 交接：DEMO-1 Fallback");
     expect(text).toContain(planA.description);
   });
 
@@ -323,7 +323,7 @@ describe("planning session", () => {
     });
     await restarted.tick();
     expect(t.fake.agents).toHaveLength(2);
-    expect(t.fake.agents[1]!.prompts[0]).toContain("Discussion so far");
+    expect(t.fake.agents[1]!.prompts[0]).toContain("至今的讨论");
     expect(t.fake.agents[1]!.prompts[0]).toContain("OWNER: one");
     expect(t.store.sessions.list({ cardId: card.id }).map((s) => s.state)).toEqual(["ended", "idle"]);
   });
