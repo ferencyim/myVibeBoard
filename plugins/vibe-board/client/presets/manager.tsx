@@ -205,11 +205,11 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
               presets={presets}
               onChange={(patch) => setEdit((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e))}
             />
-            <RequirementsPanel api={api} projectId={p.id} />
             <View style={{ flexDirection: "row", gap: 8 }}>
-              <Btn variant="primary" label="保存" onPress={saveEdit} />
+              <Btn variant="primary" label="保存项目" onPress={saveEdit} />
               <Btn label="取消" onPress={() => setEdit(null)} />
             </View>
+            <RequirementsPanel api={api} projectId={p.id} />
           </View>
         ) : (
           <View key={p.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -280,7 +280,8 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
               />
             ))}
           </View>
-          <TextField value={draft.provider} onChangeText={(provider) => patch({ provider })} autoCapitalize="none" />
+          <Muted>其它 provider（上面的目录里没有时在这里手填 id）</Muted>
+          <TextField value={draft.provider} onChangeText={(provider) => patch({ provider })} placeholder="provider id，例如 codex" autoCapitalize="none" />
         </Field>
         <Field label="模型（必填）">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>

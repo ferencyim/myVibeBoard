@@ -32,7 +32,7 @@ export function createChatService(board: BoardService, db: VibeDb, onMessage?: (
     const row = db
       .prepare<{ card_id: string; type: string }>("SELECT card_id, type FROM card_event WHERE id = ?")
       .get(eventId);
-    if (!row || row.type !== "proposal") throw new BoardError("not_found", `Proposal not found: ${eventId}`);
+    if (!row || row.type !== "proposal") throw new BoardError("not_found", `找不到提议：${eventId}`);
     return row.card_id;
   }
 

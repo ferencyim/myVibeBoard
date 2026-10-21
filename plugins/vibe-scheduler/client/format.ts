@@ -101,6 +101,6 @@ export const formatLimits = (limits: Record<string, number>): string =>
 
 export function pauseReason(view: SchedulerView, threshold: number): string | null {
   if (!view.paused) return null;
-  const mem = view.resources ? ` (memory ${fmtPct(view.resources.mem)}, limit ${fmtPct(threshold)})` : "";
-  return `Admission is paused because memory is above the threshold${mem}`;
+  const mem = view.resources ? `（内存 ${fmtPct(view.resources.mem)}，阈值 ${fmtPct(threshold)}）` : "";
+  return `内存超过阈值，已暂停放行新卡片${mem}`;
 }

@@ -11,7 +11,7 @@ import type { CardView, DeviceKind } from "./vibe/contract";
 import { publishEvent, type DeviceLeases, type VibeDb, type createVibeStore } from "./vibe/db";
 import { quotaFor } from "./quota";
 import { topSessions, type ResourceSnapshot } from "./resources";
-import { PRIORITY_RANK, type Priority, type ProviderQuota } from "./vibe/contract";
+import { PRIORITY_RANK, pickPresetId, type Priority, type ProviderQuota } from "./vibe/contract";
 import type { PortAllocator } from "./ports";
 import { findOverlap } from "./overlap";
 
@@ -252,7 +252,7 @@ export function createScheduler(deps: SchedulerDeps) {
       );
 
     if (paused) {
-      for (const { card } of waiting) deferred[card.key] = "memory above threshold";
+      for (const { card } of waiting) deferred[card.key] = "内存超过阈值，暂停放行";
       return result();
     }
 
@@ -261,47 +261,48 @@ export function createScheduler(deps: SchedulerDeps) {
 
     for (const { card } of waiting) {
       if (counts.total >= config.globalLimit) {
-        deferred[card.key] = `global limit ${config.globalLimit} reached`;
+        deferred[card.key] = `已达全局并发上限 ${config.globalLimit}`;
         continue;
       }
       const failure = failures.get(card.id);
       if (failure && (failure.count >= config.maxAdmitAttempts || failure.until > now().getTime())) {
         deferred[card.key] =
-          failure.count >= config.maxAdmitAttempts ? "dispatch failed repeatedly" : "retry cooldown after a failed dispatch";
+          failure.count >= config.maxAdmitAttempts ? "多次派发失败，已放弃" : "派发失败后冷却中，稍后重试";
         continue;
       }
       const project = store.projects.get(card.projectId);
-      const presetId = card.presetId ?? project?.defaultPresetId ?? null;
+      // Same order as vibe-board's dispatcher: card, master recommendation, project default.
+      const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id));
       const preset = presetId ? store.presets.get(presetId) : undefined;
       if (!project || !preset) {
-        deferred[card.key] = "no preset (set one on the card or a project default)";
+        deferred[card.key] = "没有执行预设（请在卡片上选择，或给项目设默认预设）";
         continue;
       }
       const provider = preset.provider;
       const providerLimit = effectiveLimit(config, provider, null);
       if ((counts.byProvider[provider] ?? 0) >= providerLimit) {
-        deferred[card.key] = `${provider} limit ${providerLimit} reached`;
+        deferred[card.key] = `${provider} 已达并发上限 ${providerLimit}`;
         continue;
       }
       if (project.concurrencyLimit != null && (counts.byProject[project.id] ?? 0) >= project.concurrencyLimit) {
-        deferred[card.key] = `project limit ${project.concurrencyLimit} reached`;
+        deferred[card.key] = `项目已达并发上限 ${project.concurrencyLimit}`;
         continue;
       }
       if (config.conflictAvoidance) {
         const files = plannedFiles(card.id);
         const other = files.length ? conflictWith(card.projectId, card.id, files) : null;
         if (other) {
-          deferred[card.key] = `touches the same files as ${other}`;
+          deferred[card.key] = `与 ${other} 改动相同的文件，等它结束`;
           continue;
         }
       }
       const q = quotaFor(quota, provider);
       if (q.level === "exhausted") {
-        deferred[card.key] = `${provider} quota exhausted${q.resetsAt ? ` until ${q.resetsAt}` : ""}`;
+        deferred[card.key] = `${provider} 额度已用完${q.resetsAt ? `，${q.resetsAt} 恢复` : ""}`;
         continue;
       }
       if (q.level === "tight" && PRIORITY_RANK[card.priority] > minRank) {
-        deferred[card.key] = `${provider} quota tight: reserved for ${config.tightMinPriority}+ priority`;
+        deferred[card.key] = `${provider} 额度紧张，仅留给 ${config.tightMinPriority} 及以上优先级`;
         continue;
       }
 
@@ -329,7 +330,7 @@ export function createScheduler(deps: SchedulerDeps) {
             if (handle) break;
           }
           if (!handle) {
-            deferred[card.key] = `no free ${kind}`;
+            deferred[card.key] = `没有空闲的 ${kind} 设备`;
             continue;
           }
           deviceIds.push(handle.deviceId);

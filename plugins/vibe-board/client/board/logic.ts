@@ -12,6 +12,7 @@ import {
   type Project,
   type Tag,
 } from "../../shared/vibe/contract";
+import { formatRpcError } from "../../shared/vibe/ui/rpc-error";
 
 export const COLUMN_LABELS: Record<CardColumn, string> = {
   draft: "草稿箱",
@@ -92,11 +93,8 @@ export function cardsFingerprint(cards: readonly CardView[]): string {
     .join("|");
 }
 
-/** `[code] message` (server errors) -> `message`. */
-export function errorMessage(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.replace(/^\[[a-z_]+\]\s*/, "");
-}
+/** Chinese, user-facing text of an RPC error (no `Request failed:`, `[code]` or requestType/code noise). */
+export const errorMessage = formatRpcError;
 
 // --- needs_evidence ------------------------------------------------------------------------
 

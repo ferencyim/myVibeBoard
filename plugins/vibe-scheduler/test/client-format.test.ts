@@ -23,7 +23,7 @@ describe("scheduler screen helpers", () => {
     expect(view.deferred).toEqual([{ cardKey: "DEMO-2", reason: "global limit 4 reached" }]);
     expect(view.quota[0]).toMatchObject({ provider: "codex", level: "tight", remainingPct: 20 });
     expect(view.pool[0]).toMatchObject({ name: "pixel", leased: true });
-    expect(pauseReason(view, 0.85)).toContain("memory 91%, limit 85%");
+    expect(pauseReason(view, 0.85)).toContain("内存 91%，阈值 85%");
     expect(pauseReason({ ...view, paused: false }, 0.85)).toBeNull();
   });
 

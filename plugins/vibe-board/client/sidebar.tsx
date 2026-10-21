@@ -2,7 +2,7 @@ import { useRpc, useSettings, type PluginSidebarItemProps, type PluginSurfacePro
 import { SettingsCard, SettingsInput, SettingsSection, SettingsSelect, SettingsSwitch, SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { boardSettings } from "../shared/settings";
 import { boardSummaryRpc } from "../shared/rpc";
 import { useSessionsData } from "./common/api";
@@ -130,7 +130,8 @@ export function BoardSettingsScreen({ theme }: PluginSurfaceProps) {
           />
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="高级：自动化参数">
+      <SettingsSection title="高级">
+        <Group theme={theme} title="自动化参数">
         <SettingsCard>
           <SettingsInput
             label="派发说明里带的最近备注数（1-50）"
@@ -168,8 +169,33 @@ export function BoardSettingsScreen({ theme }: PluginSurfaceProps) {
             onChangeText={(text) => void settings.save({ ...values, watchdogPollSeconds: clampInt(text, 5, 600, values.watchdogPollSeconds) }, revision)}
           />
         </SettingsCard>
+        </Group>
       </SettingsSection>
     </>
+  );
+}
+
+/** A settings group that folds away; same look as the Group of the other vibe plugins' settings pages. */
+function Group({
+  theme,
+  title,
+  children,
+}: {
+  theme: PluginSurfaceProps["theme"];
+  title: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <View style={{ gap: 8 }}>
+      <Pressable onPress={() => setOpen(!open)} style={{ paddingVertical: 8 }}>
+        <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>
+          {open ? "▾ " : "▸ "}
+          {title}
+        </Text>
+      </Pressable>
+      {open ? children : null}
+    </View>
   );
 }
 

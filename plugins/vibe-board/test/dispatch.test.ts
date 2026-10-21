@@ -188,7 +188,7 @@ describe("dispatch", () => {
     const t = setup();
     t.store.presets.update(t.preset.id, { model: "" });
     (t.fake.paseo as any).providers = { listModels: async () => ({ models: [] }) };
-    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/has no model/);
+    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/没有填模型/);
     expect(t.fake.calls.agent).toHaveLength(0);
   });
 
@@ -229,14 +229,14 @@ describe("dispatch", () => {
   it("rejects non-todo cards, missing presets and unlinked projects without side effects", async () => {
     const t = setup();
     const draft = t.board.cards.create({ project: "DEMO", title: "d" }).card;
-    await expect(t.dispatcher.dispatch(draft.key)).rejects.toThrow(/only todo cards/);
+    await expect(t.dispatcher.dispatch(draft.key)).rejects.toThrow(/只有待办卡片可以派发/);
 
     t.board.cards.update(t.card.id, { presetId: null });
-    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/no preset/);
+    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/还没有选执行预设/);
 
     t.board.cards.update(t.card.id, { presetId: t.preset.id });
     t.board.projects.update("DEMO", { repoPath: "/elsewhere" });
-    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/not linked/);
+    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/还没有关联到 Paseo 项目/);
     expect(column(t)).toBe("todo");
     expect(t.fake.calls.workspace).toHaveLength(0);
   });
@@ -247,6 +247,31 @@ describe("dispatch", () => {
     t.board.projects.update("DEMO", { defaultPresetId: t.preset.id });
     await t.dispatcher.dispatch("DEMO-1");
     expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.preset.id);
+  });
+
+  it("uses the master agent's recommended preset when the card and the project have none", async () => {
+    const t = setup();
+    t.board.cards.update(t.card.id, { presetId: null });
+    t.store.cards.update(t.card.id, { suggestedPresetId: t.preset.id });
+    const result = await t.dispatcher.dispatch("DEMO-1");
+    expect(result.session.currentProvider).toBe("codex");
+  });
+
+  it("prefers the card's own preset over the recommendation, and the recommendation over the project default", async () => {
+    const t = setup();
+    const { preset: other } = t.board.presets.create({
+      name: "other",
+      provider: "claude",
+      model: "opus",
+      thinking: "",
+      permissionMode: "full",
+      environmentKind: "new-worktree",
+    } as any);
+    t.board.cards.update(t.card.id, { presetId: null });
+    t.board.projects.update("DEMO", { defaultPresetId: t.preset.id });
+    t.store.cards.update(t.card.id, { suggestedPresetId: other.id });
+    const result = await t.dispatcher.dispatch("DEMO-1");
+    expect(result.session.currentProvider).toBe("claude");
   });
 
   it.each([["failWorkspace", /worktree boom/], ["failAgent", /agent boom/]] as const)(

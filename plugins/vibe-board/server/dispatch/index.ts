@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
-import type { AgentSession, CardView, Preset, Project } from "../vibe/contract";
+import { pickPresetId, type AgentSession, type CardView, type Preset, type Project } from "../vibe/contract";
 import { BoardError, toBoardError, type BoardService } from "../service";
 import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { postChat } from "../chat/post";
@@ -56,6 +56,8 @@ export interface DispatcherOptions {
   getLimits?: () => Partial<BriefLimits> | Promise<Partial<BriefLimits>>;
 }
 
+const COLUMN_ZH: Record<string, string> = { draft: "草稿箱", todo: "待办", in_progress: "进行中", verifying: "待验证", done: "已完成" };
+
 const normalizePath = (p: string) => p.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
 
 export function createDispatcher(options: DispatcherOptions) {
@@ -75,18 +77,24 @@ export function createDispatcher(options: DispatcherOptions) {
     if (!found) {
       throw new BoardError(
         "invalid",
-        `Project ${project.prefix} is not linked to a Paseo project (repo ${project.repoPath || "unset"})`,
+        `项目 ${project.prefix} 还没有关联到 Paseo 项目（仓库路径：${project.repoPath || "未设置"}）`,
       );
     }
     return found;
   }
 
+  /** Explicit override, else card pick -> master recommendation -> project default (see pickPresetId). */
   function pickPreset(card: CardView, project: Project, presetId?: string): Preset {
-    const id = presetId ?? card.presetId ?? project.defaultPresetId;
-    if (!id) throw new BoardError("invalid", `${card.key} has no preset and the project has no default`);
-    const preset = store.presets.list().find((p) => p.id === id || p.name === id);
-    if (!preset) throw new BoardError("not_found", `Preset not found: ${id}`);
-    return preset;
+    const presets = store.presets.list();
+    const find = (id: string) => presets.find((p) => p.id === id || p.name === id);
+    if (presetId) {
+      const explicit = find(presetId);
+      if (!explicit) throw new BoardError("not_found", `找不到预设：${presetId}`);
+      return explicit;
+    }
+    const id = pickPresetId(card, project, (candidate) => !!find(candidate));
+    if (!id) throw new BoardError("invalid", "这张卡还没有选执行预设，项目也没有默认预设，请先选择预设");
+    return find(id)!;
   }
 
   function recordFailure(card: CardView, error: unknown): never {
@@ -104,19 +112,19 @@ export function createDispatcher(options: DispatcherOptions) {
   async function dispatch(cardRef: string, opts: DispatchOptions = {}): Promise<DispatchResult> {
     const card = board.cards.get(cardRef);
     if (card.column !== "todo") {
-      throw new BoardError("illegal_transition", `${card.key} is in "${card.column}"; only todo cards can be dispatched`);
+      throw new BoardError("illegal_transition", `${card.key} 当前在“${COLUMN_ZH[card.column] ?? card.column}”，只有待办卡片可以派发`);
     }
-    if (inflight.has(card.id)) throw new BoardError("conflict", `${card.key} is already being dispatched`);
+    if (inflight.has(card.id)) throw new BoardError("conflict", `${card.key} 正在派发中`);
     inflight.add(card.id);
     let agentId: string | null = null;
     try {
       if (!opts.force && options.admit && !(await options.admit(card))) {
-        throw new BoardError("not_admitted", `Scheduler did not admit ${card.key}`);
+        throw new BoardError("not_admitted", `调度器暂未放行 ${card.key}`);
       }
       const paseo = options.getPaseo();
-      if (!paseo) throw new BoardError("unavailable", "Dispatch needs an active Paseo daemon connection");
+      if (!paseo) throw new BoardError("unavailable", "派发需要先连上 Paseo 守护进程");
       const project = store.projects.get(card.projectId);
-      if (!project) throw new BoardError("not_found", `Project not found: ${card.projectId}`);
+      if (!project) throw new BoardError("not_found", `找不到项目：${card.projectId}`);
       const preset = pickPreset(card, project, opts.presetId);
       let usedPreset = preset;
 

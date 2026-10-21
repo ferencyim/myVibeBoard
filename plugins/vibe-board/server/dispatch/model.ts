@@ -22,11 +22,11 @@ export async function ensurePresetModel<P extends Pick<Preset, "name" | "provide
   }
   if (!model) {
     throw new Error(
-      `Preset "${preset.name}" has no model and ${preset.provider} offers no default model; edit the preset and pick one`,
+      `预设“${preset.name}”没有填模型，${preset.provider} 也没有默认模型，请编辑预设并选一个模型`,
     );
   }
   return {
     preset: { ...preset, model },
-    note: `Preset "${preset.name}" has no model; using ${preset.provider}'s default model ${model}.`,
+    note: `预设“${preset.name}”没有填模型，改用 ${preset.provider} 的默认模型 ${model}。`,
   };
 }

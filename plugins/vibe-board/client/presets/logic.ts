@@ -11,6 +11,7 @@ import {
   type ProjectType,
   type RoleHint,
 } from "../../shared/vibe/contract";
+import { thinkingLabel } from "../../shared/vibe/ui/thinking";
 
 /** Subset of the daemon's ProviderUsage that the picker needs (structural, tolerant). */
 export interface UsageWindowLike {
@@ -179,8 +180,10 @@ export function thinkingChoices(
   current: string,
 ): ThinkingOption[] {
   const options = modelThinkingOptions(models, modelId);
-  const choices = [DEFAULT_THINKING_OPTION, ...options];
-  if (current && !options.some((o) => o.id === current)) choices.push({ id: current, label: `${current}（当前值）` });
+  const choices = [DEFAULT_THINKING_OPTION, ...options.map((o) => ({ id: o.id, label: thinkingLabel(o) }))];
+  if (current && !options.some((o) => o.id === current)) {
+    choices.push({ id: current, label: `${thinkingLabel({ id: current })}（当前值）` });
+  }
   return choices;
 }
 

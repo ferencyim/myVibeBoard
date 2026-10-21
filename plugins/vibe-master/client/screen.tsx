@@ -17,7 +17,8 @@ import {
   statusRpc,
   switchRpc,
 } from "../shared/rpc";
-import { sessionDetail, sessionTitle, switchChoices, targetLabel, type SwitchChoice } from "./format";
+import { formatRpcError } from "../shared/vibe/ui/rpc-error";
+import { sessionDetail, sessionTitle, switchChoices, targetLabel, thinkingChips, type SwitchChoice } from "./format";
 
 /** Modes a provider may offer; one the provider lacks falls back to auto. */
 const PERMISSION_CHOICES = [
@@ -85,7 +86,7 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
       await switchCall({ ...choice.request, reason: "在总 agent 页面切换" });
       await queryClient.invalidateQueries({ queryKey: ["vibe-master"] });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatRpcError(e));
     } finally {
       setBusy(null);
     }
@@ -107,7 +108,7 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
       {status.error ? (
-        <Text style={{ color: theme.colors.statusDanger }}>无法加载总 agent：{String(status.error)}</Text>
+        <Text style={{ color: theme.colors.statusDanger }}>无法加载总 agent：{formatRpcError(status.error)}</Text>
       ) : null}
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
       {s ? (
@@ -160,7 +161,7 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
               </View>
             ))}
             {sessions.data && sessions.data.sessions.length === 0 ? <Muted theme={theme}>还没有总 agent 会话。</Muted> : null}
-            {sessions.error ? <Muted theme={theme}>无法加载会话列表：{String(sessions.error)}</Muted> : null}
+            {sessions.error ? <Muted theme={theme}>无法加载会话列表：{formatRpcError(sessions.error)}</Muted> : null}
             {!navigation ? <Muted theme={theme}>当前客户端不支持从插件打开会话，请在会话列表中按标题 Vibe Master 查找。</Muted> : null}
           </Section>
 
@@ -301,6 +302,50 @@ function Group({
   );
 }
 
+/** Single-choice chips (same look as the preset form's thinking picker). */
+function ChipChoice({
+  theme,
+  label,
+  chips,
+  value,
+  onChange,
+}: {
+  theme: PluginTheme;
+  label: string;
+  chips: ReadonlyArray<{ id: string; label: string }>;
+  value: string;
+  onChange(id: string): void;
+}) {
+  return (
+    <View style={{ gap: 6, padding: 12 }}>
+      <Text style={{ color: theme.colors.foreground, fontSize: 14 }}>{label}</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+        {chips.map((chip) => {
+          const selected = chip.id === value;
+          return (
+            <Pressable
+              key={chip.id || "default"}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              onPress={() => onChange(chip.id)}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: selected ? theme.colors.accent : theme.colors.border,
+                backgroundColor: selected ? theme.colors.surface2 : theme.colors.surface1,
+              }}
+            >
+              <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{chip.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 const Button = ({ theme, label, onPress, disabled }: { theme: PluginTheme; label: string; onPress(): void; disabled?: boolean }) => (
   <Pressable
     disabled={disabled}
@@ -325,6 +370,14 @@ type CrossPluginNavigation = {
 
 export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) {
   const settings = useSettings(masterSettings);
+  const statusCall = useRpc(statusRpc);
+  // Same query as the main screen, so the provider catalog is shared and cached.
+  const catalog = useQuery({
+    queryKey: ["vibe-master", "status-providers"],
+    queryFn: () => statusCall({ includeProviders: true }),
+    staleTime: 30_000,
+    retry: false,
+  });
   if (settings.status !== "ready") {
     return (
       <View style={{ padding: 16 }}>
@@ -354,10 +407,12 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
             initialValue={values.model}
             onChangeText={(model) => save({ ...values, model: model.trim() })}
           />
-          <SettingsInput
-            label="思考档位（留空为默认，max 为最高）"
-            initialValue={values.thinking}
-            onChangeText={(thinking) => save({ ...values, thinking: thinking.trim() })}
+          <ChipChoice
+            theme={theme}
+            label="思考档位（选项随上面的 provider 和模型变化）"
+            chips={thinkingChips(catalog.data?.providers ?? [], values.provider, values.model, values.thinking)}
+            value={values.thinking}
+            onChange={(thinking) => save({ ...values, thinking })}
           />
           <SettingsSelect
             label="总 agent 与规划会话的权限模式（自动 = provider 的自动审批模式）"

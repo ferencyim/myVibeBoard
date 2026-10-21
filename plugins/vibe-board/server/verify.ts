@@ -101,7 +101,7 @@ export function createVerifyService(options: { db: VibeDb; board: BoardService; 
   function requireVerifying(ref: string) {
     const card = cardOf(ref);
     if (card.column !== "verifying") {
-      throw new BoardError("conflict", `${card.key} is in "${card.column}", not verifying`);
+      throw new BoardError("conflict", `${card.key} 当前在“${card.column}”，不在待验证状态`);
     }
     return card;
   }
@@ -131,16 +131,16 @@ export function createVerifyService(options: { db: VibeDb; board: BoardService; 
         const row = db.prepare("SELECT * FROM evidence_file WHERE id = ?").get(evidenceId);
         return row ? decodeRow(EvidenceFileSchema, row) : null;
       }, null) as EvidenceFile | null;
-      if (!evidence) throw new BoardError("not_found", `Evidence not found: ${evidenceId}`);
+      if (!evidence) throw new BoardError("not_found", `找不到证据：${evidenceId}`);
       const file = thumb && evidence.thumbPath && existsSync(evidence.thumbPath) ? evidence.thumbPath : evidence.path;
       let size: number;
       try {
         size = statSync(file).size;
       } catch {
-        throw new BoardError("not_found", `Evidence file is gone: ${path.basename(file)}`);
+        throw new BoardError("not_found", `证据文件已不存在：${path.basename(file)}`);
       }
       if (size > MAX_EVIDENCE_BYTES) {
-        throw new BoardError("too_large", `${path.basename(file)} is ${size} bytes; open it on the daemon host`);
+        throw new BoardError("too_large", `${path.basename(file)} 有 ${size} 字节，太大了，请在守护进程所在的机器上打开`);
       }
       return {
         evidence,

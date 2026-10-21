@@ -84,10 +84,13 @@ export function createResourceSampler(options: {
       const procs = await probe.listProcesses().catch(() => [] as ProcInfo[]);
       const wallMs = lastAt === null ? 0 : at.getTime() - lastAt;
       const perPid = new Map<number, number>();
+      // Once per sample: os.cpus() is a slow synchronous call (~1 ms), and calling it for every
+      // one of ~1000 processes blocked the plugin worker, and with it the settings page, for seconds.
+      const cores = probe.cpuCount();
       const cpuOf = (p: ProcInfo) => {
         const prev = lastProcs.get(p.pid);
         if (prev === undefined || wallMs <= 0 || p.cpuMs < prev) return 0;
-        return (p.cpuMs - prev) / (wallMs * probe.cpuCount());
+        return (p.cpuMs - prev) / (wallMs * cores);
       };
       for (const p of procs) perPid.set(p.pid, cpuOf(p));
       lastProcs = new Map(procs.map((p) => [p.pid, p.cpuMs]));
@@ -113,7 +116,13 @@ function attribute(
   targets: readonly SessionTarget[],
 ): Record<string, SessionUsage> {
   const children = new Map<number, ProcInfo[]>();
-  for (const p of procs) children.set(p.ppid, [...(children.get(p.ppid) ?? []), p]);
+  const byPid = new Map<number, ProcInfo>();
+  for (const p of procs) {
+    byPid.set(p.pid, p);
+    const siblings = children.get(p.ppid);
+    if (siblings) siblings.push(p);
+    else children.set(p.ppid, [p]);
+  }
 
   const byPath = new Map<string, SessionTarget[]>();
   for (const t of targets) {
@@ -135,7 +144,7 @@ function attribute(
     let mem = 0;
     let cpu = 0;
     for (const pid of seen) {
-      mem += procs.find((p) => p.pid === pid)?.rssBytes ?? 0;
+      mem += byPid.get(pid)?.rssBytes ?? 0;
       cpu += cpuByPid.get(pid) ?? 0;
     }
     for (const t of group) {
