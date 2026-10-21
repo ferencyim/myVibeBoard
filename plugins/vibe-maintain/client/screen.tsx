@@ -18,6 +18,7 @@ import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { maintainSettings, resumeRpc, rulesSettings, runRpc, statusRpc } from "../shared/rpc";
 import { FIELD_KEYS, type FieldKey, type FieldSource, type RulesConfig } from "../shared/rules";
+import { formatRpcError } from "../shared/vibe/ui/rpc-error";
 import { addCustomRule, applyRuleEdit, draftFromDef, emptyDef, removeCustomRule } from "./edit";
 import { BLOCKED_TEXT, ORIGIN_TEXT, lastRunText, parseStatus, type RuleRow } from "./format";
 import { RuleEditor } from "./rule-editor";
@@ -99,7 +100,7 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
       setMessage(await run());
       await queryClient.invalidateQueries({ queryKey: ["vibe-maintain"] });
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e));
+      setMessage(formatRpcError(e));
     } finally {
       setBusy(null);
     }
@@ -143,7 +144,7 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
         .vibe/maintenance.yml（它写了的字段会覆盖界面配置，在这里显示为只读）。
       </Muted>
       {status.error ? (
-        <Text style={{ color: theme.colors.statusDanger }}>无法加载自动维护状态：{String(status.error)}</Text>
+        <Text style={{ color: theme.colors.statusDanger }}>无法加载自动维护状态：{formatRpcError(status.error)}</Text>
       ) : null}
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
       {message ? <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{message}</Text> : null}

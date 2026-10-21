@@ -16,6 +16,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { formatRpcError } from "../shared/vibe/ui/rpc-error";
 import { FieldsCard, Group, type Field as SettingField } from "./settings-kit";
 import {
   devicesRpc,
@@ -35,6 +36,17 @@ import {
 
 const DEVICE_KINDS = ["emulator", "simulator", "board", "debugger", "camera", "other"] as const;
 type DeviceKind = (typeof DEVICE_KINDS)[number];
+
+const KIND_ZH: Record<string, string> = {
+  emulator: "模拟器",
+  simulator: "仿真器",
+  board: "开发板",
+  debugger: "调试器",
+  camera: "摄像头",
+  other: "其它",
+};
+const LEVEL_ZH: Record<string, string> = { ok: "充足", tight: "紧张", exhausted: "用完", unknown: "未知" };
+const PRIORITY_ZH: Record<string, string> = { urgent: "紧急", high: "高", medium: "中", low: "低", none: "无" };
 
 function Section({ theme, title, children }: { theme: PluginTheme; title: string; children: ReactNode }) {
   return (
@@ -168,7 +180,7 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
       await run();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatRpcError(e));
     }
   };
 
@@ -179,15 +191,15 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
       {status.error ? (
-        <Text style={{ color: theme.colors.statusDanger }}>Could not load the scheduler: {String(status.error)}</Text>
+        <Text style={{ color: theme.colors.statusDanger }}>无法加载调度器：{formatRpcError(status.error)}</Text>
       ) : null}
-      {!s ? <Muted theme={theme}>Loading...</Muted> : null}
+      {!s ? <Muted theme={theme}>加载中...</Muted> : null}
       {s ? (
         <>
-          <Section theme={theme} title="Concurrency">
+          <Section theme={theme} title="并发">
             <Row
               theme={theme}
-              left="Running workers"
+              left="运行中的 worker"
               right={limits ? `${s.running.total} / ${limits.globalLimit}` : String(s.running.total)}
             />
             {Object.entries(s.running.byProvider).map(([provider, n]) => (
@@ -201,7 +213,7 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
             {s.resources ? (
               <Row
                 theme={theme}
-                left="CPU / memory"
+                left="CPU / 内存"
                 right={`${fmtPct(s.resources.cpu)} / ${fmtPct(s.resources.mem)}`}
               />
             ) : null}
@@ -210,73 +222,73 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
                 {pauseReason(s, limits?.memoryThreshold ?? 0.85)}
               </Text>
             ) : (
-              <Muted theme={theme}>Admission is running.</Muted>
+              <Muted theme={theme}>正在正常放行卡片。</Muted>
             )}
           </Section>
 
-          <Section theme={theme} title="Quota">
-            {s.quota.length === 0 ? <Muted theme={theme}>No provider reports quota yet.</Muted> : null}
+          <Section theme={theme} title="额度">
+            {s.quota.length === 0 ? <Muted theme={theme}>还没有 provider 上报额度。</Muted> : null}
             {s.quota.map((q) => (
               <View key={q.provider}>
                 <Row
                   theme={theme}
                   left={q.provider}
-                  right={q.remainingPct === null ? q.level : `${Math.round(q.remainingPct)}% left · ${q.level}`}
+                  right={q.remainingPct === null ? (LEVEL_ZH[q.level] ?? q.level) : `剩余 ${Math.round(q.remainingPct)}% · ${LEVEL_ZH[q.level] ?? q.level}`}
                 />
                 {q.level === "tight" || q.level === "exhausted" ? (
                   <Text style={{ color: levelColor(theme, q.level), fontSize: 12 }}>
-                    {q.level === "exhausted" ? "No new cards for this provider" : "Reserved for high-priority cards"}
-                    {q.resetsAt ? ` · resets ${q.resetsAt.slice(5, 16).replace("T", " ")}` : ""}
+                    {q.level === "exhausted" ? "不再给这个 provider 派新卡" : "仅留给高优先级卡片"}
+                    {q.resetsAt ? ` · ${q.resetsAt.slice(5, 16).replace("T", " ")} 恢复` : ""}
                   </Text>
                 ) : null}
               </View>
             ))}
           </Section>
 
-          <Section theme={theme} title="Waiting cards">
+          <Section theme={theme} title="排队的卡片">
             {s.pending.map((a) => (
-              <Row key={a.cardKey} theme={theme} left={a.cardKey} right={`admitted on ${a.provider}, dispatching`} />
+              <Row key={a.cardKey} theme={theme} left={a.cardKey} right={`已放行（${a.provider}），正在派发`} />
             ))}
             {s.deferred.map((d) => (
               <Row key={d.cardKey} theme={theme} left={d.cardKey} right={d.reason} />
             ))}
             {s.pending.length + s.deferred.length === 0 ? (
-              <Muted theme={theme}>No card is waiting for a slot.</Muted>
+              <Muted theme={theme}>没有卡片在等名额。</Muted>
             ) : null}
           </Section>
         </>
       ) : null}
 
-      <Section theme={theme} title="Device pool">
+      <Section theme={theme} title="设备池">
         {error ? <Text style={{ color: theme.colors.statusDanger }}>{error}</Text> : null}
-        {devices.data?.length === 0 ? <Muted theme={theme}>No devices registered.</Muted> : null}
+        {devices.data?.length === 0 ? <Muted theme={theme}>还没有登记设备。</Muted> : null}
         {devices.data?.map((d) => (
           <View key={d.id} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <View style={{ flexShrink: 1 }}>
               <Text style={{ color: theme.colors.foreground }}>
-                {d.name} · {d.kind}
+                {d.name} · {KIND_ZH[d.kind] ?? d.kind}
               </Text>
               <Muted theme={theme}>
-                {leased.get(d.name) ? "in use" : "free"}
+                {leased.get(d.name) ? "使用中" : "空闲"}
                 {d.detail ? ` · ${d.detail}` : ""}
               </Muted>
             </View>
-            <Button theme={theme} label="Remove" onPress={() => void act(() => removeCall({ id: d.id }))} />
+            <Button theme={theme} label="移除" onPress={() => void act(() => removeCall({ id: d.id }))} />
           </View>
         ))}
-        <Muted theme={theme}>Register a device</Muted>
+        <Muted theme={theme}>登记设备</Muted>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
           {DEVICE_KINDS.map((k) => (
-            <Button key={k} theme={theme} label={k} active={k === kind} onPress={() => setKind(k)} />
+            <Button key={k} theme={theme} label={KIND_ZH[k] ?? k} active={k === kind} onPress={() => setKind(k)} />
           ))}
         </View>
-        <Field theme={theme} value={name} onChangeText={setName} placeholder="Name (e.g. pixel-emulator)" />
-        <Field theme={theme} value={serial} onChangeText={setSerial} placeholder="adb serial (optional)" />
-        <Field theme={theme} value={avd} onChangeText={setAvd} placeholder="AVD name (optional)" />
+        <Field theme={theme} value={name} onChangeText={setName} placeholder="名称（例如 pixel-emulator）" />
+        <Field theme={theme} value={serial} onChangeText={setSerial} placeholder="adb 序列号（可选）" />
+        <Field theme={theme} value={avd} onChangeText={setAvd} placeholder="AVD 名称（可选）" />
         <View style={{ flexDirection: "row" }}>
           <Button
             theme={theme}
-            label="Register"
+            label="登记"
             disabled={!name.trim()}
             onPress={() =>
               void act(async () => {
@@ -302,7 +314,7 @@ export function SchedulerSidebarItem({ currentScreen, openScreen }: PluginSideba
   return (
     <SidebarRow
       icon="Cpu"
-      label="Scheduler"
+      label="调度器"
       active={currentScreen?.screenId === "main"}
       onPress={() => openScreen({ screenId: "main" })}
     />
@@ -313,9 +325,9 @@ const PRIORITIES = ["urgent", "high", "medium", "low", "none"] as const;
 
 /** Defaults equal the values that used to be hard-coded (WP-99). */
 export const ADVANCED_FIELDS: readonly SettingField[] = [
-  { kind: "number", key: "pendingTimeoutMinutes", label: "Release an admitted card nobody dispatched after (minutes, 1-240)", min: 1, max: 240 },
-  { kind: "int", key: "retryCooldownSeconds", label: "Wait before admitting a card again after a failed dispatch (seconds, 0-86400)", min: 0, max: 86_400 },
-  { kind: "int", key: "maxAdmitAttempts", label: "Give up admitting a card after this many failed dispatches (1-20)", min: 1, max: 20 },
+  { kind: "number", key: "pendingTimeoutMinutes", label: "已放行但迟迟没人派发的卡片，多少分钟后收回（1-240）", min: 1, max: 240 },
+  { kind: "int", key: "retryCooldownSeconds", label: "派发失败后，等多少秒再重新放行（0-86400）", min: 0, max: 86_400 },
+  { kind: "int", key: "maxAdmitAttempts", label: "同一张卡派发失败多少次后不再放行（1-20）", min: 1, max: 20 },
 ];
 
 export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
@@ -324,7 +336,7 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
     return (
       <View style={{ padding: 16 }}>
         <Text style={{ color: theme.colors.foregroundMuted }}>
-          {settings.status === "loading" ? "Loading..." : `Could not load settings: ${settings.error}`}
+          {settings.status === "loading" ? "加载中..." : `无法加载设置：${settings.error}`}
         </Text>
       </View>
     );
@@ -347,41 +359,41 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
     />
   );
   return (
-    <SettingsSection title="Scheduler">
+    <SettingsSection title="调度器">
       <SettingsCard>
-        {field("Max running workers (all providers)", "globalLimit", 1, 64)}
+        {field("同时运行的 worker 上限（所有 provider 合计）", "globalLimit", 1, 64)}
         <SettingsInput
-          label="Per provider limits"
-          hint="Example: claude=2, codex=1"
+          label="各 provider 的并发上限"
+          hint="例如：claude=2, codex=1"
           initialValue={formatLimits(values.providerLimits)}
           onChangeText={(text) => save({ ...values, providerLimits: parseLimits(text) })}
         />
-        {field("Pause above this memory fraction", "memoryThreshold", 0.5, 0.99, false, "0.5 to 0.99")}
-        {field("Quota tight at remaining percent", "quotaTightPct", 0, 100, false)}
-        {field("Quota exhausted at remaining percent", "quotaExhaustedPct", 0, 100, false)}
+        {field("内存占用超过多少比例时暂停放行", "memoryThreshold", 0.5, 0.99, false, "0.5 到 0.99")}
+        {field("剩余额度低于多少百分比算“紧张”", "quotaTightPct", 0, 100, false)}
+        {field("剩余额度低于多少百分比算“用完”", "quotaExhaustedPct", 0, 100, false)}
         <SettingsSelect
-          label="Priority allowed while a provider is tight"
+          label="provider 额度紧张时，仅放行不低于此优先级的卡片"
           value={values.tightMinPriority}
-          options={PRIORITIES.map((p) => ({ label: p, value: p }))}
+          options={PRIORITIES.map((p) => ({ label: PRIORITY_ZH[p] ?? p, value: p }))}
           onValueChange={(tightMinPriority) => save({ ...values, tightMinPriority })}
         />
         <SettingsSelect
-          label="Avoid parallel cards on the same files"
+          label="避免同时运行改动相同文件的卡片"
           value={values.conflictAvoidance ? "on" : "off"}
           options={[
-            { label: "On", value: "on" },
-            { label: "Off", value: "off" },
+            { label: "开", value: "on" },
+            { label: "关", value: "off" },
           ]}
           onValueChange={(v) => save({ ...values, conflictAvoidance: v === "on" })}
         />
-        {field("Dev server port base", "devPortBase", 1024, 65000)}
-        {field("Dev server port span", "devPortSpan", 10, 5000)}
-        {field("Device lease (minutes)", "deviceLeaseMinutes", 1, 100000)}
-        {field("Admission tick (seconds)", "tickSeconds", 1, 600)}
-        {field("Resource sample interval (seconds)", "sampleSeconds", 5, 3600)}
-        {field("Keep samples (days)", "sampleRetentionDays", 1, 365)}
+        {field("开发服务器端口起点", "devPortBase", 1024, 65000)}
+        {field("开发服务器端口范围大小", "devPortSpan", 10, 5000)}
+        {field("设备租期（分钟）", "deviceLeaseMinutes", 1, 100000)}
+        {field("放行检查间隔（秒）", "tickSeconds", 1, 600)}
+        {field("资源采样间隔（秒）", "sampleSeconds", 5, 3600)}
+        {field("采样保留天数", "sampleRetentionDays", 1, 365)}
       </SettingsCard>
-      <Group theme={theme} title="Advanced">
+      <Group theme={theme} title="高级">
         <FieldsCard fields={ADVANCED_FIELDS} values={values} save={save} />
       </Group>
     </SettingsSection>

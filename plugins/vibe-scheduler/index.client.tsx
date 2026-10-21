@@ -2,19 +2,19 @@ import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { SchedulerScreen, SchedulerSettingsScreen, SchedulerSidebarItem } from "./client/screen";
 
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: "main", title: "Scheduler", Component: SchedulerScreen });
-  client.addSidebarHeaderItem({ id: "scheduler", title: "Scheduler", Component: SchedulerSidebarItem });
+  client.addScreen({ id: "main", title: "调度器", Component: SchedulerScreen });
+  client.addSidebarHeaderItem({ id: "scheduler", title: "调度器", Component: SchedulerSidebarItem });
   client.addSettingsScreen({
     id: "preferences",
-    title: "Scheduler",
+    title: "调度器",
     icon: "Cpu",
     Component: SchedulerSettingsScreen,
   });
   client.addCommandCenterItem({
     id: "open-scheduler",
-    title: "Scheduler: Open concurrency and device pool",
+    title: "调度器：查看并发与设备池",
     icon: "Cpu",
-    keywords: ["scheduler", "concurrency", "quota", "devices", "emulator"],
+    keywords: ["scheduler", "调度", "并发", "额度", "设备", "模拟器"],
     context: "global",
     onSelect({ openScreen }) {
       openScreen({ screenId: "main" });

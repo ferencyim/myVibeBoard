@@ -12,7 +12,8 @@
   "vibe": {
     "shared": {
       "shared": [
-        "contract"
+        "contract",
+        "ui"
       ],
       "server": [
         "contract",

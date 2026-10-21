@@ -55,8 +55,8 @@ describe("conflict avoidance in the scheduler", () => {
   it("defers a card whose files overlap a running card and says why", async () => {
     const { a, r, t } = await twoCards(["src/app/**"], ["src/app/main.ts"]);
     expect(r.admitted).toHaveLength(0);
-    expect(r.deferred["DEMO-2"]).toBe(`touches the same files as ${a.key}`);
-    expect(t.runtime.scheduler.status().deferred["DEMO-2"]).toMatch(/same files as DEMO-1/);
+    expect(r.deferred["DEMO-2"]).toBe(`与 ${a.key} 改动相同的文件，等它结束`);
+    expect(t.runtime.scheduler.status().deferred["DEMO-2"]).toMatch(/与 DEMO-1 改动相同的文件/);
   });
 
   it("admits when files are disjoint, or when either side declares none", async () => {
@@ -79,7 +79,7 @@ describe("conflict avoidance in the scheduler", () => {
     }
     const r = await t.runtime.tickOnce();
     expect(r.admitted.map((x) => x.cardKey)).toEqual(["DEMO-1"]);
-    expect(r.deferred["DEMO-2"]).toMatch(/same files as DEMO-1/);
+    expect(r.deferred["DEMO-2"]).toMatch(/与 DEMO-1 改动相同的文件/);
   });
 
   it("uses the latest plan version only", async () => {

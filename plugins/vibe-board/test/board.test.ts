@@ -137,7 +137,7 @@ describe("cards", () => {
     expect(() => board.cards.update(parent.key, { tagIds: ["tag_nope"] })).toThrow(/\[not_found\]/);
     expect([...board.cards.get(parent.key).tags].sort()).toEqual(["tag_bug", "tag_doc"]);
     expect(() => board.cards.update(parent.key, { parentCardId: parent.key })).toThrow(
-      /own parent/,
+      /自己的父卡片/,
     );
     expect(board.cards.detail(parent.key).children.map((c) => c.key)).toEqual([child.key]);
 
@@ -190,7 +190,7 @@ describe("events, plans, tags, presets, attachments", () => {
       ["note", "user", "user", { text: "hello" }],
       ["note", "agent", "agent-1", { text: "ping" }],
     ]);
-    expect(() => board.events.add(card.key, {})).toThrow(/text or body/);
+    expect(() => board.events.add(card.key, {})).toThrow(/需要提供 text 或 body/);
 
     const snap = {
       description: "d",
@@ -533,9 +533,9 @@ describe("plugin entry", () => {
 describe("preset model is mandatory", () => {
   it("rejects a blank model on create and update but keeps legacy rows editable", () => {
     const { board } = setupBoard();
-    expect(() => board.presets.create({ name: "A", provider: "claude", model: " " })).toThrow(/needs a model/);
+    expect(() => board.presets.create({ name: "A", provider: "claude", model: " " })).toThrow(/必须填写模型/);
     const { preset } = board.presets.create({ name: "A", provider: "claude", model: "sonnet" });
-    expect(() => board.presets.update(preset.id, { model: "" })).toThrow(/needs a model/);
+    expect(() => board.presets.update(preset.id, { model: "" })).toThrow(/必须填写模型/);
     expect(board.presets.update(preset.id, { name: "B" }).preset.name).toBe("B");
   });
 });

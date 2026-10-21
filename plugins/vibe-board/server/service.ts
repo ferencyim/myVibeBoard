@@ -129,13 +129,13 @@ export function createBoardService(runtime: BoardRuntime) {
     const found =
       store.projects.get(ref) ??
       store.projects.list(true).find((p) => p.prefix === ref.toUpperCase() || p.name === ref);
-    if (!found) throw new BoardError("not_found", `Project not found: ${ref}`);
+    if (!found) throw new BoardError("not_found", `找不到项目：${ref}`);
     return found;
   }
 
   function card(ref: string): CardView {
     const found = store.cards.get(CARD_KEY_PATTERN.test(ref.toUpperCase()) ? ref.toUpperCase() : ref);
-    if (!found) throw new BoardError("not_found", `Card not found: ${ref}`);
+    if (!found) throw new BoardError("not_found", `找不到卡片：${ref}`);
     return found;
   }
 
@@ -228,7 +228,7 @@ export function createBoardService(runtime: BoardRuntime) {
         if (input.parentCardId) {
           const parent = card(input.parentCardId);
           if (parent.projectId !== p.id) {
-            throw new BoardError("invalid", "Parent card belongs to another project");
+            throw new BoardError("invalid", "父卡片属于另一个项目");
           }
         }
         return store.cards.create(
@@ -262,7 +262,7 @@ export function createBoardService(runtime: BoardRuntime) {
         let parentId: string | null | undefined;
         if (parentCardId !== undefined) {
           parentId = parentCardId === null ? null : card(parentCardId).id;
-          if (parentId === current.id) throw new BoardError("invalid", "A card cannot be its own parent");
+          if (parentId === current.id) throw new BoardError("invalid", "卡片不能是自己的父卡片");
         }
         let result = store.cards.update(current.id, { ...rest, parentCardId: parentId });
         if (tagIds) result = store.cards.setTags(current.id, tagIds);
@@ -297,13 +297,13 @@ export function createBoardService(runtime: BoardRuntime) {
         const before = input.beforeCard ? card(input.beforeCard) : null;
         for (const neighbour of [after, before]) {
           if (neighbour && (neighbour.projectId !== c.projectId || neighbour.column !== c.column)) {
-            throw new BoardError("invalid", "Neighbour cards must be in the same project and column");
+            throw new BoardError("invalid", "相邻的卡片必须在同一个项目和同一列");
           }
         }
         try {
           sortKey = sortKeyBetween(after?.sortKey ?? null, before?.sortKey ?? null);
         } catch {
-          throw new BoardError("invalid", "afterCard must sort before beforeCard");
+          throw new BoardError("invalid", "afterCard 必须排在 beforeCard 前面");
         }
       }
       return { card: store.cards.reorder(c.id, sortKey) };
@@ -319,7 +319,7 @@ export function createBoardService(runtime: BoardRuntime) {
   ) {
     return guard(() => {
       const body = input.body ?? (input.text !== undefined ? { text: input.text } : undefined);
-      if (body === undefined) throw new BoardError("invalid", "text or body is required");
+      if (body === undefined) throw new BoardError("invalid", "需要提供 text 或 body");
       return {
         event: store.events.add({
           cardId: card(ref).id,
@@ -394,12 +394,12 @@ export function createBoardService(runtime: BoardRuntime) {
       list: () => ({ presets: store.presets.list() }),
       create: (input: Parameters<typeof store.presets.create>[0]) =>
         guard(() => {
-          if (!input.model?.trim()) throw new BoardError("invalid", "A preset needs a model");
+          if (!input.model?.trim()) throw new BoardError("invalid", "预设必须填写模型");
           return { preset: store.presets.create(input) };
         }),
       update: (id: string, patch: Parameters<typeof store.presets.update>[1]) =>
         guard(() => {
-          if (patch.model !== undefined && !patch.model.trim()) throw new BoardError("invalid", "A preset needs a model");
+          if (patch.model !== undefined && !patch.model.trim()) throw new BoardError("invalid", "预设必须填写模型");
           return { preset: store.presets.update(id, patch) };
         }),
       delete: (id: string) =>

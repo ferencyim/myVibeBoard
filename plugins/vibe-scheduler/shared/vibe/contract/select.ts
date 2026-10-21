@@ -262,3 +262,20 @@ export function parseWorkerHistory(markdown: string): Record<string, number> {
   for (const [k, c] of counts) out[k] = (c.pos - c.neg) / (c.pos + c.neg + 2);
   return out;
 }
+
+/**
+ * The preset a card runs with, in the order every dispatch path must use: the card's own pick,
+ * the master agent's recommendation (`suggestedPresetId`), the project default. Dispatch and the
+ * scheduler's admission both call this so they cannot disagree about which preset a card has.
+ * `presetExists` skips a stored id whose preset was deleted and goes on to the next source.
+ */
+export function pickPresetId(
+  card: { presetId: string | null; suggestedPresetId: string | null },
+  project: { defaultPresetId: string | null } | null | undefined,
+  presetExists: (id: string) => boolean = () => true,
+): string | null {
+  for (const id of [card.presetId, card.suggestedPresetId, project?.defaultPresetId]) {
+    if (id && presetExists(id)) return id;
+  }
+  return null;
+}

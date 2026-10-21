@@ -97,7 +97,14 @@ describe("filter / group", () => {
   });
 
   it("strips the server error code", () => {
-    expect(errorMessage(new Error("[illegal_transition] nope"))).toBe("nope");
+    expect(errorMessage(new Error("[illegal_transition] nope"))).toBe("不能这样移动：nope");
+    expect(
+      errorMessage(
+        new Error(
+          "Request failed: [invalid] 这张卡还没有选执行预设，项目也没有默认预设，请先选择预设 requestType=plugin.rpc.invoke.request code=handler_error",
+        ),
+      ),
+    ).toBe("这张卡还没有选执行预设，项目也没有默认预设，请先选择预设");
     expect(errorMessage("plain")).toBe("plain");
   });
 });

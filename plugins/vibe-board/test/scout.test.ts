@@ -122,7 +122,7 @@ describe("scout service", () => {
     (withCatalog.paseo as any).providers.listModels = async () => ({ models: [{ id: "gpt-5-mini", isDefault: true }] });
     await withCatalog.scout.run(withCatalog.card.key, tasks(1));
     expect(withCatalog.created[0].config.provider).toBe("codex/gpt-5-mini");
-    expect(JSON.stringify(withCatalog.board.events.list(withCatalog.card.key).events.at(-1)!.body)).toContain("has no model");
+    expect(JSON.stringify(withCatalog.board.events.list(withCatalog.card.key).events.at(-1)!.body)).toContain("没有填模型");
   });
 
   it("honours the parallel cap", async () => {

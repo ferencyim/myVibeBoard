@@ -119,7 +119,16 @@ describe("preset purposes and thinking", () => {
     expect(thinkingChoices(models, "m3", "").map((o) => o.id)).toEqual([""]);
     const kept = thinkingChoices(models, "m2", "xhigh");
     expect(kept.map((o) => o.id)).toEqual(["", "high", "xhigh"]);
-    expect(kept[2]!.label).toContain("xhigh");
+    expect(kept[2]!.label).toBe("很高（当前值）");
+  });
+
+  it("labels levels the same way for codex ('low') and claude ('Low')", () => {
+    const mixed = [
+      { id: "codex-m", thinkingOptions: [{ id: "low", label: "low" }, { id: "xhigh", label: "xhigh" }] },
+      { id: "claude-m", thinkingOptions: [{ id: "low", label: "Low" }, { id: "max", label: "Max" }] },
+    ];
+    expect(thinkingChoices(mixed, "codex-m", "").map((o) => o.label)).toEqual(["默认", "低", "很高"]);
+    expect(thinkingChoices(mixed, "claude-m", "").map((o) => o.label)).toEqual(["默认", "低", "最高"]);
   });
 
   it("resets thinking to default only when the new model lacks it", () => {

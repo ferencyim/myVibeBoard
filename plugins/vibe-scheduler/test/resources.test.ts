@@ -49,6 +49,20 @@ describe("resource sampler", () => {
     expect(snap.cpu).toBeGreaterThanOrEqual(0);
   });
 
+  it("asks for the core count once per sample, not once per process (os.cpus() is slow and synchronous)", async () => {
+    const m = fakeMachine();
+    let calls = 0;
+    const probe = { ...m, cpuCount: () => ++calls, listProcesses: async () => m.procs };
+    let t = 0;
+    const sampler = createResourceSampler({ probe, now: () => new Date(t) });
+    m.procs = Array.from({ length: 500 }, (_, i) => proc(i + 1, 0, `p${i}`, 1e6, 10));
+    await sampler.sample([]);
+    t = 10_000;
+    calls = 0;
+    await sampler.sample([]);
+    expect(calls).toBe(1);
+  });
+
   it("parses Windows and ps process listings", () => {
     const win = parseWindowsProcesses(
       JSON.stringify([{ ProcessId: 4, ParentProcessId: 0, Name: "System", CommandLine: null, WorkingSetSize: 1000, KernelModeTime: 20000, UserModeTime: 10000 }]),

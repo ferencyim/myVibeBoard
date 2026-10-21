@@ -184,7 +184,8 @@ function BoardContent({ initialProject, initialCard }: { initialProject?: string
             {projects.map((p, i) => (
               <Chip
                 key={p.id}
-                label={p.prefix}
+                label={p.name}
+                hint={p.prefix}
                 color={projectColor(p, i)}
                 selected={projectFilter === p.id}
                 onPress={() => setProjectFilter(projectFilter === p.id ? null : p.id)}

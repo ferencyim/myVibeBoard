@@ -68,18 +68,23 @@ export function Chip({
   onPress,
   color,
   count,
+  hint,
 }: {
   label: string;
   selected?: boolean;
   onPress?: () => void;
   color?: string;
   count?: number;
+  /** Secondary info shown as a hover tooltip (web) and read by screen readers, e.g. a project prefix. */
+  hint?: string;
 }) {
   const { theme } = useHost();
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected: !!selected }}
+      accessibilityLabel={hint ? `${label}（${hint}）` : undefined}
+      {...(hint ? ({ title: hint } as object) : {})}
       onPress={onPress}
       style={{
         flexDirection: "row",

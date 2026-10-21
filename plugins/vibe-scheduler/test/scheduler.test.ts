@@ -17,7 +17,7 @@ describe("priority admission", () => {
     t.card("medium later", "medium", p.id);
     const r = await t.runtime.tickOnce();
     expect(keys(r)).toEqual(["DEMO-3", "DEMO-2"]);
-    expect(r.deferred["DEMO-4"]).toMatch(/global limit/);
+    expect(r.deferred["DEMO-4"]).toMatch(/全局并发上限/);
     expect(t.events("scheduler.admitted").map((e) => e.cardId)).toHaveLength(2);
   });
 
@@ -59,7 +59,7 @@ describe("priority admission", () => {
     t.card("k1", "low", claude.id);
     const r = await t.runtime.tickOnce();
     expect(keys(r)).toEqual(["DEMO-1", "DEMO-3"]);
-    expect(r.deferred["DEMO-2"]).toMatch(/codex limit 1/);
+    expect(r.deferred["DEMO-2"]).toMatch(/codex 已达并发上限 1/);
     t.store.projects.update(t.project.id, { concurrencyLimit: 2 });
     t.card("k2", "low", claude.id);
     expect(t.runtime.scheduler.status().deferred).toBeDefined();
@@ -75,7 +75,7 @@ describe("quota-aware admission", () => {
     t.card("high", "high", claude.id);
     const r = await t.runtime.tickOnce();
     expect(keys(r)).toEqual(["DEMO-2"]);
-    expect(r.deferred["DEMO-1"]).toMatch(/quota tight/);
+    expect(r.deferred["DEMO-1"]).toMatch(/额度紧张/);
     expect(t.events("scheduler.quota_low")).toEqual([
       expect.objectContaining({ provider: "claude", level: "tight", remainingPct: 20 }),
     ]);
@@ -91,7 +91,7 @@ describe("quota-aware admission", () => {
     t.card("other", "low", codex.id);
     const r = await t.runtime.tickOnce();
     expect(keys(r)).toEqual(["DEMO-2"]);
-    expect(r.deferred["DEMO-1"]).toMatch(/exhausted/);
+    expect(r.deferred["DEMO-1"]).toMatch(/额度已用完/);
     expect(t.events("scheduler.quota_low")[0]).toMatchObject({ level: "exhausted" });
     t.state.usage = usage(["claude", 10]);
     t.clock.advance(120_000);
@@ -150,7 +150,7 @@ describe("device pool and ports", () => {
     t.card("b", "high", p.id);
     const r = await t.runtime.tickOnce();
     expect(keys(r)).toEqual(["DEMO-1"]);
-    expect(r.deferred["DEMO-2"]).toBe("no free emulator");
+    expect(r.deferred["DEMO-2"]).toBe("没有空闲的 emulator 设备");
     expect(t.runtime.leases.poolStatus()).toMatchObject({ busy: 1, total: 1 });
     expect(keys(await t.runtime.tickOnce())).toEqual([]);
     // Card 1 leaves the board's active columns: lease is released and b gets the device.
@@ -190,7 +190,7 @@ describe("dispatch failures", () => {
     publishEvent(t.db, { type: "scheduler.dispatch_failed", cardId: a.id, payload: { cardId: a.id, message: "no daemon" } }, t.clock.now);
     const r = await t.runtime.tickOnce();
     expect(r.admitted).toEqual([]);
-    expect(r.deferred[a.key]).toMatch(/cooldown/);
+    expect(r.deferred[a.key]).toMatch(/冷却/);
     t.clock.advance(61_000);
     expect(keys(await t.runtime.tickOnce())).toEqual([a.key]);
     expect(t.events("scheduler.admitted")).toHaveLength(2);
@@ -225,13 +225,23 @@ describe("dispatch failures", () => {
     expect(keys(await t.runtime.tickOnce())).toEqual([a.key]);
   });
 
+  it("admits a card that only has the master agent's recommended preset", async () => {
+    const t = setup();
+    const p = t.preset("claude");
+    t.clock.advance(1);
+    t.store.cards.create({ projectId: t.project.id, title: "recommended", column: "todo", suggestedPresetId: p.id });
+    const r = await t.runtime.tickOnce();
+    expect(keys(r)).toEqual(["DEMO-1"]);
+    expect(r.admitted[0]).toMatchObject({ presetId: p.id });
+  });
+
   it("skips cards without any preset", async () => {
     const t = setup();
     t.clock.advance(1);
     t.store.cards.create({ projectId: t.project.id, title: "bare", column: "todo" });
     const r = await t.runtime.tickOnce();
     expect(r.admitted).toEqual([]);
-    expect(r.deferred["DEMO-1"]).toMatch(/no preset/);
+    expect(r.deferred["DEMO-1"]).toMatch(/没有执行预设/);
   });
 });
 

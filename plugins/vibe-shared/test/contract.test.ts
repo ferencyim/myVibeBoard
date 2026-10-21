@@ -12,6 +12,7 @@ import {
   isUlid,
   newId,
   parseHlc,
+  pickPresetId,
   sortKeyAfter,
   sortKeyBetween,
   syncSpec,
@@ -382,5 +383,22 @@ describe("collector interfaces", () => {
       timedOut: false,
       durationMs: 0,
     });
+  });
+});
+
+describe("pickPresetId", () => {
+  const exists = (id: string) => id !== "gone";
+  it("card pick, then the master's recommendation, then the project default", () => {
+    const project = { defaultPresetId: "proj" };
+    expect(pickPresetId({ presetId: "own", suggestedPresetId: "rec" }, project)).toBe("own");
+    expect(pickPresetId({ presetId: null, suggestedPresetId: "rec" }, project)).toBe("rec");
+    expect(pickPresetId({ presetId: null, suggestedPresetId: null }, project)).toBe("proj");
+    expect(pickPresetId({ presetId: null, suggestedPresetId: null }, { defaultPresetId: null })).toBeNull();
+    expect(pickPresetId({ presetId: null, suggestedPresetId: null }, undefined)).toBeNull();
+  });
+  it("a deleted preset falls through to the next source", () => {
+    expect(
+      pickPresetId({ presetId: "gone", suggestedPresetId: "gone" }, { defaultPresetId: "proj" }, exists),
+    ).toBe("proj");
   });
 });
