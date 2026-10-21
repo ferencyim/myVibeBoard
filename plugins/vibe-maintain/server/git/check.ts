@@ -296,31 +296,114 @@ export function createGitCheck(deps: { outdated?: OutdatedFn } = {}): CheckFn {
   };
 }
 
-function renderGitOutput(
-  ctx: CheckContext,
+interface CategoryGuide {
+  /** What leaving it alone costs. */
+  impact: string;
+  /** What to do about it. */
+  advice: string;
+  /** How to confirm it is fixed. */
+  verify: string;
+}
+
+const CATEGORY_GUIDE: Record<string, CategoryGuide> = {
+  stale_branch: {
+    impact: "分支越放越久，和主干的差距越大，以后合并更容易冲突，也容易忘记它在做什么。",
+    advice: "逐个确认：还要用就合并或 rebase 到主干；不要了就删除分支。",
+    verify: "`git branch --no-merged` 里不再出现这些分支，或确认它们是有意保留的。",
+  },
+  merged_branch: {
+    impact: "分支内容已经在主干里，留着只会让分支列表变乱，不会造成数据损失。",
+    advice: "可以放心删除（`git branch -d <分支>`，已合并时 git 会允许）。",
+    verify: "`git branch --merged` 里不再出现这些分支。",
+  },
+  leftover_worktree: {
+    impact: "占用磁盘，并且让对应分支无法被删除或在别处检出。",
+    advice: "目录已消失的先执行 `git worktree prune`；分支已合并的用 `git worktree remove <路径>` 移除。",
+    verify: "`git worktree list` 里不再出现这些路径。",
+  },
+  uncommitted: {
+    impact: "改动只存在本地工作区，换分支、清理或重装系统时可能丢失。",
+    advice: "确认是有用的改动就提交；是临时文件就删除或加入 .gitignore。",
+    verify: "对应目录里 `git status` 显示干净。",
+  },
+  unpushed: {
+    impact: "提交只在本机，磁盘损坏就会丢失，其他设备也看不到。",
+    advice: "确认要保留的分支执行 `git push`（没有上游的用 `git push -u origin <分支>`）。",
+    verify: "`git status` 不再提示“领先 origin”，`git branch -vv` 里没有“ahead”。",
+  },
+  conflict: {
+    impact: "这个分支现在合并进主干会产生冲突，拖得越久越难解。",
+    advice: "在分支上 rebase 或合并主干并解决冲突；不再需要的分支直接删除。",
+    verify: "重新执行体检，该分支不再出现在“与主干冲突”里。",
+  },
+  large_file: {
+    impact: "大文件会让仓库体积和克隆时间持续膨胀，一旦进入历史就很难彻底去掉。",
+    advice: "确认是否必须入库；不必须的移出仓库并加入 .gitignore，需要的改用 Git LFS 或外部存储。",
+    verify: "这些文件不再出现在 `git ls-tree -r -l HEAD` 的大文件列表里。",
+  },
+  outdated_dep: {
+    impact: "依赖落后可能缺少安全修复，版本差距越大升级越费力。",
+    advice: "按需升级：先升级补丁和小版本，大版本升级单独开卡并跑完测试。",
+    verify: "`npm outdated` 里不再列出这些包，项目的测试与构建仍然通过。",
+  },
+};
+
+/** Why the card exists, in one sentence. */
+function whyText(ctx: Pick<CheckContext, "rule" | "project" | "trigger">): string {
+  const reason =
+    ctx.trigger.reason === "手动触发"
+      ? "你在维护页点击了「立即运行」"
+      : `触发原因：${ctx.trigger.reason}`;
+  return `自动维护规则「${ctx.rule.name}」检查了项目「${ctx.project.name}」的 git 状态。${reason}。这是自动生成的维护建议，不是你提出的需求。`;
+}
+
+export function renderGitOutput(
+  ctx: Pick<CheckContext, "rule" | "project" | "trigger">,
   findings: Finding[],
   notes: string[],
-  options: GitCheckOptions,
+  options: Pick<GitCheckOptions, "maxPerCategory">,
 ): CheckOutput {
+  const present = Object.entries(CATEGORY_LABELS).filter(([category]) =>
+    findings.some((f) => f.category === category),
+  );
+  const count = (category: string) => findings.filter((f) => f.category === category).length;
   const out = [
-    `规则「${ctx.rule.name}」自动检查了 ${ctx.project.name} 的 git 状态（触发：${ctx.trigger.reason}）。` +
-      "同类问题合并在本卡，仅供整理参考；这张卡不会自动改动任何分支或文件。",
+    "## 为什么出现这张卡",
+    whyText(ctx),
+    "",
+    "## 发现了什么",
+    `共 ${findings.length} 项：${present.map(([c, label]) => `${label} ${count(c)}`).join("，")}。`,
   ];
-  for (const [category, label] of Object.entries(CATEGORY_LABELS)) {
+  for (const [category, label] of present) {
     const items = findings.filter((f) => f.category === category);
-    if (items.length === 0) continue;
-    out.push("", `## ${label}（${items.length}）`);
+    out.push("", `### ${label}（${items.length}）`);
     for (const f of items.slice(0, options.maxPerCategory)) {
       out.push(`- \`${f.subject}\`：${f.detail}`);
     }
     if (items.length > options.maxPerCategory) {
-      out.push(`- ……另有 ${items.length - options.maxPerCategory} 项，见检查明细`);
+      out.push(`- ……另有 ${items.length - options.maxPerCategory} 项，见本次运行的检查明细`);
     }
   }
+  out.push("", "## 影响");
+  for (const [category, label] of present) out.push(`- ${label}：${CATEGORY_GUIDE[category]!.impact}`);
+  out.push("", "## 建议怎么做");
+  for (const [category, label] of present) out.push(`- ${label}：${CATEGORY_GUIDE[category]!.advice}`);
+  out.push("", "## 怎么验证");
+  for (const [category, label] of present) out.push(`- ${label}：${CATEGORY_GUIDE[category]!.verify}`);
   if (notes.length) out.push("", "## 说明", ...notes.map((n) => `- ${n}`));
+  out.push(
+    "",
+    "---",
+    `这张卡只是整理建议，不会自动改动任何分支或文件。同类问题会合并在本卡，不会重复建卡。` +
+      `不想再收到：在维护页停用或调整规则「${ctx.rule.name}」。`,
+  );
   return {
-    title: `Git 体检：${findings.length} 项待整理`,
+    title: `Git 体检：发现 ${findings.length} 项待整理`,
     body: out.join("\n"),
+    acceptance: [
+      "- 上面每一项都已处理，或确认是有意保留的",
+      ...present.map(([category, label]) => `- ${label}：${CATEGORY_GUIDE[category]!.verify}`),
+    ].join("\n"),
     findings,
     notes,
   };

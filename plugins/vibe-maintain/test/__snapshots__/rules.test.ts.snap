@@ -1,0 +1,84 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`default draft card text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > acceptance 1`] = `
+"- 上面每一项都已处理，或确认是有意保留的
+- 长期未合并的分支：\`git branch --no-merged\` 里不再出现这些分支，或确认它们是有意保留的。
+- 已合并但未删除的分支：\`git branch --merged\` 里不再出现这些分支。
+- 未提交的改动：对应目录里 \`git status\` 显示干净。"
+`;
+
+exports[`default draft card text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > body 1`] = `
+"## 为什么出现这张卡
+自动维护规则「git-health」检查了项目「Demo」的 git 状态。触发原因：已完成卡片 10 张，达到阈值 10。这是自动生成的维护建议，不是你提出的需求。
+
+## 发现了什么
+共 3 项：长期未合并的分支 1，已合并但未删除的分支 1，未提交的改动 1。
+
+### 长期未合并的分支（1）
+- \`feat/old\`：领先 main 1 个提交，最后提交于 30 天前
+
+### 已合并但未删除的分支（1）
+- \`feat/finished\`：已合并进 main，可以删除
+
+### 未提交的改动（1）
+- \`主工作区\`：1 个文件有未提交改动：dirty.txt
+
+## 影响
+- 长期未合并的分支：分支越放越久，和主干的差距越大，以后合并更容易冲突，也容易忘记它在做什么。
+- 已合并但未删除的分支：分支内容已经在主干里，留着只会让分支列表变乱，不会造成数据损失。
+- 未提交的改动：改动只存在本地工作区，换分支、清理或重装系统时可能丢失。
+
+## 建议怎么做
+- 长期未合并的分支：逐个确认：还要用就合并或 rebase 到主干；不要了就删除分支。
+- 已合并但未删除的分支：可以放心删除（\`git branch -d <分支>\`，已合并时 git 会允许）。
+- 未提交的改动：确认是有用的改动就提交；是临时文件就删除或加入 .gitignore。
+
+## 怎么验证
+- 长期未合并的分支：\`git branch --no-merged\` 里不再出现这些分支，或确认它们是有意保留的。
+- 已合并但未删除的分支：\`git branch --merged\` 里不再出现这些分支。
+- 未提交的改动：对应目录里 \`git status\` 显示干净。
+
+## 说明
+- 未检查过期依赖。
+
+---
+这张卡只是整理建议，不会自动改动任何分支或文件。同类问题会合并在本卡，不会重复建卡。不想再收到：在维护页停用或调整规则「git-health」。"
+`;
+
+exports[`prompt templates > renders the default templates (snapshot) > fix 1`] = `
+"自动维护规则「git-health」在项目「Demo」中发现了需要处理的问题，触发原因：已完成卡片 10 张，达到阈值 10。
+规则检查的内容：Git 体检
+
+请在当前 worktree 里调查并修复下面的问题。完成后用中文写一份简短报告：改了什么、为什么这样改、怎么验证的。
+
+卡片内容：
+SUMMARY {{project}}
+
+发现明细（JSON，共 1 条）：
+[{"a":1}]
+
+【系统约束，不可更改】
+- 只在当前 worktree 的分支上提交；不得合并到主分支，不得 push。负责人会查看证据后自行合并。
+- 只处理上面列出的问题，不做无关的重构或改动。
+- 结束时必须给出简短报告：改了什么、如何验证。"
+`;
+
+exports[`prompt templates > renders the default templates (snapshot) > review 1`] = `
+"你是项目「Demo」的维护复核员。自动维护规则「git-health」刚刚触发，原因：已完成卡片 10 张，达到阈值 10。
+规则检查的内容：Git 体检
+
+下面是检查产出的卡片内容和发现明细。请用中文写一份简短的整理方案，按优先级排序。每一项说明：
+1. 问题是什么、影响是什么；
+2. 建议怎么处理（哪些可以放心处理，哪些需要负责人决定）；
+3. 处理完后怎么验证。
+
+卡片内容：
+SUMMARY {{project}}
+
+发现明细（JSON，共 1 条）：
+[{"a":1}]
+
+【系统约束，不可更改】
+- 你是只读复核员：不得修改任何文件、分支或 worktree，不得提交，不得执行会改变仓库状态的命令。
+- 只输出一段 Markdown 文本作为回复（用中文），不要创建卡片，也不要询问用户。"
+`;

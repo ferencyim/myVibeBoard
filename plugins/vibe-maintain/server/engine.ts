@@ -12,7 +12,18 @@ import { randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { latestFire } from "./cron";
-import { loadConfig, type RuleDef } from "./config";
+import { BUILTIN_RULES, loadConfig } from "./config";
+import {
+  EMPTY_RULES_CONFIG,
+  describeCheck,
+  describeTrigger,
+  mergeRuleLayers,
+  progressText,
+  type LayeredRule,
+  type RuleDef,
+  type RulesConfig,
+} from "../shared/rules";
+import { buildPrompt, type PromptVars } from "../shared/prompts";
 import { trunkOf } from "./git/check";
 import type { GitRunner } from "./git/exec";
 import type {
@@ -55,6 +66,8 @@ export interface EngineOptions {
   git: GitRunner;
   checks: CheckRegistry;
   settings?: () => EngineSettings;
+  /** UI layer of the rule configuration (plugin settings); read on every sync. */
+  uiRules?: () => RulesConfig;
   subAgent?: SubAgentRunner;
   fixLauncher?: FixLauncher;
   newId?: () => string;
@@ -89,7 +102,11 @@ export function createMaintenanceEngine(options: EngineOptions) {
   const log = options.log ?? (() => undefined);
   const commitPollMs = (options.commitPollSeconds ?? 60) * 1000;
 
-  const configCache = new Map<string, { signature: string; errors: string[] }>();
+  const uiRules = options.uiRules ?? (() => EMPTY_RULES_CONFIG);
+  const configCache = new Map<
+    string,
+    { signature: string; errors: string[]; layered: Map<string, LayeredRule> }
+  >();
   const inflight = new Set<string>();
   const lastCommitPoll = new Map<string, number>();
 
@@ -191,17 +208,29 @@ export function createMaintenanceEngine(options: EngineOptions) {
     }
   }
 
-  /** Re-read each project's maintenance.yml (only when its text changed) and update the rule table. */
+  /**
+   * Merge built-in defaults, the UI config and maintenance.yml per project (only when either of the
+   * last two changed) and update the rule table.
+   */
   async function syncRules(): Promise<void> {
+    const ui = uiRules();
     for (const project of store.projects.list()) {
       if (!project.repoPath) continue;
       const config = await loadConfig(project.repoPath);
+      const uiLayer = ui.projects[project.id];
+      const signature = `${config.signature}|ui|${JSON.stringify(uiLayer ?? null)}`;
       const cached = configCache.get(project.id);
-      if (cached?.signature === config.signature) continue;
-      configCache.set(project.id, { signature: config.signature, errors: config.errors });
-      for (const error of config.errors) log(`${project.prefix}: ${error}`);
-      const names = new Set(config.rules.map((r) => r.name));
-      for (const def of config.rules) upsertRule(project, def);
+      if (cached?.signature === signature) continue;
+      const merged = mergeRuleLayers({ builtin: BUILTIN_RULES, ui: uiLayer, yml: config.yml });
+      const errors = [...config.errors, ...merged.errors];
+      configCache.set(project.id, {
+        signature,
+        errors,
+        layered: new Map(merged.rules.map((r) => [r.def.name, r])),
+      });
+      for (const error of errors) log(`${project.prefix}: ${error}`);
+      const names = new Set(merged.rules.map((r) => r.def.name));
+      for (const layered of merged.rules) upsertRule(project, layered.def);
       for (const rule of listRules(project.id)) {
         if (!names.has(rule.name) && rule.enabled) {
           db.prepare("UPDATE maintenance_rule SET enabled = 0, updated_at = ? WHERE id = ?").run(iso(), rule.id);
@@ -209,6 +238,9 @@ export function createMaintenanceEngine(options: EngineOptions) {
       }
     }
   }
+
+  const layeredOf = (rule: MaintenanceRule): LayeredRule | undefined =>
+    configCache.get(rule.projectId)?.layered.get(rule.name);
 
   // ---- rejection tracking (auto pause) -----------------------------------------------------------
 
@@ -338,7 +370,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
     const reasons: string[] = [];
     const cards = getCounter(project.id, ruleKey(rule, "cards"));
     if (t.cards_done && (cards?.count ?? 0) >= t.cards_done) {
-      reasons.push(`累计完成 ${cards!.count} 张卡（阈值 ${t.cards_done}）`);
+      reasons.push(`已完成卡片 ${cards!.count} 张，达到阈值 ${t.cards_done}`);
     }
     if (t.commits_merged) {
       const c = getCounter(project.id, ruleKey(rule, "commits"));
@@ -349,13 +381,13 @@ export function createMaintenanceEngine(options: EngineOptions) {
         setCounter(project.id, ruleKey(rule, "commits"), n);
       }
       const n = getCounter(project.id, ruleKey(rule, "commits"))?.count ?? 0;
-      if (n >= t.commits_merged) reasons.push(`累计合并 ${n} 个提交（阈值 ${t.commits_merged}）`);
+      if (n >= t.commits_merged) reasons.push(`已合并提交 ${n} 个，达到阈值 ${t.commits_merged}`);
     }
     if (t.tokens) {
       const c = getCounter(project.id, ruleKey(rule, "tokens"));
       if (c) setCounter(project.id, ruleKey(rule, "tokens"), tokensSince(project.id, c.since));
       const n = getCounter(project.id, ruleKey(rule, "tokens"))?.count ?? 0;
-      if (n >= t.tokens) reasons.push(`累计消耗 ${n} token（阈值 ${t.tokens}）`);
+      if (n >= t.tokens) reasons.push(`已消耗 ${n} token，达到阈值 ${t.tokens}`);
     }
     return reasons.length ? { reason: reasons.join("；") } : null;
   }
@@ -451,19 +483,30 @@ export function createMaintenanceEngine(options: EngineOptions) {
     return `${head.stdout.trim()}\n${status.stdout}`;
   }
 
-  async function askSubAgent(card: CardView, rule: MaintenanceRule, project: Project, out: CheckOutput) {
+  function promptVars(rule: MaintenanceRule, project: Project, trigger: TriggerReason, out: CheckOutput): PromptVars {
+    return {
+      project: project.name,
+      rule: rule.name,
+      trigger_reason: trigger.reason,
+      check_description: describeCheck(rule.check as { type: string } & Record<string, unknown>),
+      card_title: out.title,
+      summary: out.body,
+      findings_json: JSON.stringify(out.findings),
+      findings_count: String(out.findings.length),
+      date: iso().slice(0, 10),
+    };
+  }
+
+  async function askSubAgent(
+    card: CardView,
+    rule: MaintenanceRule,
+    project: Project,
+    out: CheckOutput,
+    trigger: TriggerReason,
+  ) {
     if (!rule.agent || !options.subAgent) return;
     const before = await repoState(project);
-    const prompt = [
-      `You are a read-only maintenance reviewer for the project "${project.name}" (rule "${rule.name}").`,
-      "Do NOT modify files, branches or worktrees. Read the deterministic findings below and reply with a short,",
-      "prioritised cleanup plan (what to do first, what is safe to delete, what needs the owner's decision).",
-      "",
-      out.body,
-      "",
-      "Findings (JSON):",
-      JSON.stringify(out.findings),
-    ].join("\n");
+    const prompt = buildPrompt("review", layeredOf(rule)?.def.prompts.review, promptVars(rule, project, trigger, out));
     try {
       const reply = await options.subAgent.run({ rule, project, prompt });
       const violated = (await repoState(project)) !== before;
@@ -490,7 +533,13 @@ export function createMaintenanceEngine(options: EngineOptions) {
     }
   }
 
-  async function suggest(rule: MaintenanceRule, project: Project, runId: string, out: CheckOutput): Promise<string[]> {
+  async function suggest(
+    rule: MaintenanceRule,
+    project: Project,
+    runId: string,
+    out: CheckOutput,
+    trigger: TriggerReason,
+  ): Promise<string[]> {
     const key = out.dedupeKey ?? rule.dedupeKey ?? rule.name;
     const existing = openCardFor(project, key);
     if (existing) {
@@ -513,11 +562,17 @@ export function createMaintenanceEngine(options: EngineOptions) {
       rule.name,
     );
     recordFindings(card, rule, runId, out, "created");
-    await askSubAgent(card, rule, project, out);
+    await askSubAgent(card, rule, project, out, trigger);
     return [card.id];
   }
 
-  async function fix(rule: MaintenanceRule, project: Project, runId: string, out: CheckOutput): Promise<string[]> {
+  async function fix(
+    rule: MaintenanceRule,
+    project: Project,
+    runId: string,
+    out: CheckOutput,
+    trigger: TriggerReason,
+  ): Promise<string[]> {
     const key = out.dedupeKey ?? rule.dedupeKey ?? rule.name;
     const existing = openCardFor(project, key);
     if (existing) {
@@ -551,17 +606,12 @@ export function createMaintenanceEngine(options: EngineOptions) {
       provider,
     });
     recordFindings(card, rule, runId, out, "created");
-    const prompt = [
-      `Maintenance rule "${rule.name}" found problems in ${project.name}. Investigate and fix them in this worktree.`,
-      "Commit on this worktree's branch. Do NOT merge into the main branch and do not push: the owner reviews",
-      "the evidence and merges. Finish with a short report of what changed and how you verified it.",
-      ...(out.instructions ? ["", out.instructions] : []),
-      "",
-      out.body,
-      "",
-      "Findings (JSON):",
-      JSON.stringify(out.findings),
-    ].join("\n");
+    const prompt = buildPrompt(
+      "fix",
+      layeredOf(rule)?.def.prompts.fix,
+      promptVars(rule, project, trigger, out),
+      out.instructions,
+    );
     try {
       const launched = await launcher.launch({
         agentId,
@@ -634,8 +684,8 @@ export function createMaintenanceEngine(options: EngineOptions) {
         if (!out) return { status: "fired", run: finishRun(runId, "done", [], []) };
         const cardIds =
           rule.outputMode === "fix" && !out.forceDraft
-            ? await fix(rule, project, runId, out)
-            : await suggest(rule, project, runId, out);
+            ? await fix(rule, project, runId, out, trigger)
+            : await suggest(rule, project, runId, out, trigger);
         out.commit?.();
         return { status: "fired", run: finishRun(runId, "done", out.findings as Finding[], cardIds) };
       } catch (error) {
@@ -708,9 +758,20 @@ export function createMaintenanceEngine(options: EngineOptions) {
             const c = getCounter(rule.projectId, ruleKey(rule, kind));
             if (c) counters[kind] = c.count;
           }
+          const layered = layeredOf(rule);
+          const trigger = layered?.def.trigger ?? (rule.trigger as RuleDef["trigger"]);
           return {
             rule,
             counters,
+            origin: layered?.origin ?? null,
+            sources: layered?.sources ?? null,
+            base: layered?.base ?? null,
+            prompts: { review: layered?.def.prompts.review ?? null, fix: layered?.def.prompts.fix ?? null },
+            triggerText: describeTrigger(trigger),
+            progressText: progressText(trigger, counters),
+            checkText: describeCheck(rule.check as { type: string } & Record<string, unknown>),
+            /** False once the rule left every config layer (kept disabled in the table for its history). */
+            defined: layered !== undefined || !configCache.has(rule.projectId),
             runsToday: runsToday(rule.id),
             lastRun: listRuns(rule.id, 1)[0] ?? null,
             blocked: gate(rule),
