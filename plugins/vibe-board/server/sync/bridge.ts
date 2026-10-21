@@ -17,6 +17,7 @@
 import { isHlc, syncSpec, type CardColumn } from "../vibe/contract";
 import type { Row, SqlParam, VibeDb, VibeStore } from "../vibe/db";
 import { ROW_MARKER, applyChange, type JsonValue, type SyncNode } from "../vibe/sync";
+import { isPhoneChatBody } from "./policy";
 import type { SqliteChangeStore } from "./sqlite-store";
 
 /** HLC for rows that were never stamped (seed tags, rows from before sync existed). */
@@ -486,6 +487,16 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     for (const p of pendingRows("card_event")) {
       try {
         if (!bizRow("card_event", p.rowId)) {
+          if (val(p, "type") === "chat") {
+            // The policy checks type and body_json one column at a time; a chat row is only
+            // created once its body is there and passes (a rejected body leaves it unimported).
+            const body = val(p, "body_json");
+            if (body === undefined) continue;
+            if (!isPhoneChatBody(body)) {
+              repairDelete("card_event", p.rowId, new Error("invalid phone chat body"));
+              continue;
+            }
+          }
           vibe.events.add({
             id: p.rowId,
             cardId: String(val(p, "card_id")),

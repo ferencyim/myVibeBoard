@@ -161,7 +161,7 @@ export function Chat({ api, card, events, sessions, plans, reload, onOpenVerific
               variant="primary"
               icon="MessageSquare"
               label="开始讨论"
-              disabled={offline || sending}
+              disabled={sending}
               onPress={() => send(START_TEXT)}
             />
           ) : null}
@@ -196,7 +196,7 @@ export function Chat({ api, card, events, sessions, plans, reload, onOpenVerific
         </View>
       ) : null}
 
-      <Field label="发言" hint={offline ? "离线中，需在线才能发言" : routeHint(card, sessions)}>
+      <Field label="发言" hint={offline ? "离线，联网后发送" : routeHint(card, sessions)}>
         <TextField
           multiline
           value={text}
@@ -208,8 +208,8 @@ export function Chat({ api, card, events, sessions, plans, reload, onOpenVerific
         <Btn
           variant="primary"
           icon="Send"
-          label="发送"
-          disabled={offline || sending || !text.trim()}
+          label={offline ? "发送（联网后送达）" : "发送"}
+          disabled={sending || !text.trim()}
           onPress={submit}
         />
         {isDraft && items.length > 0 ? (

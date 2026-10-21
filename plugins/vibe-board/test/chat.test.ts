@@ -7,7 +7,10 @@ import { createDispatcher } from "../server/dispatch";
 import { buildDispatchBrief } from "../server/dispatch/brief";
 import { registerLifecycle } from "../server/lifecycle";
 import { registerBoardRpcs } from "../server/rpc";
+import { createSyncService } from "../server/sync";
 import { createServerPolicy } from "../server/sync/policy";
+import { newId } from "../server/vibe/contract";
+import { ClientSync, MemoryChangeStore } from "../server/vibe/sync";
 import * as rpc from "../shared/rpc";
 import { setupBoard, tempDir } from "./helpers";
 
@@ -282,22 +285,85 @@ describe("dispatch writes back to the chat and the brief follows the card", () =
 });
 
 describe("phone sync refuses forged proposals and chat", () => {
-  it("only new plain notes by the user are admitted; proposals and existing events are immutable", async () => {
+  it("admits new user notes and plain chat; proposals and existing events are immutable", async () => {
     const t = setup();
     const policy = createServerPolicy(t.runtime.db);
     const proposal = t.store.cards.propose({ cardId: t.card.id, changes: { title: "T" }, rationale: "r" });
     const change = (rowId: string, column: string, value: unknown) =>
       ({ kind: "set", table: "card_event", rowId, column, value, hlc: "x", deviceId: "phone" }) as never;
-    const ok = (c: never) => policy(c, t.store as never).ok;
-    // forged proposal / chat rows
+    const ok = (c: never) => policy(c, new MemoryChangeStore() as never).ok;
+    // forged proposal / other author kinds / other event types
     expect(ok(change("new-1", "type", "proposal"))).toBe(false);
-    expect(ok(change("new-2", "type", "chat"))).toBe(false);
     expect(ok(change("new-3", "author_kind", "master"))).toBe(false);
+    expect(ok(change("new-5", "type", "evaluation"))).toBe(false);
     // direct rewrite of an existing proposal's status or any other existing event
     expect(ok(change(proposal.id, "body_json", JSON.stringify({ status: "accepted" })))).toBe(false);
     const chat = user(t, "hi");
     expect(ok(change(chat.id, "body_json", "{}"))).toBe(false);
-    // a plain note from the user is still fine
+    // a plain note and a plain user chat message are fine
     expect(ok(change("new-4", "type", "note"))).toBe(true);
+    expect(ok(change("new-2", "type", "chat"))).toBe(true);
+  });
+
+  it("allows only text and kind in a phone chat body", async () => {
+    const t = setup();
+    const sync = createSyncService({ db: t.runtime.db, store: t.store, log: () => {} });
+    const client = new ClientSync({ deviceId: "phone-1", store: new MemoryChangeStore() });
+    const base = { card_id: t.card.id, author_kind: "user", author: "phone", created_at: new Date().toISOString() };
+    const send = async (body: unknown) => {
+      const id = newId();
+      client.write("card_event", id, { ...base, type: "chat", body_json: JSON.stringify(body) });
+      const out = await client.sync(async (req) => sync.exchange(JSON.parse(JSON.stringify(req))));
+      return { id, rejected: out.rejected.length };
+    };
+    const good = await send({ text: "offline hello", kind: "question" });
+    expect(good.rejected).toBe(0);
+    expect(t.chats().find((e) => e.id === good.id)).toMatchObject({
+      type: "chat",
+      authorKind: "user",
+      body: { text: "offline hello", kind: "question" },
+    });
+    for (const forged of [{ text: "x", answers: ["e1"] }, { text: "x", fallback: ["e1"] }, { text: "x", key: "k" }, { kind: "info" }, { text: 3 }]) {
+      const bad = await send(forged);
+      expect(bad.rejected).toBeGreaterThan(0);
+      expect(t.chats().some((e) => e.id === bad.id)).toBe(false);
+    }
+  });
+
+  it("forwards a chat message written offline on the phone exactly once after it syncs", async () => {
+    const t = setup();
+    withWorker(t);
+    const sync = createSyncService({ db: t.runtime.db, store: t.store, log: () => {} });
+    const send = vi.fn(async () => undefined);
+    const router = createChatRouter({
+      db: t.runtime.db,
+      board: t.board,
+      getPaseo: () => ({ agents: { ref: () => ({ send }) } }) as never,
+      replies: { send: vi.fn(async () => ({ sent: true, duplicate: false })) },
+      log: () => {},
+    });
+    router.start();
+    const client = new ClientSync({ deviceId: "phone-1", store: new MemoryChangeStore() });
+    const transport = async (req: Parameters<typeof sync.exchange>[0]) => sync.exchange(JSON.parse(JSON.stringify(req)));
+    await client.sync(transport);
+    const id = newId();
+    client.write("card_event", id, {
+      card_id: t.card.id,
+      type: "chat",
+      author_kind: "user",
+      author: "phone",
+      created_at: new Date().toISOString(),
+      body_json: JSON.stringify({ text: "use sqlite" }),
+    });
+    expect(await router.poll()).toBe(0); // nothing reached the computer yet
+    await client.sync(transport);
+    await router.poll();
+    await client.sync(transport); // the re-sync must not replay the message
+    await router.poll();
+    await router.poll();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("use sqlite");
+    expect(t.chats().find((e) => e.authorKind === "system")?.body).toMatchObject({ answers: [id] });
+    await router.stop();
   });
 });
