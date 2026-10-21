@@ -62,7 +62,7 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       whenSent: "运行中的总 agent / 规划会话已收到旧规则，而当前规则文本哈希已变化时。",
       audience: "总 agent、规划会话",
       defaultText:
-        "[Master rules updated - these replace all earlier rules and supplements]\n\n{{rules}}",
+        "[总 agent 规则已更新：以下规则取代此前所有规则和补充]\n\n{{rules}}",
       placeholders: [{ name: "rules", description: "完整的当前规则（正文 + 补充）" }],
       order: 2,
     },
@@ -77,20 +77,20 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       defaultText: `[wake:assess_draft]
 {{project}}
 
-## Card to assess (dynamic)
-Key: {{card.key}}
-Title: {{card.title}}
-Priority: {{card.priority}}
-Tags: {{card.tags}}
-Preselected preset: {{card.preset}}
-Reference images: {{card.refImages}}
-Description:
+## 待审查的卡片（动态）
+编号：{{card.key}}
+标题：{{card.title}}
+优先级：{{card.priority}}
+标签：{{card.tags}}
+已预选的预设：{{card.preset}}
+参考图：{{card.refImages}}
+描述：
 {{card.description}}
-Acceptance criteria:
+验收标准：
 {{card.acceptance}}
 
-Provider quota: {{quota}}
-Scheduler hint: {{hint}}`,
+Provider 额度：{{quota}}
+调度器提示：{{hint}}`,
       placeholders: [
         PROJECT,
         ...CARD,
@@ -104,7 +104,7 @@ Scheduler hint: {{hint}}`,
         { name: "hint", description: "调度器对执行 agent 的提示" },
       ],
       fixedSuffix:
-        'Optional additions to the JSON object: "verdict" is what the owner reads in the card chat (markdown, 2 to 6 sentences: is it feasible, what is unclear or risky, what you recommend; written in the card\'s language). "proposal" is {"title"?, "description"?, "acceptance"?, "rationale"} with replacement text for those card fields, only for a field that is really worth changing. You never edit the card\'s fields yourself; the owner accepts a proposal in the chat.\n\nReply with the assess_draft JSON object only.',
+        'JSON 对象的可选补充项："verdict" 是负责人在卡片聊天里阅读的评估（markdown，2 到 6 句：是否可行、哪里不清楚或有风险、你的建议；用卡片的语言书写）。"proposal" 为 {"title"?, "description"?, "acceptance"?, "rationale"}，给出这些卡片字段的替换文本，只写确实值得修改的字段。你绝不自己修改卡片字段；负责人在聊天里接受提案。\n\n只回复 assess_draft JSON 对象。',
       order: 10,
     },
     {
@@ -118,19 +118,19 @@ Scheduler hint: {{hint}}`,
       defaultText: `[wake:card_done]
 {{project}}
 
-## Current project memory (entry ids in brackets)
+## 当前项目记忆（方括号内为条目编号）
 {{memory}}
 
-## Finished card (dynamic)
-Key: {{card.key}}
-Title: {{card.title}}
-Description:
+## 已完成的卡片（动态）
+编号：{{card.key}}
+标题：{{card.title}}
+描述：
 {{card.description}}
-Acceptance criteria:
+验收标准：
 {{card.acceptance}}
-Recent notes:
+最近的备注：
 {{notes}}
-Verification:
+验证结果：
 {{verification}}`,
       placeholders: [
         PROJECT,
@@ -142,8 +142,8 @@ Verification:
         { name: "verification", description: "最近一次验证的结论与逐项结果" },
       ],
       fixedSuffix: maintain
-        ? `Optional: add "requirementsUpdate": {"content": "<the complete new requirements document>", "summary": "<one short line>"} only when this card changed the product requirements or settled a new product decision, and only when the requirements excerpt in the project block is complete (not marked as truncated). Never for implementation details.\n\nReply with the card_done JSON object only.`
-        : "Reply with the card_done JSON object only.",
+        ? `可选：仅当这张卡片改变了产品需求或确定了新的产品决定、并且项目块里的需求文档摘录是完整的（未标 TRUNCATED）时，才加上 "requirementsUpdate": {"content": "<完整的新需求文档>", "summary": "<一句简短的话>"}。实现细节绝不写入。\n\n只回复 card_done JSON 对象。`
+        : "只回复 card_done JSON 对象。",
       order: 11,
     },
     {
@@ -157,13 +157,13 @@ Verification:
       defaultText: `[wake:session_help]
 {{project}}
 
-## Worker question (dynamic)
-Card: {{card.key}} {{card.title}}
-Acceptance criteria:
+## 执行 agent 的提问（动态）
+卡片：{{card.key}} {{card.title}}
+验收标准：
 {{card.acceptance}}
-Plan:
+计划：
 {{plan}}
-Question:
+问题：
 {{question}}`,
       placeholders: [
         PROJECT,
@@ -172,7 +172,7 @@ Question:
         { name: "plan", description: "卡片当前计划" },
         { name: "question", description: "执行 agent 的提问（JSON）" },
       ],
-      fixedSuffix: "Reply with the session_help JSON object only.",
+      fixedSuffix: "只回复 session_help JSON 对象。",
       order: 12,
     },
     {
@@ -184,7 +184,7 @@ Question:
       whenSent: "回复解析失败后（重试次数见总 agent 设置的「高级」分组）。",
       audience: "总 agent、规划会话",
       defaultText:
-        "Your reply was rejected: {{error}}\nReply again with only the corrected {{kind}} JSON object in a ```json fence.",
+        "你的回复被拒绝：{{error}}\n请只重新回复修正后的 {{kind}} JSON 对象，放在 ```json 围栏里。",
       placeholders: [
         { name: "error", description: "解析失败的原因" },
         { name: "kind", description: "期望的 JSON 类型，如 assess_draft、card_done、plan_discussion" },
@@ -200,25 +200,25 @@ Question:
       whenSent: "规划会话（新建或重建）收到用户第一批消息时。",
       audience: "规划会话",
       defaultText: `[plan:start]
-You are the planning session of card {{card.key}}. Discuss the plan with the owner until it is executable.
+你是卡片 {{card.key}} 的规划会话。与负责人讨论计划，直到它可以执行。
 {{project}}
 
-## Project memory (read-only)
+## 项目记忆（只读）
 {{memory}}
 
-## Card {{card.key}}
-Title: {{card.title}}
-Priority: {{card.priority}}
-Tags: {{card.tags}}
-Description:
+## 卡片 {{card.key}}
+标题：{{card.title}}
+优先级：{{card.priority}}
+标签：{{card.tags}}
+描述：
 {{card.description}}
-Acceptance criteria:
+验收标准：
 {{card.acceptance}}
 
-## Latest plan version
+## 最新计划版本
 {{plan}}
 
-{{discussion}}## Owner message(s) to answer now
+{{discussion}}## 现在需要回答的负责人消息
 {{pending}}`,
       placeholders: [
         PROJECT,
@@ -232,7 +232,7 @@ Acceptance criteria:
         { name: "discussion", description: "至今的讨论整段（含标题与结尾空行），没有则为空" },
         { name: "pending", description: "待回答的用户消息" },
       ],
-      fixedSuffix: "Reply with the plan_discussion JSON object only.",
+      fixedSuffix: "只回复 plan_discussion JSON 对象。",
       order: 30,
     },
     {
@@ -245,7 +245,7 @@ Acceptance criteria:
       audience: "规划会话",
       defaultText: "[plan:turn]\n{{pending}}",
       placeholders: [{ name: "pending", description: "待回答的用户消息" }],
-      fixedSuffix: "Reply with the plan_discussion JSON object only.",
+      fixedSuffix: "只回复 plan_discussion JSON 对象。",
       order: 31,
     },
     {
@@ -259,7 +259,7 @@ Acceptance criteria:
       defaultText: "[plan:research_results]\n\n{{results}}",
       placeholders: [{ name: "results", description: "各调研项的问题与结果（含失败说明）" }],
       fixedSuffix:
-        "Continue the discussion with the plan_discussion JSON object only (no further research unless it is essential).",
+        "只用 plan_discussion JSON 对象继续讨论（除非必不可少，不要再发起调研）。",
       order: 32,
     },
     {
@@ -271,9 +271,9 @@ Acceptance criteria:
       whenSent: "用户把有规划会话的卡片移出草稿时。",
       audience: "规划会话",
       defaultText:
-        "[plan:handoff]\nThe owner is moving this card to todo. Write the hand-off summary for the executing agent.",
+        "[plan:handoff]\n负责人正要把这张卡片移到 todo。请为执行 agent 写交接摘要。",
       placeholders: [],
-      fixedSuffix: 'Reply with `{ "summary": "<markdown>" }` only, in a ```json fence.',
+      fixedSuffix: '只回复 `{ "summary": "<markdown>" }`，放在 ```json 围栏里。',
       order: 33,
     },
     {
@@ -284,15 +284,15 @@ Acceptance criteria:
       description: "规划会话派出的只读探路兵收到的任务消息。",
       whenSent: "规划会话请求调研时，每个调研项各发一条给一个新的只读探路兵。",
       audience: "规划探路兵（只读）",
-      defaultText: `You are a read-only scout for card {{card.key}} ({{card.title}}).
-Answer the question below by reading code, logs or documents in this repository.
-Do NOT modify, create or delete any file, do not run builds or install anything, do not use git commands that write.
-Answer in at most 20 lines: findings with file paths, then the effort/risks if the question asks for an estimate.
-Question: {{question}}{{scope}}`,
+      defaultText: `你是卡片 {{card.key}}（{{card.title}}）的只读探路兵。
+通过阅读本仓库的代码、日志或文档来回答下面的问题。
+不要修改、创建或删除任何文件，不要运行构建或安装任何东西，不要使用会写入的 git 命令。
+回答不超过 20 行：先写带文件路径的发现；如果问题要求估算，再写工作量和风险。
+问题：{{question}}{{scope}}`,
       placeholders: [
         ...CARD,
         { name: "question", description: "调研问题" },
-        { name: "scope", description: "查找范围整行（含换行与 “Where to look:”），没有则为空" },
+        { name: "scope", description: "查找范围整行（含换行与“查找范围：”），没有则为空" },
       ],
       order: 40,
     },
@@ -334,12 +334,12 @@ Question: {{question}}{{scope}}`,
       description: "规划会话无法写出交接摘要（会话丢失或回复无效）时，由插件直接生成的交接文件框架。",
       whenSent: "用户移动卡片、规划会话写不出摘要时，写入 .vibe/sessions/<KEY>-plan.md 并交给执行 agent。",
       audience: "执行 agent（经派发 brief）",
-      defaultText: `# Hand-off: {{card.key}} {{card.title}}
+      defaultText: `# 交接：{{card.key}} {{card.title}}
 
-## Goal
+## 目标
 {{goal}}
 
-## Agreed plan (latest plan version)
+## 已商定的计划（最新计划版本）
 {{plan}}{{lastWord}}`,
       placeholders: [
         ...CARD,

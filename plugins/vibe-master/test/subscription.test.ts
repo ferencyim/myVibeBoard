@@ -109,7 +109,7 @@ describe("master session", () => {
     const card = t.board.draft("Codex master");
     t.runtime.triggers.assessNow(card.id);
     await t.runtime.queue.idle();
-    expect(t.fake.agents[0]!.prompts[0]).toContain("# Vibe master agent");
+    expect(t.fake.agents[0]!.prompts[0]).toContain("# Vibe 总 agent");
     expect(t.fake.agents[0]!.prompts[0]).toContain("[wake:assess_draft]");
     await t.runtime.dispose();
   });

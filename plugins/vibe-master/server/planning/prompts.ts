@@ -8,17 +8,17 @@ import { transcript, type ThreadMessage } from "./thread";
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 export function renderPlan(plan: PlanSnapshot | undefined, presetName: (id: string) => string | null): string {
-  if (!plan) return "(no plan yet)";
+  if (!plan) return "（还没有计划）";
   const checks = plan.checks.map((c) => `- ${c.text}${c.method ? ` (${c.method})` : ""}`).join("\n");
   const subCards = plan.subCards.map((s) => `- ${s.title}`).join("\n");
   const preset = plan.recommendedPresetId ? presetName(plan.recommendedPresetId) : null;
   return [
     plan.description,
-    checks && `Checks:\n${checks}`,
-    subCards && `Sub-cards:\n${subCards}`,
-    plan.tags.length ? `Tags: ${plan.tags.join(", ")}` : "",
-    preset ? `Recommended preset: ${preset}` : "",
-    plan.notes ? `Notes: ${plan.notes}` : "",
+    checks && `检查项：\n${checks}`,
+    subCards && `子卡片：\n${subCards}`,
+    plan.tags.length ? `标签：${plan.tags.join(", ")}` : "",
+    preset ? `推荐预设：${preset}` : "",
+    plan.notes ? `备注：${plan.notes}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -39,15 +39,15 @@ export function buildStartMessage(input: {
     projectId: card.projectId,
     vars: {
       project: input.projectBlock,
-      memory: input.memory || "(empty)",
+      memory: input.memory || "（空）",
       "card.key": card.key,
       "card.title": card.title,
       "card.priority": card.priority,
-      "card.tags": input.tagNames.join(", ") || "none",
-      "card.description": card.description || "(empty)",
-      "card.acceptance": card.acceptance || "(empty)",
+      "card.tags": input.tagNames.join(", ") || "无",
+      "card.description": card.description || "（空）",
+      "card.acceptance": card.acceptance || "（空）",
       plan: input.plan,
-      discussion: input.earlier.length ? `## Discussion so far\n${transcript(input.earlier)}\n\n` : "",
+      discussion: input.earlier.length ? `## 至今的讨论\n${transcript(input.earlier)}\n\n` : "",
       pending: transcript(input.pending),
     },
   });
@@ -76,7 +76,7 @@ export function buildResultsMessage(
   const results = items
     .map(
       (r, i) =>
-        `### ${i + 1}. ${r.question}${r.scope ? ` (${r.scope})` : ""}\n${r.ok ? r.answer : `FAILED: ${r.answer}`}`,
+        `### ${i + 1}. ${r.question}${r.scope ? ` (${r.scope})` : ""}\n${r.ok ? r.answer : `失败：${r.answer}`}`,
     )
     .join("\n\n");
   return prompts.resolve("master.plan.research_results", { projectId, vars: { results } });
@@ -110,7 +110,7 @@ export function buildScoutMessage(input: {
       "card.key": input.card.key,
       "card.title": clip(input.card.title, 80),
       question: input.question,
-      scope: input.scope ? `\nWhere to look: ${input.scope}` : "",
+      scope: input.scope ? `\n查找范围：${input.scope}` : "",
     },
   });
 }
@@ -130,7 +130,7 @@ export function fallbackHandoff(input: {
       "card.title": input.card.title,
       goal: input.card.description || input.card.title,
       plan: input.plan,
-      lastWord: lastPlanner ? `\n\n## Last word of the planning discussion\n${clip(lastPlanner, 1500)}` : "",
+      lastWord: lastPlanner ? `\n\n## 规划讨论的最后一条回复\n${clip(lastPlanner, 1500)}` : "",
     },
   });
 }

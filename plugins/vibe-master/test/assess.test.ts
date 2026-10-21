@@ -143,7 +143,7 @@ describe("draft assessment write-back", () => {
 
     // static rules live in the system prompt, the wake message carries project + card only
     expect(prompts[0]).toContain("[wake:assess_draft]");
-    expect(prompts[0]).toContain("Tag vocabulary:");
+    expect(prompts[0]).toContain("标签词表：");
     expect(prompts[0]).toContain("Add dark mode toggle");
   });
 
@@ -153,7 +153,7 @@ describe("draft assessment write-back", () => {
     const first = assessorFor(board, ["not json at all", assessmentJson()]);
     expect((await first.assessor.assess(ok.key)).status).toBe("assessed");
     expect(first.prompts).toHaveLength(2);
-    expect(first.prompts[1]).toContain("rejected");
+    expect(first.prompts[1]).toContain("被拒绝");
 
     const hopeless = board.draft("Hopeless");
     const second = assessorFor(board, ["nope", "still nope"]);

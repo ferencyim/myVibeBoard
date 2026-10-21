@@ -135,7 +135,7 @@ describe("rules reach running agents", () => {
     board.store.prompts.setOverride("master.rules", "NEW RULES BODY");
     await wake("D");
     const prompts = fake.agents[0]!.prompts;
-    expect(prompts[1]).toContain("[Master rules updated");
+    expect(prompts[1]).toContain("[总 agent 规则已更新");
     expect(prompts[1]).toContain("NEW RULES BODY");
     expect(prompts[2]).not.toContain("NEW RULES BODY");
     expect(prompts[3]).not.toContain("NEW RULES BODY");
@@ -184,12 +184,12 @@ describe("rules reach running agents", () => {
     store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text: "second" });
     await planning.trigger(card.id);
     const turn = fake.agents[0]!.prompts.at(-1)!;
-    expect(turn).toContain("[Master rules updated");
+    expect(turn).toContain("[总 agent 规则已更新");
     expect(turn).toContain("Be terse.");
     expect(turn).toContain("[plan:turn]");
     store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text: "third" });
     await planning.trigger(card.id);
-    expect(fake.agents[0]!.prompts.at(-1)).not.toContain("[Master rules updated");
+    expect(fake.agents[0]!.prompts.at(-1)).not.toContain("[总 agent 规则已更新");
     await planning.stop();
   });
 

@@ -44,7 +44,7 @@ function formatMemory(snapshot: ReturnType<MemoryPort["snapshot"]>): string {
   return Object.entries(snapshot)
     .map(([file, entries]) => {
       const lines = entries.map((e) => `- [${e.id}]${e.tag ? ` (${e.tag})` : ""} ${clip(e.body.replace(/\s+/g, " "), 240)}`);
-      return `### ${file}\n${lines.join("\n") || "(empty)"}`;
+      return `### ${file}\n${lines.join("\n") || "（空）"}`;
     })
     .join("\n");
 }
@@ -64,7 +64,7 @@ function verificationSummary(db: VibeDb, cardId: string): string {
       )
       .all(v.id);
     return [
-      `${v.conclusion ?? "unfinished"} (${v.mode}, commit ${v.commit_hash.slice(0, 8)})`,
+      `${v.conclusion ?? "未完成"} (${v.mode}, commit ${v.commit_hash.slice(0, 8)})`,
       ...items.map((i) => `- ${i.judgement ?? "?"}: ${clip(i.check_text, 120)}${i.note ? ` - ${clip(i.note, 120)}` : ""}`),
     ].join("\n");
   } catch {

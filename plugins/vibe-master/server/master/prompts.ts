@@ -43,10 +43,10 @@ export function requirementsExcerpt(
     const content = doc.content.replace(/\r\n/g, "\n").trim();
     const truncated = content.length > maxChars;
     const body = truncated
-      ? `${content.slice(0, maxChars)}\n[... truncated: ${content.length - maxChars} more characters, complete file is ${doc.path}]`
+      ? `${content.slice(0, maxChars)}\n[…… 已截断：还有 ${content.length - maxChars} 个字符，完整文件见 ${doc.path}]`
       : content;
     return {
-      text: `Requirements document (${doc.path}${truncated ? ", TRUNCATED" : ", complete"}):\n${body}`,
+      text: `需求文档（${doc.path}${truncated ? "，TRUNCATED" : "，完整"}）：\n${body}`,
       truncated,
     };
   } catch {
@@ -60,7 +60,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
       (p) =>
-        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` thinking=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}${p.roleHints.length ? ` role=${p.roleHints.join("+")}` : ""}`,
+        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` 思考档=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}${p.roleHints.length ? ` role=${p.roleHints.join("+")}` : ""}`,
     );
   const cards = [...input.openCards]
     .sort(
@@ -71,20 +71,20 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     .map((c) => `- ${c.key} [${c.column}] ${clip(c.title, 80)} :: ${clip(c.description, 100)}`);
   const excerpt = requirementsExcerpt(project, input.requirementsChars ?? DEFAULT_REQUIREMENTS_CHARS);
   return [
-    `## Project ${project.prefix} (${project.name}, type ${project.projectTypes.join("+")})`,
-    ...(project.description.trim() ? [`Description: ${project.description.trim()}`] : []),
+    `## 项目 ${project.prefix}（${project.name}，类型 ${project.projectTypes.join("+")}）`,
+    ...(project.description.trim() ? [`简介：${project.description.trim()}`] : []),
     ...(excerpt ? [excerpt.text] : []),
-    `Tag vocabulary: ${[...input.tags].map((t) => t.name).sort().join(", ")}`,
-    `Execution presets (use these names in recommendation.preset):\n${presets.join("\n") || "- none configured"}`,
-    `Other open cards:\n${cards.join("\n") || "- none"}`,
+    `标签词表：${[...input.tags].map((t) => t.name).sort().join(", ")}`,
+    `执行预设（recommendation.preset 请使用这些名称）：\n${presets.join("\n") || "- 未配置"}`,
+    `其它未完成卡片：\n${cards.join("\n") || "- 无"}`,
   ].join("\n");
 }
 
 export function quotaLine(quota: QuotaMap): string {
   const parts = Object.entries(quota)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, q]) => `${id} ${q.remainingPct === null ? "?" : `${q.remainingPct}%`} left (${q.level})`);
-  return parts.length ? parts.join("; ") : "unknown";
+    .map(([id, q]) => `${id} ${q.remainingPct === null ? "?" : `${q.remainingPct}%`} 剩余（${q.level}）`);
+  return parts.length ? parts.join("; ") : "未知";
 }
 
 export function buildAssessMessage(input: {
@@ -103,13 +103,13 @@ export function buildAssessMessage(input: {
     "card.key": card.key,
     "card.title": card.title,
     "card.priority": card.priority,
-    "card.tags": input.tagNames.join(", ") || "none",
-    "card.preset": card.presetId ?? "none",
+    "card.tags": input.tagNames.join(", ") || "无",
+    "card.preset": card.presetId ?? "无",
     "card.refImages": String(card.refImages.length),
-    "card.description": card.description || "(empty)",
-    "card.acceptance": card.acceptance || "(empty)",
+    "card.description": card.description || "（空）",
+    "card.acceptance": card.acceptance || "（空）",
     quota: quotaLine(input.quota),
-    hint: input.hint ? `${input.hint.presetName ?? input.hint.provider ?? "none"} (${input.hint.reason})` : "none",
+    hint: input.hint ? `${input.hint.presetName ?? input.hint.provider ?? "无"}（${input.hint.reason}）` : "无",
     },
   });
 }
@@ -145,13 +145,13 @@ export function buildDoneMessage(input: {
     projectId: input.card.projectId,
     vars: {
       project: input.projectBlock,
-      memory: input.memory || "(empty)",
+      memory: input.memory || "（空）",
       "card.key": input.card.key,
       "card.title": input.card.title,
       "card.description": clip(input.card.description, 1500),
       "card.acceptance": clip(input.card.acceptance, 800),
-      notes: notes || "(none)",
-      verification: input.verification || "(none recorded)",
+      notes: notes || "（无）",
+      verification: input.verification || "（无记录）",
     },
   });
 }
@@ -170,7 +170,7 @@ export function buildHelpMessage(input: {
       "card.key": input.card.key,
       "card.title": input.card.title,
       "card.acceptance": clip(input.card.acceptance, 800),
-      plan: input.plan || "(none)",
+      plan: input.plan || "（无）",
       question: JSON.stringify(input.question ?? null, null, 2).slice(0, 2000),
     },
   });

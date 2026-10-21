@@ -40,21 +40,21 @@ export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string
 
 export function parseReply<S extends z.ZodType>(reply: string, schema: S): ParseResult<z.output<S>> {
   const candidates = jsonCandidates(reply);
-  if (candidates.length === 0) return { ok: false, error: "The reply contains no JSON object." };
+  if (candidates.length === 0) return { ok: false, error: "回复中没有 JSON 对象。" };
   let lastError = "";
   for (const candidate of candidates) {
     let json: unknown;
     try {
       json = JSON.parse(candidate);
     } catch (error) {
-      lastError = `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+      lastError = `JSON 无效：${error instanceof Error ? error.message : String(error)}`;
       continue;
     }
     const parsed = schema.safeParse(json);
     if (parsed.success) return { ok: true, value: parsed.data };
     lastError = parsed.error.issues
       .slice(0, 8)
-      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .map((i) => `${i.path.join(".") || "（根）"}: ${i.message}`)
       .join("; ");
   }
   return { ok: false, error: lastError };
