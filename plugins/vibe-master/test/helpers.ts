@@ -133,6 +133,9 @@ export interface FakeAgent {
   /** timeoutMs of every run() call, in order. */
   timeouts: Array<number | undefined>;
   archived: boolean;
+  /** The daemon stopped: the agent must be resumed before it takes a message. */
+  closed?: boolean;
+  resumes?: number;
   title?: string;
 }
 
@@ -145,6 +148,10 @@ export function fakePaseo(
     modes?: Record<string, Array<{ id: string; label: string }>>;
     /** Simulates a host older than v0.12.1: handles have no setTitle. */
     noSetTitle?: boolean;
+    /** Simulates a host without resume(). */
+    noResume?: boolean;
+    /** resume() rejects (the persisted session cannot be restored). */
+    failResume?: boolean;
   } = {},
 ) {
   const agents: FakeAgent[] = [];
@@ -162,11 +169,20 @@ export function fakePaseo(
       });
       return typeof out === "string" ? { status: "idle", lastMessage: out, error: null } : out;
     },
-    refresh: async () => (agent.archived ? null : { agent: agent.id }),
+    refresh: async () => (agent.archived ? null : { agent: { id: agent.id, status: agent.closed ? "closed" : "idle" } }),
     archive: async () => {
       agent.archived = true;
       return { archivedAt: "now" };
     },
+    ...(options.noResume
+      ? {}
+      : {
+          resume: async () => {
+            if (options.failResume) throw new Error("cannot restore");
+            agent.closed = false;
+            agent.resumes = (agent.resumes ?? 0) + 1;
+          },
+        }),
     ...(options.noSetTitle
       ? {}
       : {

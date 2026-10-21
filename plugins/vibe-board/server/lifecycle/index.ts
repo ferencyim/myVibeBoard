@@ -16,7 +16,7 @@
 //                           otherwise session -> waiting (waiting_since + pending_question: the red dot)
 //                           and the question goes to the card's group chat (chat(executor, question))
 //   permission_resolved     last pending request resolved -> session -> working (session.answered)
-//   agent.closed/archived   session -> ended
+//   agent.closed/archived   session -> ended (a closed master/planner stays: it is resumed on next use)
 //   completed compaction    compaction card event
 //   session_open(import)    agent switched inside the card (switch-provider): switch card event
 //
@@ -338,7 +338,14 @@ export function registerLifecycle(
       });
     }),
 
-    server.on("agent.closed", ({ agent }) => end(agent.id, "closed")),
+    // The daemon closes every agent when it stops. The master and the planners are long-lived and
+    // come back through agent.resume() on their next use, so closing is not the end of their session
+    // (vibe-master ends them itself when it replaces them).
+    server.on("agent.closed", ({ agent }) => {
+      const role = store.sessions.getByAgent(agent.id)?.role;
+      if (role === "master" || role === "planner") return;
+      end(agent.id, "closed");
+    }),
     server.on("agent.archived", ({ agent }) => end(agent.id, "archived")),
 
     // switch-provider imports the converted session as a new agent in the same workspace.

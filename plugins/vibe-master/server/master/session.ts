@@ -9,6 +9,7 @@
 import { mkdirSync } from "node:fs";
 import type { MasterSessionRow, MasterSettings, MasterTarget } from "../../shared/rpc";
 import { buildHandoff, type SwitchNote } from "./handoff";
+import { reviveAgent } from "./revive";
 import { hashText, rulesUpdateMessage, type PromptPort } from "../prompts/port";
 import { defaultTuning, type TuningSource } from "../tuning";
 import type { AgentSession } from "../vibe/contract";
@@ -212,11 +213,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     }
     if (!handle && live && record?.agentId === live.agentId && current(record)) {
       const candidate = paseo.agents.ref(record.agentId);
-      const alive = await candidate.refresh().then(
-        (r) => r != null,
-        () => false,
-      );
-      if (alive) {
+      if (await reviveAgent(candidate)) {
         handle = candidate;
         rulesSent = true;
         // Records from before the hash was kept: assume the agent has the current rules.
@@ -224,8 +221,11 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
         return candidate;
       }
     }
-    const fresh = await spawn(paseo, target, "replaced");
-    if (live && live.id !== fresh.id) await retire(live, "replaced");
+    // The recorded agent is still the wanted one but could not be brought back: say so in the hand-off.
+    const unrecoverable = !!live && record?.agentId === live.agentId && current(record);
+    const reason = unrecoverable ? "restart_recovery_failed" : "replaced";
+    const fresh = await spawn(paseo, target, reason);
+    if (live && live.id !== fresh.id) await retire(live, reason);
     return handle!;
   }
 
