@@ -3,10 +3,10 @@ import { useSettings } from "@getpaseo/plugin/client";
 import { SettingsSection } from "@getpaseo/plugin/client/ui";
 import React from "react";
 import { ScrollView, Text, View } from "react-native";
-import { DEFAULT_TTL_SECONDS } from "../server/compaction/policy";
-import { compactionSettings } from "../server/compaction/settings";
-import { complexitySettings } from "../server/complexity/settings";
-import { contextSettings } from "../server/inject/settings";
+import { DEFAULT_TTL_SECONDS } from "../shared/settings/defaults";
+import { compactionSettings } from "../shared/settings/compaction";
+import { complexitySettings } from "../shared/settings/complexity";
+import { contextSettings } from "../shared/settings/context";
 import { BehaviourLink, FieldsCard, Group, Muted, type Field } from "./settings-kit";
 
 export const COMPACTION_FIELDS: readonly Field[] = [

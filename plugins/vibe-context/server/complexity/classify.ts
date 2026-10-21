@@ -3,6 +3,9 @@
 // itself; a turn can contain dozens of model calls (usage_event rows), which count as ONE turn.
 
 import type { SessionComplexity } from "../vibe/contract";
+import { DEFAULT_THRESHOLDS, type ComplexityThresholds } from "../../shared/settings/defaults";
+
+export { DEFAULT_THRESHOLDS, type ComplexityThresholds } from "../../shared/settings/defaults";
 
 export interface TurnStats {
   /** Effective agent turns since the last compaction. */
@@ -13,26 +16,7 @@ export interface TurnStats {
   turnPeaks: readonly number[];
 }
 
-export interface ComplexityThresholds {
-  /** Last turn count still "short" (default 3: 1-3 turns). */
-  shortMaxTurns: number;
-  /** First turn count that is "long" (default 15; 4-14 is "multi"). */
-  longMinTurns: number;
-  /** Accumulated cacheRead at or above this is "long" (default 1,000,000). */
-  longCacheRead: number;
-  /** A turn whose peak context reaches this is "heavy". */
-  heavyTurnContext: number;
-  /** Share of heavy turns at or above this is "long" (default 0.25). */
-  heavyTurnShare: number;
-}
 
-export const DEFAULT_THRESHOLDS: ComplexityThresholds = {
-  shortMaxTurns: 3,
-  longMinTurns: 15,
-  longCacheRead: 1_000_000,
-  heavyTurnContext: 177_047,
-  heavyTurnShare: 0.25,
-};
 
 export function classifyComplexity(
   stats: TurnStats,

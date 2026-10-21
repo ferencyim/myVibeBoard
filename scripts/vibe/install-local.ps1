@@ -47,6 +47,9 @@ New-Item -ItemType Directory -Force -Path $InstallDir, $pluginsDir, $paseoHome, 
 
 if (-not $SkipCopy) {
   if (-not (Test-Path (Join-Path $appSrc "Paseo.exe"))) { throw "Desktop build not found at $appSrc" }
+  # Catches plugin problems the daemon would only report at load time (e.g. a client bundle importing server/).
+  node (Join-Path $repo "scriptsibe\check-plugins.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "check-plugins failed; fix the plugins before installing" }
   if (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($appDir, "OrdinalIgnoreCase") }) {
     throw "myVibeBoard is running from $appDir; stop it first (stop-daemon.ps1 and close the window)."
   }

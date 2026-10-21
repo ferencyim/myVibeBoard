@@ -121,3 +121,28 @@ test("check-plugins flags a stale Paseo range", () => {
   assert.equal(problems.length, 1);
   assert.match(problems[0], /vibe-demo.*>=0\.13\.0 <0\.14\.0/);
 });
+
+test("check-plugins flags a client bundle that reaches server/", () => {
+  const root = fixtureRoot();
+  put(
+    root,
+    "plugins/vibe-demo/index.client.tsx",
+    'import type { T } from "./server/types";\nimport { Screen } from "./client/screen";\n',
+  );
+  put(root, "plugins/vibe-demo/client/screen.tsx", 'import { LIMIT } from "../shared/limits";\n');
+  put(root, "plugins/vibe-demo/shared/limits.ts", "export const LIMIT = 1;\n");
+  put(root, "plugins/vibe-demo/server/types.ts", "export type T = 1;\n");
+  put(root, "plugins/vibe-demo/server/policy.ts", "export const P = 1;\n");
+  assert.deepEqual(checkPlugins(root).problems, []);
+  put(
+    root,
+    "plugins/vibe-demo/shared/limits.ts",
+    'export { P as LIMIT } from "../server/policy";\n',
+  );
+  const { problems } = checkPlugins(root);
+  assert.equal(problems.length, 1);
+  assert.match(
+    problems[0],
+    /vibe-demo: client bundle imports server-only module server.policy\.ts/,
+  );
+});
