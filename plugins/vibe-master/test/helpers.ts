@@ -131,6 +131,7 @@ export interface FakeAgent {
   options: CreateAgentOptions;
   prompts: string[];
   archived: boolean;
+  title?: string;
 }
 
 /** Hand-written PaseoApi stand-in: agents answer through `script`. */
@@ -140,6 +141,8 @@ export function fakePaseo(
     usage?: UsageProviderLike[];
     failCreate?: (provider: string) => string | null;
     modes?: Record<string, Array<{ id: string; label: string }>>;
+    /** Simulates a host older than v0.12.1: handles have no setTitle. */
+    noSetTitle?: boolean;
   } = {},
 ) {
   const agents: FakeAgent[] = [];
@@ -161,6 +164,13 @@ export function fakePaseo(
       agent.archived = true;
       return { archivedAt: "now" };
     },
+    ...(options.noSetTitle
+      ? {}
+      : {
+          setTitle: async (title: string) => {
+            agent.title = title;
+          },
+        }),
   });
   const paseo: MasterPaseo = {
     agents: {
