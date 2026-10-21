@@ -12,6 +12,7 @@ import { buildContextBlock, CONTEXT_START, type ContextOptions } from "./content
 
 export * from "./agents-file";
 export * from "./content";
+export * from "./settings";
 
 export type InjectionStrategy = "system-prompt" | AgentsTarget;
 
@@ -29,6 +30,8 @@ export function strategyFor(provider: string): InjectionStrategy | null {
 }
 
 export interface InjectionOptions extends ContextOptions {
+  /** Default memory budget (setting); a per-directory budget or `maxMemoryTokens` wins. */
+  defaultMemoryTokens?: () => number;
   git?: GitRunner;
   userHome?: string;
   /** Per-directory memory budget (complexity policy): tight for multi-turn / long cards. */
@@ -55,7 +58,7 @@ export async function injectContext(
   });
   const block = buildContextBlock(store, {
     ...options,
-    maxMemoryTokens: options.budgetFor?.(cwd) ?? options.maxMemoryTokens,
+    maxMemoryTokens: options.budgetFor?.(cwd) ?? options.maxMemoryTokens ?? options.defaultMemoryTokens?.(),
   });
   if (!block) return null;
   if (strategy === "system-prompt") {

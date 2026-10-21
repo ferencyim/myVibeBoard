@@ -9,6 +9,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { createRequire } from "node:module";
 import type { switchSession } from "../shared/convert";
 import { compact } from "./compact";
+import { DEFAULT_TRANSCRIPT_PROMPT, renderTemplate, switchSettings, textOrDefault, type SwitchSettings } from "../shared/settings";
 import { importAgent } from "./daemon";
 import { importIntoOpenCode, readOpenCodeSession } from "./opencode";
 import { exportAgentTranscript } from "./transcript";
@@ -81,13 +82,11 @@ function targetPath(provider: string, cwd: string, id: string, iso: string) {
 // OpenCode keeps sessions in a database, so it is read with `opencode session export` and written with `opencode session import`.
 const convertible = (from: string, to: string) => (from in HARNESS || from === "opencode") && (to in HARNESS || to === "opencode");
 
-// ponytail: Codex and Copilot report no context size, so assume 200K for them. A table of known sizes would be tighter.
-const DEFAULT_WINDOW = 200_000;
-
-async function targetWindow(paseo: PluginHandlerContext["paseo"], provider: string, modelId: string) {
+// ponytail: Codex and Copilot report no context size, so assume defaultWindowTokens (200K) for them. A table of known sizes would be tighter.
+async function targetWindow(paseo: PluginHandlerContext["paseo"], provider: string, modelId: string, defaultWindow: number) {
   const { entries } = await paseo.providers.snapshot();
   const model = entries.find((entry) => entry.provider === provider)?.models?.find((m) => m.id === modelId || m.aliases?.includes(modelId));
-  return model?.contextWindowMaxTokens ?? DEFAULT_WINDOW;
+  return model?.contextWindowMaxTokens ?? defaultWindow;
 }
 
 async function convertAndImport(
@@ -95,6 +94,7 @@ async function convertAndImport(
   provider: string,
   modelId: string,
   window: number,
+  settings: SwitchSettings,
 ) {
   const { cwd } = snapshot;
   log(`reading ${snapshot.provider} session`);
@@ -107,7 +107,7 @@ async function convertAndImport(
     common = JSON.parse((await txcript()).toCommon(await readFile(source, "utf8"), HARNESS[snapshot.provider]));
   }
   // Leave room for the new provider's own instructions and tools, and for the work still to come.
-  const compacted = await compact(common, Math.floor(window * 0.6));
+  const compacted = await compact(common, Math.floor((window * settings.targetPercent) / 100), settings);
   if (compacted) {
     common = compacted.common;
     log(`compacted about ${compacted.beforeTokens} to ${compacted.afterTokens} tokens for a ${window} token window`);
@@ -138,6 +138,7 @@ async function convertAndImport(
 export async function switchAgentSession(
   { agentId, provider, modelId }: RpcInput<typeof switchSession>,
   context: PluginHandlerContext,
+  settings: SwitchSettings = switchSettings.schema.parse({}),
 ) {
   const { paseo } = context;
   const snapshot = (await paseo.agents.ref(agentId).refresh())?.agent;
@@ -145,15 +146,17 @@ export async function switchAgentSession(
   const { persistence, cwd } = snapshot;
   if (convertible(snapshot.provider, provider)) {
     if (!persistence) throw new Error("The source agent has no saved session yet; send it a message first");
-    const window = await targetWindow(paseo, provider, modelId);
-    const id = await convertAndImport({ provider: snapshot.provider, cwd, workspaceId: snapshot.workspaceId, persistence }, provider, modelId, window);
+    const window = await targetWindow(paseo, provider, modelId, settings.defaultWindowTokens);
+    const id = await convertAndImport({ provider: snapshot.provider, cwd, workspaceId: snapshot.workspaceId, persistence }, provider, modelId, window, settings);
     return { agentId: id, method: "converted" as const };
   }
-  const { path } = await exportAgentTranscript({ agentId }, context);
-  const prompt = [
-    `You are continuing the session of agent ${agentId} ("${snapshot.title ?? "untitled"}"), which ran on ${snapshot.provider}.`,
-    `Its full transcript, including tool calls and results, is in ${path}. Read the whole file before you act, then continue where that agent stopped.`,
-  ].join("\n");
+  const { path } = await exportAgentTranscript({ agentId }, context, { page: settings.transcriptPage, maxBlock: settings.transcriptMaxBlock });
+  const prompt = renderTemplate(textOrDefault(settings.transcriptPrompt, DEFAULT_TRANSCRIPT_PROMPT), {
+    agentId,
+    title: snapshot.title ?? "untitled",
+    provider: snapshot.provider,
+    path,
+  });
   const created = await paseo.agents.create({ cwd, config: { provider: `${provider}/${modelId}` }, prompt });
   return { agentId: created.id, method: "transcript" as const };
 }

@@ -22,6 +22,8 @@ import {
 import type { VibeDb, VibeStore } from "../vibe/db";
 import {
   baseProvider,
+  COMPACT_PROVIDERS,
+  DEFAULT_MARGIN_RULE,
   DEFAULT_TTL_SECONDS,
   FALLBACK_TTL_SECONDS,
   marginSeconds,
@@ -29,6 +31,7 @@ import {
   supportsCompact,
   type SkipReason,
 } from "./policy";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 
 export interface AgentInfo {
   id: string;
@@ -54,6 +57,14 @@ export interface CompactionConfig {
   enabled: boolean;
   ttlSeconds: Record<string, number>;
   marginSeconds?: number;
+  /** Advanced settings (WP-99); absent = the built-in values. */
+  fallbackTtlSeconds?: number;
+  marginLongFromSeconds?: number;
+  marginLongSeconds?: number;
+  marginShortSeconds?: number;
+  compactProviders?: readonly string[];
+  compactCommands?: Record<string, string>;
+  approvalWaitMinutes?: number;
   /** Complexity policy (WP-83); absent = off. */
   complexity?: ComplexitySettingsValues;
 }
@@ -73,6 +84,8 @@ export interface SchedulerOptions {
   settleMs?: number;
   /** Poll interval while waiting for the session to be marked idle again. */
   pollMs?: number;
+  /** Prompt texts (registry); defaults to the registered defaults. */
+  prompts?: PromptResolver;
   /** Claude Code compacts idle sessions itself: leave claude alone. */
   nativeClaude?: boolean;
   log?: (message: string) => void;
@@ -85,42 +98,51 @@ export type TickOutcome =
 
 export const ttlFor = (config: CompactionConfig, provider: string): number => {
   const id = baseProvider(provider);
-  return config.ttlSeconds[id] ?? DEFAULT_TTL_SECONDS[id] ?? FALLBACK_TTL_SECONDS;
+  return config.ttlSeconds[id] ?? DEFAULT_TTL_SECONDS[id] ?? config.fallbackTtlSeconds ?? FALLBACK_TTL_SECONDS;
 };
 
-export function notesPrompt(mdPath: string, cardRef?: string | null): string {
-  return (
-    "Your context is about to be compacted. Before that, save your progress notes: the goal, " +
-    "what is done, what is in progress, next steps, key files and decisions, open questions. " +
-    "Use the `vibe_session_note` tool of the `vibe-board` MCP server" +
-    (cardRef ? ` with key "${cardRef}"` : "") +
-    " (it overwrites " +
-    `\`${mdPath}\` and needs no approval); only if that tool does not exist, write that file ` +
-    'yourself (create or overwrite it). Do nothing else. Reply "saved" when done.'
-  );
+/** Seconds before expiry at which the compaction window opens. */
+export const marginFor = (config: CompactionConfig, ttlSeconds: number): number =>
+  config.marginSeconds ??
+  marginSeconds(ttlSeconds, {
+    longFrom: config.marginLongFromSeconds ?? DEFAULT_MARGIN_RULE.longFrom,
+    long: config.marginLongSeconds ?? DEFAULT_MARGIN_RULE.long,
+    short: config.marginShortSeconds ?? DEFAULT_MARGIN_RULE.short,
+  });
+
+/** The compact command of a provider ("/compact" unless the owner set another). */
+export const compactCommandFor = (config: CompactionConfig, provider: string): string =>
+  config.compactCommands?.[baseProvider(provider)] ?? "/compact";
+
+export const canCompact = (config: CompactionConfig, provider: string): boolean =>
+  supportsCompact(provider, config.compactProviders ?? COMPACT_PROVIDERS);
+
+export function notesPrompt(mdPath: string, cardRef?: string | null, prompts: PromptResolver = defaultPrompts): string {
+  return prompts.resolve("context.compact_notes", {
+    vars: { mdPath, keyClause: cardRef ? ` with key "${cardRef}"` : "" },
+  });
 }
 
-export function restorePrompt(block: string | null): string {
-  return (
-    "Context was compacted. The project context below is authoritative; continue from your " +
-    `session notes. Reply "ok" only.\n\n${block ?? "(no project context)"}`
-  );
+export function restorePrompt(block: string | null, prompts: PromptResolver = defaultPrompts): string {
+  return prompts.resolve("context.compact_restore", { vars: { block: block ?? "(no project context)" } });
 }
 
 export function coldStartPrompt(
   oldSessionId: string,
   mdPath: string,
   block: string | null,
+  prompts: PromptResolver = defaultPrompts,
 ): string {
-  return (
-    `You continue session ${oldSessionId}, handed over because its context grew long or its cache expires. ` +
-    `Read \`${mdPath}\` for its progress and the files under \`.vibe/\` for project memory, ` +
-    `then carry on with the task.${block ? `\n\n${block}` : ""}`
-  );
+  return prompts.resolve("context.cold_start", {
+    vars: { oldSessionId, mdPath, block: block ? `
+
+${block}` : "" },
+  });
 }
 
 export function createCompactionScheduler(options: SchedulerOptions) {
   const { store, host } = options;
+  const prompts = () => options.prompts ?? defaultPrompts;
   const now = options.now ?? Date.now;
   const log = options.log ?? (() => {});
   let nativeClaude = options.nativeClaude ?? false;
@@ -181,15 +203,16 @@ export function createCompactionScheduler(options: SchedulerOptions) {
       return false;
     };
 
-    const notes = await host.run(agent.id, notesPrompt(mdPath, s.cardId));
+    const notes = await host.run(agent.id, notesPrompt(mdPath, s.cardId, prompts()));
     // Waiting for an approval is not a failure: try again once the user has answered.
     if (notes.status === "permission") return "deferred";
     if (notes.status !== "idle" || !(await stillIdle())) return "failed";
     const tightTokens = opts.tight ? options.config().complexity?.tightMemoryTokens : undefined;
     const block = options.buildContext(agent.cwd, tightTokens);
 
-    if (opts.forceHandoff || !supportsCompact(agent.provider)) {
-      const newAgentId = await host.handoff(agent, coldStartPrompt(s.id, mdPath, block));
+    const config = options.config();
+    if (opts.forceHandoff || !canCompact(config, agent.provider)) {
+      const newAgentId = await host.handoff(agent, coldStartPrompt(s.id, mdPath, block, prompts()));
       const next = store.sessions.start({
         cardId: s.cardId,
         agentId: newAgentId,
@@ -217,7 +240,7 @@ export function createCompactionScheduler(options: SchedulerOptions) {
     }
 
     const before = compactionEvents(s);
-    if ((await host.run(agent.id, "/compact")).status === "error") return "failed";
+    if ((await host.run(agent.id, compactCommandFor(config, agent.provider))).status === "error") return "failed";
     await sleep(options.settleMs ?? 1500);
     if (compactionEvents(s) === before) store.sessions.recordCompaction(s.id, "compact");
     if (options.usageDb) {
@@ -228,7 +251,7 @@ export function createCompactionScheduler(options: SchedulerOptions) {
         if (opts.wasLong) st.longCompactions += 1;
       });
     }
-    if (await stillIdle()) await host.run(agent.id, restorePrompt(block));
+    if (await stillIdle()) await host.run(agent.id, restorePrompt(block, prompts()));
     return "compact";
   }
 
@@ -300,7 +323,7 @@ export function createCompactionScheduler(options: SchedulerOptions) {
           cacheExpiresAtMs: s.cacheExpiresAt ? Date.parse(s.cacheExpiresAt) : null,
           nowMs: now(),
           marginMs:
-            (config.marginSeconds ?? marginSeconds(ttlFor(config, agent.provider))) * 1000,
+            marginFor(config, ttlFor(config, agent.provider)) * 1000,
           alreadyCompacted: compacted.has(s.id),
           force,
         });

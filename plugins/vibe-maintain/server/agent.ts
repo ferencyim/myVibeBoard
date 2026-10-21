@@ -25,16 +25,22 @@ export interface ResolvedAgent {
 export interface AgentResolveDeps {
   presets: () => Preset[];
   defaultAgent: () => string;
+  /** Unattended mode id per provider (setting); defaults to UNATTENDED_MODE. */
+  unattendedModes?: () => Record<string, string>;
 }
 
 /** Unattended "accept edits" style mode per provider (codex routes approvals to the auto reviewer). */
-const UNATTENDED_MODE: Record<string, string> = { claude: "acceptEdits", codex: "auto-review" };
+export const UNATTENDED_MODE: Record<string, string> = { claude: "acceptEdits", codex: "auto-review" };
 
-export function modeFor(provider: string, mode: Preset["permissionMode"] | null): string | undefined {
+export function modeFor(
+  provider: string,
+  mode: Preset["permissionMode"] | null,
+  unattended: Record<string, string> = UNATTENDED_MODE,
+): string | undefined {
   const p = provider.toLowerCase();
   if (mode === "full") return p === "claude" ? "bypassPermissions" : p === "codex" ? "full-access" : "auto";
   if (mode === "auto") return "auto";
-  return UNATTENDED_MODE[p];
+  return unattended[p];
 }
 
 const providerOf = (spec: string) => (spec.split("/")[0] ?? spec).toLowerCase();
@@ -43,11 +49,11 @@ function presetSpec(preset: Pick<Preset, "provider" | "model">): string {
   return preset.model.startsWith(`${preset.provider}/`) ? preset.model : `${preset.provider}/${preset.model}`;
 }
 
-function fromPreset(preset: Preset, source: string): ResolvedAgent {
+function fromPreset(preset: Preset, source: string, unattended?: Record<string, string>): ResolvedAgent {
   return {
     provider: preset.provider.toLowerCase(),
     spec: presetSpec(preset),
-    modeId: modeFor(preset.provider, preset.permissionMode),
+    modeId: modeFor(preset.provider, preset.permissionMode, unattended),
     source,
   };
 }
@@ -70,19 +76,19 @@ function profileOf(preset: Preset): AgentProfile {
 }
 
 /** Resolves an explicit `agent` value: preset name/id, `provider/model`, or a bare provider. */
-function fromText(text: string, presets: Preset[], project: Project): ResolvedAgent {
+function fromText(text: string, presets: Preset[], project: Project, unattended?: Record<string, string>): ResolvedAgent {
   const wanted = text.trim().toLowerCase();
   const named = presets.find((p) => p.id === text.trim() || p.name.toLowerCase() === wanted);
-  if (named) return fromPreset(named, `preset ${named.name}`);
+  if (named) return fromPreset(named, `preset ${named.name}`, unattended);
   if (wanted.includes("/")) {
     const same = presets.find((p) => presetSpec(p).toLowerCase() === wanted);
-    if (same) return fromPreset(same, `preset ${same.name}`);
-    return { provider: providerOf(wanted), spec: text.trim(), modeId: modeFor(providerOf(wanted), null), source: "rule" };
+    if (same) return fromPreset(same, `preset ${same.name}`, unattended);
+    return { provider: providerOf(wanted), spec: text.trim(), modeId: modeFor(providerOf(wanted), null, unattended), source: "rule" };
   }
   // Bare provider ("codex"): borrow the model of a preset for that provider.
   const ofProvider = presets.filter((p) => p.provider.toLowerCase() === wanted);
   const chosen = ofProvider.find((p) => p.id === project.defaultPresetId) ?? ofProvider[0];
-  if (chosen) return fromPreset(chosen, `preset ${chosen.name}`);
+  if (chosen) return fromPreset(chosen, `preset ${chosen.name}`, unattended);
   throw new Error(
     `Maintenance rule agent "${text}" is neither a preset nor provider/model; write a preset name or "${text}/<model>"`,
   );
@@ -94,7 +100,8 @@ export function resolveAgent(
   deps: AgentResolveDeps,
 ): ResolvedAgent {
   const presets = deps.presets();
-  if (rule.agent?.trim()) return fromText(rule.agent, presets, project);
+  const unattended = deps.unattendedModes?.();
+  if (rule.agent?.trim()) return fromText(rule.agent, presets, project, unattended);
 
   if (presets.length > 0) {
     const selection = selectAgent(
@@ -103,9 +110,9 @@ export function resolveAgent(
       { quota: {} },
     );
     const picked = presets.find((p) => p.id === selection.agentId);
-    if (picked) return fromPreset(picked, `selected: ${selection.reason}`);
+    if (picked) return fromPreset(picked, `selected: ${selection.reason}`, unattended);
     const fallback = presets.find((p) => p.id === project.defaultPresetId);
-    if (fallback) return fromPreset(fallback, "project default preset");
+    if (fallback) return fromPreset(fallback, "project default preset", unattended);
   }
-  return fromText(deps.defaultAgent(), presets, project);
+  return fromText(deps.defaultAgent(), presets, project, unattended);
 }

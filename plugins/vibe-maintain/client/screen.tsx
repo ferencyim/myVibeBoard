@@ -21,6 +21,7 @@ import { FIELD_KEYS, type FieldKey, type FieldSource, type RulesConfig } from ".
 import { addCustomRule, applyRuleEdit, draftFromDef, emptyDef, removeCustomRule } from "./edit";
 import { BLOCKED_TEXT, ORIGIN_TEXT, lastRunText, parseStatus, type RuleRow } from "./format";
 import { RuleEditor } from "./rule-editor";
+import { FieldsCard, Group, type Field as SettingField } from "./settings-kit";
 
 const ALL_BUILTIN = Object.fromEntries(FIELD_KEYS.map((k) => [k, "builtin"])) as Record<FieldKey, FieldSource>;
 
@@ -324,6 +325,14 @@ export function MaintainSidebarItem({ currentScreen, openScreen }: PluginSidebar
   );
 }
 
+/** Defaults equal the values that used to be hard-coded (WP-99). */
+export const ADVANCED_FIELDS: readonly SettingField[] = [
+  { kind: "number", key: "subAgentTimeoutMinutes", label: "规则的只读分析 agent 单次运行超时（分钟，1-240）", min: 1, max: 240 },
+  { kind: "int", key: "commitPollSeconds", label: "检查“合入提交数”触发条件的最小间隔（秒，5-3600）", min: 5, max: 3600 },
+  { kind: "map", key: "unattendedModes", valueType: "string", label: "无人值守修复 agent 的权限模式，按 provider，如 claude=acceptEdits, codex=auto-review（未列出的用 provider 默认）" },
+  { kind: "map", key: "readOnlyModes", valueType: "string", label: "只读分析 agent 的权限模式，按 provider，如 claude=plan, codex=read-only" },
+];
+
 export function MaintainSettingsScreen({ theme }: PluginSurfaceProps) {
   const settings = useSettings(maintainSettings);
   if (settings.status !== "ready") {
@@ -373,6 +382,9 @@ export function MaintainSettingsScreen({ theme }: PluginSurfaceProps) {
           onChangeText={(text) => save({ ...values, defaultAgent: text.trim() || "claude/sonnet" })}
         />
       </SettingsCard>
+      <Group theme={theme} title="高级">
+        <FieldsCard fields={ADVANCED_FIELDS} values={values} save={save} />
+      </Group>
     </SettingsSection>
   );
 }

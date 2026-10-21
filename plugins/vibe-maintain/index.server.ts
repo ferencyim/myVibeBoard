@@ -44,6 +44,9 @@ export default function contribute(server: PluginServerContext) {
     getPaseo: () => paseo,
     defaultAgent: () => current.defaultAgent,
     presets: () => store.presets.list(),
+    unattendedModes: () => current.unattendedModes,
+    readOnlyModes: () => current.readOnlyModes,
+    timeoutMs: () => current.subAgentTimeoutMinutes * 60_000,
   };
 
   const engine = createMaintenanceEngine({
@@ -52,6 +55,7 @@ export default function contribute(server: PluginServerContext) {
     git: execGit,
     checks: { git: gitCheck, "perf-slow": perfSlowCheck },
     settings: () => current,
+    commitPollSeconds: () => current.commitPollSeconds,
     uiRules: () => rulesConfig,
     subAgent: createSubAgentRunner(agentPorts),
     fixLauncher: createFixLauncher(agentPorts),

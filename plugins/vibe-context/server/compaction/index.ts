@@ -5,6 +5,7 @@ import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { complexitySettings, type ComplexitySettingsValues } from "../complexity";
 import { buildContextBlock } from "../inject";
+import type { PromptResolver } from "../prompts";
 import { createMemoryStore } from "../memory/store";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "../vibe/db";
 import { detectNativeIdleCompaction } from "./native";
@@ -18,15 +19,16 @@ export * from "./policy";
 export * from "./scheduler";
 export * from "./settings";
 
-/** How long a compaction turn may wait for the user to answer an approval. */
-const APPROVAL_WAIT_MS = 10 * 60_000;
-
 export interface CompactionOptions {
   /** Replaceable probe for native idle compaction in the installed Claude Code. */
   detectNative?: () => Promise<boolean>;
   log?: (message: string) => void;
   dbPath?: string;
   settleMs?: number;
+  /** Prompt texts (registry); defaults to the registered defaults. */
+  prompts?: PromptResolver;
+  /** Memory tokens inlined when no tight budget applies (setting); default 6000. */
+  defaultMemoryTokens?: () => number;
 }
 
 export function registerCompaction(server: PluginServerContext, options: CompactionOptions = {}) {
@@ -75,7 +77,7 @@ export function registerCompaction(server: PluginServerContext, options: Compact
       const agent = handle().agents.ref(agentId);
       // Our own turn: tell vibe-board it is not the user continuing the chat.
       expectSystemTurn(agentId, markerHome);
-      const deadline = Date.now() + APPROVAL_WAIT_MS;
+      const deadline = Date.now() + (config.approvalWaitMinutes ?? 10) * 60_000;
       let result = await agent.run(text);
       while ((result.status === "permission" || result.status === "timeout") && Date.now() < deadline) {
         result = await agent.waitForFinish(30_000);
@@ -116,8 +118,9 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     buildContext: (cwd, maxMemoryTokens) =>
       buildContextBlock(
         createMemoryStore({ projectRoot: cwd, userHome, contextWindowTokens: 200_000 }),
-        { maxMemoryTokens },
+        { maxMemoryTokens: maxMemoryTokens ?? options.defaultMemoryTokens?.(), prompts: options.prompts },
       ),
+    prompts: options.prompts,
     settleMs: options.settleMs,
     log,
   });
@@ -152,9 +155,15 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     } catch (error) {
       log(`vibe-context: compaction tick failed: ${String(error)}`);
     }
-    if (!stopped) timer = setTimeout(loop, intervalMs).unref();
+    if (!stopped) timer = schedule();
   };
-  timer = setTimeout(loop, intervalMs).unref();
+  // The timer must not keep the daemon alive.
+  const schedule = () => {
+    const handle = setTimeout(loop, intervalMs);
+    (handle as unknown as { unref?: () => void }).unref?.();
+    return handle;
+  };
+  timer = schedule();
 
   return () => {
     stopped = true;

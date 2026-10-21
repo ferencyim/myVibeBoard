@@ -23,7 +23,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "check": "esbuild test/compact.check.ts --bundle --platform=node --format=esm --outfile=/tmp/switch-provider-check.mjs --log-level=error && node /tmp/switch-provider-check.mjs"
+    "check": "esbuild test/compact.check.ts test/settings.check.ts --bundle --platform=node --format=esm --out-extension:.js=.mjs --outdir=node_modules/.cache/switch-provider-check --log-level=error && node node_modules/.cache/switch-provider-check/compact.check.mjs && node node_modules/.cache/switch-provider-check/settings.check.mjs",
+    "test": "npm run check"
   },
   "devDependencies": {
     "@getpaseo/plugin": "0.11.2",

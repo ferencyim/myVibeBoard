@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { editorText, groupByRole, sourceIn, textToSave, unknownIn, type BehaviourPrompt } from "../client/behaviour/logic";
+import { AUTOMATION_LINKS, editorText, groupByRole, sourceIn, textToSave, unknownIn, type BehaviourPrompt } from "../client/behaviour/logic";
 
 const p = (over: Partial<BehaviourPrompt> = {}): BehaviourPrompt => ({
   key: "x.a",
@@ -48,5 +48,14 @@ describe("agent behaviour page logic", () => {
   it("flags unknown placeholders only for prompts that declare some", () => {
     expect(unknownIn(p(), "{{n}} {{typo}}")).toEqual(["typo"]);
     expect(unknownIn(p({ placeholders: [] }), "{{typo}}")).toEqual([]);
+  });
+
+  it("links every plugin settings page that holds automation parameters, once each", () => {
+    const ids = AUTOMATION_LINKS.map((l) => l.pluginId);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ["vibe-master", "vibe-board", "vibe-verify", "vibe-context", "switch-provider", "vibe-maintain", "vibe-scheduler"]) {
+      expect(ids).toContain(id);
+    }
+    expect(AUTOMATION_LINKS.every((l) => l.label.length > 0 && l.screenId === "preferences")).toBe(true);
   });
 });

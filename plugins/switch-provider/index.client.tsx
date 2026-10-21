@@ -1,5 +1,6 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { SwitchPanel } from "./client/picker";
+import { SwitchSettingsScreen } from "./client/settings";
 
 export default function contribute(client: PluginClientContext) {
   const removePanel = client.addWorkspacePanel({
@@ -19,7 +20,14 @@ export default function contribute(client: PluginClientContext) {
       openPanel("switch-provider");
     },
   });
+  const removeSettings = client.addSettingsScreen({
+    id: "preferences",
+    title: "Switch provider",
+    icon: "MessagesSquare",
+    Component: SwitchSettingsScreen,
+  });
   return () => {
+    removeSettings();
     removeItem();
     removePanel();
   };

@@ -2,6 +2,9 @@ import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { createNodeRunner } from "./server/collectors/common";
+import { verifySettings } from "./shared/settings";
+import { createVerifyPrompts } from "./server/prompts";
+import { tuningOf, type VerifyTuning } from "./server/tuning";
 import { isEvent } from "./server/vibe/contract";
 import { createPipeline } from "./server/pipeline";
 import { createVerifyRegistry, type RunConfigs } from "./server/registry";
@@ -24,10 +27,22 @@ export default function contribute(server: PluginServerContext) {
   migrateOwner(db, "verify");
   const board = createVibeStore(db);
   const home = resolveVibeHome();
+  const prompts = createVerifyPrompts(board);
+  prompts.register();
   const verify = createVerifyStore(db, { root: join(home, "verify") });
   const configs: RunConfigs = new Map();
   const log = (message: string, error?: unknown) =>
     console.error(`[vibe-verify] ${message}`, error ?? "");
+
+  // Owner settings, read on every use; the env vars are the initial values while a setting is unset.
+  const settings = server.registerSettings(verifySettings);
+  let tuning: VerifyTuning = tuningOf(verifySettings.schema.parse({}));
+  const applySettings = (state: Awaited<ReturnType<typeof settings.read>>) => {
+    if (state.status === "ready") tuning = tuningOf(state.values);
+  };
+  void settings.read().then(applySettings);
+  const stopSettings = settings.subscribe(applySettings);
+  const getTuning = () => tuning;
 
   let paseo: PaseoApi | null = null;
   const remember = (api: PaseoApi) => void (paseo = api);
@@ -37,7 +52,11 @@ export default function contribute(server: PluginServerContext) {
 
   // Verifier agents -> where they may write (their output directory); read-only otherwise.
   const verifierDirs = new Map<string, string>();
-  const inner = createPaseoVerifierLauncher({ getPaseo: () => paseo });
+  const inner = createPaseoVerifierLauncher({
+    getPaseo: () => paseo,
+    prompts,
+    roundTimeoutMs: () => tuning.roundTimeoutMs,
+  });
   const launcher: VerifierLauncher = {
     async launch(input) {
       const agent = await inner.launch(input);
@@ -66,7 +85,11 @@ export default function contribute(server: PluginServerContext) {
   const pipeline = createPipeline({
     board,
     verify,
-    registry: createVerifyRegistry({ configs, leases: createDeviceLeases(db).provider }),
+    registry: createVerifyRegistry({
+      configs,
+      leases: createDeviceLeases(db).provider,
+      readyTimeoutMs: () => tuning.readyTimeoutMs,
+    }),
     runner: createNodeRunner(),
     launcher,
     configs,
@@ -75,7 +98,8 @@ export default function contribute(server: PluginServerContext) {
       await paseo.agents.ref(agentId).send(prompt);
       return true;
     },
-    maxReviewReturns: Number(process.env.VIBE_REVIEW_MAX_RETURNS) || 3,
+    tuning: getTuning,
+    prompts,
     worktreeRoot: process.env.VIBE_WORKTREE_ROOT?.trim() || join(home, "worktrees"),
     log,
   });
@@ -115,6 +139,7 @@ export default function contribute(server: PluginServerContext) {
   registerVerifyRpcs(server, { board, verify, pipeline, rerun: start });
 
   return async () => {
+    stopSettings();
     await consumer.stop();
     db.close();
   };

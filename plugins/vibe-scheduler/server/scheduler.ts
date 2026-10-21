@@ -25,6 +25,8 @@ export interface SchedulerConfig {
   leaseTtlMinutes: number;
   retryCooldownSeconds: number;
   maxAdmitAttempts: number;
+  /** An admitted card nobody dispatched within this many minutes is released and backed off. */
+  pendingTimeoutMinutes: number;
   /** Hold back a card whose planned files overlap a running card of the same project. */
   conflictAvoidance: boolean;
 }
@@ -37,6 +39,7 @@ export const DEFAULT_CONFIG: SchedulerConfig = {
   leaseTtlMinutes: 240,
   retryCooldownSeconds: 120,
   maxAdmitAttempts: 3,
+  pendingTimeoutMinutes: 5,
   conflictAvoidance: true,
 };
 
@@ -68,7 +71,6 @@ export interface TickResult {
   paused: boolean;
 }
 
-const PENDING_TIMEOUT_MS = 5 * 60_000;
 const ACTIVE_STATES = ["starting", "working", "waiting", "idle"] as const;
 
 /** Device kind a runtime environment needs, or null when it needs no exclusive device. */
@@ -131,7 +133,7 @@ export function createScheduler(deps: SchedulerDeps) {
     for (const id of [...pending.keys()]) {
       const c = store.cards.get(id);
       if (!c || c.column !== "todo") pending.delete(id); // dispatched (now counted as a session) or gone
-      else if (now().getTime() - Date.parse(pending.get(id)!.at) > PENDING_TIMEOUT_MS) {
+      else if (now().getTime() - Date.parse(pending.get(id)!.at) > deps.config().pendingTimeoutMinutes * 60_000) {
         handleDispatchFailed(id); // nobody dispatched it: free the slot and back off
       }
     }

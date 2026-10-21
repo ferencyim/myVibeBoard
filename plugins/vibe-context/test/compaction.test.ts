@@ -237,3 +237,33 @@ describe("native idle compaction probe", () => {
     expect(compareVersions("0.16.0", "0.9.5")).toBeGreaterThan(0);
   });
 });
+
+describe("scheduler settings (WP-99)", () => {
+  it("sends the provider's configured compact command", async () => {
+    const s = setup("codex");
+    s.config.compactCommands = { codex: "/summarize" };
+    s.clock.advance(250);
+    await s.scheduler.tick();
+    expect(s.prompts[1]).toBe("/summarize");
+  });
+
+  it("a provider left out of compactProviders is handed over instead", async () => {
+    const s = setup("codex");
+    s.config.compactProviders = ["claude"];
+    s.clock.advance(250);
+    expect(await s.scheduler.tick()).toEqual([{ sessionId: s.session.id, action: "handoff" }]);
+    expect(s.handoffs).toHaveLength(1);
+    expect(s.prompts).toHaveLength(1); // only the notes prompt, no compact command
+  });
+
+  it("the fallback TTL and the margin rule move the window", async () => {
+    const s = setup("kimi"); // no built-in TTL: the fallback decides
+    s.config.fallbackTtlSeconds = 1000;
+    s.config.marginShortSeconds = 200;
+    s.scheduler.onTurnEnded(s.agent); // cache now expires T0 + 1000
+    s.clock.advance(700); // 300 s left > 200 s margin
+    expect((await s.scheduler.tick())[0]).toMatchObject({ action: "skipped", reason: "cache-hot" });
+    s.clock.advance(150); // 150 s left
+    expect((await s.scheduler.tick())[0]).toMatchObject({ action: "handoff" });
+  });
+});

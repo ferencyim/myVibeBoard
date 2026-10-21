@@ -63,7 +63,8 @@ const CommandSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   /** URL polled until it answers (any HTTP status) before the server counts as started. */
   readyUrl: z.string().optional(),
-  readyTimeoutMs: z.number().default(60_000),
+  /** Unset = the plugin setting (default 60 seconds). */
+  readyTimeoutMs: z.number().optional(),
 });
 export type ServerCommand = z.infer<typeof CommandSchema>;
 
@@ -243,7 +244,7 @@ export async function waitForUrl(url: string, timeoutMs: number): Promise<void> 
   throw new Error(`Server not ready at ${url} within ${timeoutMs}ms (${last})`);
 }
 
-export function createNodeServerLauncher(): ServerLauncher {
+export function createNodeServerLauncher(options: { readyTimeoutMs?: () => number } = {}): ServerLauncher {
   return {
     async start(spec, worktreePath) {
       const child = spawn(spec.command, spec.args, {
@@ -262,7 +263,7 @@ export function createNodeServerLauncher(): ServerLauncher {
       child.on("exit", (code) => (exited = code));
       try {
         if (spec.readyUrl) {
-          await waitForUrl(spec.readyUrl, spec.readyTimeoutMs);
+          await waitForUrl(spec.readyUrl, spec.readyTimeoutMs ?? options.readyTimeoutMs?.() ?? 60_000);
           if (exited !== undefined) throw new Error(`Server exited early (code ${exited})`);
         }
       } catch (e) {

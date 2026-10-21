@@ -16,6 +16,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { FieldsCard, Group, type Field as SettingField } from "./settings-kit";
 import {
   devicesRpc,
   registerDeviceRpc,
@@ -310,6 +311,13 @@ export function SchedulerSidebarItem({ currentScreen, openScreen }: PluginSideba
 
 const PRIORITIES = ["urgent", "high", "medium", "low", "none"] as const;
 
+/** Defaults equal the values that used to be hard-coded (WP-99). */
+export const ADVANCED_FIELDS: readonly SettingField[] = [
+  { kind: "number", key: "pendingTimeoutMinutes", label: "Release an admitted card nobody dispatched after (minutes, 1-240)", min: 1, max: 240 },
+  { kind: "int", key: "retryCooldownSeconds", label: "Wait before admitting a card again after a failed dispatch (seconds, 0-86400)", min: 0, max: 86_400 },
+  { kind: "int", key: "maxAdmitAttempts", label: "Give up admitting a card after this many failed dispatches (1-20)", min: 1, max: 20 },
+];
+
 export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
   const settings = useSettings(schedulerSettings);
   if (settings.status !== "ready") {
@@ -373,6 +381,9 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
         {field("Resource sample interval (seconds)", "sampleSeconds", 5, 3600)}
         {field("Keep samples (days)", "sampleRetentionDays", 1, 365)}
       </SettingsCard>
+      <Group theme={theme} title="Advanced">
+        <FieldsCard fields={ADVANCED_FIELDS} values={values} save={save} />
+      </Group>
     </SettingsSection>
   );
 }
