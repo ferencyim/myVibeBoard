@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
 import { z } from "zod";
-import { REVIEWER_SYSTEM_PROMPT } from "../review";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 import { JudgementSchema, type CardView, type Preset, type Project } from "../vibe/contract";
 
 export interface VerifierRun {
@@ -48,17 +48,22 @@ export type PickVerifier = (input: {
   presets: readonly Preset[];
 }) => { provider: string; model?: string };
 
-/** Default: a preset whose provider differs from the worker's, else the worker's own provider. */
-export const pickDifferentProvider: PickVerifier = ({ workerProvider, presets }) => {
+/**
+ * Default: a preset whose provider differs from the worker's, else the worker's own provider.
+ * With `preferDifferent` off the worker's own provider comes first.
+ */
+export const pickProvider =
+  (preferDifferent: () => boolean = () => true): PickVerifier =>
+  ({ workerProvider, presets }) => {
+  const same = presets.find((p) => p.provider === workerProvider);
   const other = presets.find((p) => p.provider !== workerProvider);
-  const chosen = other ?? presets[0];
+  const chosen = (preferDifferent() ? other : same) ?? presets[0];
   return chosen
     ? { provider: chosen.provider, model: chosen.model || undefined }
     : { provider: workerProvider ?? "claude" };
-};
+  };
 
-export const VERIFIER_SYSTEM_PROMPT = `You are an independent verifier for a kanban card. Another agent wrote the change; you did not.
-You are READ-ONLY with respect to the repository: never edit, create, move or delete files in the working tree, never run git commands that change state (add, commit, checkout, reset, stash, ...), never install dependencies. Your only writable location is the output directory given in the task. Judge what the change actually does, not what it claims.`;
+export const pickDifferentProvider: PickVerifier = pickProvider();
 
 // --- verdict ---------------------------------------------------------------------------------
 
@@ -118,7 +123,9 @@ export async function defaultModelOf(paseo: VerifierPaseo, provider: string): Pr
 export interface PaseoLauncherOptions {
   getPaseo: () => VerifierPaseo | null;
   newAgentId?: () => string;
-  roundTimeoutMs?: number;
+  /** Milliseconds, or a getter so a settings change applies to the next round (default 20 minutes). */
+  roundTimeoutMs?: number | (() => number);
+  prompts?: PromptResolver;
   /** Max wait for a stuck permission prompt to be answered by the policy hook. */
   pollMs?: number;
 }
@@ -144,12 +151,13 @@ export function createPaseoVerifierLauncher(options: PaseoLauncherOptions): Veri
         title: `${input.card.key} ${input.role === "reviewer" ? "review" : "verify"}`,
         labels: { cardKey: input.card.key, cardId: input.card.id, role: input.role ?? "verifier" },
         env: { VIBE_ROLE: "verifier", VIBE_CARD_ID: input.card.id, VIBE_CARD_KEY: input.card.key },
-        config: { provider: spec, systemPrompt: input.role === "reviewer" ? REVIEWER_SYSTEM_PROMPT : VERIFIER_SYSTEM_PROMPT },
+        config: { provider: spec, systemPrompt: (options.prompts ?? defaultPrompts).resolve(input.role === "reviewer" ? "verify.reviewer_system" : "verify.verifier_system", { projectId: input.project.id }) },
       };
       const handle = input.workspaceId
         ? await paseo.workspaces.ref(input.workspaceId).agents.create(create)
         : await paseo.agents.create({ ...create, cwd: input.cwd });
-      const roundTimeout = options.roundTimeoutMs ?? 20 * 60_000;
+      const configured = options.roundTimeoutMs;
+      const roundTimeout = (typeof configured === "function" ? configured() : configured) ?? 20 * 60_000;
 
       return {
         agentId,

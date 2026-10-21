@@ -16,5 +16,6 @@ describe("plugin manifest", () => {
 
   it("has the entry points it ships", () => {
     expect(existsSync(join(pluginDir, "index.server.ts"))).toBe(true);
+    expect(existsSync(join(pluginDir, "index.client.tsx"))).toBe(true); // the settings page (WP-99)
   });
 });

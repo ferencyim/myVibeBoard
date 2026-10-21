@@ -13,6 +13,7 @@ import {
   createDesktopCollector,
   createIosCollector,
   createInMemoryLeaseProvider,
+  createNodeServerLauncher,
   createNodeSpawner,
   createWebCollector,
   type VerifyConfig,
@@ -27,14 +28,17 @@ export interface RegistryOptions {
   configs: RunConfigs;
   /** Device leases for Android (index.server.ts passes the device_lease backed provider). */
   leases?: DeviceLeaseProvider;
+  /** Default wait for a dev server's ready URL in milliseconds (a verify.json value wins). */
+  readyTimeoutMs?: () => number;
 }
 
 export function createVerifyRegistry(options: RegistryOptions): CollectorRegistry {
   const resolve = (ctx: CollectorContext): VerifyConfig =>
     options.configs.get(ctx.verificationId) ?? loadVerifyConfig(ctx.worktreePath);
   const registry = createCollectorRegistry();
-  registry.register(createWebCollector({ loadConfig: resolve }));
-  registry.register(createBackendCollector({ loadConfig: resolve }));
+  const launcher = createNodeServerLauncher({ readyTimeoutMs: options.readyTimeoutMs });
+  registry.register(createWebCollector({ loadConfig: resolve, launcher }));
+  registry.register(createBackendCollector({ loadConfig: resolve, launcher }));
   registry.register(
     createAndroidCollector({
       leases:

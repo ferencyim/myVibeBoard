@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPipeline, returnReason, verificationLine } from "../server/pipeline";
 import { reviewChatText } from "../server/review";
+import { DEFAULT_TUNING, type VerifyTuning } from "../server/tuning";
 import { createVerifyStore } from "../server/store";
 import type { LaunchInput, VerifierLauncher } from "../server/verifier/agent";
 import { createCollectorRegistry, createScriptedRunner } from "../server/vibe/contract";
@@ -24,7 +25,13 @@ const minor = {
 };
 const clean = { verdict: "pass", summary: "Looks fine", issues: [] };
 
-function setup(options: { maxReviewReturns?: number; replies: unknown[]; reviewer?: boolean; launchNote?: string }) {
+function setup(options: {
+  maxReviewReturns?: number;
+  replies: unknown[];
+  reviewer?: boolean;
+  launchNote?: string;
+  tuning?: Partial<VerifyTuning>;
+}) {
   const db = openVibeDb({ path: ":memory:" });
   migrateOwner(db, "verify");
   const board = createVibeStore(db);
@@ -83,7 +90,7 @@ function setup(options: { maxReviewReturns?: number; replies: unknown[]; reviewe
       return true;
     },
     worktreeRoot: temp("vibe-review-base-"),
-    maxReviewReturns: options.maxReviewReturns,
+    tuning: () => ({ ...DEFAULT_TUNING, maxReviewReturns: options.maxReviewReturns ?? 3, ...options.tuning }),
     log: () => {},
   });
   /** Worker finishes its fix: back to verifying. */
@@ -168,6 +175,43 @@ describe("model review", () => {
     expect(h.sent).toHaveLength(2);
     expect(h.events("master.alert")).toMatchObject([{ kind: "review_loop" }]);
     expect(h.events("review.finished")[2]).toMatchObject({ verdict: "severe" });
+  });
+
+  it("autoReturnOnFail off: a severe review stays a failed verification and the card stays in verifying", async () => {
+    const h = setup({ replies: [severe], tuning: { autoReturnOnFail: false } });
+    const result = await h.pipeline.run(h.cardId);
+    expect(result).toMatchObject({ conclusion: "fail", returned: false });
+    expect(h.board.cards.get(h.cardId)!.column).toBe("verifying");
+    expect(h.sent).toHaveLength(0);
+    expect(h.events("master.alert")).toHaveLength(0);
+  });
+
+  it("autoReturnOnFail off does not stop the owner's own rejection", async () => {
+    const h = setup({ replies: [clean], tuning: { autoReturnOnFail: false } });
+    await h.pipeline.run(h.cardId);
+    expect(await h.pipeline.reject(h.cardId, "not good")).toBe(true);
+    expect(h.board.cards.get(h.cardId)!.column).toBe("in_progress");
+    expect(h.sent[0]!.prompt).toContain("rejected by the user");
+  });
+
+  it("the severity map decides the judgement: severe -> doubt keeps the card, major -> fail sends it back", async () => {
+    const lenient = setup({
+      replies: [severe],
+      tuning: { severityMap: { severe: "doubt", major: "doubt", minor: "doubt" } },
+    });
+    expect(await lenient.pipeline.run(lenient.cardId)).toMatchObject({ conclusion: "doubt", returned: false });
+    const major = { verdict: "issues", summary: "", issues: [{ severity: "major", text: "edge case" }] };
+    const strict = setup({
+      replies: [major],
+      tuning: { severityMap: { severe: "fail", major: "fail", minor: "doubt" } },
+    });
+    expect(await strict.pipeline.run(strict.cardId)).toMatchObject({ conclusion: "fail", returned: true });
+    expect(strict.sent[0]!.prompt).toContain("edge case");
+  });
+
+  it("maxReviewReturns 0: the very first severe review is only doubtful", async () => {
+    const h = setup({ maxReviewReturns: 0, replies: [severe] });
+    expect(await h.pipeline.run(h.cardId)).toMatchObject({ conclusion: "doubt", returned: false });
   });
 
   it("writes the reviewer's conclusion and the return reason to the card's group chat, once per verification", async () => {

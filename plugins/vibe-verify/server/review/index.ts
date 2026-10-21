@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import type { CardView, Judgement, PlanVersion } from "../vibe/contract";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 
 export const ISSUE_SEVERITIES = ["severe", "major", "minor"] as const;
 export type IssueSeverity = (typeof ISSUE_SEVERITIES)[number];
@@ -38,13 +39,22 @@ export function reviewVerdict(review: Review): "pass" | "issues" | "severe" {
   return "pass";
 }
 
-/** `severe` is a fail unless the return budget is used up (then it is only doubtful). */
-export function issueJudgement(severity: IssueSeverity, allowReturn: boolean): Judgement {
-  return severity === "severe" && allowReturn ? "fail" : "doubt";
-}
+/** Default issue severity -> judgement (settings can change it, see tuning.ts). */
+export const DEFAULT_SEVERITY_MAP: Record<IssueSeverity, Judgement> = {
+  severe: "fail",
+  major: "doubt",
+  minor: "doubt",
+};
 
-export const REVIEWER_SYSTEM_PROMPT = `You are an independent code reviewer for a kanban card. Another agent wrote the change; you did not.
-You are READ-ONLY with respect to the repository: never edit, create, move or delete files in the working tree, never run git commands that change state, never install dependencies. You may read any file and run read-only commands (git diff, git log, grep). Review what the change actually does.`;
+/** A "fail" only counts while the return budget lasts (then it is only doubtful). */
+export function issueJudgement(
+  severity: IssueSeverity,
+  allowReturn: boolean,
+  map: Record<IssueSeverity, Judgement> = DEFAULT_SEVERITY_MAP,
+): Judgement {
+  const judgement = map[severity];
+  return judgement === "fail" && !allowReturn ? "doubt" : judgement;
+}
 
 export interface ReviewPromptInput {
   card: CardView;
@@ -55,37 +65,32 @@ export interface ReviewPromptInput {
   stat: string;
   diff: string;
   truncated: boolean;
+  prompts?: PromptResolver;
+}
+
+function planSection(plan: NonNullable<PlanVersion["snapshot"]>): string {
+  const checks = plan.checks.map((c, n) => `${n + 1}. ${c.text}`).join("\n");
+  return `\n## Latest plan\n${plan.description}\n${checks}${plan.notes ? `\nNotes: ${plan.notes}` : ""}\n`;
 }
 
 export function buildReviewPrompt(i: ReviewPromptInput): string {
   const plan = i.plan?.snapshot;
-  return `# Review ${i.card.key}: ${i.card.title}
-
-Worktree (READ-ONLY for you): ${i.worktree}
-Reviewed commit: ${i.commitHash}${i.baseCommit ? `  (diff against ${i.baseCommit})` : "  (no base commit found: uncommitted changes only)"}
-
-## Card description
-${i.card.description || "(none)"}
-
-## Acceptance criteria
-${i.card.acceptance || "(none)"}
-${plan ? `\n## Latest plan\n${plan.description}\n${plan.checks.map((c, n) => `${n + 1}. ${c.text}`).join("\n")}${plan.notes ? `\nNotes: ${plan.notes}` : ""}\n` : ""}
-## Diff summary
-${i.stat || "(empty)"}
-
-## Diff${i.truncated ? " (truncated; read the files for the rest)" : ""}
-\`\`\`diff
-${i.diff || "(no changes)"}
-\`\`\`
-
-## Your task
-Review the change for correctness bugs, security problems, broken edge cases, missing handling the acceptance criteria require, and regressions. Open the surrounding code when the diff alone is not enough. Do NOT report style or taste. Classify each issue:
-- "severe": the change is wrong or dangerous (bug that breaks the feature, data loss, security hole, acceptance criterion not met); it must be fixed before the card can be accepted.
-- "major": a real problem that should be fixed but does not break the main flow.
-- "minor": small improvement.
-Reply with ONE JSON object (in a \`\`\`json fence, nothing after it):
-{"verdict": "pass|issues|severe", "summary": "one or two sentences", "issues": [{"severity": "severe|major|minor", "file": "path/relative/to/worktree", "line": 12, "text": "what is wrong and how to fix it"}]}
-Use an empty issues array and verdict "pass" when you find nothing worth reporting. Do not modify anything; do not write files.`;
+  return (i.prompts ?? defaultPrompts).resolve("verify.review", {
+    projectId: i.card.projectId,
+    vars: {
+      "card.key": i.card.key,
+      "card.title": i.card.title,
+      worktree: i.worktree,
+      commitHash: i.commitHash,
+      baseNote: i.baseCommit ? `  (diff against ${i.baseCommit})` : "  (no base commit found: uncommitted changes only)",
+      description: i.card.description || "(none)",
+      acceptance: i.card.acceptance || "(none)",
+      plan: plan ? planSection(plan) : "",
+      stat: i.stat || "(empty)",
+      truncatedNote: i.truncated ? " (truncated; read the files for the rest)" : "",
+      diff: i.diff || "(no changes)",
+    },
+  });
 }
 
 export function issueLocation(issue: ReviewIssue): string {

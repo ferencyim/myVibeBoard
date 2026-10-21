@@ -21,7 +21,9 @@ import {
 } from "../vibe/contract";
 import { publishEvent, type VibeStore } from "../vibe/db";
 import { VerifyConfigSchema, loadVerifyConfig, type PerfConfig, type VerifyConfig } from "../collectors/common";
-import { type VerifierLauncher, type PickVerifier, VerdictSchema, parseJsonLoose, pickDifferentProvider } from "../verifier/agent";
+import { type VerifierLauncher, type PickVerifier, VerdictSchema, parseJsonLoose, pickProvider } from "../verifier/agent";
+import { defaultPrompts, type PromptResolver } from "../prompts";
+import { defaultTuning, type TuningSource } from "../tuning";
 import { aggregate, type VerifyStore } from "../store";
 import { runAutoChecks, splitChecks } from "./checks";
 import { changeDiff, prepareBaseline, type Baseline, removeWorktree, sameSnapshot, snapshotTree, headCommit } from "./git";
@@ -47,9 +49,11 @@ export interface PipelineDeps {
   /** Sends a prompt to the worker agent; false = could not be delivered. */
   notifyWorker: (agentId: string, prompt: string) => Promise<boolean>;
   pickVerifier?: PickVerifier;
-  /** Consecutive review-triggered returns after which a severe review is only "doubt" (default 3). */
-  maxReviewReturns?: number;
-  /** Where baseline worktrees are created (Windows: must be on D:). */
+  /** Owner settings (return policy, severity map, timeouts); read on every use. */
+  tuning?: TuningSource;
+  /** Prompt texts (registry); defaults to the registered defaults. */
+  prompts?: PromptResolver;
+  /** Where baseline worktrees are created (Windows: must be on D:); the worktreeRoot setting wins. */
   worktreeRoot: string;
   now?: () => Date;
   log?: (message: string, error?: unknown) => void;
@@ -63,18 +67,16 @@ export interface PipelineResult {
   returned: boolean;
 }
 
-const EXCERPT_CHARS = 6_000;
-
 /** Head and tail of a small text evidence file (logs, reports); undefined for binary kinds. */
-function textExcerpt(file: string, kind: string): string | undefined {
+export function textExcerpt(file: string, kind: string, excerptChars: number): string | undefined {
   if (kind !== "log" && kind !== "report") return undefined;
   try {
     const text = readFileSync(file, "utf8");
-    return text.length <= EXCERPT_CHARS
+    return text.length <= excerptChars
       ? text
-      : `${text.slice(0, EXCERPT_CHARS / 2)}
+      : `${text.slice(0, excerptChars / 2)}
 ...[cut]...
-${text.slice(-EXCERPT_CHARS / 2)}`;
+${text.slice(-excerptChars / 2)}`;
   } catch {
     return undefined;
   }
@@ -115,9 +117,10 @@ export function createPipeline(deps: PipelineDeps) {
   const { board, verify, registry, runner } = deps;
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((m, e) => console.error(`[vibe-verify] ${m}`, e ?? ""));
-  const pick = deps.pickVerifier ?? pickDifferentProvider;
+  const tuning = deps.tuning ?? defaultTuning;
+  const prompts = deps.prompts ?? defaultPrompts;
+  const pick = deps.pickVerifier ?? pickProvider(() => tuning().preferDifferentProvider);
   const active = new Set<string>();
-  const maxReviewReturns = deps.maxReviewReturns ?? 3;
 
   /** Length of the newest-first run of reject events that were caused by a model review. */
   const reviewReturnsInARow = (cardId: string) => {
@@ -239,6 +242,7 @@ export function createPipeline(deps: PipelineDeps) {
           stat: change.stat,
           diff: change.diff,
           truncated: change.truncated,
+          prompts,
         }),
       );
       const after = await snapshotTree(runner, input.worktree);
@@ -278,7 +282,7 @@ export function createPipeline(deps: PipelineDeps) {
           method: `review:${issue.severity}`,
           kind: "review",
         });
-        verify.judgeItem(item.id, issueJudgement(issue.severity, input.allowReturn), issueLocation(issue));
+        verify.judgeItem(item.id, issueJudgement(issue.severity, input.allowReturn, tuning().severityMap), issueLocation(issue));
       }
       if (review.summary) notes.push(`Review: ${review.summary}`);
       const verdict = reviewVerdict({ ...review, issues });
@@ -288,9 +292,9 @@ export function createPipeline(deps: PipelineDeps) {
         review.summary,
         sessionId,
       );
-      if (verdict === "severe" && !input.allowReturn) {
+      if (verdict === "severe" && !input.allowReturn && tuning().autoReturnOnFail) {
         notes.push(
-          `Review: severe issues, but the card was already sent back ${maxReviewReturns} times because of reviews; left to the user`,
+          `Review: severe issues, but the card was already sent back ${tuning().maxReviewReturns} times because of reviews; left to the user`,
         );
         publishEvent(
           board.db,
@@ -300,7 +304,7 @@ export function createPipeline(deps: PipelineDeps) {
             projectId: input.project.id,
             payload: {
               kind: "review_loop",
-              message: `${card.key}: the reviewer still reports severe issues after ${maxReviewReturns} automatic returns; please look at it yourself.`,
+              message: `${card.key}: the reviewer still reports severe issues after ${tuning().maxReviewReturns} automatic returns; please look at it yourself.`,
             },
             dedupeKey: `review-loop:${card.id}:${vid}`,
           },
@@ -452,7 +456,7 @@ export function createPipeline(deps: PipelineDeps) {
           const base = await prepareBaseline(
             runner,
             worktree,
-            path.join(deps.worktreeRoot, `verify-${card.key.toLowerCase()}-${vid.slice(-6).toLowerCase()}`),
+            path.join(tuning().worktreeRoot || deps.worktreeRoot, `verify-${card.key.toLowerCase()}-${vid.slice(-6).toLowerCase()}`),
             [board.presets.list().find((p) => p.id === card.presetId)?.baseBranch, "main", "master"],
           );
           if (base) baseline = base;
@@ -472,6 +476,7 @@ export function createPipeline(deps: PipelineDeps) {
               baselinePath: baseline?.path,
               baselineCommit: baseline?.commitHash,
               existingConfig: existing,
+              prompts,
             }),
           ))?.text ?? "";
           const raw = parseJsonLoose(setupReply) ?? (await readJsonFile(path.join(outputDir, "verify.json")));
@@ -555,10 +560,11 @@ export function createPipeline(deps: PipelineDeps) {
               checks,
               commitHash,
               outputDir,
+              prompts,
               evidence: evidence.map((e) => ({
                 name: path.basename(e.path),
                 kind: e.kind,
-                excerpt: textExcerpt(e.path, e.kind),
+                excerpt: textExcerpt(e.path, e.kind, tuning().excerptChars),
               })),
               notes: verify
                 .items(vid)
@@ -618,7 +624,7 @@ export function createPipeline(deps: PipelineDeps) {
         vid,
         outputDir,
         notes,
-        allowReturn: reviewReturnsInARow(card.id) < maxReviewReturns,
+        allowReturn: reviewReturnsInARow(card.id) < tuning().maxReviewReturns,
       });
     }
 
@@ -656,7 +662,7 @@ export function createPipeline(deps: PipelineDeps) {
     });
 
     let returned = false;
-    if (conclusion === "fail" && !voided) {
+    if (conclusion === "fail" && !voided && tuning().autoReturnOnFail) {
       returned = await sendBack(card.id, {
         verificationId: vid,
         commitHash,
@@ -689,7 +695,7 @@ export function createPipeline(deps: PipelineDeps) {
   ): Promise<boolean> {
     const card = board.cards.get(cardId);
     if (!card || card.column !== "verifying") return false;
-    const prompt = buildFailurePrompt({ card, ...input });
+    const prompt = buildFailurePrompt({ card, ...input, prompts });
     board.cards.move(card.id, {
       to: "in_progress",
       actor: input.source === "user" ? "user" : "verifier",
