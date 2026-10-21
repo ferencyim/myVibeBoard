@@ -36,12 +36,12 @@ describe("switch choices", () => {
     expect(choices.find((c) => c.active)?.key).toBe("claude:opus-x");
     const codexMax = choices.find((c) => c.key === "codex:gpt-5-codex:max")!;
     expect(codexMax.request).toEqual({ provider: "codex", model: "gpt-5-codex", thinking: "max" });
-    expect(codexMax.detail).toBe("9% left - tight");
+    expect(codexMax.detail).toBe("剩余 9% - tight");
   });
 
   it("formats labels", () => {
-    expect(targetLabel(null)).toBe("not resolved yet");
+    expect(targetLabel(null)).toBe("尚未解析");
     expect(targetLabel({ provider: "codex", model: "m", thinking: "xhigh" })).toBe("codex / m (xhigh)");
-    expect(quotaLabel({ remainingPct: null, level: "unknown" })).toBe("quota unknown");
+    expect(quotaLabel({ remainingPct: null, level: "unknown" })).toBe("额度未知");
   });
 });

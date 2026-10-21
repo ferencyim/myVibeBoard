@@ -4,12 +4,15 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   masterSettings,
   permissionRpc,
+  promptsRpc,
+  sessionsRpc,
   statusRpc,
   switchRpc,
   wakeRpc,
   type MasterSettings,
 } from "./shared/rpc";
 import { createMasterRuntime } from "./server/runtime";
+import { promptInfos } from "./server/master/templates";
 import { startNotifyConsumer, type PushNotification } from "./server/notify";
 import { CARD_KEY_PATTERN } from "./server/vibe/contract";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
@@ -79,6 +82,13 @@ export default function contribute(server: PluginServerContext) {
     const result = await runtime.setPermission(input.mode);
     return { changed: result.changed, permission: (await runtime.status(false)).permission };
   });
+
+  server.handle(sessionsRpc, async (input, { paseo: api }) => {
+    onPaseo(api);
+    return { sessions: runtime.sessions(input.limit) };
+  });
+
+  server.handle(promptsRpc, async () => ({ prompts: promptInfos(current.maintainRequirements) }));
 
   server.handle(wakeRpc, async (input, { paseo: api }) => {
     onPaseo(api);

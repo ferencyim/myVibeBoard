@@ -3,17 +3,17 @@ import { permissionRpc, statusRpc, switchRpc } from "./shared/rpc";
 import { MasterScreen, MasterSettingsScreen, MasterSidebarItem } from "./client/screen";
 
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: "main", title: "Master", Component: MasterScreen });
-  client.addSidebarHeaderItem({ id: "master", title: "Master", Component: MasterSidebarItem });
+  client.addScreen({ id: "main", title: "总 agent", Component: MasterScreen });
+  client.addSidebarHeaderItem({ id: "master", title: "总 agent", Component: MasterSidebarItem });
   client.addSettingsScreen({
     id: "preferences",
-    title: "Master",
+    title: "总 agent",
     icon: "Bot",
     Component: MasterSettingsScreen,
   });
   client.addCommandCenterItem({
     id: "open-master",
-    title: "Master: Open status and switch subscription",
+    title: "总 agent：查看状态与切换订阅",
     icon: "Bot",
     keywords: ["master", "agent", "subscription", "switch", "claude", "codex"],
     context: "global",
@@ -23,7 +23,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "switch-claude",
-    title: "Master: Switch to Claude Opus",
+    title: "总 agent：切换到 Claude Opus",
     icon: "Bot",
     keywords: ["master", "switch", "claude", "opus"],
     context: "global",
@@ -33,7 +33,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "switch-codex",
-    title: "Master: Switch to Codex (highest reasoning)",
+    title: "总 agent：切换到 Codex（最高推理）",
     icon: "Bot",
     keywords: ["master", "switch", "codex", "gpt"],
     context: "global",
@@ -42,9 +42,9 @@ export default function contribute(client: PluginClientContext) {
     },
   });
   const permissionItems = [
-    { id: "auto", title: "Master permissions: Auto (recommended)", mode: "auto" },
-    { id: "ask", title: "Master permissions: Ask for everything", mode: "default" },
-    { id: "settings", title: "Master permissions: Follow the settings default", mode: "settings" },
+    { id: "auto", title: "总 agent 权限：自动（推荐）", mode: "auto" },
+    { id: "ask", title: "总 agent 权限：每步都询问", mode: "default" },
+    { id: "settings", title: "总 agent 权限：跟随设置默认值", mode: "settings" },
   ];
   for (const item of permissionItems) {
     client.addCommandCenterItem({
@@ -60,7 +60,7 @@ export default function contribute(client: PluginClientContext) {
   }
   client.addCommandCenterItem({
     id: "permission-full",
-    title: "Master permissions: Full access (no approvals)",
+    title: "总 agent 权限：完全访问（不审批）",
     icon: "Bot",
     keywords: ["master", "permission", "bypass", "full access", "yolo"],
     context: "global",

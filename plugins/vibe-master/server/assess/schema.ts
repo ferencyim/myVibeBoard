@@ -92,6 +92,11 @@ export const MemoryUpdateSchema = z.object({
   archive: z
     .array(z.object({ file: z.enum(["DECISIONS.md", "LESSONS.md", "INDEX.md"]), id: text }))
     .default([]),
+  /**
+   * Optional: complete new content of the project's requirements document. Written and committed by
+   * the plugin only when the owner enabled requirements maintenance.
+   */
+  requirementsUpdate: z.object({ content: text, summary: text }).optional(),
 });
 export type MemoryUpdate = z.infer<typeof MemoryUpdateSchema>;
 

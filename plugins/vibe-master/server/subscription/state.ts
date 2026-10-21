@@ -27,6 +27,17 @@ export interface MasterStateData {
   permissionMode?: string;
   agent?: MasterAgentRecord;
   lastAlert?: MasterAlert;
+  /** Per master session (agent_session id): what it ran on and why it was replaced. */
+  sessions?: Record<string, MasterSessionNote>;
+}
+
+export interface MasterSessionNote {
+  /** Provider the agent actually ran on (agent_session.currentProvider is rewritten by a switch). */
+  provider?: string;
+  model: string;
+  thinking: string | null;
+  retiredReason?: string;
+  retiredAt?: string;
 }
 
 export interface MasterStateFile {

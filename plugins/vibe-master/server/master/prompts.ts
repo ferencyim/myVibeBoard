@@ -4,6 +4,8 @@
 //                order, no timestamps or counters, so wakes for the same project share a prefix
 //   dynamic      the card itself, quota numbers, the scheduler hint, the reply contract reminder
 
+import { readRequirementsDoc } from "../vibe/db";
+import { composeWakeMessage } from "./templates";
 import type { CardEvent, CardView, Preset, Project, Tag } from "../vibe/contract";
 import type { SelectResult } from "../select";
 import type { QuotaMap } from "../subscription/quota";
@@ -21,6 +23,33 @@ export interface ProjectBlockInput {
   presets: Preset[];
   /** Other open (not done, not archived) cards of the project. */
   openCards: CardView[];
+  /** Max characters of the requirements document to include (0 = none). Default 6000. */
+  requirementsChars?: number;
+}
+
+export const DEFAULT_REQUIREMENTS_CHARS = 6000;
+
+/** The requirements document as an excerpt block; `truncated` tells the master it must not rewrite it. */
+export function requirementsExcerpt(
+  project: Pick<Project, "repoPath" | "requirementsPath">,
+  maxChars: number,
+): { text: string; truncated: boolean } | null {
+  if (maxChars <= 0 || !project.repoPath) return null;
+  try {
+    const doc = readRequirementsDoc(project.repoPath, project.requirementsPath);
+    if (!doc.exists || !doc.content.trim()) return null;
+    const content = doc.content.replace(/\r\n/g, "\n").trim();
+    const truncated = content.length > maxChars;
+    const body = truncated
+      ? `${content.slice(0, maxChars)}\n[... truncated: ${content.length - maxChars} more characters, complete file is ${doc.path}]`
+      : content;
+    return {
+      text: `Requirements document (${doc.path}${truncated ? ", TRUNCATED" : ", complete"}):\n${body}`,
+      truncated,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function buildProjectBlock(input: ProjectBlockInput): string {
@@ -38,8 +67,11 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     )
     .slice(0, 40)
     .map((c) => `- ${c.key} [${c.column}] ${clip(c.title, 80)} :: ${clip(c.description, 100)}`);
+  const excerpt = requirementsExcerpt(project, input.requirementsChars ?? DEFAULT_REQUIREMENTS_CHARS);
   return [
     `## Project ${project.prefix} (${project.name}, type ${project.projectTypes.join("+")})`,
+    ...(project.description.trim() ? [`Description: ${project.description.trim()}`] : []),
+    ...(excerpt ? [excerpt.text] : []),
     `Tag vocabulary: ${[...input.tags].map((t) => t.name).sort().join(", ")}`,
     `Execution presets (use these names in recommendation.preset):\n${presets.join("\n") || "- none configured"}`,
     `Other open cards:\n${cards.join("\n") || "- none"}`,
@@ -59,29 +91,23 @@ export function buildAssessMessage(input: {
   tagNames: string[];
   quota: QuotaMap;
   hint: SelectResult | null;
+  /** Owner override of the default template (settings). */
+  template?: string;
 }): string {
   const { card } = input;
-  return [
-    "[wake:assess_draft]",
-    input.projectBlock,
-    "",
-    "## Card to assess (dynamic)",
-    `Key: ${card.key}`,
-    `Title: ${card.title}`,
-    `Priority: ${card.priority}`,
-    `Tags: ${input.tagNames.join(", ") || "none"}`,
-    `Preselected preset: ${card.presetId ?? "none"}`,
-    `Reference images: ${card.refImages.length}`,
-    `Description:\n${card.description || "(empty)"}`,
-    `Acceptance criteria:\n${card.acceptance || "(empty)"}`,
-    "",
-    `Provider quota: ${quotaLine(input.quota)}`,
-    input.hint
-      ? `Scheduler hint: ${input.hint.presetName ?? input.hint.provider ?? "none"} (${input.hint.reason})`
-      : "Scheduler hint: none",
-    "",
-    "Reply with the assess_draft JSON object only.",
-  ].join("\n");
+  return composeWakeMessage("assess_draft", input.template, {
+    project: input.projectBlock,
+    "card.key": card.key,
+    "card.title": card.title,
+    "card.priority": card.priority,
+    "card.tags": input.tagNames.join(", ") || "none",
+    "card.preset": card.presetId ?? "none",
+    "card.refImages": String(card.refImages.length),
+    "card.description": card.description || "(empty)",
+    "card.acceptance": card.acceptance || "(empty)",
+    quota: quotaLine(input.quota),
+    hint: input.hint ? `${input.hint.presetName ?? input.hint.provider ?? "none"} (${input.hint.reason})` : "none",
+  });
 }
 
 export function buildRepairMessage(kind: string, error: string): string {
@@ -99,29 +125,30 @@ export function buildDoneMessage(input: {
   events: CardEvent[];
   verification: string;
   memory: string;
+  template?: string;
+  /** The master may return a requirements document update (adds the format hint). */
+  maintainRequirements?: boolean;
 }): string {
   const notes = input.events
     .filter((e) => e.type === "note" || e.type === "reject" || e.type === "evaluation")
     .slice(-8)
     .map((e) => `- [${e.type}] ${e.author}: ${eventText(e)}`)
     .join("\n");
-  return [
-    "[wake:card_done]",
-    input.projectBlock,
-    "",
-    "## Current project memory (entry ids in brackets)",
-    input.memory || "(empty)",
-    "",
-    "## Finished card (dynamic)",
-    `Key: ${input.card.key}`,
-    `Title: ${input.card.title}`,
-    `Description:\n${clip(input.card.description, 1500)}`,
-    `Acceptance criteria:\n${clip(input.card.acceptance, 800)}`,
-    `Recent notes:\n${notes || "(none)"}`,
-    `Verification:\n${input.verification || "(none recorded)"}`,
-    "",
-    "Reply with the card_done JSON object only.",
-  ].join("\n");
+  return composeWakeMessage(
+    "card_done",
+    input.template,
+    {
+      project: input.projectBlock,
+      memory: input.memory || "(empty)",
+      "card.key": input.card.key,
+      "card.title": input.card.title,
+      "card.description": clip(input.card.description, 1500),
+      "card.acceptance": clip(input.card.acceptance, 800),
+      notes: notes || "(none)",
+      verification: input.verification || "(none recorded)",
+    },
+    { maintainRequirements: input.maintainRequirements },
+  );
 }
 
 export function buildHelpMessage(input: {
@@ -129,17 +156,14 @@ export function buildHelpMessage(input: {
   card: CardView;
   question: unknown;
   plan: string;
+  template?: string;
 }): string {
-  return [
-    "[wake:session_help]",
-    input.projectBlock,
-    "",
-    "## Worker question (dynamic)",
-    `Card: ${input.card.key} ${input.card.title}`,
-    `Acceptance criteria:\n${clip(input.card.acceptance, 800)}`,
-    `Plan:\n${input.plan || "(none)"}`,
-    `Question:\n${JSON.stringify(input.question ?? null, null, 2).slice(0, 2000)}`,
-    "",
-    "Reply with the session_help JSON object only.",
-  ].join("\n");
+  return composeWakeMessage("session_help", input.template, {
+    project: input.projectBlock,
+    "card.key": input.card.key,
+    "card.title": input.card.title,
+    "card.acceptance": clip(input.card.acceptance, 800),
+    plan: input.plan || "(none)",
+    question: JSON.stringify(input.question ?? null, null, 2).slice(0, 2000),
+  });
 }

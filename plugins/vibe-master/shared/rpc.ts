@@ -26,8 +26,34 @@ export const masterSettings = defineSettings({
     /** Alert when the master's provider has at most this much quota left (percent). */
     quotaLowPct: z.number().min(1).max(90).default(20),
     quotaCheckSeconds: z.number().int().min(30).max(3600).default(300),
-    /** On start, also assess drafts that have no up-to-date assessment (newest 10). */
+    /** On start, also assess drafts that have no up-to-date assessment (newest N, see sweepDraftLimit). */
     sweepOnStart: z.boolean().default(true),
+
+    // ---- triggers (WP-93) ----
+    /** Review a draft automatically after it was created / its owner fields were edited / it was moved back to draft. */
+    autoAssessOnCreate: z.boolean().default(true),
+    autoAssessOnEdit: z.boolean().default(true),
+    autoAssessOnMoveToDraft: z.boolean().default(true),
+    /** How many of the newest unreviewed drafts the start-up sweep queues. */
+    sweepDraftLimit: z.number().int().min(1).max(50).default(10),
+    /** A worker session asked a question (session.waiting): wake the master for advice. */
+    wakeOnSessionWaiting: z.boolean().default(true),
+    /** A card reached done: the master consolidates project memory. */
+    consolidateOnDone: z.boolean().default(true),
+    /** At card done the master may also return an update of the project's requirements document. */
+    maintainRequirements: z.boolean().default(true),
+
+    // ---- prompts (WP-93) ----
+    /** Appended after the static SKILL rules (system prompt). */
+    rulesSupplement: z.string().default(""),
+    /** Wake templates with {{placeholders}}; empty = the built-in default. The reply format section is always appended. */
+    templateAssessDraft: z.string().default(""),
+    templateCardDone: z.string().default(""),
+    templateSessionHelp: z.string().default(""),
+
+    // ---- project context (WP-93) ----
+    /** Max characters of the requirements document handed to the master in the project block. */
+    requirementsExcerptChars: z.number().int().min(0).max(50_000).default(6000),
   }),
 });
 export type MasterSettings = z.output<typeof masterSettings.schema>;
@@ -142,4 +168,44 @@ export const permissionRpc = defineRpc({
     mode: z.string().min(1),
   }),
   output: z.object({ permission: PermissionInfo.nullable(), changed: z.boolean() }),
+});
+
+const SessionRow = z.object({
+  sessionId: z.string(),
+  agentId: z.string(),
+  provider: z.string(),
+  /** Model the session started with; empty for sessions recorded before this was tracked. */
+  model: z.string(),
+  thinking: z.string().nullable(),
+  state: z.string(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  current: z.boolean(),
+  /** Why the session was replaced (switched / mode_changed / replaced), if known. */
+  retiredReason: z.string().nullable(),
+});
+export type MasterSessionRow = z.infer<typeof SessionRow>;
+
+export const sessionsRpc = defineRpc({
+  name: "master.sessions",
+  input: z.object({ limit: z.number().int().min(1).max(100).default(30) }),
+  output: z.object({ sessions: z.array(SessionRow) }),
+});
+
+const PromptInfo = z.object({
+  /** Settings key holding the override. */
+  settingKey: z.enum(["templateAssessDraft", "templateCardDone", "templateSessionHelp"]),
+  label: z.string(),
+  description: z.string(),
+  placeholders: z.array(z.object({ name: z.string(), description: z.string() })),
+  defaultTemplate: z.string(),
+  /** Appended automatically after the template; not editable. */
+  formatSection: z.string(),
+});
+export type PromptInfo = z.infer<typeof PromptInfo>;
+
+export const promptsRpc = defineRpc({
+  name: "master.prompts",
+  input: z.object({}),
+  output: z.object({ prompts: z.array(PromptInfo) }),
 });

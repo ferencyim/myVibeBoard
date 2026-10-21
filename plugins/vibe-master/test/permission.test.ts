@@ -70,7 +70,7 @@ describe("master permission mode", () => {
     t.runtime.triggers.assessNow(t.board.draft("B").id);
     await t.runtime.queue.idle();
     expect(t.fake.agents.map((a) => a.options.config.modeId)).toEqual(["auto", "acceptEdits"]);
-    expect(t.fake.agents[0]!.archived).toBe(true);
+    expect(t.fake.agents[0]!.archived).toBe(false); // WP-93: the old conversation stays openable
     expect(t.board.store.sessions.list({ role: "master" }).map((s) => s.state)).toEqual(["ended", "idle"]);
     await t.runtime.dispose();
   });
@@ -83,7 +83,7 @@ describe("master permission mode", () => {
     const switched = await t.runtime.setPermission("bypassPermissions");
     expect(switched.changed).toBe(true);
     expect(t.fake.agents.map((a) => a.options.config.modeId)).toEqual(["auto", "bypassPermissions"]);
-    expect(t.fake.agents[0]!.archived).toBe(true);
+    expect(t.fake.agents[0]!.archived).toBe(false); // WP-93: the old conversation stays openable
     expect((await t.runtime.status(false)).permission).toMatchObject({
       setting: "bypassPermissions",
       source: "switched",

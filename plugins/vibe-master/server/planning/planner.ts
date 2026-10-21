@@ -66,7 +66,9 @@ export interface PlanningDeps {
   getPaseo(): MasterPaseo | null;
   /** The master session: its current subscription decides model/provider of new planners. */
   master: Pick<MasterSession, "currentTarget" | "permission">;
-  rules: string;
+  rules: string | (() => string);
+  /** Max characters of the requirements document in the project block (settings). */
+  requirementsChars?(): number;
   /** `<VIBE_HOME>/master`; planner scratch workspaces live under `planning/<KEY>`. */
   dataDir: string;
   clock: Clock;
@@ -97,6 +99,7 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export function createPlanning(deps: PlanningDeps) {
   const { store, db, clock } = deps;
   const log = deps.log ?? (() => undefined);
+  const rulesText = () => (typeof deps.rules === "function" ? deps.rules() : deps.rules);
   const handles = new Map<
     string,
     { agent: MasterAgentHandle; sessionId: string; rulesSent: boolean; modeId?: string | null }
@@ -186,7 +189,7 @@ export function createPlanning(deps: PlanningDeps) {
       env: { VIBE_ROLE: "planner", VIBE_CARD_ID: card.id, VIBE_CARD_KEY: card.key },
       config: {
         provider: providerSpec(target),
-        systemPrompt: deps.rules,
+        systemPrompt: rulesText(),
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
         ...(modeId ? { modeId } : {}),
       },
@@ -252,7 +255,7 @@ export function createPlanning(deps: PlanningDeps) {
 
   async function ask(live: Live, card: Pick<CardView, "id">, prompt: string): Promise<string> {
     moveSession(live.session, "working");
-    const message = live.rulesSent ? prompt : `${deps.rules}\n\n---\n\n${prompt}`;
+    const message = live.rulesSent ? prompt : `${rulesText()}\n\n---\n\n${prompt}`;
     const fail = (failure: MasterError): never => {
       moveSession(live.session, "error", { message: failure.message });
       if (failure.kind === "quota") {
@@ -388,7 +391,7 @@ export function createPlanning(deps: PlanningDeps) {
       const events = store.events.list(card.id);
       const prompt = live.fresh
         ? buildStartMessage({
-            projectBlock: buildProjectBlock({ project, tags, presets, openCards }),
+            projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.requirementsChars?.() }),
             memory: memoryText(project),
             card,
             tagNames: tagNames(card),

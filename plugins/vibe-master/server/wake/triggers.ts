@@ -4,6 +4,7 @@
 //        -> assess_draft after a quiet period (default 30 s), restarted by every further edit
 //   card.moved -> done                         -> card_done (memory consolidation)
 //   session.waiting of a worker with a card    -> session_help
+//   card.review_requested                      -> assess_draft at once (no debounce, no "already assessed" check)
 //   maintenance.paused                         -> master.alert (maintenance_paused); .triggered is only logged
 // The master's own write-back (suggested preset, plan version, evaluation event) does not
 // restart the debounce: only owner fields count, and the content hash is the final arbiter.
@@ -19,6 +20,25 @@ import type { WakeQueue } from "./queue";
 /** card.updated field names (DB columns) that change what the owner asked for. */
 const OWNER_FIELDS = new Set(["title", "description", "acceptance", "ref_images_json", "tags"]);
 const SWEEP_DRAFTS = 10;
+
+/** Owner switches (settings). Review requests from the board ignore them: asking is explicit. */
+export interface TriggerFlags {
+  autoAssessOnCreate: boolean;
+  autoAssessOnEdit: boolean;
+  autoAssessOnMoveToDraft: boolean;
+  wakeOnSessionWaiting: boolean;
+  consolidateOnDone: boolean;
+  sweepDraftLimit: number;
+}
+
+export const DEFAULT_TRIGGER_FLAGS: TriggerFlags = {
+  autoAssessOnCreate: true,
+  autoAssessOnEdit: true,
+  autoAssessOnMoveToDraft: true,
+  wakeOnSessionWaiting: true,
+  consolidateOnDone: true,
+  sweepDraftLimit: SWEEP_DRAFTS,
+};
 const SWEEP_DONE_WINDOW_MS = 48 * 60 * 60_000;
 
 export interface TriggersOptions {
@@ -28,6 +48,8 @@ export interface TriggersOptions {
   queue: WakeQueue;
   enabled(): boolean;
   debounceMs(): number;
+  /** Read on every event; missing = everything on. */
+  flags?(): TriggerFlags;
   pollIntervalMs?: number;
   /** vibe-scheduler signals: quota getting low / admission paused or resumed (memory). */
   onScheduler?(event: SchedulerSignal): void;
@@ -53,6 +75,7 @@ export interface Triggers {
 export function createTriggers(options: TriggersOptions): Triggers {
   const { store, queue } = options;
   const log = options.log ?? (() => undefined);
+  const flags = () => options.flags?.() ?? DEFAULT_TRIGGER_FLAGS;
 
   const debouncer = createDebouncer<string>(options.clock, options.debounceMs, (cardId) => {
     if (options.enabled()) queue.enqueue({ kind: "assess_draft", cardId });
@@ -70,6 +93,7 @@ export function createTriggers(options: TriggersOptions): Triggers {
       "card.created",
       "card.updated",
       "card.moved",
+      "card.review_requested",
       "session.waiting",
       "scheduler.quota_low",
       "scheduler.paused",
@@ -98,20 +122,34 @@ export function createTriggers(options: TriggersOptions): Triggers {
       }
       if (!options.enabled()) return;
       const cardId = event.cardId;
-      if (isEvent(event, "card.created")) {
-        if (cardId && event.payload.column === "draft") debouncer.touch(cardId);
+      const f = flags();
+      if (isEvent(event, "card.review_requested")) {
+        const id = event.payload.cardId || cardId;
+        if (id && isDraft(id)) {
+          debouncer.cancel(id);
+          queue.enqueue({ kind: "assess_draft", cardId: id, force: true });
+        }
+      } else if (isEvent(event, "card.created")) {
+        if (f.autoAssessOnCreate && cardId && event.payload.column === "draft") debouncer.touch(cardId);
       } else if (isEvent(event, "card.updated")) {
-        if (cardId && event.payload.fields.some((f) => OWNER_FIELDS.has(f)) && isDraft(cardId)) {
+        if (
+          f.autoAssessOnEdit &&
+          cardId &&
+          event.payload.fields.some((field) => OWNER_FIELDS.has(field)) &&
+          isDraft(cardId)
+        ) {
           debouncer.touch(cardId);
         }
       } else if (isEvent(event, "card.moved")) {
         if (!cardId) return;
-        if (event.payload.to === "draft") debouncer.touch(cardId);
-        else {
+        if (event.payload.to === "draft") {
+          if (f.autoAssessOnMoveToDraft) debouncer.touch(cardId);
+        } else {
           debouncer.cancel(cardId);
-          if (event.payload.to === "done") queue.enqueue({ kind: "card_done", cardId });
+          if (event.payload.to === "done" && f.consolidateOnDone) queue.enqueue({ kind: "card_done", cardId });
         }
       } else if (isEvent(event, "session.waiting")) {
+        if (!f.wakeOnSessionWaiting) return;
         const session = store.sessions.get(event.payload.sessionId);
         if (session && session.role === "worker" && session.cardId) {
           const job: WakeJob = {
@@ -147,13 +185,13 @@ export function createTriggers(options: TriggersOptions): Triggers {
           return lastAssessmentMarker(store.events.list(card.id))?.hash !== contentHash(card, names);
         })
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, SWEEP_DRAFTS);
+        .slice(0, flags().sweepDraftLimit);
       for (const card of drafts) {
         queue.enqueue({ kind: "assess_draft", cardId: card.id });
         queued++;
       }
       const since = new Date(options.clock.now() - SWEEP_DONE_WINDOW_MS).toISOString();
-      for (const card of store.cards.list({ column: "done" })) {
+      for (const card of flags().consolidateOnDone ? store.cards.list({ column: "done" }) : []) {
         if (card.updatedAt < since) continue;
         const consolidated = store.events
           .list(card.id)
