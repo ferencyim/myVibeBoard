@@ -15,12 +15,13 @@ const THINKING_LABELS: Record<string, string> = {
 };
 
 /**
- * The provider's own label when it says more than the id (e.g. a Chinese or descriptive name);
- * otherwise the Chinese name of a well-known level. A label that only re-spells the id ("Low",
- * "low") counts as absent, so codex and claude levels read the same. Unknown ids show as is.
+ * A Chinese label from the provider wins. Otherwise a well-known level id gets its Chinese name,
+ * even when the provider's English label differs from the id ("Extra High" for xhigh), so one
+ * picker never mixes 低/中/高 with English labels. An unknown id shows the provider's label,
+ * else the id.
  */
 export function thinkingLabel(option: ThinkingOptionLike): string {
   const label = option.label?.trim();
-  if (label && label.toLowerCase() !== option.id.toLowerCase()) return label;
-  return THINKING_LABELS[option.id.toLowerCase()] ?? label ?? option.id;
+  if (label && /[㐀-鿿]/.test(label)) return label;
+  return THINKING_LABELS[option.id.toLowerCase()] ?? (label || option.id);
 }

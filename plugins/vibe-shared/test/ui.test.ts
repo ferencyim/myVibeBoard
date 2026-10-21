@@ -34,14 +34,17 @@ describe("formatRpcError", () => {
 });
 
 describe("thinkingLabel", () => {
-  test("a label that only respells the id counts as absent (codex 'low', claude 'Low')", () => {
+  test("codex 'low' and claude 'Low' read the same", () => {
     expect(thinkingLabel({ id: "low", label: "low" })).toBe("低");
     expect(thinkingLabel({ id: "low", label: "Low" })).toBe("低");
     expect(thinkingLabel({ id: "xhigh" })).toBe("很高");
   });
 
-  test("a descriptive provider label wins", () => {
+  test("a Chinese provider label wins; an English label does not override a known level", () => {
     expect(thinkingLabel({ id: "high", label: "深度思考" })).toBe("深度思考");
+    expect(thinkingLabel({ id: "xhigh", label: "Extra High" })).toBe("很高");
+    expect(thinkingLabel({ id: "ultra", label: "Ultra Code" })).toBe("极高");
+    expect(thinkingLabel({ id: "turbo", label: "Turbo mode" })).toBe("Turbo mode");
   });
 
   test("covers the known levels and shows unknown ids as is", () => {

@@ -44,7 +44,7 @@ export function RequirementsPanel({ api, projectId }: { api: BoardApi; projectId
 
   return (
     // A separate section: its 编辑 / 保存并提交 buttons must not sit next to the project's 保存项目 / 取消.
-    <View style={{ marginTop: 20, paddingTop: 16, gap: 8, borderTopWidth: 1, borderTopColor: theme.colors.border }}>
+    <View style={{ marginTop: 20, marginBottom: 12, paddingTop: 16, gap: 8, borderTopWidth: 1, borderTopColor: theme.colors.border }}>
       <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>需求文档</Text>
       <Muted>{doc.data ? `${doc.data.path} · 保存会直接提交到项目仓库，与上面的项目设置无关` : "保存会直接提交到项目仓库，与上面的项目设置无关"}</Muted>
       {doc.isLoading ? <Muted>读取中…</Muted> : null}

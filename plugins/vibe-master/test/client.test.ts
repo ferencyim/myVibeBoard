@@ -53,8 +53,8 @@ describe("thinking chips of the settings page", () => {
       { id: "low", label: "低" },
       { id: "high", label: "高" },
     ]);
-    // A provider label that says more than the id wins (here "XH" / "L").
-    expect(thinkingChips(providers, "codex", "gpt-5-codex", "xhigh").map((c) => c.label)).toEqual(["默认", "XH", "L"]);
+    // English provider labels ("XH", "L") never override the known levels.
+    expect(thinkingChips(providers, "codex", "gpt-5-codex", "xhigh").map((c) => c.label)).toEqual(["默认", "很高", "低"]);
   });
 
   it("an empty model means Opus for claude and the default model elsewhere", () => {
