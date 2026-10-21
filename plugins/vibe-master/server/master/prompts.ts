@@ -5,7 +5,7 @@
 //   dynamic      the card itself, quota numbers, the scheduler hint, the reply contract reminder
 
 import { readRequirementsDoc } from "../vibe/db";
-import { composeWakeMessage } from "./templates";
+import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import type { CardEvent, CardView, Preset, Project, Tag } from "../vibe/contract";
 import type { SelectResult } from "../select";
 import type { QuotaMap } from "../subscription/quota";
@@ -25,6 +25,8 @@ export interface ProjectBlockInput {
   openCards: CardView[];
   /** Max characters of the requirements document to include (0 = none). Default 6000. */
   requirementsChars?: number;
+  /** Max other open cards listed. Default 40. */
+  cardLimit?: number;
 }
 
 export const DEFAULT_REQUIREMENTS_CHARS = 6000;
@@ -65,7 +67,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
       (a, b) =>
         COLUMN_ORDER.indexOf(a.column) - COLUMN_ORDER.indexOf(b.column) || a.number - b.number,
     )
-    .slice(0, 40)
+    .slice(0, input.cardLimit ?? 40)
     .map((c) => `- ${c.key} [${c.column}] ${clip(c.title, 80)} :: ${clip(c.description, 100)}`);
   const excerpt = requirementsExcerpt(project, input.requirementsChars ?? DEFAULT_REQUIREMENTS_CHARS);
   return [
@@ -91,11 +93,12 @@ export function buildAssessMessage(input: {
   tagNames: string[];
   quota: QuotaMap;
   hint: SelectResult | null;
-  /** Owner override of the default template (settings). */
-  template?: string;
+  prompts?: PromptPort;
 }): string {
   const { card } = input;
-  return composeWakeMessage("assess_draft", input.template, {
+  return (input.prompts ?? defaultPromptPort()).resolve("master.wake.assess_draft", {
+    projectId: card.projectId,
+    vars: {
     project: input.projectBlock,
     "card.key": card.key,
     "card.title": card.title,
@@ -107,11 +110,17 @@ export function buildAssessMessage(input: {
     "card.acceptance": card.acceptance || "(empty)",
     quota: quotaLine(input.quota),
     hint: input.hint ? `${input.hint.presetName ?? input.hint.provider ?? "none"} (${input.hint.reason})` : "none",
+    },
   });
 }
 
-export function buildRepairMessage(kind: string, error: string): string {
-  return `Your reply was rejected: ${error}\nReply again with only the corrected ${kind} JSON object in a \`\`\`json fence.`;
+export function buildRepairMessage(
+  kind: string,
+  error: string,
+  prompts: PromptPort = defaultPromptPort(),
+  projectId?: string | null,
+): string {
+  return prompts.resolve("master.repair_json", { projectId, vars: { kind, error } });
 }
 
 function eventText(e: CardEvent): string {
@@ -125,19 +134,16 @@ export function buildDoneMessage(input: {
   events: CardEvent[];
   verification: string;
   memory: string;
-  template?: string;
-  /** The master may return a requirements document update (adds the format hint). */
-  maintainRequirements?: boolean;
+  prompts?: PromptPort;
 }): string {
   const notes = input.events
     .filter((e) => e.type === "note" || e.type === "reject" || e.type === "evaluation")
     .slice(-8)
     .map((e) => `- [${e.type}] ${e.author}: ${eventText(e)}`)
     .join("\n");
-  return composeWakeMessage(
-    "card_done",
-    input.template,
-    {
+  return (input.prompts ?? defaultPromptPort()).resolve("master.wake.card_done", {
+    projectId: input.card.projectId,
+    vars: {
       project: input.projectBlock,
       memory: input.memory || "(empty)",
       "card.key": input.card.key,
@@ -147,8 +153,7 @@ export function buildDoneMessage(input: {
       notes: notes || "(none)",
       verification: input.verification || "(none recorded)",
     },
-    { maintainRequirements: input.maintainRequirements },
-  );
+  });
 }
 
 export function buildHelpMessage(input: {
@@ -156,14 +161,17 @@ export function buildHelpMessage(input: {
   card: CardView;
   question: unknown;
   plan: string;
-  template?: string;
+  prompts?: PromptPort;
 }): string {
-  return composeWakeMessage("session_help", input.template, {
-    project: input.projectBlock,
-    "card.key": input.card.key,
-    "card.title": input.card.title,
-    "card.acceptance": clip(input.card.acceptance, 800),
-    plan: input.plan || "(none)",
-    question: JSON.stringify(input.question ?? null, null, 2).slice(0, 2000),
+  return (input.prompts ?? defaultPromptPort()).resolve("master.wake.session_help", {
+    projectId: input.card.projectId,
+    vars: {
+      project: input.projectBlock,
+      "card.key": input.card.key,
+      "card.title": input.card.title,
+      "card.acceptance": clip(input.card.acceptance, 800),
+      plan: input.plan || "(none)",
+      question: JSON.stringify(input.question ?? null, null, 2).slice(0, 2000),
+    },
   });
 }

@@ -15,6 +15,7 @@ import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } 
 import { isEvent, type ProposalEventBody } from "../vibe/contract";
 import { contentHash, lastAssessmentMarker } from "../assess/assess";
 import type { Clock } from "../clock";
+import { defaultTuning, type TuningSource } from "../tuning";
 import type { WakeJob } from "../types";
 import { createDebouncer, type Debouncer } from "./debounce";
 import type { WakeQueue } from "./queue";
@@ -23,7 +24,6 @@ import type { WakeQueue } from "./queue";
 const OWNER_FIELDS = new Set(["title", "description", "acceptance", "refImages", "ref_images_json", "tags"]);
 /** Fields a proposal can change, and how far apart acceptance and its card.updated may be. */
 const PROPOSAL_FIELDS = ["title", "description", "acceptance"] as const;
-const PROPOSAL_WINDOW_MS = 15_000;
 const SWEEP_DRAFTS = 10;
 
 /** Owner switches (settings). Review requests from the board ignore them: asking is explicit. */
@@ -44,7 +44,6 @@ export const DEFAULT_TRIGGER_FLAGS: TriggerFlags = {
   consolidateOnDone: true,
   sweepDraftLimit: SWEEP_DRAFTS,
 };
-const SWEEP_DONE_WINDOW_MS = 48 * 60 * 60_000;
 
 export interface TriggersOptions {
   db: VibeDb;
@@ -53,6 +52,8 @@ export interface TriggersOptions {
   queue: WakeQueue;
   enabled(): boolean;
   debounceMs(): number;
+  /** Automation parameters (settings); defaults when omitted. */
+  tuning?: TuningSource;
   /** Read on every event; missing = everything on. */
   flags?(): TriggerFlags;
   pollIntervalMs?: number;
@@ -111,7 +112,7 @@ export function createTriggers(options: TriggersOptions): Triggers {
     }
     if (!latest || owner.length === 0) return false;
     const gap = Math.abs(Date.parse(latest.resolvedAt) - Date.parse(eventTs));
-    if (!(gap <= PROPOSAL_WINDOW_MS)) return false;
+    if (!(gap <= (options.tuning ?? defaultTuning)().proposalWindowMs)) return false;
     const { id: proposalId, changes } = latest;
     const covered = owner.every((f) => {
       const field = PROPOSAL_FIELDS.find((x) => x === f);
@@ -243,7 +244,7 @@ export function createTriggers(options: TriggersOptions): Triggers {
         queue.enqueue({ kind: "assess_draft", cardId: card.id });
         queued++;
       }
-      const since = new Date(options.clock.now() - SWEEP_DONE_WINDOW_MS).toISOString();
+      const since = new Date(options.clock.now() - (options.tuning ?? defaultTuning)().sweepDoneWindowMs).toISOString();
       for (const card of flags().consolidateOnDone ? store.cards.list({ column: "done" }) : []) {
         if (card.updatedAt < since) continue;
         const consolidated = store.events

@@ -11,7 +11,7 @@ import {
   type CardPriority,
 } from "../vibe/contract";
 import { agentActor, toBoardError, type BoardService } from "../service";
-import { SCOUT_KINDS, SCOUT_MAX_TASKS_PER_CALL, type ScoutService, type ScoutTask } from "../scout";
+import { SCOUT_KINDS, SCOUT_MAX_TASKS_LIMIT, type ScoutService, type ScoutTask } from "../scout";
 
 export interface McpCaller {
   agentId?: string;
@@ -139,7 +139,7 @@ export const MCP_TOOLS = [
         key: str("Card key such as PROD-12 (the scouts run in its worktree)"),
         tasks: {
           type: "array",
-          maxItems: SCOUT_MAX_TASKS_PER_CALL,
+          maxItems: SCOUT_MAX_TASKS_LIMIT,
           description: "Independent questions, one scout each",
           items: {
             type: "object",

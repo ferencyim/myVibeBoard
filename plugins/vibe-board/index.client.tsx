@@ -1,7 +1,8 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { BoardScreen } from "./client/board/BoardScreen";
 import { SessionsScreen } from "./client/sessions/SessionsScreen";
-import { BoardSettingsScreen, BoardSidebarItem, SessionsSidebarItem } from "./client/sidebar";
+import { BehaviourScreen } from "./client/behaviour/BehaviourScreen";
+import { BehaviourSidebarItem, BoardSettingsScreen, BoardSidebarItem, SessionsSidebarItem } from "./client/sidebar";
 
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
@@ -21,6 +22,10 @@ export default function contribute(client: PluginClientContext) {
     // 会话汇总: waiting sessions on top, offline-capable (data from the phone replica).
     client.addScreen({ id: "sessions", title: "会话汇总", Component: SessionsScreen }),
     client.addSidebarHeaderItem({ id: "sessions", title: "会话汇总", Component: SessionsSidebarItem }),
+
+    // Agent 行为: every prompt of every agent, editable globally or per project.
+    client.addScreen({ id: "behaviour", title: "Agent 行为", Component: BehaviourScreen }),
+    client.addSidebarHeaderItem({ id: "behaviour", title: "Agent 行为", Component: BehaviourSidebarItem }),
 
     client.addSettingsScreen({
       id: "preferences",
@@ -48,6 +53,17 @@ export default function contribute(client: PluginClientContext) {
       context: "global",
       onSelect({ openScreen }) {
         openScreen({ screenId: "board" });
+      },
+    }),
+
+    client.addCommandCenterItem({
+      id: "open-behaviour",
+      title: "Vibe Board: Agent 行为（提示词与自动化）",
+      icon: "Bot",
+      keywords: ["prompt", "agent", "behaviour", "提示词", "行为", "规则"],
+      context: "global",
+      onSelect({ openScreen }) {
+        openScreen({ screenId: "behaviour" });
       },
     }),
 

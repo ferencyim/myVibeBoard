@@ -4,6 +4,7 @@
 
 import { publishEvent, type VibeDb } from "../vibe/db";
 import type { Clock } from "../clock";
+import { defaultTuning, type TuningSource } from "../tuning";
 import type { MasterStateFile } from "./state";
 
 export type AlertKind = "quota_low" | "quota_error" | "maintenance_paused" | "permission_wait" | "requirements_failed";
@@ -13,25 +14,28 @@ export interface Alerts {
   raise(kind: AlertKind, subject: string, message: string): boolean;
 }
 
-const COOLDOWN_MS: Record<AlertKind, number> = {
-  quota_low: 6 * 60 * 60_000,
-  quota_error: 10 * 60_000,
-  maintenance_paused: 60 * 60_000,
-  permission_wait: 10 * 60_000,
-  requirements_failed: 60 * 60_000,
-};
+/** Which cooldown group (settings) an alert kind belongs to. */
+const COOLDOWN_GROUP = {
+  quota_low: "quotaLow",
+  quota_error: "urgent",
+  maintenance_paused: "routine",
+  permission_wait: "urgent",
+  requirements_failed: "routine",
+} as const satisfies Record<AlertKind, "quotaLow" | "urgent" | "routine">;
 
 export function createAlerts(options: {
   db: VibeDb;
   state: MasterStateFile;
   clock: Clock;
   sessionId: () => string | null;
+  tuning?: TuningSource;
   log?: (message: string) => void;
 }): Alerts {
   return {
     raise(kind, subject, message) {
       const now = options.clock.now();
-      const bucket = Math.floor(now / COOLDOWN_MS[kind]);
+      const cooldown = (options.tuning ?? defaultTuning)().alertCooldownMs[COOLDOWN_GROUP[kind]];
+      const bucket = Math.floor(now / cooldown);
       const seq = publishEvent(options.db, {
         type: "master.alert",
         payload: {

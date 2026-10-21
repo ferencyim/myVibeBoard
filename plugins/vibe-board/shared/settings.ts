@@ -27,6 +27,16 @@ export const boardSettings = defineSettings({
     stallAutoInterruptMinutes: z.number().min(0).default(0),
     /** A worker failing on quota / login / provider errors moves to the preset's fallback chain. */
     failoverEnabled: z.boolean().default(true),
+    /** Advanced limits (WP-98). Brief: newest notes / chat messages listed, hand-off summary clip. */
+    briefRecentEvents: z.number().int().min(1).max(50).default(5),
+    briefChatLimit: z.number().int().min(0).max(50).default(8),
+    briefHandoffMaxChars: z.number().int().min(500).max(100000).default(8000),
+    /** Scout answer cache in minutes (0 = no cache), answer length and tasks per vibe_scout call. */
+    scoutCacheTtlMinutes: z.number().min(0).max(240).default(10),
+    scoutSummaryMaxLines: z.number().int().min(3).max(200).default(20),
+    scoutMaxTasksPerCall: z.number().int().min(1).max(64).default(16),
+    /** How often the stall watchdog looks at working sessions (read at start-up). */
+    watchdogPollSeconds: z.number().int().min(5).max(600).default(30),
   }),
 });
 

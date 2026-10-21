@@ -56,6 +56,12 @@ describe("prompt registry", () => {
     expect(store.prompts.resolve("demo.other")).toBe("x");
   });
 
+  it("a prompt without placeholders is used verbatim", () => {
+    const { store } = seed();
+    store.prompts.register([def({ key: "demo.raw", placeholders: [], defaultText: "keep {{this}}", fixedSuffix: "" })]);
+    expect(store.prompts.resolve("demo.raw", { vars: { this: "gone" } })).toBe("keep {{this}}");
+  });
+
   it("a customised body keeps the fixed suffix", () => {
     const { store } = seed();
     store.prompts.setOverride("demo.hello", "Yo {{name}}");

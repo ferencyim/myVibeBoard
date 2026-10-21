@@ -43,7 +43,7 @@ function plannerFor(script: Script) {
     store: board.store,
     getPaseo: () => fake.paseo,
     master: fakeMaster(fake),
-    rules: MASTER_RULES,
+    rules: () => MASTER_RULES,
     dataDir: tempDir("vibe-master-data-"),
     clock: new ManualClock(),
     memory,

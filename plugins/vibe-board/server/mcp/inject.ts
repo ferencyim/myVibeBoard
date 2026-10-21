@@ -21,12 +21,14 @@ export function injectBoard<T extends InjectRequest>(
   inject: { instructions: boolean; cliAndMcp: boolean },
   active: { mcpScriptPath: string; bridgeFile: string } | null,
   processExecPath: string,
+  /** Builds the instructions text (registry-backed); default texts when omitted. */
+  instructionsText: () => string = buildBoardInstructions,
 ): T {
   const role = agentRoleOf(request);
   if (role === "scout") return request;
   const config = { ...request.config };
   if (inject.instructions && !(config.systemPrompt ?? "").includes(BOARD_INSTRUCTIONS_MARKER)) {
-    config.systemPrompt = [config.systemPrompt ?? "", buildBoardInstructions()].filter(Boolean).join("\n\n");
+    config.systemPrompt = [config.systemPrompt ?? "", instructionsText()].filter(Boolean).join("\n\n");
   }
   if (inject.cliAndMcp && active) {
     const checking = role === "verifier" || role === "reviewer";

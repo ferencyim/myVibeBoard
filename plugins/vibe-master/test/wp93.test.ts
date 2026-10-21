@@ -10,14 +10,9 @@ import { createAssessor } from "../server/assess/assess";
 import { MemoryUpdateSchema } from "../server/assess/schema";
 import { buildHandoff, HANDOFF_MAX_CHARS } from "../server/master/handoff";
 import { buildAssessMessage, buildDoneMessage, buildProjectBlock } from "../server/master/prompts";
-import {
-  TEMPLATES,
-  composeRules,
-  composeWakeMessage,
-  promptInfos,
-  renderTemplate,
-  unknownPlaceholders,
-} from "../server/master/templates";
+import { masterPromptDefs } from "../server/prompts/defs";
+import { composeRules, defaultPromptPort } from "../server/prompts/port";
+import { renderPromptTemplate, unknownPromptPlaceholders } from "../server/vibe/contract";
 import { createConsolidator } from "../server/memory/consolidate";
 import { createFileMemoryPort } from "../server/memory/files";
 import { createMasterRuntime } from "../server/runtime";
@@ -91,23 +86,25 @@ describe("settings upgrade", () => {
 });
 
 describe("templates", () => {
-  it("renders {{placeholders}}, blanks unknown ones and reports them", () => {
-    expect(renderTemplate("A {{x}} B {{ y.z }} C {{nope}}", { x: "1", "y.z": "2" })).toBe("A 1 B 2 C ");
-    expect(renderTemplate("{{x}}", { x: "$&$1" })).toBe("$&$1");
-    expect(unknownPlaceholders("{{card.key}} {{typo}} {{typo}} {{quota}}", "assess_draft")).toEqual(["typo"]);
+  it("renders {{placeholders}} once, blanks unknown ones and reports them", () => {
+    expect(renderPromptTemplate("A {{x}} B {{ y.z }} C {{nope}}", { x: "1", "y.z": "2" })).toBe("A 1 B 2 C ");
+    expect(renderPromptTemplate("{{x}}", { x: "$&$1" })).toBe("$&$1");
+    const assess = masterPromptDefs().find((d) => d.key === "master.wake.assess_draft")!;
+    expect(unknownPromptPlaceholders("{{card.key}} {{typo}} {{typo}} {{quota}}", assess.placeholders ?? [])).toEqual(["typo"]);
   });
 
-  it("keeps the reply-format section whatever the owner wrote, and falls back to the default when empty", () => {
+  it("keeps the reply-format section whatever the owner wrote", () => {
     const board = setupBoard();
     const card = board.draft("Templated");
     const base = { projectBlock: "PROJ", card, tagNames: [], quota: {}, hint: null };
-    const custom = buildAssessMessage({ ...base, template: "Look at {{card.key}} only" });
+    board.store.prompts.register(masterPromptDefs());
+    board.store.prompts.setOverride("master.wake.assess_draft", "Look at {{card.key}} only");
+    const custom = buildAssessMessage({ ...base, prompts: { resolve: board.store.prompts.resolve } });
     expect(custom.startsWith(`Look at ${card.key} only\n\n`)).toBe(true);
     expect(custom.endsWith("\n\nReply with the assess_draft JSON object only.")).toBe(true);
     expect(custom).toContain('"verdict"');
     expect(custom).toContain('"proposal"');
     const dflt = buildAssessMessage(base);
-    expect(buildAssessMessage({ ...base, template: "  " })).toBe(dflt);
     expect(dflt.startsWith("[wake:assess_draft]\nPROJ\n")).toBe(true);
     expect(dflt).toContain(`Key: ${card.key}`);
     expect(dflt.endsWith("Reply with the assess_draft JSON object only.")).toBe(true);
@@ -117,19 +114,19 @@ describe("templates", () => {
     const board = setupBoard();
     const card = board.draft("Done soon");
     const input = { projectBlock: "P", card, events: [], verification: "", memory: "" };
-    expect(buildDoneMessage(input)).not.toContain("requirementsUpdate");
-    const on = buildDoneMessage({ ...input, maintainRequirements: true });
+    const off = buildDoneMessage({ ...input, prompts: defaultPromptPort({ maintainRequirements: false }) });
+    expect(off).not.toContain("requirementsUpdate");
+    const on = buildDoneMessage({ ...input, prompts: defaultPromptPort({ maintainRequirements: true }) });
     expect(on).toContain("requirementsUpdate");
     expect(on.endsWith("Reply with the card_done JSON object only.")).toBe(true);
-    expect(composeWakeMessage("session_help", "x", {})).toBe("x\n\nReply with the session_help JSON object only.");
   });
 
   it("documents every placeholder its default template uses", () => {
-    for (const info of promptInfos(true)) {
-      const def = TEMPLATES[info.settingKey === "templateAssessDraft" ? "assess_draft" : info.settingKey === "templateCardDone" ? "card_done" : "session_help"];
-      expect(unknownPlaceholders(def.defaultTemplate, def.id)).toEqual([]);
-      expect(info.defaultTemplate).toBe(def.defaultTemplate);
-      expect(info.formatSection).toContain("JSON object only");
+    for (const def of masterPromptDefs().filter((d) => d.placeholders?.length)) {
+      expect(unknownPromptPlaceholders(def.defaultText, def.placeholders ?? [])).toEqual([]);
+    }
+    for (const def of masterPromptDefs().filter((d) => d.key.startsWith("master.wake."))) {
+      expect(def.fixedSuffix).toContain("JSON object only");
     }
   });
 
@@ -245,10 +242,10 @@ describe("kept history and hand-off", () => {
 
   it("sends a changed rule supplement to a running agent once", async () => {
     const board = setupBoard();
-    const { runtime, fake, settings } = runtimeFor(board, () => assessmentJson());
+    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
     runtime.triggers.assessNow(board.draft("A").id);
     await runtime.queue.idle();
-    settings.rulesSupplement = "Always answer in Chinese.";
+    board.store.prompts.setOverride("master.rules_supplement", "Always answer in Chinese.");
     runtime.triggers.assessNow(board.draft("B").id);
     await runtime.queue.idle();
     runtime.triggers.assessNow(board.draft("C").id);
@@ -396,10 +393,10 @@ describe("trigger switches", () => {
     await runtime.dispose();
   });
 
-  it("applies a template override from the settings to the next wake", async () => {
+  it("applies a template override from the registry to the next wake", async () => {
     const board = setupBoard();
-    const { runtime, settings, fake } = runtimeFor(board, () => assessmentJson());
-    settings.templateAssessDraft = "CUSTOM {{card.key}}\n{{project}}";
+    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
+    board.store.prompts.setOverride("master.wake.assess_draft", "CUSTOM {{card.key}}\n{{project}}");
     const card = board.draft("Custom");
     runtime.triggers.assessNow(card.id);
     await runtime.queue.idle();
@@ -439,6 +436,7 @@ describe("requirements maintenance", () => {
       master,
       assessor,
       memory: createFileMemoryPort(),
+      prompts: defaultPromptPort({ maintainRequirements: opts.maintain ?? true }),
       options: {
         maintainRequirements: () => opts.maintain ?? true,
         requirementsChars: () => opts.chars ?? 6000,

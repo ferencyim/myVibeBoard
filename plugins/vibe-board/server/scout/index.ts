@@ -11,6 +11,7 @@ import { selectAgent, type AgentProfile, type Preset, type SelectContext } from 
 import { BoardError, type BoardService } from "../service";
 import { postChat } from "../chat/post";
 import { ensurePresetModel } from "../dispatch/model";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 
 export type ScoutPaseo = Pick<PaseoApi, "agents"> & {
   providers?: Pick<PaseoApi["providers"], "listModes" | "listModels">;
@@ -20,7 +21,9 @@ export const SCOUT_KINDS = ["locate", "inventory", "research"] as const;
 export type ScoutKind = (typeof SCOUT_KINDS)[number];
 
 export const SCOUT_MAX_PARALLEL_LIMIT = 16;
+/** Default and upper bound of tasks per vibe_scout call (the setting scoutMaxTasksPerCall picks the actual cap). */
 export const SCOUT_MAX_TASKS_PER_CALL = 16;
+export const SCOUT_MAX_TASKS_LIMIT = 64;
 const SUMMARY_MAX_LINES = 20;
 const CACHE_TTL_MS = 10 * 60_000;
 
@@ -35,6 +38,10 @@ export interface ScoutConfig {
   preset: string;
   maxParallel: number;
   timeoutMs: number;
+  /** Defaults: 20 lines, 10 minutes (0 = no cache), 16 tasks. */
+  summaryMaxLines?: number;
+  cacheTtlMs?: number;
+  maxTasksPerCall?: number;
 }
 
 export interface ScoutResult {
@@ -67,13 +74,14 @@ export interface ScoutServiceOptions {
   /** HEAD commit of a directory (cache key). Default: git rev-parse. */
   headOf?: (cwd: string) => Promise<string>;
   now?: () => number;
+  /** Prompt registry (default texts when omitted). */
+  prompts?: PromptResolver;
 }
 
-export const SCOUT_SYSTEM_PROMPT = `[vibe-scout]
-You are a read-only scout working for another coding agent. Answer ONE question about the repository in your working directory.
-- Never modify files, never run commands that change state, never call vibe_scout or any vibe_* tool.
-- Be fast: search and read only what the question needs.
-- Reply with at most ${SUMMARY_MAX_LINES} lines of plain text, no preamble. Every finding is one line "path:line - what it is" (relative paths). Say explicitly when something was not found.`;
+/** Default system prompt of a scout (the owner may override it, see server/prompts). */
+export const SCOUT_SYSTEM_PROMPT = defaultPrompts.resolve("board.scout_system", {
+  vars: { maxLines: String(SUMMARY_MAX_LINES) },
+});
 
 /**
  * Read-only settings per provider: claude has a "plan" mode; codex has no read-only mode id, so
@@ -165,34 +173,37 @@ export function pickScoutPreset(
   return presets.find((p) => p.id === selection.agentId) ?? null;
 }
 
-/** Keeps the first SUMMARY_MAX_LINES non-empty lines. */
-export function trimSummary(text: string): string {
+/** Keeps the first `max` non-empty lines. */
+export function trimSummary(text: string, max: number = SUMMARY_MAX_LINES): string {
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trimEnd())
     .filter((l) => l.trim());
-  const kept = lines.slice(0, SUMMARY_MAX_LINES);
+  const kept = lines.slice(0, max);
   if (lines.length > kept.length) kept.push(`... (${lines.length - kept.length} more lines cut)`);
   return kept.join("\n");
 }
 
 type NormTask = { goal: string; kind: ScoutKind; paths: string[] };
 
-function buildPrompt(task: NormTask): string {
-  const how = {
-    locate: "Locate the files, symbols or lines that answer the goal.",
-    inventory: "Make a precise inventory (counts, lists) for the goal; give exact numbers.",
-    research:
-      "Research the goal from the repository docs, comments and sources (and the web if you have a search tool).",
-  }[task.kind];
-  return [
-    `Kind: ${task.kind}. ${how}`,
-    `Goal: ${task.goal}`,
-    task.paths.length ? `Restrict to: ${task.paths.join(", ")}` : "",
-    `Answer in at most ${SUMMARY_MAX_LINES} lines with path:line anchors.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+function buildPrompt(
+  task: NormTask,
+  prompts: PromptResolver,
+  maxLines: number,
+  projectId: string,
+): string {
+  const how = prompts.resolve(`board.scout_how.${task.kind}`, { projectId });
+  return prompts.resolve("board.scout_task", {
+    projectId,
+    vars: {
+      kind: task.kind,
+      how,
+      goal: task.goal,
+      restrict: task.paths.length ? `Restrict to: ${task.paths.join(", ")}
+` : "",
+      maxLines: String(maxLines),
+    },
+  });
 }
 
 const gitHead = (cwd: string) =>
@@ -224,6 +235,7 @@ export function createScoutService(options: ScoutServiceOptions) {
   const { board } = options;
   const now = options.now ?? Date.now;
   const headOf = options.headOf ?? gitHead;
+  const prompts = options.prompts ?? defaultPrompts;
   let currentLimit = 4;
   const gate = new Semaphore(() => currentLimit);
   const cache = new Map<string, { at: number; result: ScoutResult }>();
@@ -231,7 +243,7 @@ export function createScoutService(options: ScoutServiceOptions) {
 
   async function runOne(
     task: NormTask,
-    ctx: { cardId: string; cardKey: string; cwd: string; preset: Preset; readOnly: ReadOnlySetup; timeoutMs: number },
+    ctx: { cardId: string; projectId: string; maxLines: number; cardKey: string; cwd: string; preset: Preset; readOnly: ReadOnlySetup; timeoutMs: number },
   ): Promise<ScoutResult> {
     const base = { goal: task.goal, kind: task.kind };
     const paseo = options.getPaseo();
@@ -247,12 +259,14 @@ export function createScoutService(options: ScoutServiceOptions) {
         env: { VIBE_ROLE: "scout", VIBE_CARD_ID: ctx.cardId, VIBE_CARD_KEY: ctx.cardKey },
         config: {
           provider: specOf(ctx.preset),
-          systemPrompt: SCOUT_SYSTEM_PROMPT,
+          systemPrompt: prompts.resolve("board.scout_system", { vars: { maxLines: String(ctx.maxLines) } }),
           ...readOnly,
         },
       });
-      const result = await handle.run(buildPrompt(task), { timeoutMs: ctx.timeoutMs });
-      const text = trimSummary(result.lastMessage ?? "");
+      const result = await handle.run(buildPrompt(task, prompts, ctx.maxLines, ctx.projectId), {
+        timeoutMs: ctx.timeoutMs,
+      });
+      const text = trimSummary(result.lastMessage ?? "", ctx.maxLines);
       if (result.status === "idle") return { ...base, status: "ok", summary: text || "(no findings)" };
       if (result.status === "error") {
         return { ...base, status: "failed", summary: result.error ?? "scout failed" };
@@ -269,9 +283,13 @@ export function createScoutService(options: ScoutServiceOptions) {
     if (!Array.isArray(tasks) || tasks.length === 0) {
       throw new BoardError("invalid", "tasks must be a non-empty array");
     }
-    if (tasks.length > SCOUT_MAX_TASKS_PER_CALL) {
-      throw new BoardError("invalid", `At most ${SCOUT_MAX_TASKS_PER_CALL} tasks per call`);
+    const config = await options.getConfig();
+    const maxTasks = config.maxTasksPerCall ?? SCOUT_MAX_TASKS_PER_CALL;
+    if (tasks.length > maxTasks) {
+      throw new BoardError("invalid", `At most ${maxTasks} tasks per call`);
     }
+    const maxLines = config.summaryMaxLines ?? SUMMARY_MAX_LINES;
+    const cacheTtlMs = config.cacheTtlMs ?? CACHE_TTL_MS;
     const norm: NormTask[] = tasks.map((t) => {
       const goal = String(t?.goal ?? "").trim();
       if (!goal) throw new BoardError("invalid", "Every task needs a goal");
@@ -284,7 +302,6 @@ export function createScoutService(options: ScoutServiceOptions) {
     const cwd = card.worktree || project?.repoPath;
     if (!cwd) throw new BoardError("invalid", `${card.key} has no worktree or project path to scout in`);
 
-    const config = await options.getConfig();
     currentLimit = Math.min(SCOUT_MAX_PARALLEL_LIMIT, Math.max(1, Math.floor(config.maxParallel) || 4));
     const presets = board.presets.list().presets;
     const platform = options.platform ?? process.platform;
@@ -325,17 +342,17 @@ export function createScoutService(options: ScoutServiceOptions) {
       norm.map((task) => {
         const cacheKey = JSON.stringify([card.id, head, task.kind, task.goal, task.paths]);
         const hit = cache.get(cacheKey);
-        if (hit && now() - hit.at < CACHE_TTL_MS) {
+        if (hit && now() - hit.at < cacheTtlMs) {
           return Promise.resolve<ScoutResult>({ ...hit.result, cached: true });
         }
         const existing = inflight.get(cacheKey);
         if (existing) return existing;
         const pending = gate
           .run(() =>
-            runOne(task, { cardId: card.id, cardKey: card.key, cwd, preset, readOnly, timeoutMs: config.timeoutMs }),
+            runOne(task, { cardId: card.id, projectId: card.projectId, maxLines, cardKey: card.key, cwd, preset, readOnly, timeoutMs: config.timeoutMs }),
           )
           .then((result) => {
-            if (result.status === "ok") cache.set(cacheKey, { at: now(), result });
+            if (result.status === "ok" && cacheTtlMs > 0) cache.set(cacheKey, { at: now(), result });
             return result;
           })
           .finally(() => inflight.delete(cacheKey));

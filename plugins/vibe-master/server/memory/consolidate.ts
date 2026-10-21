@@ -7,6 +7,8 @@ import { MemoryUpdateSchema, HelpSchema, type Help, type MemoryUpdate } from "..
 import { parseReply } from "../assess/parse";
 import type { Assessor } from "../assess/assess";
 import { writeRequirementsDoc, type GitRunner, type VibeDb, type VibeStore } from "../vibe/db";
+import { defaultPromptPort, type PromptPort } from "../prompts/port";
+import { defaultTuning, type TuningSource } from "../tuning";
 import type { MasterAsk } from "../types";
 import type { ApplyResult, MemoryPort } from "./files";
 
@@ -16,12 +18,13 @@ export interface ConsolidateDeps {
   master: MasterAsk;
   assessor: Assessor;
   memory: MemoryPort;
-  /** Owner settings (read on every use). All optional: defaults = built-in templates, 6000 chars, no requirements writes. */
+  /** Prompt texts (registry); built-in defaults when omitted. */
+  prompts?: PromptPort;
+  /** Owner settings (read on every use). All optional: 6000 chars, no requirements writes, default tuning. */
   options?: {
-    templateDone?(): string | undefined;
-    templateHelp?(): string | undefined;
     requirementsChars?(): number;
     maintainRequirements?(): boolean;
+    tuning?: TuningSource;
   };
   /** A requirements update failed: remind the owner (once per cooldown). */
   onRequirementsFailure?(cardKey: string, message: string): void;
@@ -72,6 +75,14 @@ function verificationSummary(db: VibeDb, cardId: string): string {
 export function createConsolidator(deps: ConsolidateDeps) {
   const { store } = deps;
   const log = deps.log ?? (() => undefined);
+  const prompts = deps.prompts ?? defaultPromptPort();
+  const tuning = deps.options?.tuning ?? defaultTuning;
+  const projectBlockOf = (input: Omit<Parameters<typeof buildProjectBlock>[0], "requirementsChars" | "cardLimit">) =>
+    buildProjectBlock({
+      ...input,
+      requirementsChars: deps.options?.requirementsChars?.(),
+      cardLimit: tuning().projectBlockCardLimit,
+    });
 
   /**
    * Write the master's requirementsUpdate to the project's document and commit only that file.
@@ -135,18 +146,20 @@ export function createConsolidator(deps: ConsolidateDeps) {
     if (!project.repoPath || !existsSync(project.repoPath)) return { status: "skipped", reason: "no_repo" };
 
     const message = buildDoneMessage({
-      projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.options?.requirementsChars?.() }),
+      projectBlock: projectBlockOf({ project, tags, presets, openCards }),
       card,
       events,
       verification: verificationSummary(deps.db, card.id),
       memory: formatMemory(deps.memory.snapshot(project.repoPath)),
-      template: deps.options?.templateDone?.(),
-      maintainRequirements: deps.options?.maintainRequirements?.() ?? false,
+      prompts,
     });
     let parsed = parseReply(await deps.master.ask(message), MemoryUpdateSchema);
-    if (!parsed.ok) {
+    for (let retry = 0; retry < tuning().jsonRepairRetries && !parsed.ok; retry++) {
       log(`memory update for ${card.key} rejected, asking for a fix: ${parsed.error}`);
-      parsed = parseReply(await deps.master.ask(buildRepairMessage("card_done", parsed.error)), MemoryUpdateSchema);
+      parsed = parseReply(
+        await deps.master.ask(buildRepairMessage("card_done", parsed.error, prompts, card.projectId)),
+        MemoryUpdateSchema,
+      );
     }
     if (!parsed.ok) {
       store.events.add({
@@ -198,15 +211,18 @@ export function createConsolidator(deps: ConsolidateDeps) {
     const { project, tags, presets, openCards } = deps.assessor.context(card);
     const plan = store.plans.list(card.id).at(-1)?.snapshot;
     const message = buildHelpMessage({
-      projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.options?.requirementsChars?.() }),
-      template: deps.options?.templateHelp?.(),
+      projectBlock: projectBlockOf({ project, tags, presets, openCards }),
+      prompts,
       card,
       question,
       plan: plan ? [plan.description, ...plan.checks.map((c) => `- ${c.text}`)].filter(Boolean).join("\n") : "",
     });
     let parsed = parseReply(await deps.master.ask(message), HelpSchema);
-    if (!parsed.ok) {
-      parsed = parseReply(await deps.master.ask(buildRepairMessage("session_help", parsed.error)), HelpSchema);
+    for (let retry = 0; retry < tuning().jsonRepairRetries && !parsed.ok; retry++) {
+      parsed = parseReply(
+        await deps.master.ask(buildRepairMessage("session_help", parsed.error, prompts, card.projectId)),
+        HelpSchema,
+      );
     }
     if (!parsed.ok) return { status: "failed", reason: parsed.error };
     const help = parsed.value;

@@ -1843,7 +1843,10 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     ): string {
       const t = mustTemplate(key);
       const { text } = prompts.body(key, options);
-      return composePrompt(renderPromptTemplate(text, options.vars ?? {}), t.fixed_suffix);
+      // A prompt without declared placeholders is used verbatim (rules text may contain "{{").
+      const declared = JSON.parse(t.placeholders_json) as unknown[];
+      const body = declared.length > 0 ? renderPromptTemplate(text, options.vars ?? {}) : text;
+      return composePrompt(body, t.fixed_suffix);
     },
 
     /** Set (or with blank text, clear) an override. `projectId` null/omitted = global. */

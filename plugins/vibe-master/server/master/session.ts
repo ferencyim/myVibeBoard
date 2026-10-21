@@ -9,7 +9,8 @@
 import { mkdirSync } from "node:fs";
 import type { MasterSessionRow, MasterSettings, MasterTarget } from "../../shared/rpc";
 import { buildHandoff, type SwitchNote } from "./handoff";
-import { composeRules } from "./templates";
+import { hashText, rulesUpdateMessage, type PromptPort } from "../prompts/port";
+import { defaultTuning, type TuningSource } from "../tuning";
 import type { AgentSession } from "../vibe/contract";
 import type { VibeStore } from "../vibe/db";
 import { FOLLOW_SETTINGS, type PermissionResolver, type ResolvedPermission } from "../subscription/permission";
@@ -30,10 +31,11 @@ export interface MasterSessionDeps {
   settings(): MasterSettings;
   state: MasterStateFile;
   permission: PermissionResolver;
-  /** Static rules (system prompt). */
-  rules: string;
-  /** Owner supplement appended to the rules (settings); read on every use. */
-  supplement?(): string;
+  /** The system prompt in effect (rules body + supplement from the prompt registry); read on every use. */
+  rules(): string;
+  /** Wording of the "rules updated" notice. */
+  prompts: PromptPort;
+  tuning?: TuningSource;
   workspace(): string;
   alerts: Alerts;
   log(message: string, error?: unknown): void;
@@ -68,12 +70,11 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   /** The rules were delivered in the conversation (providers that ignore systemPrompt need this). */
   let rulesSent = false;
   let settingsTarget: { key: string; value: MasterTarget } | null = null;
-  /** Rule supplement the agent has seen (system prompt or conversation). */
-  let deliveredSupplement = "";
+  /** Hash of the rules text the agent has seen (system prompt or conversation). */
+  let deliveredRules = "";
   /** Hand-off summary for the first message to a freshly started agent. */
   let pendingHandoff: string | null = null;
-  const supplement = () => deps.supplement?.() ?? "";
-  const rules = () => composeRules(deps.rules, supplement());
+  const tuning = deps.tuning ?? defaultTuning;
   const nowMs = () => Date.now();
   const note = (sessionId: string, patch: Partial<MasterSessionNote>) =>
     deps.state.update((d) => ({
@@ -149,7 +150,14 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       .map((n) => ({ at: n.retiredAt!, text: `旧会话结束: ${n.retiredReason}` }));
     switches.push(...retired, { at: new Date(nowMs()).toISOString(), text: `本次更换原因: ${reason}` });
     switches.sort((a, b) => a.at.localeCompare(b.at));
-    return buildHandoff({ store, nowMs: nowMs(), switches });
+    return buildHandoff({
+      store,
+      nowMs: nowMs(),
+      switches,
+      prompts: deps.prompts,
+      maxChars: tuning().handoffMaxChars,
+      recentDays: tuning().handoffRecentDays,
+    });
   }
 
   async function spawn(paseo: MasterPaseo, target: MasterTarget, reason: string): Promise<AgentSession> {
@@ -157,6 +165,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     const { modeId } = await resolvePermission(target);
     const cwd = deps.workspace();
     mkdirSync(cwd, { recursive: true });
+    const systemPrompt = deps.rules();
     const created = await paseo.agents.create({
       cwd,
       title: "Vibe Master",
@@ -164,7 +173,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       env: { VIBE_ROLE: "master" },
       config: {
         provider: providerSpec(target),
-        systemPrompt: rules(),
+        systemPrompt,
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
         ...(modeId ? { modeId } : {}),
       },
@@ -177,12 +186,12 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     });
     deps.state.update((s) => ({
       ...s,
-      agent: { agentId: created.id, sessionId: session.id, target, modeId },
+      agent: { agentId: created.id, sessionId: session.id, target, modeId, rulesHash: hashText(systemPrompt) },
     }));
     note(session.id, { provider: target.provider, model: target.model, thinking: target.thinking });
     handle = created;
     rulesSent = target.provider === "claude";
-    deliveredSupplement = supplement();
+    deliveredRules = hashText(systemPrompt);
     pendingHandoff = hadPredecessor ? handoffFor(reason) : null;
     deps.log(`master agent ${created.id} started on ${providerSpec(target)}`);
     return session;
@@ -210,6 +219,8 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       if (alive) {
         handle = candidate;
         rulesSent = true;
+        // Records from before the hash was kept: assume the agent has the current rules.
+        deliveredRules = record.rulesHash ?? hashText(deps.rules());
         return candidate;
       }
     }
@@ -279,16 +290,11 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       }
       const session = liveSession();
       moveSession(session, "working");
-      const sup = supplement();
+      const rulesText = deps.rules();
+      const rulesHash = hashText(rulesText);
       const parts: string[] = [];
-      if (!rulesSent) parts.push(rules());
-      else if (sup !== deliveredSupplement) {
-        parts.push(
-          sup.trim()
-            ? `[Owner rule supplement updated - it replaces any earlier supplement]\n${sup.trim()}`
-            : "[Owner rule supplement removed - ignore any earlier supplement]",
-        );
-      }
+      if (!rulesSent) parts.push(rulesText);
+      else if (rulesHash !== deliveredRules) parts.push(rulesUpdateMessage(deps.prompts, rulesText));
       const handoff = pendingHandoff;
       if (handoff) parts.push(handoff);
       parts.push(prompt);
@@ -304,7 +310,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
 
       let result;
       try {
-        result = await agent.run(message, { timeoutMs: options.timeoutMs ?? 5 * 60_000 });
+        result = await agent.run(message, { timeoutMs: options.timeoutMs ?? tuning().askTimeoutMs });
       } catch (error) {
         return fail(classify(error instanceof Error ? error.message : String(error)));
       }
@@ -321,7 +327,8 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
         return fail(new MasterError("agent", "The master agent returned an empty reply"));
       }
       rulesSent = true;
-      deliveredSupplement = sup;
+      deliveredRules = rulesHash;
+      deps.state.update((s) => (s.agent ? { ...s, agent: { ...s.agent, rulesHash } } : s));
       if (pendingHandoff === handoff) pendingHandoff = null;
       moveSession(session, "idle");
       return result.lastMessage;

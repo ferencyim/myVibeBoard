@@ -14,7 +14,7 @@
 // Synced values are the raw SQLite cells (text / integer / null): `*_json` columns stay JSON text,
 // flags stay 0/1. The phone keeps the same column layout.
 
-import { isHlc, syncSpec, type CardColumn } from "../vibe/contract";
+import { isHlc, parsePromptOverrideId, syncSpec, type CardColumn } from "../vibe/contract";
 import type { Row, SqlParam, VibeDb, VibeStore } from "../vibe/db";
 import { ROW_MARKER, applyChange, type JsonValue, type SyncNode } from "../vibe/sync";
 import { isPhoneChatBody } from "./policy";
@@ -31,6 +31,7 @@ const BOTH_TABLES = [
   "card_tag",
   "card_event",
   "maintenance_rule",
+  "prompt_override",
 ] as const;
 const DOWN_TABLES = [
   "agent_session",
@@ -40,6 +41,7 @@ const DOWN_TABLES = [
   "verification_item",
   "evidence_file",
   "maintenance_run",
+  "prompt_template",
 ] as const;
 /**
  * Display-only columns of the phone-writable tables (card key and number, project prefix, ...).
@@ -61,6 +63,7 @@ const DISPLAY_COLUMNS: Record<string, readonly string[]> = {
   ],
   preset: ["builtin", "created_at", "updated_at"],
   tag: ["builtin"],
+  prompt_override: ["key", "project_id", "created_at", "updated_at"],
 };
 /** Local file paths never leave the computer. */
 const DOWN_EXCLUDE: Record<string, readonly string[]> = { evidence_file: ["path", "thumb_path"] };
@@ -533,6 +536,35 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     }
   }
 
+  /** Phone-edited prompt texts: written through the registry (key and scope come from the row id). */
+  function importOverrides(): void {
+    if (!has("prompt_override") || !has("prompt_template")) return;
+    for (const p of pendingRows("prompt_override")) {
+      const id = parsePromptOverrideId(p.rowId);
+      const known =
+        id && db.prepare("SELECT 1 AS x FROM prompt_template WHERE key = ?").get(id.key) !== undefined;
+      if (!id || !known) {
+        repairDelete("prompt_override", p.rowId, new Error("unknown prompt override"));
+        continue;
+      }
+      const text = val(p, "text");
+      try {
+        vibe.prompts.setOverride(id.key, typeof text === "string" ? text : "", { projectId: id.projectId });
+      } catch (error) {
+        if (!bizRow("prompt_override", p.rowId)) {
+          repairDelete("prompt_override", p.rowId, error);
+          continue;
+        }
+        warn(`sync: prompt_override ${p.rowId} update failed`, error);
+      }
+      if (!bizRow("prompt_override", p.rowId)) {
+        repairDelete("prompt_override", p.rowId, new Error("blank prompt override")); // nothing to keep
+        continue;
+      }
+      settle("prompt_override", p);
+    }
+  }
+
   function importCardTags(): void {
     if (!has("card_tag")) return;
     const adds = db
@@ -633,6 +665,7 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     importCards();
     importEvents();
     importRules();
+    importOverrides();
     importCardTags();
     importDeletes();
     return repaired;

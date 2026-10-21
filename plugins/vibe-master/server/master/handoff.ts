@@ -1,13 +1,15 @@
 // Hand-off summary for a freshly started master agent. Built from the board alone (cards, events,
 // session history), so it works when the previous agent is gone or archived. Size-capped: the new
-// agent still gets full detail from the wake messages and `vibe_show`.
+// agent still gets full detail from the wake messages and `vibe_show`. The framing text is the
+// registered prompt `master.handoff_summary`; this module only fills its sections.
 
 import { contentHash, lastAssessmentMarker } from "../assess/assess";
+import { defaultPromptPort, type PromptPort } from "../prompts/port";
+import { DEFAULT_TUNING } from "../tuning";
 import type { CardView } from "../vibe/contract";
 import type { VibeStore } from "../vibe/db";
 
-export const HANDOFF_MAX_CHARS = 3500;
-const RECENT_DAYS = 7;
+export const HANDOFF_MAX_CHARS = DEFAULT_TUNING.handoffMaxChars;
 
 const clip = (text: string, max: number) => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -34,9 +36,15 @@ export function buildHandoff(input: {
   nowMs: number;
   /** Why the previous agent was replaced, plus earlier switches (newest last). */
   switches: SwitchNote[];
+  prompts?: PromptPort;
+  /** Size cap and look-back window (settings); defaults 3500 characters and 7 days. */
+  maxChars?: number;
+  recentDays?: number;
 }): string {
   const { store } = input;
-  const since = new Date(input.nowMs - RECENT_DAYS * 24 * 60 * 60_000).toISOString();
+  const recentDays = input.recentDays ?? DEFAULT_TUNING.handoffRecentDays;
+  const maxChars = input.maxChars ?? DEFAULT_TUNING.handoffMaxChars;
+  const since = new Date(input.nowMs - recentDays * 24 * 60 * 60_000).toISOString();
   const tagName = new Map(store.tags.list().map((t) => [t.id, t.name]));
   const tagNames = (c: CardView) => c.tags.map((id) => tagName.get(id)).filter((n): n is string => !!n);
   const cards = store.cards.list({}).filter((c) => !c.archivedAt);
@@ -84,13 +92,14 @@ export function buildHandoff(input: {
 
   const switches = input.switches.slice(-5).map((s) => `- ${day(s.at)} ${clip(s.text, 120)}`);
 
-  const sections = [
-    "[handoff] 你接替上一任总 agent。以下摘要由插件根据看板生成，不依赖旧会话；细节用 vibe_show / vibe_list 查，不要凭记忆。",
-    switches.length ? `## 最近的切换\n${switches.join("\n")}` : "",
-    `## 最近审查结论（${RECENT_DAYS} 天内）\n${reviews.slice(0, 5).map((r) => r.line).join("\n") || "- 无"}`,
-    `## 草稿与审查状态\n${drafts.join("\n") || "- 没有草稿"}`,
-    `## 近期完成的卡片\n${done.join("\n") || "- 无"}`,
-  ].filter(Boolean);
-  const text = sections.join("\n\n");
-  return text.length > HANDOFF_MAX_CHARS ? `${text.slice(0, HANDOFF_MAX_CHARS - 1)}…` : text;
+  const text = (input.prompts ?? defaultPromptPort()).resolve("master.handoff_summary", {
+    vars: {
+      switches: switches.join("\n") || "- 无",
+      days: String(recentDays),
+      reviews: reviews.slice(0, 5).map((r) => r.line).join("\n") || "- 无",
+      drafts: drafts.join("\n") || "- 没有草稿",
+      done: done.join("\n") || "- 无",
+    },
+  });
+  return text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text;
 }

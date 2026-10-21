@@ -130,6 +130,8 @@ export interface FakeAgent {
   provider: string;
   options: CreateAgentOptions;
   prompts: string[];
+  /** timeoutMs of every run() call, in order. */
+  timeouts: Array<number | undefined>;
   archived: boolean;
   title?: string;
 }
@@ -149,8 +151,9 @@ export function fakePaseo(
   let usage = options.usage ?? [];
   const handleFor = (agent: FakeAgent): MasterAgentHandle => ({
     id: agent.id,
-    async run(text) {
+    async run(text, runOptions) {
       agent.prompts.push(text);
+      agent.timeouts.push((runOptions as { timeoutMs?: number } | undefined)?.timeoutMs);
       const out = await script({
         provider: agent.provider,
         agentId: agent.id,
@@ -183,6 +186,7 @@ export function fakePaseo(
           provider,
           options: opts,
           prompts: [],
+          timeouts: [],
           archived: false,
         };
         agents.push(agent);

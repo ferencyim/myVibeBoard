@@ -14,7 +14,8 @@ import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { postChat } from "../chat/post";
 import { loadHandoff } from "./handoff";
 import { ensurePresetModel, type ModelCatalog } from "./model";
-import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug } from "./brief";
+import type { PromptResolver } from "../prompts";
+import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug, type BriefLimits } from "./brief";
 
 export type DispatchPaseo = Pick<PaseoApi, "projects" | "workspaces"> & ModelCatalog;
 
@@ -49,6 +50,10 @@ export interface DispatcherOptions {
   newAgentId?: () => string;
   /** Failover on (default true): an agent that cannot even start for a provider-side reason tries the preset's fallbacks. */
   failoverEnabled?: () => boolean | Promise<boolean>;
+  /** Prompt registry (default texts when omitted). */
+  prompts?: PromptResolver;
+  /** Brief limits from the board settings. */
+  getLimits?: () => Partial<BriefLimits> | Promise<Partial<BriefLimits>>;
 }
 
 const normalizePath = (p: string) => p.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
@@ -159,6 +164,8 @@ export function createDispatcher(options: DispatcherOptions) {
             });
           }
           const prompt = buildDispatchBrief({
+            prompts: options.prompts,
+            limits: await options.getLimits?.(),
             card,
             project,
             preset: current,
