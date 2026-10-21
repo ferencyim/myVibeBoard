@@ -42,7 +42,10 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
     ["id"],
     [
       "name",
-      "project_type",
+      "project_type", // COMPAT(project-types): added 2026-10-21, remove after 2027-04-01
+      "project_types_json",
+      "description",
+      "requirements_path",
       "default_preset_id",
       "concurrency_limit",
       "devices_json",
@@ -85,7 +88,8 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
       "runtime_env",
       "instructions",
       "fallback_preset_ids_json",
-      "role_hint",
+      "role_hint", // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
+      "role_hints_json",
     ],
   ),
   both("tag", ["id"], ["name", "evidence"]),

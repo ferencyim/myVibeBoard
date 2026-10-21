@@ -457,3 +457,36 @@ describe("offline replies", () => {
     expect(s.queue.list("stale")[0]?.staleReason).toBe("question_gone");
   });
 });
+
+describe("round 3 fields over sync", () => {
+  it("publishes projectTypes / description / requirementsPath / roleHints and maps old single-value phone writes", async () => {
+    const t = setup();
+    t.store.projects.update(t.project.id, { projectTypes: ["web", "backend"], description: "d", requirementsPath: "docs/R.md" });
+    const preset = t.store.presets.create({ name: "rev", provider: "claude", model: "m", roleHints: ["reviewer", "scout"] });
+    const chat = t.store.cards.addChat({
+      cardId: t.store.cards.create({ projectId: t.project.id, title: "c" }).id,
+      authorKind: "master",
+      text: "hello",
+      kind: "info",
+    });
+    const p = t.phone();
+    await p.syncNow();
+    expect(p.row("project", t.project.id)).toMatchObject({
+      project_type: "web",
+      project_types_json: '["web","backend"]',
+      description: "d",
+      requirements_path: "docs/R.md",
+    });
+    expect(p.row("preset", preset.id)).toMatchObject({ role_hint: "reviewer", role_hints_json: '["reviewer","scout"]' });
+    expect(p.row("card_event", chat.id)).toMatchObject({ type: "chat", author_kind: "master" });
+
+    // an old phone knows only the single-value columns
+    t.clock.ms += 5_000;
+    p.client.write("project", t.project.id, { project_type: "android" });
+    p.client.write("preset", preset.id, { role_hint: "scout" });
+    t.clock.ms += 5_000;
+    await p.syncNow();
+    expect(t.store.projects.get(t.project.id)).toMatchObject({ projectType: "android", projectTypes: ["android"] });
+    expect(t.store.presets.get(preset.id)).toMatchObject({ roleHint: "scout", roleHints: ["scout"] });
+  });
+});

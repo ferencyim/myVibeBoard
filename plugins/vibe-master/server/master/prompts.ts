@@ -29,7 +29,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
       (p) =>
-        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` thinking=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}${p.roleHint ? ` role=${p.roleHint}` : ""}`,
+        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` thinking=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}${p.roleHints.length ? ` role=${p.roleHints.join("+")}` : ""}`,
     );
   const cards = [...input.openCards]
     .sort(
@@ -39,7 +39,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     .slice(0, 40)
     .map((c) => `- ${c.key} [${c.column}] ${clip(c.title, 80)} :: ${clip(c.description, 100)}`);
   return [
-    `## Project ${project.prefix} (${project.name}, type ${project.projectType})`,
+    `## Project ${project.prefix} (${project.name}, type ${project.projectTypes.join("+")})`,
     `Tag vocabulary: ${[...input.tags].map((t) => t.name).sort().join(", ")}`,
     `Execution presets (use these names in recommendation.preset):\n${presets.join("\n") || "- none configured"}`,
     `Other open cards:\n${cards.join("\n") || "- none"}`,

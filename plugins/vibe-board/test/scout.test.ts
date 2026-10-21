@@ -166,7 +166,7 @@ describe("scout preset selection", () => {
     expect(pickScoutPreset(presets, "Big")!.name).toBe("Big");
     expect(pickScoutPreset(presets, "")!.name).toBe("Cheap");
     const big = presets.find((p) => p.name === "Big")!;
-    const hinted = presets.map((p) => (p.id === big.id ? { ...p, roleHint: "scout" } : p));
+    const hinted = presets.map((p) => (p.id === big.id ? { ...p, roleHints: ["scout"] } : p));
     expect(pickScoutPreset(hinted, "")!.name).toBe("Big");
     expect(pickScoutPreset(hinted, "missing")!.name).toBe("Big");
     expect(pickScoutPreset([], "")).toBeNull();

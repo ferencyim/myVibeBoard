@@ -66,3 +66,21 @@ Additive and nullable; shared by the round-2 work packages.
 
 (client code imports `shared/vibe/contract`, server code imports `server/vibe/{contract,db}`).
 `npm run vibe:sync-shared:check` must pass in every WP.
+
+## Round 3 additions (core migration 4)
+
+- `project.projectTypes` (non-empty, no repeats; first = primary), `description`, `requirementsPath`
+  (repo-relative; `isSafeRepoRelativePath` rejects absolute and `..`). `projectType` stays as
+  `projectTypes[0]` for old replicas (`COMPAT(project-types)`); the command layer accepts either form.
+- `preset.roleHints` (`worker|scout|reviewer`, `[]` = unspecified) replaces `roleHint`
+  (`COMPAT(preset-role-hints)`, kept as `roleHints[0]`). Select presets with `roleHints.includes(...)`.
+- Card events `chat` (body `ChatEventBody`) and `proposal` (body `ProposalEventBody`); author kinds
+  `master|executor|reviewer|scout` added (`agent` is legacy). Commands: `cards.addChat`,
+  `cards.propose` (supersedes earlier pending), `cards.acceptProposal(eventId, actor)` (applies the
+  changes through `cards.update`), `cards.rejectProposal(eventId, actor)`. Proposal status lives in
+  `body_json` (a field-level LWW sync field), so card events stay append-only apart from that field.
+- Bus event `card.review_requested { cardId, requestedBy }`.
+- `db/requirements-doc.ts`: `readRequirementsDoc` / `writeRequirementsDoc` (commits only that file via
+  an injectable git Runner; refuses mid merge/rebase/cherry-pick, ignored paths and path traversal).
+- Migrations may set `foreignKeysOff` (table rebuilds; `PRAGMA foreign_keys` is switched around the
+  migration transaction and `foreign_key_check` runs before commit).

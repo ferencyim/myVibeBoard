@@ -47,6 +47,7 @@ describe("publishEvent", () => {
         "card.updated",
         "card.deleted",
         "card.moved",
+        "card.review_requested",
         "card.assessed",
         "card.dispatched",
         "session.started",

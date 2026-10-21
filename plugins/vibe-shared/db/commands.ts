@@ -10,15 +10,19 @@
 
 import {
   CARD_KEY_PATTERN,
+  DEFAULT_REQUIREMENTS_PATH,
   PROJECT_PREFIX_PATTERN,
+  ROLE_HINTS,
   type AuthorKind,
   type CardColumn,
   type CardEventType,
   type CardOrigin,
   type CardPriority,
   type PresetEnvironmentKind,
+  type ChatKind,
   type PresetPermissionMode,
   type ProjectType,
+  type RoleHint,
   type SessionComplexity,
   type SessionRole,
   type SessionState,
@@ -34,14 +38,19 @@ import {
   PlanVersionSchema,
   PresetSchema,
   ProjectSchema,
+  ProposalChangesSchema,
+  ProposalEventBodySchema,
   TagSchema,
   type AgentSession,
   type CardEvent,
   type CardView,
+  type ChatEventBody,
   type GitSnapshot,
   type PlanSnapshot,
   type PlanVersion,
   type Preset,
+  type ProposalChanges,
+  type ProposalEventBody,
   type Project,
   type Tag,
 } from "../contract/model";
@@ -53,6 +62,7 @@ import {
   assertTransition,
   canCreateIn,
 } from "../contract/state-machine";
+import { isSafeRepoRelativePath } from "../contract/paths";
 import { syncSpec } from "../contract/sync-spec";
 import { publishEvent } from "./events";
 import { decodeRow, decodeRows } from "./rows";
@@ -79,7 +89,14 @@ export interface CreateProjectInput {
   name: string;
   prefix: string;
   repoPath: string;
+  /** Non-empty, deduplicated; the first is the primary type. Wins over `projectType`. */
+  projectTypes?: ProjectType[];
+  // COMPAT(project-types): added 2026-10-21, remove after 2027-04-01
+  // Old replicas send only this; it becomes projectTypes = [projectType].
   projectType?: ProjectType;
+  description?: string;
+  /** Repo-relative requirements file; default PRODUCT-REQUIREMENTS.md. */
+  requirementsPath?: string;
   defaultPresetId?: string | null;
   concurrencyLimit?: number | null;
   devices?: string[];
@@ -104,7 +121,10 @@ export interface CreatePresetInput {
   instructions?: string;
   /** Preset ids tried in order when a session on this preset fails. */
   fallbackPresetIds?: string[] | null;
-  /** scout | worker | reviewer | ... */
+  /** Jobs the preset may be picked for; [] = unspecified. Wins over `roleHint`. */
+  roleHints?: RoleHint[];
+  // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
+  // Old replicas send only this; it becomes roleHints = [roleHint] (unknown values: []).
   roleHint?: string | null;
   builtin?: boolean;
 }
@@ -150,6 +170,29 @@ export interface UpdateCardInput {
   parentCardId?: string | null;
   planSessionId?: string | null;
   worktree?: string | null;
+}
+
+export interface AddChatInput {
+  /** Sync materialization: keep the id/creation time a replica generated offline. */
+  id?: string;
+  createdAt?: string;
+  cardId: string;
+  authorKind: AuthorKind;
+  author?: string;
+  text: string;
+  sessionId?: string;
+  agentId?: string;
+  kind?: ChatKind;
+}
+
+export interface ProposeInput {
+  cardId: string;
+  /** At least one of title / description / acceptance. */
+  changes: ProposalChanges;
+  rationale: string;
+  /** Default: master. */
+  authorKind?: AuthorKind;
+  author?: string;
 }
 
 export interface MoveCardInput {
@@ -233,7 +276,10 @@ type FieldMap = Record<string, readonly [column: string, encode: Enc]>;
 const PROJECT_FIELDS: FieldMap = {
   name: ["name", asIs],
   repoPath: ["repo_path", asIs],
+  projectTypes: ["project_types_json", asJson],
   projectType: ["project_type", asIs],
+  description: ["description", asIs],
+  requirementsPath: ["requirements_path", asIs],
   defaultPresetId: ["default_preset_id", asIs],
   concurrencyLimit: ["concurrency_limit", asIs],
   devices: ["devices_json", asJson],
@@ -251,6 +297,7 @@ const PRESET_FIELDS: FieldMap = {
   runtimeEnv: ["runtime_env", asIs],
   instructions: ["instructions", asIs],
   fallbackPresetIds: ["fallback_preset_ids_json", asJsonOrNull],
+  roleHints: ["role_hints_json", asJson],
   roleHint: ["role_hint", asIs],
 };
 const CARD_FIELDS: FieldMap = {
@@ -280,6 +327,40 @@ class WhereBuilder {
   clause(): string {
     return this.conditions.length ? `WHERE ${this.conditions.join(" AND ")}` : "";
   }
+}
+
+/**
+ * projectTypes / projectType -> both columns, kept consistent (projectType = projectTypes[0]).
+ * Returns the patch with both set, or unchanged when neither is present.
+ */
+function normalizeProjectInput<T extends { projectTypes?: ProjectType[]; projectType?: ProjectType }>(
+  input: T,
+): T {
+  let types = input.projectTypes;
+  if (types === undefined && input.projectType === undefined) return input;
+  types = [...new Set(types ?? [input.projectType!])];
+  if (types.length === 0) throw new CommandError("invalid", "projectTypes must not be empty");
+  return { ...input, projectTypes: types, projectType: types[0] };
+}
+
+function checkRequirementsPath(path: string | undefined): void {
+  if (path !== undefined && !isSafeRepoRelativePath(path))
+    throw new CommandError(
+      "invalid",
+      `requirementsPath must be a path relative to the repository root (no absolute path, no ".."): ${path}`,
+    );
+}
+
+/** roleHints / roleHint -> both columns, kept consistent (roleHint = roleHints[0] ?? null). */
+function normalizePresetInput<T extends { roleHints?: RoleHint[]; roleHint?: string | null }>(
+  input: T,
+): T {
+  if (input.roleHints === undefined && input.roleHint === undefined) return input;
+  const known = (v: unknown): v is RoleHint => (ROLE_HINTS as readonly unknown[]).includes(v);
+  const hints = [...new Set(input.roleHints ?? (known(input.roleHint) ? [input.roleHint] : []))];
+  for (const h of hints)
+    if (!known(h)) throw new CommandError("invalid", `Unknown role hint "${String(h)}"`);
+  return { ...input, roleHints: hints, roleHint: hints[0] ?? null };
 }
 
 export type VibeStore = ReturnType<typeof createVibeStore>;
@@ -467,10 +548,61 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       return fn(hlc);
     });
 
+  // ---- proposals (card events of type "proposal") ----
+
+  function pendingProposals(cardId: string): Array<{ id: string; body: ProposalEventBody }> {
+    const rows = db
+      .prepare<{ id: string; body_json: string }>(
+        "SELECT id, body_json FROM card_event WHERE card_id = ? AND type = 'proposal' ORDER BY created_at, id",
+      )
+      .all(cardId);
+    return rows.flatMap((r) => {
+      const parsed = ProposalEventBodySchema.safeParse(JSON.parse(r.body_json));
+      return parsed.success && parsed.data.status === "pending"
+        ? [{ id: r.id, body: parsed.data }]
+        : [];
+    });
+  }
+
+  function mustPendingProposal(eventId: string): { event: CardEvent; body: ProposalEventBody } {
+    const row = db.prepare("SELECT * FROM card_event WHERE id = ?").get(eventId);
+    if (!row) throw new CommandError("not_found", `Card event not found: ${eventId}`);
+    const event = decodeRow(CardEventSchema, row);
+    if (event.type !== "proposal")
+      throw new CommandError("invalid", `Card event ${eventId} is not a proposal`);
+    const body = ProposalEventBodySchema.parse(event.body);
+    if (body.status !== "pending")
+      throw new CommandError("conflict", `Proposal ${eventId} is already ${body.status}`);
+    return { event, body };
+  }
+
+  function setProposalStatus(
+    eventId: string,
+    body: ProposalEventBody,
+    status: ProposalEventBody["status"],
+    hlc: Hlc,
+    resolvedBy?: string,
+  ): CardEvent {
+    const next: ProposalEventBody = { ...body, status };
+    if (resolvedBy !== undefined) {
+      next.resolvedBy = resolvedBy;
+      next.resolvedAt = iso();
+    }
+    db.prepare("UPDATE card_event SET body_json = ?, updated_hlc = ? WHERE id = ?").run(
+      JSON.stringify(next),
+      hlc,
+      eventId,
+    );
+    stampFields("card_event", eventId, ["body_json"], hlc);
+    return decodeRow(CardEventSchema, db.prepare("SELECT * FROM card_event WHERE id = ?").get(eventId)!);
+  }
+
   // ---- projects ----
 
   const projects = {
-    create(input: CreateProjectInput): Project {
+    create(rawInput: CreateProjectInput): Project {
+      const input = normalizeProjectInput(rawInput);
+      checkRequirementsPath(input.requirementsPath);
       if (!PROJECT_PREFIX_PATTERN.test(input.prefix)) {
         throw new CommandError(
           "invalid",
@@ -481,15 +613,19 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         const id = newId(now().getTime());
         try {
           db.prepare(
-            `INSERT INTO project (id, name, prefix, repo_path, project_type, default_preset_id, concurrency_limit,
+            `INSERT INTO project (id, name, prefix, repo_path, project_type, project_types_json, description,
+               requirements_path, default_preset_id, concurrency_limit,
                devices_json, paseo_project_id, color, created_at, updated_at, updated_hlc)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             id,
             input.name,
             input.prefix,
             input.repoPath,
             input.projectType ?? "other",
+            JSON.stringify(input.projectTypes ?? ["other"]),
+            input.description ?? "",
+            input.requirementsPath ?? DEFAULT_REQUIREMENTS_PATH,
             input.defaultPresetId ?? null,
             input.concurrencyLimit ?? null,
             JSON.stringify(input.devices ?? []),
@@ -513,7 +649,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         return mustProject(id);
       });
     },
-    update(id: string, patch: UpdateProjectInput): Project {
+    update(id: string, rawPatch: UpdateProjectInput): Project {
+      const patch = normalizeProjectInput(rawPatch);
+      checkRequirementsPath(patch.requirementsPath);
       return write((hlc) => {
         mustProject(id);
         const { archived, ...rest } = patch;
@@ -552,14 +690,15 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
   }
 
   const presets = {
-    create(input: CreatePresetInput): Preset {
+    create(rawInput: CreatePresetInput): Preset {
+      const input = normalizePresetInput(rawInput);
       return write((hlc) => {
         const id = input.id ?? newId(now().getTime());
         try {
           db.prepare(
             `INSERT INTO preset (id, name, provider, model, thinking, permission_mode, environment_kind, base_branch,
-               runtime_env, instructions, fallback_preset_ids_json, role_hint, builtin, created_at, updated_at, updated_hlc)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               runtime_env, instructions, fallback_preset_ids_json, role_hint, role_hints_json, builtin, created_at, updated_at, updated_hlc)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             id,
             input.name,
@@ -573,6 +712,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             input.instructions ?? "",
             input.fallbackPresetIds ? JSON.stringify(input.fallbackPresetIds) : null,
             input.roleHint ?? null,
+            JSON.stringify(input.roleHints ?? []),
             input.builtin ? 1 : 0,
             iso(),
             iso(),
@@ -592,7 +732,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         return mustPreset(id);
       });
     },
-    update(id: string, patch: UpdatePresetInput): Preset {
+    update(id: string, rawPatch: UpdatePresetInput): Preset {
+      const patch = normalizePresetInput(rawPatch);
       return write((hlc) => {
         mustPreset(id);
         const { builtin: _ignored, ...rest } = patch;
@@ -788,6 +929,71 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             { cardId: id, projectId: before.project_id as string },
           );
         return viewOf(rawCard(id));
+      });
+    },
+
+    /** Group-chat message on a card (card event type "chat"). */
+    addChat(input: AddChatInput): CardEvent {
+      if (!input.text.trim()) throw new CommandError("invalid", "Chat text is required");
+      const body: ChatEventBody = { text: input.text };
+      if (input.sessionId !== undefined) body.sessionId = input.sessionId;
+      if (input.agentId !== undefined) body.agentId = input.agentId;
+      if (input.kind !== undefined) body.kind = input.kind;
+      return events.add({
+        id: input.id,
+        createdAt: input.createdAt,
+        cardId: input.cardId,
+        type: "chat",
+        authorKind: input.authorKind,
+        author: input.author,
+        body,
+      });
+    },
+
+    /**
+     * The master suggests new title / description / acceptance. A proposal is a "proposal" card
+     * event whose body.status moves pending -> accepted | rejected | superseded (body_json is a
+     * field-level LWW sync field, so status changes sync like any edit). A new proposal supersedes
+     * the card's earlier pending ones.
+     */
+    propose(input: ProposeInput): CardEvent {
+      const changes = ProposalChangesSchema.parse(input.changes);
+      if (Object.values(changes).every((v) => v === undefined))
+        throw new CommandError("invalid", "A proposal needs at least one change");
+      return write((hlc) => {
+        rawCard(input.cardId);
+        for (const p of pendingProposals(input.cardId)) setProposalStatus(p.id, p.body, "superseded", hlc);
+        const body: ProposalEventBody = { changes, rationale: input.rationale, status: "pending" };
+        return insertCardEvent(
+          {
+            cardId: input.cardId,
+            type: "proposal",
+            authorKind: input.authorKind ?? "master",
+            author: input.author,
+            body,
+          },
+          hlc,
+        );
+      });
+    },
+
+    /** Apply a pending proposal's changes to the card (one card.updated event) and mark it accepted. */
+    acceptProposal(eventId: string, actor: MoveActor): CardEvent {
+      return write((hlc) => {
+        const { event, body } = mustPendingProposal(eventId);
+        const changes: UpdateCardInput = {};
+        if (body.changes.title !== undefined) changes.title = body.changes.title;
+        if (body.changes.description !== undefined) changes.description = body.changes.description;
+        if (body.changes.acceptance !== undefined) changes.acceptance = body.changes.acceptance;
+        cards.update(event.cardId, changes);
+        return setProposalStatus(eventId, body, "accepted", hlc, actor);
+      });
+    },
+
+    rejectProposal(eventId: string, actor: MoveActor): CardEvent {
+      return write((hlc) => {
+        const { body } = mustPendingProposal(eventId);
+        return setProposalStatus(eventId, body, "rejected", hlc, actor);
       });
     },
 
