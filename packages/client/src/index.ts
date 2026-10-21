@@ -379,6 +379,12 @@ export interface PaseoAgentHandle {
   archive(): Promise<{ archivedAt: string }>;
   /** Renames the agent through the existing `update_agent_request` RPC (shown as its title). */
   setTitle(title: string): Promise<void>;
+  /**
+   * Loads a closed agent (daemon restart, process exit) back from its persisted session through the
+   * existing `refresh_agent_request` RPC, the same call the app makes when a closed agent is opened.
+   * Rejects when the session cannot be restored. Hosts older than this call have no `resume`.
+   */
+  resume(): Promise<void>;
   detach(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
 }
@@ -982,6 +988,9 @@ function createAgentHandleFactory(
       },
       setTitle: async (title) => {
         await daemonClient.updateAgent(id, { name: title });
+      },
+      resume: async () => {
+        await daemonClient.refreshAgent(id);
       },
       detach: async () => {
         await daemonClient.detachAgent(id);
