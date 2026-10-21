@@ -184,6 +184,14 @@ export interface AddChatInput {
   sessionId?: string;
   agentId?: string;
   kind?: ChatKind;
+  /** Idempotency key (unique per card): writing the same key again returns the first event. */
+  key?: string;
+  answers?: string[];
+  fallback?: string[];
+  detail?: string;
+  planVersion?: number;
+  ready?: boolean;
+  error?: boolean;
 }
 
 export interface ProposeInput {
@@ -936,10 +944,25 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     /** Group-chat message on a card (card event type "chat"). */
     addChat(input: AddChatInput): CardEvent {
       if (!input.text.trim()) throw new CommandError("invalid", "Chat text is required");
+      if (input.key !== undefined) {
+        const row = db
+          .prepare(
+            "SELECT * FROM card_event WHERE card_id = ? AND type = 'chat' AND json_extract(body_json, '$.key') = ? ORDER BY created_at, id LIMIT 1",
+          )
+          .get(input.cardId, input.key);
+        if (row) return decodeRow(CardEventSchema, row);
+      }
       const body: ChatEventBody = { text: input.text };
       if (input.sessionId !== undefined) body.sessionId = input.sessionId;
       if (input.agentId !== undefined) body.agentId = input.agentId;
       if (input.kind !== undefined) body.kind = input.kind;
+      if (input.key !== undefined) body.key = input.key;
+      if (input.answers !== undefined) body.answers = input.answers;
+      if (input.fallback !== undefined) body.fallback = input.fallback;
+      if (input.detail !== undefined) body.detail = input.detail;
+      if (input.planVersion !== undefined) body.planVersion = input.planVersion;
+      if (input.ready !== undefined) body.ready = input.ready;
+      if (input.error !== undefined) body.error = input.error;
       return events.add({
         id: input.id,
         createdAt: input.createdAt,
@@ -962,9 +985,13 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       if (Object.values(changes).every((v) => v === undefined))
         throw new CommandError("invalid", "A proposal needs at least one change");
       return write((hlc) => {
-        rawCard(input.cardId);
+        const row = rawCard(input.cardId);
         for (const p of pendingProposals(input.cardId)) setProposalStatus(p.id, p.body, "superseded", hlc);
-        const body: ProposalEventBody = { changes, rationale: input.rationale, status: "pending" };
+        const before: ProposalChanges = {};
+        for (const key of ["title", "description", "acceptance"] as const) {
+          if (changes[key] !== undefined) before[key] = row[key] as string;
+        }
+        const body: ProposalEventBody = { changes, rationale: input.rationale, status: "pending", before };
         return insertCardEvent(
           {
             cardId: input.cardId,
