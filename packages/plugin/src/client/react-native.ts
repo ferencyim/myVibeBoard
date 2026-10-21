@@ -60,6 +60,12 @@ export type IconProps = Partial<PluginIconProps> &
 
 export declare const Icon: ComponentType<IconProps>;
 export declare const Modal: ModalComponent;
+/**
+ * Renders Markdown with the app's own engine (themed, selectable, tappable links, code blocks).
+ * COMPAT(plugin-markdown): added in v0.12.1, remove after 2027-04-01. Older hosts leave this undefined, so
+ * check `typeof Markdown === "function"` and fall back to plain text.
+ */
+export declare const Markdown: ComponentType<{ text: string; compact?: boolean }>;
 export declare function useToast(): ToastApi;
 export declare function useRevealedText(text: string, phase: "streaming" | "complete"): string;
 

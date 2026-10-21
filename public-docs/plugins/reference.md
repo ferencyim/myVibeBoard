@@ -1115,6 +1115,12 @@ export function IssueActions({ theme }: PluginSurfaceProps) {
 }
 ```
 
+### Markdown
+
+`<Markdown text={string} compact?={boolean} />` renders Markdown with the app's own engine: themed,
+selectable, with code blocks, tables and tappable links. Hosts older than v0.12.1 do not provide it;
+check `typeof Markdown === "function"` and fall back to plain text.
+
 ### Modal
 
 `Modal` uses a bottom sheet on compact layouts and a centered dialog otherwise. The plugin owns

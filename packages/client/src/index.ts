@@ -377,6 +377,8 @@ export interface PaseoAgentHandle {
    */
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
   archive(): Promise<{ archivedAt: string }>;
+  /** Renames the agent through the existing `update_agent_request` RPC (shown as its title). */
+  setTitle(title: string): Promise<void>;
   detach(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
 }
@@ -977,6 +979,9 @@ function createAgentHandleFactory(
           current = { ...current, archivedAt: result.archivedAt };
         }
         return result;
+      },
+      setTitle: async (title) => {
+        await daemonClient.updateAgent(id, { name: title });
       },
       detach: async () => {
         await daemonClient.detachAgent(id);

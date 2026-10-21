@@ -976,6 +976,26 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
   expect(agent.current()?.archivedAt).toBe("2026-05-16T01:00:00.000Z");
   expect(agent.archivedAt).toBe("2026-05-16T01:00:00.000Z");
 
+  const titlePromise = agent.setTitle("Renamed");
+  const titleRequest = parseSentSessionMessage(ws.sent.at(-1));
+  expect(titleRequest).toMatchObject({
+    type: "update_agent_request",
+    agentId: "agent_sdk",
+    name: "Renamed",
+  });
+  ws.message(
+    sessionMessage({
+      type: "update_agent_response",
+      payload: {
+        requestId: titleRequest.requestId,
+        agentId: "agent_sdk",
+        accepted: true,
+        error: null,
+      },
+    }),
+  );
+  await expect(titlePromise).resolves.toBeUndefined();
+
   unsubscribe();
   await client.close();
 });
