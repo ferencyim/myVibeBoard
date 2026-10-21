@@ -1897,6 +1897,36 @@ test("push token registration can be revoked by the connected client", async () 
   ]);
 });
 
+test("push token registration passes the vivo channel through, heartbeats keep it, and fcm stays default", async () => {
+  const renewed: Array<[string, string | undefined]> = [];
+  const session = createSessionForTest({
+    messages: [],
+    pushNotifications: asPushNotifications({
+      renew: (token: string, channel?: string) => renewed.push([token, channel]),
+      revoke: () => undefined,
+    }),
+  });
+  const heartbeat = {
+    type: "client_heartbeat" as const,
+    deviceType: "mobile" as const,
+    focusedAgentId: null,
+    lastActivityAt: "2026-08-10T00:00:00.000Z",
+    appVisible: false,
+  };
+
+  await session.handleMessage({ type: "register_push_token", token: "vivo-reg", channel: "vivo" });
+  await session.handleMessage(heartbeat);
+  await session.handleMessage({ type: "register_push_token", token: "fcm-token" });
+  await session.handleMessage(heartbeat);
+
+  expect(renewed).toEqual([
+    ["vivo-reg", "vivo"],
+    ["vivo-reg", "vivo"],
+    ["fcm-token", "fcm"],
+    ["fcm-token", "fcm"],
+  ]);
+});
+
 test("push token revocation only acknowledges durable removal", async () => {
   const renewed: string[] = [];
   const messages: SessionOutboundMessage[] = [];

@@ -4,6 +4,7 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { z } from "zod";
 import { readValidatedString } from "@/storage/validated-storage";
+import { isVivoPushAvailable, registerVivoPush } from "./vivo";
 import type { RevokePushNotificationsInput, StartPushNotificationsInput } from "./types";
 
 const STORAGE_PREFIX = "@paseo:expo-push-token:";
@@ -28,7 +29,12 @@ async function ensurePushPermission(): Promise<boolean> {
   return requested.status === Notifications.PermissionStatus.GRANTED;
 }
 
-async function resolveToken(serverId: string): Promise<string | null> {
+interface ResolvedToken {
+  token: string;
+  channel: "fcm" | "vivo";
+}
+
+async function resolveToken(serverId: string): Promise<ResolvedToken | null> {
   const key = storageKey(serverId);
   const cached = await readValidatedString(AsyncStorage, key, ExpoPushTokenSchema);
   if (!(await ensurePushPermission())) {
@@ -43,35 +49,52 @@ async function resolveToken(serverId: string): Promise<string | null> {
     });
   }
 
-  // Android: native FCM token, delivered through the self-hosted push gateway.
+  // Android: a native token delivered through the self-hosted push gateway. vivo phones with the
+  // vivo SDK build use vivo push; everything else keeps the FCM token.
   if (Platform.OS === "android") {
+    if (isVivoPushAvailable()) {
+      const regId = await registerVivoPush().catch((error) => {
+        console.warn("[PushNotifications] vivo registration failed, falling back to FCM", error);
+        return null;
+      });
+      if (regId) {
+        await AsyncStorage.setItem(key, regId);
+        return { token: regId, channel: "vivo" };
+      }
+    }
     const native = await Notifications.getDevicePushTokenAsync();
     const nativeToken = typeof native.data === "string" ? native.data.trim() : "";
-    if (!nativeToken) return cached;
+    if (!nativeToken)
+      return cached && !isVivoPushAvailable() ? { token: cached, channel: "fcm" } : null;
     await AsyncStorage.setItem(key, nativeToken);
-    return nativeToken;
+    return { token: nativeToken, channel: "fcm" };
   }
 
   const projectId = getExpoProjectId();
   if (!projectId) {
     console.warn("[PushNotifications] Missing EAS projectId; cannot fetch Expo push token");
-    return cached;
+    return cached ? { token: cached, channel: "fcm" } : null;
   }
 
   const result = await Notifications.getExpoPushTokenAsync({ projectId });
   const token = result.data.trim();
-  if (!token) return cached;
+  if (!token) return cached ? { token: cached, channel: "fcm" } : null;
   await AsyncStorage.setItem(key, token);
-  return token;
+  return { token, channel: "fcm" };
 }
 
 export function startSubscription(input: StartPushNotificationsInput): () => void {
   let stopped = false;
-  let token: string | null = null;
+  let token: ResolvedToken | null = null;
   const register = () => {
-    if (!stopped && token && input.client.isConnected) {
-      input.client.registerPushToken(token);
+    if (stopped || !token || !input.client.isConnected) return;
+    if (token.channel === "vivo") {
+      // An older daemon would store the regId as an FCM token; only register with daemons that route by channel.
+      if (input.client.getLastServerInfoMessage()?.features?.pushChannels !== true) return;
+      input.client.registerPushToken(token.token, "vivo");
+      return;
     }
+    input.client.registerPushToken(token.token);
   };
 
   void resolveToken(input.serverId)

@@ -63,7 +63,7 @@ bash install.sh --env-file relay.env             # 确认无误后执行
 
 ### 3.3 推送网关（WP-44，可选）
 
-网关是 `services/vibe-push-gateway`（Node，无依赖）。设置 `PUSH_PORT`（如 18787，须与 `RELAY_PORT` 不同、主机上未占用；网关自带默认 8787 常被占用）后，`docker-compose.yml` 里的 `push` 服务（profile `push`，由脚本自动启用）与中继在同一 compose 项目中独立运行：只绑 `127.0.0.1:<PUSH_PORT>`，只读根文件系统、`cap_drop: ALL`、128m 内存上限。`VIBE_PUSH_AUTH_TOKEN` 由 install.sh 随机生成并写入 `PUSH_ENV_FILE`（600，需要时在服务器上读取，别贴进聊天）。没有 FCM 服务账号时网关为 dry-run（`/push/healthz` 返回 `dryRun:true`）；之后要真发送，把服务账号 JSON 放到服务器并给 `push` 服务挂载、设置 `VIBE_PUSH_FCM_SERVICE_ACCOUNT_FILE`（不入库）。部署时需把 `deploy/relay/` 和 `services/vibe-push-gateway/` 一起拷到服务器（保持相对位置）。
+网关是 `services/vibe-push-gateway`（Node，无依赖）。设置 `PUSH_PORT`（如 18787，须与 `RELAY_PORT` 不同、主机上未占用；网关自带默认 8787 常被占用）后，`docker-compose.yml` 里的 `push` 服务（profile `push`，由脚本自动启用）与中继在同一 compose 项目中独立运行：只绑 `127.0.0.1:<PUSH_PORT>`，只读根文件系统、`cap_drop: ALL`、128m 内存上限。`VIBE_PUSH_AUTH_TOKEN` 由 install.sh 随机生成并写入 `PUSH_ENV_FILE`（600，需要时在服务器上读取，别贴进聊天）。没有 FCM 服务账号时网关为 dry-run（`/push/healthz` 返回 `dryRun:true`）；之后要真发送，把服务账号 JSON 放到服务器并给 `push` 服务挂载、设置 `VIBE_PUSH_FCM_SERVICE_ACCOUNT_FILE`（不入库）。vivo 手机用 vivo 通道：在同一个 `PUSH_ENV_FILE` 里追加 `VIVO_APP_ID` / `VIVO_APP_KEY` / `VIVO_APP_SECRET` / `VIVO_PUSH_MODE`（1 测试推送、0 正式，默认 0），重启 `push` 服务；三个凭据缺任何一个则 vivo 通道关闭，FCM 不受影响，两个通道各自独立，请求里带 `channel` 字段路由。部署时需把 `deploy/relay/` 和 `services/vibe-push-gateway/` 一起拷到服务器（保持相对位置）。
 
 设置 `PUSH_PORT` 后，同一站点多一个 `location /push/`，前缀被去掉后转发到网关，即 `https://<RELAY_DOMAIN>/push/v1/push`；`PUSH_PORT` 留空则不启动网关、不生成该 location。daemon 侧：配置 `daemon.push.gateway=https://<RELAY_DOMAIN>/push`，并设置环境变量 `PASEO_PUSH_GATEWAY_TOKEN`（与 `PUSH_ENV_FILE` 里的 token 相同）。
 

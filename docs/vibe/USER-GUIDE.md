@@ -214,8 +214,24 @@ rules:
 - **会话汇总**：侧栏 `会话汇总`，正在等你的会话（审批/提问）置顶，可直接批准或回答；离线时回答排队，重连后核对「问题是否仍然有效」再发出，
   已失效的会提示并丢弃。
 - **推送**：卡片进入待验证、worker 等你回答、总 agent 提醒（额度低、维护规则暂停）会推送；正文只含项目名和事件类型，
-  不含卡片内容。点击等待审批的推送会直接打开该会话。推送需要自建推送网关与 FCM（见 CONNECTIVITY.md 第 3.3 节）；
-  未配置网关时不发推送。
+  不含卡片内容。点击等待审批的推送会直接打开该会话。推送需要自建推送网关（见 CONNECTIVITY.md 第 3.3 节），
+  通道二选一或并存：FCM（需要手机有谷歌服务），或 **vivo 官方推送**（vivo 手机在国内用这个）。未配置网关时不发推送。
+  - **vivo 推送你需要准备的**：
+    1. 在 vivo 开放平台注册开发者，创建一个「应用」并开通「推送」服务，拿到 AppID、AppKey、AppSecret。
+    2. 应用的包名必须和你装的 APK 一致（当前调试包是 `sh.paseo.debug`，见 BUILD.md）；控制台要求填的签名指纹
+       （以控制台提示的格式为准，通常是证书 MD5/SHA）可用 `keytool -printcert -jarfile app-debug.apk` 或对 keystore 执行
+       `keytool -list -v -keystore <keystore> -alias <alias>` 得到。APK 用哪把 keystore 签的，这里就填哪把的指纹。
+    3. 从 vivo 推送文档页下载「推送客户端 SDK」的 aar，放到本机 `.secrets/vivo/` 下（仓库根或 `packages/app` 下均可，已被
+       `.gitignore` 忽略），再建 `.secrets/vivo/config.json`：`{"appId": "<AppID>", "appKey": "<AppKey>"}`。也可以用环境变量
+       `VIVO_PUSH_SDK_AAR`（aar 路径）、`VIVO_APP_ID`、`VIVO_APP_KEY` 代替。三样齐全，下次打包才会带 vivo 推送；缺任何一样，
+       包与以前完全一样。**改完要重新 prebuild 并打包**（`expo prebuild` 会把 aar、manifest 配置写进 `android/`）。
+    4. 网关服务器的环境变量（写进 `PUSH_ENV_FILE` 那个服务器上的 env 文件，不入库、别贴进聊天）：`VIVO_APP_ID`、
+       `VIVO_APP_KEY`、`VIVO_APP_SECRET`，以及 `VIVO_PUSH_MODE`：`1` 是测试推送（只推给测试名单里的设备，自用建议先用它，
+       应用未上架时也只能用它），`0` 是正式推送。改完重启网关；`/push/healthz` 会显示各通道是否启用。
+    5. 若 `VIVO_PUSH_MODE=1`：在 vivo 控制台的推送测试设备名单里加入你手机的 regId（手机装好带 vivo 推送的 APK 并连上 daemon
+       后，regId 完整地保存在 daemon 的 `~/.paseo/push-tokens.json` 里那条 `"channel": "vivo"` 的 `token` 字段；是否必须登记测试名单、在哪里登记，以 vivo 控制台为准）。
+  - vivo 手机装了带 vivo 推送的包后优先走 vivo，拿不到 regId 才退回 FCM；点击通知的跳转与 FCM 通知一致。
+    连的 daemon 需要是带 `pushChannels` 能力的新版本，旧版本 daemon 不会收到 vivo 注册。
 
 ## 12. 远程连接与中继
 
@@ -225,7 +241,8 @@ daemon 监听非回环地址必须设密码。
 ## 13. 已知限制
 
 - Android 只测过 x86_64 模拟器；arm64 真机、iOS 与 iOS 取证（需 Mac + Xcode）尚未验证。
-- 推送网关需要 FCM 服务账号；本仓库的包不带 `google-services.json`，所以未自行配置推送时包内没有推送能力。
+- 推送网关的 FCM 通道需要服务账号，vivo 通道需要 vivo 开放平台凭据；本仓库的包不带 `google-services.json`，也不带 vivo SDK，
+  所以未自行配置推送时包内没有推送能力。vivo 通道代码按官方文档写成，本仓库尚未用真实 SDK 编译、也未在 vivo 真机验证。
 - 手机离线只覆盖看板数据；总 agent、规划会话、验证流水线都在电脑上，手机离线期间不会推进，重连后继续。
 - 手机离线时在草稿与待办之外移动卡片、改会话和验证相关数据都会被拒绝（以服务端数据为准）。
 - 插件首次初始化在机器很忙时可能超时（见 2.2），`plugin reload` 即可。

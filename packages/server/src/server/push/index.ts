@@ -1,14 +1,14 @@
 import type pino from "pino";
 
 import { PushService, type PushGatewayConfig, type PushPayload } from "./push-service.js";
-import { PushTokenStore } from "./token-store.js";
+import { PushTokenStore, type PushChannel } from "./token-store.js";
 
-export type { PushGatewayConfig, PushPayload };
+export type { PushChannel, PushGatewayConfig, PushPayload };
 
 const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
 
 export interface PushNotifications {
-  renew(token: string): void;
+  renew(token: string, channel?: PushChannel): void;
   revoke(token: string): void;
   send(payload: PushPayload): Promise<void>;
 }
@@ -20,7 +20,11 @@ export function createPushNotifications(options: {
   filePath: string;
   now?: () => number;
   gateway?: PushGatewayConfig;
-  deliver?: (tokens: string[], payload: PushPayload) => Promise<void>;
+  deliver?: (
+    tokens: string[],
+    payload: PushPayload,
+    channels?: ReadonlyMap<string, PushChannel>,
+  ) => Promise<void>;
 }): PushNotifications {
   const now = options.now ?? Date.now;
   const store = new PushTokenStore(options.logger, options.filePath, now, PUSH_TOKEN_LEASE_MS);
@@ -31,11 +35,12 @@ export function createPushNotifications(options: {
   );
   const deliver =
     options.deliver ??
-    ((tokens: string[], payload: PushPayload) => service.sendPush(tokens, payload));
+    ((tokens: string[], payload: PushPayload, channels?: ReadonlyMap<string, PushChannel>) =>
+      service.sendPush(tokens, payload, channels));
 
   return {
-    renew(token) {
-      store.renewToken(token);
+    renew(token, channel) {
+      store.renewToken(token, channel);
     },
     revoke(token) {
       store.revokeToken(token);
@@ -44,7 +49,9 @@ export function createPushNotifications(options: {
       const tokens = store.getActiveTokens();
       options.logger.info({ tokenCount: tokens.length }, "Sending push notification");
       if (tokens.length === 0) return;
-      await deliver(tokens, payload);
+      const channels = store.getChannels(tokens);
+      if (channels.size === 0) await deliver(tokens, payload);
+      else await deliver(tokens, payload, channels);
     },
   };
 }

@@ -6,11 +6,20 @@ const withAndroidOptionalCamera = require("./plugins/with-android-optional-camer
 const withAndroidProfileable = require("./plugins/with-android-profileable");
 const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
 const withPasteInput = require("./plugins/with-paste-input");
+const withVivoPush = require("./plugins/with-vivo-push");
 const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
 const { getNativeReleaseVersion } = require("./native-release-version");
 const appVariant = process.env.APP_VARIANT ?? "production";
 const isFdroidBuild = process.env.PASEO_FDROID_BUILD === "1";
 const isProfileBuild = process.env.PASEO_PROFILE_BUILD === "1";
+
+// vivo push is on only when the SDK aar and AppID/AppKey exist locally (see plugins/with-vivo-push.js).
+const vivoPush = isFdroidBuild
+  ? null
+  : withVivoPush.resolveVivoPushConfig({
+      appDir: __dirname,
+      repoRoot: path.resolve(__dirname, "../.."),
+    });
 
 const buildProfile = isFdroidBuild
   ? {
@@ -180,6 +189,7 @@ export default {
         },
       ],
       ...buildProfile.fdroidPlugins,
+      ...(vivoPush ? [[withVivoPush, vivoPush]] : []),
       ...(isProfileBuild ? [withAndroidProfileable] : []),
     ],
     experiments: {
@@ -189,6 +199,7 @@ export default {
     },
     extra: {
       fdroidBuild: isFdroidBuild,
+      vivoPush: vivoPush !== null,
       profileBuild: isProfileBuild,
       router: {},
       eas: {

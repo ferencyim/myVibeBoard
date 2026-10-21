@@ -103,6 +103,7 @@ import {
   useKeyboardActionDispatcher,
 } from "@/keyboard/keyboard-action-dispatcher-context";
 import { polyfillCrypto } from "@/polyfills/crypto";
+import { subscribeVivoNotificationClicks } from "@/push-notifications";
 import {
   getHostRuntimeStore,
   hasConfiguredLocalDaemonOverride,
@@ -267,6 +268,7 @@ function PushNotificationRouter() {
     };
 
     const subscription = Notifications.addNotificationResponseReceivedListener(openFromResponse);
+    const stopVivoClicks = subscribeVivoNotificationClicks(openNotification);
 
     void Notifications.getLastNotificationResponseAsync().then((response) => {
       if (response) {
@@ -277,6 +279,7 @@ function PushNotificationRouter() {
 
     return () => {
       subscription.remove();
+      stopVivoClicks();
     };
   }, [openNotification]);
 

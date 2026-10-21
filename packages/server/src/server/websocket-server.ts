@@ -1877,6 +1877,8 @@ export class VoiceAssistantWebSocketServer {
         ...(this.advertiseRelayConfig ? { relayConfig: true } : {}),
         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
         pushTokenRevocation: true,
+        // COMPAT(pushChannels): added in v0.13.0, remove gate after 2027-06-30.
+        pushChannels: true,
         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
         plugins: true,
         pluginManagement: true,

@@ -64,4 +64,31 @@ describe("push notifications", () => {
 
     expect(deliveries).toEqual([]);
   });
+
+  test("remembers the vivo channel across restarts; fcm-only stays channel-free", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-notifications-"));
+    homes.push(home);
+    const filePath = path.join(home, "push-tokens.json");
+    const now = Date.parse("2026-08-10T00:00:00.000Z");
+    const first = createPushNotifications({ logger: createLogger(), filePath, now: () => now });
+    first.renew("fcm-device");
+    expect(readFileSync(filePath, "utf8")).not.toContain("channel");
+    first.renew("vivo-reg", "vivo");
+
+    const seen: Array<{ tokens: string[]; channels?: ReadonlyMap<string, string> }> = [];
+    const second = createPushNotifications({
+      logger: createLogger(),
+      filePath,
+      now: () => now,
+      deliver: async (tokens, _payload, channels) => void seen.push({ tokens, channels }),
+    });
+    await second.send({ title: "P", body: "B" });
+    expect(seen[0].tokens.sort()).toEqual(["fcm-device", "vivo-reg"]);
+    expect([...(seen[0].channels ?? [])]).toEqual([["vivo-reg", "vivo"]]);
+
+    second.revoke("vivo-reg");
+    await second.send({ title: "P", body: "B" });
+    expect(seen[1].tokens).toEqual(["fcm-device"]);
+    expect(seen[1].channels).toBeUndefined();
+  });
 });

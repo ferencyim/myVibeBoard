@@ -58,4 +58,35 @@ describe("Android app config", () => {
     },
     30_000,
   );
+
+  describe("vivo push", () => {
+    const vivoEnvKeys = ["VIVO_PUSH_SDK_AAR", "VIVO_APP_ID", "VIVO_APP_KEY"] as const;
+    const originalVivoEnv = Object.fromEntries(vivoEnvKeys.map((key) => [key, process.env[key]]));
+
+    afterEach(() => {
+      for (const key of vivoEnvKeys) {
+        const value = originalVivoEnv[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    const vivoMetaNames = async () => {
+      const manifest = await resolveAndroidManifest();
+      const meta: ManifestEntry[] = manifest.application?.[0]?.["meta-data"] ?? [];
+      return meta.map((entry) => entry.$["android:name"]).filter((n) => n.startsWith("com.vivo."));
+    };
+
+    it("leaves the manifest untouched without an SDK and credentials", async () => {
+      for (const key of vivoEnvKeys) delete process.env[key];
+      expect(await vivoMetaNames()).toEqual([]);
+    }, 30_000);
+
+    it("adds the vivo meta-data when the SDK and credentials are present", async () => {
+      process.env.VIVO_PUSH_SDK_AAR = __filename; // any existing file stands in for the aar
+      process.env.VIVO_APP_ID = "105000000";
+      process.env.VIVO_APP_KEY = "test-key";
+      expect(await vivoMetaNames()).toEqual(["com.vivo.push.app_id", "com.vivo.push.api_key"]);
+    }, 30_000);
+  });
 });
