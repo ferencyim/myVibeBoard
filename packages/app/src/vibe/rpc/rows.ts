@@ -3,6 +3,7 @@
 // (snake_case, 0/1 flags, `*_json` text); columns the daemon did not publish get safe defaults.
 
 import {
+  ROLE_HINTS,
   parseHlc,
   type AgentSession,
   type CardEvent,
@@ -75,6 +76,18 @@ function derivePrefix(name: string): string {
   );
 }
 
+/** project_types_json, or the single project_type written by an older daemon/phone. */
+function projectTypesOf(v: RawRow["v"]): Project["projectTypes"] {
+  const types = json<Project["projectTypes"]>(v.project_types_json, []);
+  return types.length ? types : [str(v.project_type, "other") as Project["projectType"]];
+}
+
+function roleHintsOf(v: RawRow["v"]): Preset["roleHints"] {
+  const hints = json<Preset["roleHints"]>(v.role_hints_json, []);
+  const legacy = strOrNull(v.role_hint) as Preset["roleHints"][number];
+  return hints.length || !ROLE_HINTS.includes(legacy) ? hints : [legacy];
+}
+
 export function toProject(r: RawRow): Project {
   const name = str(r.v.name, r.id);
   return {
@@ -82,7 +95,10 @@ export function toProject(r: RawRow): Project {
     name,
     prefix: str(r.v.prefix) || derivePrefix(name),
     repoPath: str(r.v.repo_path),
-    projectType: str(r.v.project_type, "other") as Project["projectType"],
+    projectTypes: projectTypesOf(r.v),
+    projectType: str(r.v.project_type, "other") as Project["projectType"], // COMPAT(project-types)
+    description: str(r.v.description),
+    requirementsPath: str(r.v.requirements_path) || "PRODUCT-REQUIREMENTS.md",
     defaultPresetId: strOrNull(r.v.default_preset_id),
     concurrencyLimit: intOrNull(r.v.concurrency_limit),
     devices: json<string[]>(r.v.devices_json, []),
@@ -160,7 +176,8 @@ export function toPreset(r: RawRow): Preset {
     runtimeEnv: strOrNull(r.v.runtime_env),
     instructions: str(r.v.instructions),
     fallbackPresetIds: json<string[] | null>(r.v.fallback_preset_ids_json, null),
-    roleHint: strOrNull(r.v.role_hint),
+    roleHints: roleHintsOf(r.v),
+    roleHint: strOrNull(r.v.role_hint), // COMPAT(preset-role-hints)
     builtin: flag(r.v.builtin),
     createdAt: str(r.v.created_at) || iso(r.wall),
     updatedAt: str(r.v.updated_at) || iso(r.wall),

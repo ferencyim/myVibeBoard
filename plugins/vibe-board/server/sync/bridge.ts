@@ -313,7 +313,10 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
         const v = val(p, c);
         if (same(cell(row[c]), v)) continue;
         if (c === "name") patch.name = v;
-        else if (c === "project_type") patch.projectType = v;
+        else if (c === "project_type") patch.projectType = v; // COMPAT(project-types)
+        else if (c === "project_types_json") patch.projectTypes = asJson(v, []);
+        else if (c === "description") patch.description = v;
+        else if (c === "requirements_path") patch.requirementsPath = v;
         else if (c === "default_preset_id") patch.defaultPresetId = v;
         else if (c === "concurrency_limit") patch.concurrencyLimit = v;
         else if (c === "devices_json") patch.devices = asJson(v, []);
@@ -340,7 +343,8 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     runtime_env: "runtimeEnv",
     instructions: "instructions",
     fallback_preset_ids_json: "fallbackPresetIds",
-    role_hint: "roleHint",
+    role_hint: "roleHint", // COMPAT(preset-role-hints)
+    role_hints_json: "roleHints",
   };
 
   function importPresets(): void {

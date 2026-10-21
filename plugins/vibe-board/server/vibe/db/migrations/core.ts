@@ -273,4 +273,45 @@ ALTER TABLE agent_session ADD COLUMN complexity TEXT
 ALTER TABLE agent_session ADD COLUMN reassigned_from_session_id TEXT;
 `,
   },
+  {
+    version: 4,
+    name: "round3_contract",
+    // card_event.type / author_kind CHECK lists grow (chat, proposal, master, executor, ...);
+    // SQLite cannot alter a CHECK, so the table is rebuilt (the documented 12-step procedure,
+    // which needs foreign keys off: attachment.card_event_id references this table).
+    foreignKeysOff: true,
+    sql: `
+-- Projects: several types, description, requirements file. project_type stays as the primary
+-- type for old replicas (COMPAT(project-types)).
+ALTER TABLE project ADD COLUMN project_types_json TEXT NOT NULL DEFAULT '[]';
+UPDATE project SET project_types_json = json_array(project_type);
+ALTER TABLE project ADD COLUMN description TEXT NOT NULL DEFAULT '';
+ALTER TABLE project ADD COLUMN requirements_path TEXT NOT NULL DEFAULT 'PRODUCT-REQUIREMENTS.md';
+
+-- Presets: several role hints. role_hint stays as the first one (COMPAT(preset-role-hints));
+-- free-text values outside the known list were never selectable and are dropped.
+ALTER TABLE preset ADD COLUMN role_hints_json TEXT NOT NULL DEFAULT '[]';
+UPDATE preset SET role_hint = NULL WHERE role_hint IS NOT NULL
+  AND role_hint NOT IN ('worker','scout','reviewer');
+UPDATE preset SET role_hints_json = json_array(role_hint) WHERE role_hint IS NOT NULL;
+
+CREATE TABLE card_event_new (
+  id TEXT PRIMARY KEY,
+  card_id TEXT NOT NULL REFERENCES card(id) ON DELETE CASCADE,
+  type TEXT NOT NULL
+    CHECK (type IN ('evaluation','status','switch_agent','compaction','reject','note','maintenance','chat','proposal')),
+  author_kind TEXT NOT NULL
+    CHECK (author_kind IN ('user','agent','master','executor','reviewer','scout','system')),
+  author TEXT NOT NULL DEFAULT '',
+  body_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_hlc TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO card_event_new (id, card_id, type, author_kind, author, body_json, created_at, updated_hlc)
+  SELECT id, card_id, type, author_kind, author, body_json, created_at, updated_hlc FROM card_event;
+DROP TABLE card_event;
+ALTER TABLE card_event_new RENAME TO card_event;
+CREATE INDEX idx_card_event_card ON card_event(card_id, created_at, id);
+`,
+  },
 ];

@@ -146,7 +146,7 @@ function profileOf(preset: Preset): AgentProfile {
   };
 }
 
-/** setting -> role_hint=scout -> cheapest by the shared selector. */
+/** setting -> roleHints includes scout -> cheapest by the shared selector. */
 export function pickScoutPreset(
   presets: readonly Preset[],
   setting: string,
@@ -157,7 +157,7 @@ export function pickScoutPreset(
     const named = presets.find((p) => p.id === setting.trim() || p.name.toLowerCase() === wanted);
     if (named) return named;
   }
-  const hinted = presets.find((p) => p.roleHint?.toLowerCase() === "scout");
+  const hinted = presets.find((p) => p.roleHints.includes("scout"));
   if (hinted) return hinted;
   if (presets.length === 0) return null;
   const selection = selectAgent(presets.map(profileOf), { tags: ["scout"], size: "S", priority: "low" }, ctx);

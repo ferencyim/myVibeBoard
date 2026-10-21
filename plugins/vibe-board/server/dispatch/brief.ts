@@ -116,7 +116,7 @@ export function buildDispatchBrief(input: BriefInput): string {
         )
       : "",
     section("Recent notes", notes),
-    section("Project", `- Name: ${project.name}\n- Type: ${project.projectType}`),
+    section("Project", `- Name: ${project.name}\n- Type: ${project.projectTypes.join(", ")}`),
     section("Project memory", MEMORY_POINTER),
     section(
       "Report-back contract",

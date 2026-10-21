@@ -24,8 +24,11 @@ import {
   PresetSchema,
   ProjectSchema,
   ProjectTypeSchema,
+  RoleHintSchema,
   TagSchema,
   PROJECT_PREFIX_PATTERN,
+  ROLE_HINTS,
+  isSafeRepoRelativePath,
 } from "../vibe/contract";
 
 export const MAX_ATTACHMENT_SIZE_BYTES = 25 * 1024 * 1024;
@@ -62,7 +65,16 @@ export type BoardCounts = z.infer<typeof boardCountsSchema>;
 const projectFields = {
   name: nonBlank,
   repoPath: z.string(),
+  /** Non-empty, no repeats; the first is the primary type. Wins over `projectType`. */
+  projectTypes: z
+    .array(ProjectTypeSchema)
+    .min(1)
+    .refine((types) => new Set(types).size === types.length, "projectTypes must not repeat"),
+  // COMPAT(project-types): added 2026-10-21, remove after 2027-04-01
   projectType: ProjectTypeSchema,
+  description: z.string(),
+  /** Requirements document, relative to the repository root. */
+  requirementsPath: z.string().refine(isSafeRepoRelativePath, "must be relative to the repository root"),
   defaultPresetId: z.string().nullable(),
   concurrencyLimit: z.number().int().min(1).nullable(),
   devices: z.array(z.string()),
@@ -70,7 +82,7 @@ const projectFields = {
   color: z.string().nullable(),
 };
 
-export const PRESET_ROLE_HINTS = ["worker", "scout", "reviewer"] as const;
+export const PRESET_ROLE_HINTS = ROLE_HINTS;
 
 const presetFields = {
   name: nonBlank,
@@ -84,7 +96,9 @@ const presetFields = {
   instructions: z.string(),
   /** Ordered failover chain: preset ids to continue on when a session on this preset fails. */
   fallbackPresetIds: z.array(z.string()).nullable(),
-  /** Purpose: worker | scout | reviewer; null = unspecified. */
+  /** Purposes (worker | scout | reviewer); [] = unspecified. Wins over `roleHint`. */
+  roleHints: z.array(RoleHintSchema),
+  // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
   roleHint: z.enum(PRESET_ROLE_HINTS).nullable(),
 };
 
@@ -117,7 +131,10 @@ export const projectsCreateRpc = defineRpc({
     name: projectFields.name,
     prefix: prefixSchema,
     repoPath: projectFields.repoPath.default(""),
+    projectTypes: projectFields.projectTypes.optional(),
     projectType: projectFields.projectType.optional(),
+    description: projectFields.description.optional(),
+    requirementsPath: projectFields.requirementsPath.optional(),
     defaultPresetId: projectFields.defaultPresetId.optional(),
     concurrencyLimit: projectFields.concurrencyLimit.optional(),
     devices: projectFields.devices.optional(),
@@ -134,7 +151,10 @@ export const projectsUpdateRpc = defineRpc({
     project: z.string().min(1),
     name: projectFields.name.optional(),
     repoPath: projectFields.repoPath.optional(),
+    projectTypes: projectFields.projectTypes.optional(),
     projectType: projectFields.projectType.optional(),
+    description: projectFields.description.optional(),
+    requirementsPath: projectFields.requirementsPath.optional(),
     defaultPresetId: projectFields.defaultPresetId.optional(),
     concurrencyLimit: projectFields.concurrencyLimit.optional(),
     devices: projectFields.devices.optional(),
@@ -357,6 +377,7 @@ export const presetsCreateRpc = defineRpc({
     runtimeEnv: presetFields.runtimeEnv.optional(),
     instructions: presetFields.instructions.optional(),
     fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
+    roleHints: presetFields.roleHints.optional(),
     roleHint: presetFields.roleHint.optional(),
   }),
   output: z.object({ preset: PresetSchema }),
@@ -376,6 +397,7 @@ export const presetsUpdateRpc = defineRpc({
     runtimeEnv: presetFields.runtimeEnv.optional(),
     instructions: presetFields.instructions.optional(),
     fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
+    roleHints: presetFields.roleHints.optional(),
     roleHint: presetFields.roleHint.optional(),
   }),
   output: z.object({ preset: PresetSchema }),

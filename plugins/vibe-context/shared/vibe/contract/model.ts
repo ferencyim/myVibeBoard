@@ -12,6 +12,7 @@ import {
   CardEventTypeSchema,
   CardOriginSchema,
   CardPrioritySchema,
+  ChatKindSchema,
   DeviceKindSchema,
   EvidenceKindSchema,
   JudgementSchema,
@@ -21,12 +22,15 @@ import {
   PresetEnvironmentKindSchema,
   PresetPermissionModeSchema,
   ProjectTypeSchema,
+  ProposalStatusSchema,
+  RoleHintSchema,
   SessionComplexitySchema,
   SessionRoleSchema,
   SessionStateSchema,
   VerificationKindSchema,
   VerificationModeSchema,
 } from "./enums";
+import { isSafeRepoRelativePath } from "./paths";
 
 const Iso = z.string(); // ISO-8601 UTC
 const Hlc = z.string(); // see hlc.ts; "" = never stamped
@@ -39,7 +43,18 @@ export const ProjectSchema = z.object({
   name: z.string().min(1),
   prefix: z.string(),
   repoPath: z.string(),
+  /** Non-empty, no duplicates; the first entry is the primary type. */
+  projectTypes: z
+    .array(ProjectTypeSchema)
+    .min(1)
+    .refine((types) => new Set(types).size === types.length, "projectTypes must not repeat"),
+  // COMPAT(project-types): added 2026-10-21, remove after 2027-04-01
+  // Always equals projectTypes[0]; old phones (offline db / sync) still read and write only this.
   projectType: ProjectTypeSchema,
+  /** Free-text project description (goal, stack); handed to agents as context. */
+  description: z.string(),
+  /** Requirements document, relative to the repository root (never absolute, never `..`). */
+  requirementsPath: z.string().refine(isSafeRepoRelativePath, "requirementsPath must be repo-relative"),
   defaultPresetId: z.string().nullable(),
   concurrencyLimit: z.number().int().nullable(),
   devices: z.array(z.string()),
@@ -101,6 +116,35 @@ export const CardEventSchema = z.object({
 });
 export type CardEvent = z.infer<typeof CardEventSchema>;
 
+/** Body of a `chat` card event (author kind: user/master/executor/reviewer/scout/system). */
+export const ChatEventBodySchema = z.object({
+  text: z.string(),
+  /** agent_session / Paseo agent the message came from, if any. */
+  sessionId: z.string().optional(),
+  agentId: z.string().optional(),
+  kind: ChatKindSchema.optional(),
+});
+export type ChatEventBody = z.infer<typeof ChatEventBodySchema>;
+
+/** Card fields a proposal may change. */
+export const ProposalChangesSchema = z.object({
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  acceptance: z.string().optional(),
+});
+export type ProposalChanges = z.infer<typeof ProposalChangesSchema>;
+
+/** Body of a `proposal` card event; `status` is the only part that changes after creation. */
+export const ProposalEventBodySchema = z.object({
+  changes: ProposalChangesSchema,
+  rationale: z.string(),
+  status: ProposalStatusSchema,
+  /** Who accepted/rejected it and when (set with the status change). */
+  resolvedBy: z.string().optional(),
+  resolvedAt: Iso.optional(),
+});
+export type ProposalEventBody = z.infer<typeof ProposalEventBodySchema>;
+
 export const PlanSnapshotSchema = z.object({
   description: z.string(),
   checks: z.array(z.object({ text: z.string(), method: z.string().optional() })),
@@ -136,7 +180,10 @@ export const PresetSchema = z.object({
   instructions: z.string(),
   /** Preset ids to fall back to, in order, when a session on this preset fails; null = none. */
   fallbackPresetIds: z.array(z.string()).nullable(),
-  /** Selector hint: scout | worker | reviewer | ... (free text); null = unspecified. */
+  /** Jobs this preset may be picked for (scout / worker / reviewer); [] = unspecified. */
+  roleHints: z.array(RoleHintSchema),
+  // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
+  // First entry of roleHints (null when empty); old phones still read and write only this.
   roleHint: z.string().nullable(),
   builtin: z.boolean(),
   createdAt: Iso,

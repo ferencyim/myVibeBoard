@@ -13,6 +13,12 @@ export interface Migration {
   version: number;
   name: string;
   sql: string;
+  /**
+   * Run with `PRAGMA foreign_keys = OFF` (table rebuilds that must not trigger ON DELETE actions
+   * of referencing tables). The pragma only works outside a transaction, so it is switched around
+   * the migration; violations are checked before commit.
+   */
+  foreignKeysOff?: boolean;
 }
 
 export interface MigrateResult {
@@ -79,17 +85,24 @@ export function migrateOwner(
   db.exec(CREATE_VERSION_TABLE);
   const applied: number[] = [];
   for (const migration of list) {
-    db.immediate(() => {
-      // Re-check under the write lock: another process may have applied it meanwhile.
-      if (getSchemaVersion(db, owner) >= migration.version) return;
-      db.exec(migration.sql);
-      db.prepare("INSERT INTO schema_version (owner, version, applied_at) VALUES (?, ?, ?)").run(
-        owner,
-        migration.version,
-        now().toISOString(),
-      );
-      applied.push(migration.version);
-    });
+    if (migration.foreignKeysOff) db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      db.immediate(() => {
+        // Re-check under the write lock: another process may have applied it meanwhile.
+        if (getSchemaVersion(db, owner) >= migration.version) return;
+        db.exec(migration.sql);
+        if (migration.foreignKeysOff && db.prepare("PRAGMA foreign_key_check").all().length > 0)
+          throw new Error(`Migration ${owner}/${migration.version} left foreign key violations`);
+        db.prepare("INSERT INTO schema_version (owner, version, applied_at) VALUES (?, ?, ?)").run(
+          owner,
+          migration.version,
+          now().toISOString(),
+        );
+        applied.push(migration.version);
+      });
+    } finally {
+      if (migration.foreignKeysOff) db.exec("PRAGMA foreign_keys = ON");
+    }
   }
   return { owner, from, to: latest, applied };
 }

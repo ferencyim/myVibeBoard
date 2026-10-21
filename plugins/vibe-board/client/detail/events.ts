@@ -11,6 +11,8 @@ export const EVENT_TYPE_LABELS: Record<CardEventType, string> = {
   reject: "退回",
   note: "备注",
   maintenance: "维护",
+  chat: "群聊",
+  proposal: "修改建议",
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {

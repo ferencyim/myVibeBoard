@@ -30,6 +30,8 @@ export const EVENT_PAYLOADS = {
     actor: z.enum(MOVE_ACTORS),
     reason: z.string().optional(),
   }),
+  // The board asks the master to review the card now (user pressed "ask master to review").
+  "card.review_requested": z.object({ cardId: z.string(), requestedBy: z.string() }),
   "card.assessed": z.object({ cardEventId: z.string() }),
   "card.dispatched": z.object({
     sessionId: z.string(),
