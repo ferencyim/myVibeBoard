@@ -3581,9 +3581,9 @@ export const ServerInfoStatusPayloadSchema = z
         creationLifecycle: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
-        // COMPAT(internalAgents): added in v0.13.0; remove gate after 2027-03-17.
+        // COMPAT(internalAgents): added in v0.9.0; remove gate after 2027-03-17.
         internalAgents: z.boolean().optional(),
-        // COMPAT(internalWorkspaces): added in v0.13.0; remove gate after 2027-03-17.
+        // COMPAT(internalWorkspaces): added in v0.9.0; remove gate after 2027-03-17.
         internalWorkspaces: z.boolean().optional(),
         backgroundWorkspaces: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
@@ -4675,7 +4675,7 @@ export const AgentTimelineSearchResponseMessageSchema = z.object({
         seq: z.number().int().nonnegative(),
         role: z.enum(["user", "assistant"]),
         // Estimated occurrences in the message; the client verifies against rendered text.
-        // COMPAT(timelineSearchCount): added in v0.13.0, remove optional after 2027-09-22.
+        // COMPAT(timelineSearchCount): added in v0.9.0, remove optional after 2027-09-22.
         count: z.number().int().positive().optional(),
       }),
     ),
