@@ -60,7 +60,7 @@ describe("context block", () => {
     expect(at("Always reply in Chinese.")).toBeLessThan(at("Goal: ship the harbor app."));
     expect(at("Goal: ship the harbor app.")).toBeLessThan(at("harbor module is half done"));
     expect(at("harbor module is half done")).toBeLessThan(at("Use sqlite"));
-    expect(block).toContain("read-only");
+    expect(block).toContain("对你只读");
     expect(block.startsWith(CONTEXT_START)).toBe(true);
   });
 
@@ -68,7 +68,7 @@ describe("context block", () => {
     const { store } = project();
     const block = buildContextBlock(store, { maxMemoryTokens: 5 })!;
     expect(block).not.toContain("harbor module is half done");
-    expect(block).toContain("read `.vibe/PROJECT_STATE.md`");
+    expect(block).toContain("请读 `.vibe/PROJECT_STATE.md`");
   });
 
   it("is null without a .vibe directory", () => {

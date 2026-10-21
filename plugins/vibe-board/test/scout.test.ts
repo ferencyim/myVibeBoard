@@ -30,7 +30,7 @@ function setup(
         let goal = "";
         return {
           run: async (prompt: string, o: { timeoutMs: number }) => {
-            goal = /Goal: (.*)/.exec(prompt)?.[1] ?? "";
+            goal = /目标：(.*)/.exec(prompt)?.[1] ?? "";
             running++;
             peak = Math.max(peak, running);
             try {

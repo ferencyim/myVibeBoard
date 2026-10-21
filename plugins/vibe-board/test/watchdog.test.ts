@@ -127,7 +127,7 @@ describe("stall watchdog", () => {
     t.advance(6 * MIN);
     await t.watchdog.tick();
     expect(t.send).toHaveBeenCalledTimes(1);
-    expect(t.send.mock.calls[0]![0]).toMatch(/Continue/);
+    expect(t.send.mock.calls[0]![0]).toMatch(/继续/);
     expect(t.row().stalledSince).toBeNull(); // touchActivity after the nudge
     expect(t.store.events.list(t.card.id).some((e) => (e.body as any)?.kind === "stall_interrupted")).toBe(true);
   });

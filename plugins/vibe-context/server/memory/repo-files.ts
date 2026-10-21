@@ -23,12 +23,11 @@ export const AGENTS_BLOCK_END = "<!-- vibe:agents-guide:end -->";
 export function renderAgentsGuide(): string {
   return [
     AGENTS_BLOCK_START,
-    "## Project context (myVibeBoard)",
+    "## 项目上下文（myVibeBoard）",
     "",
-    "Project goals, instructions, decisions, lessons and current state live in `.vibe/`.",
-    "Start with `.vibe/INDEX.md` and `.vibe/PROJECT_STATE.md`; read `.vibe/instructions/` for the",
-    "owner's rules. These files are authoritative and read-only for you: report changes to the",
-    "master agent instead of editing them.",
+    "项目目标、指令、决策、经验教训和当前状态都在 `.vibe/` 目录。",
+    "先读 `.vibe/INDEX.md` 和 `.vibe/PROJECT_STATE.md`；用户的规则在 `.vibe/instructions/`。",
+    "这些文件是权威依据，对你只读：需要修改时请告知总 agent，不要自己改。",
     AGENTS_BLOCK_END,
   ].join("\n");
 }

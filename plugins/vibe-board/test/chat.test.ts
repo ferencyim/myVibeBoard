@@ -279,7 +279,7 @@ describe("dispatch writes back to the chat and the brief follows the card", () =
     expect(brief).toContain("# DEMO-1 · Edited");
     expect(brief).toContain("Edited body");
     expect(brief).toContain("Edited check");
-    expect(brief).toContain("authoritative");
+    expect(brief).toContain("以它们为准");
     expect(brief).not.toContain(`# DEMO-1 · ${stale.title}\n`);
   });
 });

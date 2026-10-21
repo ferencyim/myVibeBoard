@@ -22,11 +22,11 @@ const store = () => {
 };
 const card = { id: "c1", key: "DEMO-1", title: "Add greeting", description: "Say hi", acceptance: "works", projectId: "p1" } as never;
 
-// The texts as they were hard-coded before the registry (server/verifier/agent.ts, review/index.ts).
-const ORIGINAL_VERIFIER_SYSTEM = `You are an independent verifier for a kanban card. Another agent wrote the change; you did not.
-You are READ-ONLY with respect to the repository: never edit, create, move or delete files in the working tree, never run git commands that change state (add, commit, checkout, reset, stash, ...), never install dependencies. Your only writable location is the output directory given in the task. Judge what the change actually does, not what it claims.`;
-const ORIGINAL_REVIEWER_SYSTEM = `You are an independent code reviewer for a kanban card. Another agent wrote the change; you did not.
-You are READ-ONLY with respect to the repository: never edit, create, move or delete files in the working tree, never run git commands that change state, never install dependencies. You may read any file and run read-only commands (git diff, git log, grep). Review what the change actually does.`;
+// The default (Chinese) system prompts.
+const ORIGINAL_VERIFIER_SYSTEM = `你是看板卡片的独立验证者。改动是另一个 agent 写的，不是你。
+对仓库你是只读的：不要在工作树里编辑、创建、移动或删除文件，不要运行会改变状态的 git 命令（add、commit、checkout、reset、stash 等），不要安装依赖。你唯一可写的位置是任务里给出的输出目录。要判断改动实际做了什么，而不是它自称做了什么。`;
+const ORIGINAL_REVIEWER_SYSTEM = `你是看板卡片的独立代码复核者。改动是另一个 agent 写的，不是你。
+对仓库你是只读的：不要在工作树里编辑、创建、移动或删除文件，不要运行会改变状态的 git 命令，不要安装依赖。你可以读任何文件，也可以运行只读命令（git diff、git log、grep）。要复核改动实际做了什么。`;
 
 /** The old buildFailurePrompt, kept here as the reference for the new templates. */
 function legacyFailurePrompt(input: {
@@ -37,25 +37,25 @@ function legacyFailurePrompt(input: {
 }): string {
   const head =
     input.source === "user"
-      ? "Your work on DEMO-1 was rejected by the user."
+      ? "你在 DEMO-1 上的工作被用户驳回了。"
       : input.review
-        ? "Independent code review of DEMO-1 (commit abc123) found severe problems (listed below together with any failing checks), so the card was sent back to you."
-        : "Independent verification of DEMO-1 (commit abc123) found failing checks, so the card was sent back to you.";
+        ? "对 DEMO-1（提交 abc123）的独立代码复核发现了严重问题（连同未通过的检查项一并列在下面），所以卡片被退回给你。"
+        : "对 DEMO-1（提交 abc123）的独立验证发现有检查项未通过，所以卡片被退回给你。";
   const body = input.failed.length
     ? input.failed
         .map(
           (f) =>
-            `- ${f.text}\n  Finding: ${f.note || "(no note)"}${
-              f.evidenceFiles.length ? `\n  Evidence: ${f.evidenceFiles.join(", ")}` : ""
+            `- ${f.text}\n  发现：${f.note || "（无说明）"}${
+              f.evidenceFiles.length ? `\n  证据：${f.evidenceFiles.join(", ")}` : ""
             }`,
         )
         .join("\n")
     : "";
   return [
     head,
-    input.comment ? `User comment: ${input.comment}` : "",
-    body ? `Failed checks:\n${body}` : "",
-    "Fix the problems, run the project's tests, and finish your round; the card will be verified again.",
+    input.comment ? `用户评论：${input.comment}` : "",
+    body ? `未通过的检查：\n${body}` : "",
+    "请修复这些问题，运行项目的测试，然后结束本轮；卡片会被重新验证。",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -129,7 +129,7 @@ describe("prompt registry", () => {
       prompts,
     });
     expect(setup.startsWith("MY OWN DEMO-1")).toBe(true);
-    expect(setup).toContain("Reply with ONE JSON object");
+    expect(setup).toContain("回复一个 JSON 对象");
     expect(setup).toContain('"web"'); // the VerifyConfig JSON Schema
     const judge = buildJudgePrompt({ card, checks: [], commitHash: "abc", outputDir: "/o", evidence: [], notes: [], prompts });
     expect(judge.startsWith("MY OWN DEMO-1")).toBe(true);
@@ -162,11 +162,11 @@ describe("prompt registry", () => {
       baselineCommit: "def",
       existingConfig: true,
     });
-    expect(setup).toContain("# Verify DEMO-1 (web project) - round 1: how to run it");
-    expect(setup).toContain("Baseline worktree (the code before the change, commit def): /base");
-    expect(setup).toContain("1. page loads  (how: open it)");
-    expect(setup).toContain("Put the baseline path above in web.baseline.path");
-    expect(setup).toContain("already contains .vibe/verify.json");
+    expect(setup).toContain("# 验证 DEMO-1（web 项目）- 第一轮：如何运行");
+    expect(setup).toContain("基线工作树（改动前的代码，提交 def）：/base");
+    expect(setup).toContain("1. page loads  （做法：open it）");
+    expect(setup).toContain("请把上面的基线路径写进 web.baseline.path");
+    expect(setup).toContain("仓库里已有 .vibe/verify.json");
     const judge = buildJudgePrompt({
       card,
       checks: [{ text: "page loads", method: "" }],
@@ -176,12 +176,12 @@ describe("prompt registry", () => {
       notes: ["n1"],
     });
     expect(judge).toContain("- a.log [log]\n    | x\n    | y");
-    expect(judge).toContain("## Collector notes\n- n1");
-    expect(judge).toContain('Be strict; do not give "pass" without evidence.');
+    expect(judge).toContain("## 采集器备注\n- n1");
+    expect(judge).toContain('要严格；没有证据不要给 "pass"。');
     const review = buildReviewPrompt({ card, worktree: "/w", commitHash: "abc", stat: "1 file", diff: "+x", truncated: true });
-    expect(review).toContain("(no base commit found: uncommitted changes only)");
-    expect(review).toContain("## Diff (truncated; read the files for the rest)\n```diff\n+x\n```");
-    expect(review).toContain('- "severe": the change is wrong or dangerous');
+    expect(review).toContain("（未找到基线提交：只有未提交的改动）");
+    expect(review).toContain("## Diff（已截断；其余部分请直接读文件）\n```diff\n+x\n```");
+    expect(review).toContain('- "severe"（严重）：改动是错的或危险的');
   });
 });
 

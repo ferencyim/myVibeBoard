@@ -1,7 +1,7 @@
-// Every prompt text vibe-verify sends to an agent, registered with its default (WP-99).
-// The default text is the single source: code resolves through ./index.ts, the owner may override it
-// globally or per project on the Agent behaviour page. Reply formats the parsers depend on live in
-// fixedSuffix (appended after the possibly overridden body, read-only for the owner).
+// vibe-verify 发给 agent 的全部提示词及其默认值（WP-99）。默认文本一律用中文写；
+// JSON 键名与枚举值（pass/doubt/fail、severe/major/minor 等）、命令、{{占位符}}、文件路径保持原样。
+// 默认文本是唯一来源：代码通过 ./index.ts 解析，用户可在“Agent 行为”页全局或按项目覆盖。
+// 解析器依赖的回复格式放在 fixedSuffix（追加在可能被覆盖的正文之后，用户只读）。
 
 import { z } from "zod";
 import { VerifyConfigSchema } from "../collectors/common";
@@ -13,76 +13,76 @@ export function verifyConfigDoc(): string {
   try {
     return JSON.stringify(z.toJSONSchema(VerifyConfigSchema, { io: "input" }));
   } catch {
-    return "(schema unavailable: use the sections web, backend, android as documented in plugins/vibe-verify/README.md)";
+    return "（无法生成 schema：请按 plugins/vibe-verify/README.md 的说明使用 web、backend、android 三个分区）";
   }
 }
 
-const VERIFIER_SYSTEM = `You are an independent verifier for a kanban card. Another agent wrote the change; you did not.
-You are READ-ONLY with respect to the repository: never edit, create, move or delete files in the working tree, never run git commands that change state (add, commit, checkout, reset, stash, ...), never install dependencies. Your only writable location is the output directory given in the task. Judge what the change actually does, not what it claims.`;
+const VERIFIER_SYSTEM = `你是看板卡片的独立验证者。改动是另一个 agent 写的，不是你。
+对仓库你是只读的：不要在工作树里编辑、创建、移动或删除文件，不要运行会改变状态的 git 命令（add、commit、checkout、reset、stash 等），不要安装依赖。你唯一可写的位置是任务里给出的输出目录。要判断改动实际做了什么，而不是它自称做了什么。`;
 
-const REVIEWER_SYSTEM = `You are an independent code reviewer for a kanban card. Another agent wrote the change; you did not.
-You are READ-ONLY with respect to the repository: never edit, create, move or delete files in the working tree, never run git commands that change state, never install dependencies. You may read any file and run read-only commands (git diff, git log, grep). Review what the change actually does.`;
+const REVIEWER_SYSTEM = `你是看板卡片的独立代码复核者。改动是另一个 agent 写的，不是你。
+对仓库你是只读的：不要在工作树里编辑、创建、移动或删除文件，不要运行会改变状态的 git 命令，不要安装依赖。你可以读任何文件，也可以运行只读命令（git diff、git log、grep）。要复核改动实际做了什么。`;
 
-const SETUP = `# Verify {{card.key}} ({{projectType}} project) - round 1: how to run it
+const SETUP = `# 验证 {{card.key}}（{{projectType}} 项目）- 第一轮：如何运行
 
-Worktree under test (READ-ONLY for you): {{worktree}}
-Commit: {{commitHash}}
-You write nothing at all: your reply is the result.
+被验证的工作树（对你只读）：{{worktree}}
+提交：{{commitHash}}
+你什么都不要写：你的回复就是结果。
 {{baselineLine}}
 
-## Card
+## 卡片
 {{card.title}}
 
 {{description}}
 
-## Checks (numbered)
+## 检查项（带编号）
 {{checks}}
 
-## Your task
-Read the code and decide how an evidence collector should run this project and exercise each check (start command + ready URL, pages and click/fill steps, HTTP requests, Android app/flow, test command).
+## 你的任务
+阅读代码，判断证据采集器应该如何运行这个项目并逐项执行检查（启动命令加就绪 URL、页面与点击/填写步骤、HTTP 请求、Android 应用/流程、测试命令）。
 {{baselineHint}}
 {{existingConfigNote}}
-Do not modify anything; do not write files.`;
+不要修改任何东西，不要写文件。`;
 
-const SETUP_SUFFIX = `Reply with ONE JSON object (in a \`\`\`json fence, nothing after it) that follows this JSON Schema (only include the sections that apply; omit everything you cannot determine):
+const SETUP_SUFFIX = `回复一个 JSON 对象（放在 \`\`\`json 围栏里，围栏之后不要再写任何内容），格式符合下面的 JSON Schema（只写适用的分区；无法确定的一律省略）：
 ${verifyConfigDoc()}
 
-Use the check number as string in \`checkId\` of backend requests (for example "1"). Use paths relative to the worktree for \`cwd\`.`;
+backend 请求的 \`checkId\` 用检查项编号的字符串形式（例如 "1"）。\`cwd\` 用相对于工作树的路径。`;
 
-const JUDGE = `# Verify {{card.key}} - round 2: judge the evidence
+const JUDGE = `# 验证 {{card.key}} - 第二轮：判定证据
 
-Commit under test: {{commitHash}}
-Evidence directory: {{outputDir}}
+被验证的提交：{{commitHash}}
+证据目录：{{outputDir}}
 
-## Checks (numbered)
+## 检查项（带编号）
 {{checks}}
 
-## Collected evidence (files in the evidence directory)
+## 已采集的证据（证据目录中的文件）
 {{evidence}}
 
-## Collector notes
+## 采集器备注
 {{notes}}
 
-## Your task
-Open the evidence (look at screenshots and read logs and reports), compare it with the code and each check, and judge every check: "pass" (clearly satisfied), "doubt" (cannot tell from the evidence) or "fail" (not satisfied or broken). Be strict; do not give "pass" without evidence.
-Do not modify anything; do not write files.`;
+## 你的任务
+打开证据（看截图，读日志和报告），与代码和每个检查项对照，逐项判定："pass"（明确满足）、"doubt"（凭证据无法判断）或 "fail"（不满足或已损坏）。要严格；没有证据不要给 "pass"。
+不要修改任何东西，不要写文件。`;
 
-const JUDGE_SUFFIX = `Reply with ONE JSON object (in a \`\`\`json fence, nothing after it):
-{"summary": "one sentence", "items": [{"check": 1, "judgement": "pass|doubt|fail", "note": "why, one or two sentences", "evidence": ["file names from the list above"]}]}
-Include every check number.`;
+const JUDGE_SUFFIX = `回复一个 JSON 对象（放在 \`\`\`json 围栏里，围栏之后不要再写任何内容）：
+{"summary": "一句话", "items": [{"check": 1, "judgement": "pass|doubt|fail", "note": "原因，一到两句话", "evidence": ["上面列表里的文件名"]}]}
+必须包含每个检查项的编号。`;
 
-const REVIEW = `# Review {{card.key}}: {{card.title}}
+const REVIEW = `# 复核 {{card.key}}：{{card.title}}
 
-Worktree (READ-ONLY for you): {{worktree}}
-Reviewed commit: {{commitHash}}{{baseNote}}
+工作树（对你只读）：{{worktree}}
+被复核的提交：{{commitHash}}{{baseNote}}
 
-## Card description
+## 卡片描述
 {{description}}
 
-## Acceptance criteria
+## 验收标准
 {{acceptance}}
 {{plan}}
-## Diff summary
+## Diff 统计
 {{stat}}
 
 ## Diff{{truncatedNote}}
@@ -90,29 +90,29 @@ Reviewed commit: {{commitHash}}{{baseNote}}
 {{diff}}
 \`\`\`
 
-## Your task
-Review the change for correctness bugs, security problems, broken edge cases, missing handling the acceptance criteria require, and regressions. Open the surrounding code when the diff alone is not enough. Do NOT report style or taste. Classify each issue:
-- "severe": the change is wrong or dangerous (bug that breaks the feature, data loss, security hole, acceptance criterion not met); it must be fixed before the card can be accepted.
-- "major": a real problem that should be fixed but does not break the main flow.
-- "minor": small improvement.
-Do not modify anything; do not write files.`;
+## 你的任务
+复核这次改动，找出正确性缺陷、安全问题、被破坏的边界情况、验收标准要求但缺失的处理，以及回归。仅凭 diff 不够时，去读周围的代码。不要报告风格或个人喜好问题。给每个问题定级：
+- "severe"（严重）：改动是错的或危险的（缺陷让功能不可用、数据丢失、安全漏洞、验收标准未满足）；必须修复后卡片才能被接受。
+- "major"（一般）：确实存在、应该修复，但不影响主流程的问题。
+- "minor"（轻微）：小的改进。
+不要修改任何东西，不要写文件。`;
 
-const REVIEW_SUFFIX = `Reply with ONE JSON object (in a \`\`\`json fence, nothing after it):
-{"verdict": "pass|issues|severe", "summary": "one or two sentences", "issues": [{"severity": "severe|major|minor", "file": "path/relative/to/worktree", "line": 12, "text": "what is wrong and how to fix it"}]}
-Use an empty issues array and verdict "pass" when you find nothing worth reporting.`;
+const REVIEW_SUFFIX = `回复一个 JSON 对象（放在 \`\`\`json 围栏里，围栏之后不要再写任何内容）：
+{"verdict": "pass|issues|severe", "summary": "一到两句话", "issues": [{"severity": "severe|major|minor", "file": "相对于工作树的路径", "line": 12, "text": "问题是什么、怎么修"}]}
+没有值得报告的问题时，issues 为空数组、verdict 为 "pass"。`;
 
 const SEND_BACK_TAIL =
-  "Fix the problems, run the project's tests, and finish your round; the card will be verified again.";
+  "请修复这些问题，运行项目的测试，然后结束本轮；卡片会被重新验证。";
 
-const SEND_BACK_USER = `Your work on {{card.key}} was rejected by the user.
-
-{{comment}}{{failed}}${SEND_BACK_TAIL}`;
-
-const SEND_BACK_REVIEW = `Independent code review of {{card.key}} (commit {{commitHash}}) found severe problems (listed below together with any failing checks), so the card was sent back to you.
+const SEND_BACK_USER = `你在 {{card.key}} 上的工作被用户驳回了。
 
 {{comment}}{{failed}}${SEND_BACK_TAIL}`;
 
-const SEND_BACK_VERIFIER = `Independent verification of {{card.key}} (commit {{commitHash}}) found failing checks, so the card was sent back to you.
+const SEND_BACK_REVIEW = `对 {{card.key}}（提交 {{commitHash}}）的独立代码复核发现了严重问题（连同未通过的检查项一并列在下面），所以卡片被退回给你。
+
+{{comment}}{{failed}}${SEND_BACK_TAIL}`;
+
+const SEND_BACK_VERIFIER = `对 {{card.key}}（提交 {{commitHash}}）的独立验证发现有检查项未通过，所以卡片被退回给你。
 
 {{comment}}{{failed}}${SEND_BACK_TAIL}`;
 
@@ -124,8 +124,8 @@ const SEGMENT = (name: string, description: string) => ({
 const SEND_BACK_VARS = [
   CARD_KEY,
   { name: "commitHash", description: "被验证的提交" },
-  SEGMENT("comment", "主人的评论，自带“User comment:”前缀与段尾空行"),
-  SEGMENT("failed", "未通过的检查清单，自带“Failed checks:”前缀与段尾空行"),
+  SEGMENT("comment", "用户的评论，自带“用户评论：”前缀与段尾空行"),
+  SEGMENT("failed", "未通过的检查清单，自带“未通过的检查：”前缀与段尾空行"),
 ];
 
 export const VERIFY_PROMPT_DEFS: readonly PromptDef[] = [
@@ -252,9 +252,9 @@ export const VERIFY_PROMPT_DEFS: readonly PromptDef[] = [
     key: "verify.send_back.user",
     plugin: PLUGIN,
     role: "executor",
-    title: "退回执行 agent：主人驳回",
-    description: "主人在验证页驳回卡片并附一句话时，发给原执行 agent 的消息。",
-    whenSent: "主人驳回卡片时",
+    title: "退回执行 agent：用户驳回",
+    description: "用户在验证页驳回卡片并附一句话时，发给原执行 agent 的消息。",
+    whenSent: "用户驳回卡片时",
     audience: "执行 agent",
     defaultText: SEND_BACK_USER,
     placeholders: SEND_BACK_VARS,

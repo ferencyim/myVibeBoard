@@ -20,31 +20,31 @@ import { setupBoard, tempDir } from "./helpers";
 const GOLDEN_BRIEF = [
   "# DEMO-1 · Fix it",
   "",
-  "The title, description and acceptance criteria below are the card as it stands now, including every change the owner accepted. They are authoritative: where the plan or hand-off further down says something different, follow the card.",
+  "下面的标题、描述和验收标准是卡片的当前内容，已包含用户采纳的全部改动，以它们为准：后文的计划或交接内容与之不一致时，按卡片执行。",
   "",
-  "## Description",
+  "## 描述",
   "desc",
   "",
-  "## Acceptance criteria",
+  "## 验收标准",
   "works",
   "",
-  "## Reference images",
-  "None.",
+  "## 参考图片",
+  "无。",
   "",
-  "## Recent notes",
-  "None.",
+  "## 最近备注",
+  "无。",
   "",
-  "## Project",
-  "- Name: Demo",
-  "- Type: web",
+  "## 项目",
+  "- 名称：Demo",
+  "- 类型：web",
   "",
-  "## Project memory",
-  "Project goals, rules and current state live in `.vibe/` (start with `.vibe/INDEX.md` and `.vibe/PROJECT_STATE.md`; owner rules are in `.vibe/instructions/`). These files are authoritative and read-only for you: report needed changes in a card comment instead of editing them.",
+  "## 项目记忆",
+  "项目目标、规则和当前状态都在 `.vibe/` 目录（先读 `.vibe/INDEX.md` 和 `.vibe/PROJECT_STATE.md`；用户的规则在 `.vibe/instructions/`）。这些文件是权威依据，对你只读：需要修改时请在卡片评论里说明，不要自己改。",
   "",
-  "## Report-back contract",
-  "You are the worker for card DEMO-1. Read it with `vibe-board show DEMO-1` (MCP `vibe_show`). Report progress or ask a question with `vibe-board comment DEMO-1 --body \"...\"`. Attach result files with `vibe-board attachment add DEMO-1 --file <path>`. Commit your finished work on the worktree branch before you end the round (the board merges that branch after approval and never touches uncommitted changes). You cannot move the card: when your round ends with no open question, the board moves it to verifying.",
+  "## 回报约定",
+  "你是卡片 DEMO-1 的执行者。用 `vibe-board show DEMO-1`（MCP 工具 `vibe_show`）读取卡片。用 `vibe-board comment DEMO-1 --body \"...\"` 汇报进展或提问。用 `vibe-board attachment add DEMO-1 --file <path>` 上传结果文件。本轮结束前，把完成的工作提交到工作树分支（批准后看板会合并该分支，不会处理未提交的改动）。你不能移动卡片：本轮结束时若没有未解决的提问，看板会把卡片移到“验证中”（verifying）。",
   "",
-  "## Preset instructions",
+  "## 预设指令",
   "Be careful.",
   "",
 ].join("\n");
@@ -78,8 +78,8 @@ describe("prompt defaults", () => {
     expect(t.store.prompts.list().map((p) => p.key).sort()).toEqual(BOARD_PROMPT_DEFS.map((d) => d.key).sort());
     expect(BOARD_PROMPT_DEFS.every((d) => d.plugin === "vibe-board")).toBe(true);
     expect(defaultPrompts.resolve("board.watchdog_continue")).toBe(CONTINUE_PROMPT);
-    expect(SCOUT_SYSTEM_PROMPT).toContain("at most 20 lines");
-    expect(defaultPrompts.resolve("board.port_hint", { vars: { port: "4100" } })).toContain("port 4100 ");
+    expect(SCOUT_SYSTEM_PROMPT).toContain("最多 20 行");
+    expect(defaultPrompts.resolve("board.port_hint", { vars: { port: "4100" } })).toContain("端口 4100");
   });
 });
 
@@ -96,11 +96,11 @@ describe("brief through the registry", () => {
   it("a global override replaces the skeleton; a project override wins; segments drop out when omitted", () => {
     const t = setup();
     t.store.prompts.setOverride("board.brief", "TASK {{card.key}} / {{card.title}}\n{{description}}");
-    expect(brief(t)).toBe("TASK DEMO-1 / Fix it\n## Description\ndesc\n");
+    expect(brief(t)).toBe("TASK DEMO-1 / Fix it\n## 描述\ndesc\n");
     t.store.prompts.setOverride("board.brief", "OTHER {{card.key}}", { projectId: t.project.id });
     expect(brief(t)).toBe("OTHER DEMO-1\n");
     t.store.prompts.clearOverride("board.brief", { projectId: t.project.id });
-    expect(brief(t)).toBe("TASK DEMO-1 / Fix it\n## Description\ndesc\n");
+    expect(brief(t)).toBe("TASK DEMO-1 / Fix it\n## 描述\ndesc\n");
   });
 
   it("a card description containing a placeholder is not rendered again", () => {
@@ -112,9 +112,9 @@ describe("brief through the registry", () => {
   it("the contract text is its own prompt and is project-scoped", () => {
     const t = setup();
     t.store.prompts.setOverride("board.brief_contract", "Report with {{card.key}} only.", { projectId: t.project.id });
-    expect(brief(t)).toContain("## Report-back contract\nReport with DEMO-1 only.\n");
+    expect(brief(t)).toContain("## 回报约定\nReport with DEMO-1 only.\n");
     const otherCard = t.board.cards.create({ project: t.other.prefix, title: "o", column: "todo" }).card;
-    expect(brief(t, { card: otherCard, project: t.other })).toContain("You are the worker for card OTH-1.");
+    expect(brief(t, { card: otherCard, project: t.other })).toContain("你是卡片 OTH-1 的执行者。");
   });
 
   it("limits come from the settings values", () => {
@@ -129,10 +129,10 @@ describe("brief through the registry", () => {
     expect(out).not.toContain("note 2");
     expect(out).toContain("chat 4");
     expect(out).not.toContain("chat 3");
-    expect(brief(t, { events, limits: { chatLimit: 0 } })).not.toContain("Group chat");
+    expect(brief(t, { events, limits: { chatLimit: 0 } })).not.toContain("群聊");
     const handoff = { path: null, text: "y".repeat(900) };
-    expect(brief(t, { handoff, limits: { handoffMaxChars: 500 } })).toContain("(truncated, see the file)");
-    expect(brief(t, { handoff })).not.toContain("(truncated");
+    expect(brief(t, { handoff, limits: { handoffMaxChars: 500 } })).toContain("（已截断，见文件）");
+    expect(brief(t, { handoff })).not.toContain("（已截断");
   });
 
   it("settings defaults and ranges", () => {
@@ -203,7 +203,7 @@ describe("other prompt keys", () => {
     const one = start(1);
     const re = createReassigner({ board: t.board, getPaseo: () => paseo, prompts: t.prompts, newAgentId: () => "new-1", log: () => {} });
     expect((await re.reassign(one.session.id, failure)).reassigned).not.toBeNull();
-    expect(created[0].prompt).toContain("TAKE codex quota quota gone\nThe previous agent's transcript");
+    expect(created[0].prompt).toContain("TAKE codex quota quota gone\n上一个 agent 的转录文件");
     const two = start(2);
     const conv = createReassigner({ board: t.board, getPaseo: () => paseo, prompts: t.prompts, convert: async () => "converted", log: () => {} });
     expect((await conv.reassign(two.session.id, failure)).reassigned).not.toBeNull();
@@ -241,7 +241,7 @@ describe("other prompt keys", () => {
     });
     const out = await scout.run(t.card.key, [{ goal: "where", paths: ["src", "lib"] }]);
     expect(created[0].config.systemPrompt).toBe("SYS 3");
-    expect(prompts[0]).toBe("Kind: locate. FIND IT\nGoal: where\nRestrict to: src, lib\nAnswer in at most 3 lines with path:line anchors.");
+    expect(prompts[0]).toBe("类型：locate。FIND IT\n目标：where\n限定范围：src, lib\n回复最多 3 行，并带 path:line 定位。");
     expect(out.results[0]!.summary).toBe("a\nb\nc\n... (2 more lines cut)");
     await expect(scout.run(t.card.key, [{ goal: "x" }, { goal: "y" }])).rejects.toThrow(/At most 1 tasks/);
     await scout.run(t.card.key, [{ goal: "where", paths: ["src", "lib"] }]); // ttl 0: no cache hit

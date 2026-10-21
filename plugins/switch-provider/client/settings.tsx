@@ -34,7 +34,7 @@ export const TEXT_FIELDS: readonly Field[] = [
   {
     kind: "textarea",
     key: "summaryAck",
-    label: "摘要之后预置的助手回复（“Understood...”）",
+    label: "摘要之后预置的助手回复（默认“明白。我会使用压缩后的历史……”）",
     defaultText: DEFAULT_SUMMARY_ACK,
   },
   {

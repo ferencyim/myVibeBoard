@@ -116,7 +116,7 @@ describe("model review", () => {
     expect(h.board.cards.get(h.cardId)!.column).toBe("in_progress");
     expect(h.launched[0]).toMatchObject({ provider: "codex", model: "gpt-x", role: "reviewer" });
     expect(h.prompts[0]).toContain("+const x = user.name;");
-    expect(h.prompts[0]).toContain("diff against base1111");
+    expect(h.prompts[0]).toContain("与 base1111 比较的 diff");
     expect(h.sent[0]!.agentId).toBe("worker-1");
     expect(h.sent[0]!.prompt).toContain("user may be undefined");
     expect(h.sent[0]!.prompt).toContain("src/a.ts:12");
@@ -191,7 +191,7 @@ describe("model review", () => {
     await h.pipeline.run(h.cardId);
     expect(await h.pipeline.reject(h.cardId, "not good")).toBe(true);
     expect(h.board.cards.get(h.cardId)!.column).toBe("in_progress");
-    expect(h.sent[0]!.prompt).toContain("rejected by the user");
+    expect(h.sent[0]!.prompt).toContain("被用户驳回了");
   });
 
   it("the severity map decides the judgement: severe -> doubt keeps the card, major -> fail sends it back", async () => {

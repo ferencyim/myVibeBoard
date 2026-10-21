@@ -119,12 +119,12 @@ export const canCompact = (config: CompactionConfig, provider: string): boolean 
 
 export function notesPrompt(mdPath: string, cardRef?: string | null, prompts: PromptResolver = defaultPrompts): string {
   return prompts.resolve("context.compact_notes", {
-    vars: { mdPath, keyClause: cardRef ? ` with key "${cardRef}"` : "" },
+    vars: { mdPath, keyClause: cardRef ? `，key 为 "${cardRef}"` : "" },
   });
 }
 
 export function restorePrompt(block: string | null, prompts: PromptResolver = defaultPrompts): string {
-  return prompts.resolve("context.compact_restore", { vars: { block: block ?? "(no project context)" } });
+  return prompts.resolve("context.compact_restore", { vars: { block: block ?? "（无项目上下文）" } });
 }
 
 export function coldStartPrompt(

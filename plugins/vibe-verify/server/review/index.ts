@@ -70,7 +70,7 @@ export interface ReviewPromptInput {
 
 function planSection(plan: NonNullable<PlanVersion["snapshot"]>): string {
   const checks = plan.checks.map((c, n) => `${n + 1}. ${c.text}`).join("\n");
-  return `\n## Latest plan\n${plan.description}\n${checks}${plan.notes ? `\nNotes: ${plan.notes}` : ""}\n`;
+  return `\n## 最新计划\n${plan.description}\n${checks}${plan.notes ? `\n备注：${plan.notes}` : ""}\n`;
 }
 
 export function buildReviewPrompt(i: ReviewPromptInput): string {
@@ -82,13 +82,13 @@ export function buildReviewPrompt(i: ReviewPromptInput): string {
       "card.title": i.card.title,
       worktree: i.worktree,
       commitHash: i.commitHash,
-      baseNote: i.baseCommit ? `  (diff against ${i.baseCommit})` : "  (no base commit found: uncommitted changes only)",
-      description: i.card.description || "(none)",
-      acceptance: i.card.acceptance || "(none)",
+      baseNote: i.baseCommit ? `  （与 ${i.baseCommit} 比较的 diff）` : "  （未找到基线提交：只有未提交的改动）",
+      description: i.card.description || "（无）",
+      acceptance: i.card.acceptance || "（无）",
       plan: plan ? planSection(plan) : "",
-      stat: i.stat || "(empty)",
-      truncatedNote: i.truncated ? " (truncated; read the files for the rest)" : "",
-      diff: i.diff || "(no changes)",
+      stat: i.stat || "（空）",
+      truncatedNote: i.truncated ? "（已截断；其余部分请直接读文件）" : "",
+      diff: i.diff || "（无改动）",
     },
   });
 }
