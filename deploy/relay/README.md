@@ -37,6 +37,11 @@ Copy **both** `deploy/relay/` and `services/vibe-push-gateway/` to the host, kee
    - Baseline of other sites, saved to a file: `for h in <SITE_1> <SITE_2> ...; do echo "$h $(curl -sI -o /dev/null -w '%{http_code}' https://$h)"; done | tee /root/sites.before`
 2. Execute: `cd deploy/relay && cp relay.env.example relay.env` (fill in), `bash install.sh --env-file relay.env --dry-run`, review, then
    `bash install.sh --env-file relay.env`.
+   - Push credentials stay out of git: the generated `PUSH_ENV_FILE` on the server is the place for them. For vivo phones append
+     `VIVO_APP_ID=`, `VIVO_APP_KEY=`, `VIVO_APP_SECRET=` and `VIVO_PUSH_MODE=` (`1` test push, `0` production) to it, then
+     `docker compose --project-name vibe-relay up -d push`; `https://<RELAY_DOMAIN>/push/healthz` then lists `channels.vivo: true`.
+     Without them the vivo channel stays off and FCM behaves exactly as before. The vivo console also needs the app package name
+     and signing-certificate fingerprint of the installed APK (`docs/vibe/USER-GUIDE.md`, section 11).
 3. Verify
    - `curl -s -o /dev/null -w '%{http_code}
 ' https://<RELAY_DOMAIN>/health` -> 200; `/ready` -> 200; `https://<RELAY_DOMAIN>/push/healthz` -> `{"ok":true,"dryRun":true}`.
