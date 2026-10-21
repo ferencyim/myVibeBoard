@@ -17,10 +17,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { maintainSettings, resumeRpc, rulesSettings, runRpc, statusRpc } from "../shared/rpc";
-import { FIELD_KEYS, type FieldKey, type FieldSource, type RulesConfig } from "../shared/rules";
+import {
+  FIELD_KEYS,
+  describeCheck,
+  describeTrigger,
+  type FieldKey,
+  type FieldSource,
+  type RulesConfig,
+} from "../shared/rules";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
 import { addCustomRule, applyRuleEdit, draftFromDef, emptyDef, removeCustomRule } from "./edit";
-import { BLOCKED_TEXT, ORIGIN_TEXT, lastRunText, parseStatus, type RuleRow } from "./format";
+import { BLOCKED_TEXT, FIELD_LABEL, ORIGIN_TEXT, lastRunText, parseStatus, type RuleGroup, type RuleRow } from "./format";
 import { RuleEditor } from "./rule-editor";
 import { FieldsCard, Group, type Field as SettingField } from "./settings-kit";
 
@@ -76,6 +83,12 @@ function Button({
   );
 }
 
+const SCOPE_CHIP = (theme: PluginTheme, label: string) => (
+  <View key={label} style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: theme.colors.surface2 }}>
+    <Text style={{ color: theme.colors.foreground, fontSize: 11 }}>{label}</Text>
+  </View>
+);
+
 export function MaintainScreen({ theme }: PluginScreenProps) {
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
@@ -85,7 +98,8 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
-  const [creating, setCreating] = useState<{ projectId: string; name: string } | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [creating, setCreating] = useState<{ name: string } | null>(null);
 
   const status = useQuery({
     queryKey: ["vibe-maintain", "status"],
@@ -105,20 +119,30 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
       setBusy(null);
     }
   };
-  const runNow = (rule: RuleRow) =>
-    act(`run:${rule.id}`, async () => {
-      const r = await runCall({ ruleId: rule.id });
-      return r.status === "fired"
-        ? `「${rule.name}」已运行一次，结果见“上次运行”`
-        : `「${rule.name}」没有运行：${BLOCKED_TEXT[r.why ?? ""] ?? r.why ?? r.status}`;
+  const s = status.data;
+  const projectName = (id: string) => s?.projects.find((p) => p.id === id)?.name ?? id;
+
+  /** Runs one project's row (`row`), or every applicable project of the rule (no `row`). */
+  const runNow = (group: RuleGroup, row?: RuleRow) =>
+    act(`run:${row?.id ?? group.key}`, async () => {
+      const r = await runCall(
+        row ? { ruleId: row.id } : group.readOnly ? { ruleId: group.rows[0]!.id } : { ruleName: group.name },
+      );
+      const results = r.results.length ? r.results : [{ projectId: row?.projectId ?? "", status: r.status, why: r.why }];
+      const lines = results.map((x) =>
+        x.status === "fired"
+          ? `「${projectName(x.projectId)}」已运行一次`
+          : `「${projectName(x.projectId)}」没有运行：${BLOCKED_TEXT[x.why ?? ""] ?? x.why ?? x.status}`,
+      );
+      return `「${group.name}」${lines.join("；")}，结果见“上次运行”`;
     });
-  const resume = (rule: RuleRow) =>
-    act(`resume:${rule.id}`, async () => {
-      await resumeCall({ ruleId: rule.id });
-      return `「${rule.name}」已恢复`;
+  const resume = (row: RuleRow) =>
+    act(`resume:${row.id}`, async () => {
+      await resumeCall({ ruleId: row.id });
+      return `「${row.name}」在「${row.projectName}」已恢复`;
     });
 
-  /** Writes a new UI-layer config; the engine picks it up on the next status call or tick. */
+  /** Writes a new global rule table; the engine picks it up on the next status call or tick. */
   const saveConfig = (
     id: string,
     change: (config: RulesConfig) => { config: RulesConfig; error?: string },
@@ -135,13 +159,15 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
       return done;
     });
 
-  const s = status.data;
-  const namesIn = (projectId: string) => s?.rules.filter((r) => r.projectId === projectId).map((r) => r.name) ?? [];
+  const takenNames = s?.groups.filter((g) => !g.readOnly).map((g) => g.name) ?? [];
+  const scopeNames = (g: RuleGroup) =>
+    g.scope === "all" ? ["全部项目"] : g.scope.length ? g.scope.map(projectName) : ["未选择项目"];
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
       <Muted theme={theme}>
-        自动维护按规则定期检查项目，把结果放进看板。规则的值按优先级叠加：内置默认，其次是这里的界面配置，最后是项目里的
-        .vibe/maintenance.yml（它写了的字段会覆盖界面配置，在这里显示为只读）。
+        自动维护按规则定期检查项目，把结果放进看板。每条规则只定义一份，在规则上选择适用的项目（或全部项目）；改一次，所有适用项目都生效。
+        进度、运行记录和每日上限按「规则 × 项目」分别统计。规则的值按优先级叠加：内置默认，其次是这里的界面配置，最后是项目里的
+        .vibe/maintenance.yml（只对该项目生效的局部覆盖）。
       </Muted>
       {status.error ? (
         <Text style={{ color: theme.colors.statusDanger }}>无法加载自动维护状态：{formatRpcError(status.error)}</Text>
@@ -150,101 +176,144 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
       {message ? <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{message}</Text> : null}
       {s?.configErrors.map((c) => (
         <Text key={c.project} style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
-          规则配置有问题：{c.errors.join("；")}
+          规则配置有问题（{s.projects.find((p) => p.id === c.project)?.name ?? c.project}）：{c.errors.join("；")}
         </Text>
       ))}
-      {s && s.rules.length === 0 ? <Muted theme={theme}>还没有维护规则。</Muted> : null}
-      {s?.rules.map((rule) => (
-        <Section key={rule.id} theme={theme} title={rule.name}>
-          <Muted theme={theme}>
-            项目「{rule.projectName}」· {rule.origin ? ORIGIN_TEXT[rule.origin] : "规则"}
-            {rule.enabled ? "" : " · 已停用"}
-          </Muted>
-          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
-            什么时候触发：{rule.triggerText || "-"}
-          </Text>
-          {rule.progressText ? (
-            <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>当前进度：{rule.progressText}</Text>
-          ) : null}
-          <Muted theme={theme}>检查内容：{rule.checkText}</Muted>
-          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
-            {rule.output === "fix" ? "直接修复（新建 worktree 让 agent 动手）" : "生成建议草稿卡"}
-            {rule.agent ? ` · 执行 agent ${rule.agent}` : " · 不调用模型"} · 优先级 {rule.priority}
-          </Text>
-          <Muted theme={theme}>
-            今天已运行 {rule.runsToday} 次（每日上限 {rule.dailyCap}）
-          </Muted>
-          <Muted theme={theme}>上次运行：{lastRunText(rule.lastRun)}</Muted>
-          {rule.blocked ? (
-            <Text
-              style={{
-                color: rule.paused ? theme.colors.statusDanger : theme.colors.statusWarning,
-                fontSize: 12,
-              }}
-            >
-              {BLOCKED_TEXT[rule.blocked] ?? rule.blocked}
+      {s && s.groups.length === 0 ? <Muted theme={theme}>还没有维护规则。</Muted> : null}
+      {s?.groups.map((group) => (
+        <Section key={group.key} theme={theme} title={group.name}>
+          <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <Muted theme={theme}>适用项目：</Muted>
+            {scopeNames(group).map((n) => SCOPE_CHIP(theme, n))}
+            <Muted theme={theme}>
+              · {group.origin ? ORIGIN_TEXT[group.origin] : "规则"}
+              {group.def.enabled ? "" : " · 已停用"}
+            </Muted>
+          </View>
+          {group.splitFrom ? (
+            <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+              迁移时因各项目配置不同而拆分：这条规则原来是「{group.splitFrom}」，不同项目的配置不一样，所以拆成了几条。
             </Text>
           ) : null}
+          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
+            什么时候触发：{describeTrigger(group.def.trigger)}
+          </Text>
+          <Muted theme={theme}>
+            检查内容：{describeCheck(group.def.check as { type: string } & Record<string, unknown>)}
+          </Muted>
+          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
+            {group.def.output === "fix" ? "直接修复（新建 worktree 让 agent 动手）" : "生成建议草稿卡"}
+            {group.def.agent ? ` · 执行 agent ${group.def.agent}` : " · 不调用模型"} · 优先级 {group.def.priority} ·
+            每日上限 {group.def.daily_cap}（每个项目分别计）
+          </Text>
           <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-            {rule.paused ? (
-              <Button
-                theme={theme}
-                label={busy === `resume:${rule.id}` ? "恢复中..." : "恢复"}
-                disabled={busy !== null}
-                onPress={() => void resume(rule)}
-              />
-            ) : null}
             <Button
               theme={theme}
-              label={busy === `run:${rule.id}` ? "运行中..." : "立即运行"}
-              disabled={busy !== null || !rule.enabled}
-              onPress={() => void runNow(rule)}
+              label={busy === `run:${group.key}` ? "运行中..." : group.rows.length > 1 ? "立即运行（全部适用项目）" : "立即运行"}
+              disabled={busy !== null || !group.def.enabled || group.rows.length === 0}
+              onPress={() => void runNow(group)}
             />
             <Button
               theme={theme}
-              label={editing === rule.id ? "收起" : "查看与编辑"}
-              onPress={() => setEditing(editing === rule.id ? null : rule.id)}
+              label={`各项目运行状态（${group.rows.length}）${expanded[group.key] ? " ▾" : " ▸"}`}
+              onPress={() => setExpanded({ ...expanded, [group.key]: !expanded[group.key] })}
             />
-            {rule.origin === "custom" ? (
+            <Button
+              theme={theme}
+              label={editing === group.key ? "收起" : group.readOnly ? "查看" : "查看与编辑"}
+              onPress={() => setEditing(editing === group.key ? null : group.key)}
+            />
+            {group.origin === "custom" && !group.readOnly ? (
               <Button
                 theme={theme}
                 label="删除规则"
                 disabled={busy !== null}
                 onPress={() =>
                   void saveConfig(
-                    `delete:${rule.id}`,
-                    (config) => ({ config: removeCustomRule(config, rule.projectId, rule.name) }),
-                    `已删除自定义规则「${rule.name}」（只删配置，不影响文件和历史卡片）`,
+                    `delete:${group.key}`,
+                    (config) => ({ config: removeCustomRule(config, group.name) }),
+                    `已删除自定义规则「${group.name}」（只删配置，不影响文件和历史卡片）`,
                   )
                 }
               />
             ) : null}
           </View>
-          {editing === rule.id ? (
+          {expanded[group.key] ? (
+            <View style={{ gap: 8 }}>
+              {group.rows.length === 0 ? <Muted theme={theme}>没有适用的项目，规则不会运行。</Muted> : null}
+              {group.rows.map((row) => (
+                <View
+                  key={row.id}
+                  style={{ gap: 3, borderLeftWidth: 2, borderLeftColor: theme.colors.border, paddingLeft: 8 }}
+                >
+                  <Text style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}>
+                    {row.projectName}
+                    {row.enabled ? "" : " · 已停用"}
+                  </Text>
+                  {row.progressText ? (
+                    <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>当前进度：{row.progressText}</Text>
+                  ) : null}
+                  <Muted theme={theme}>
+                    今天已运行 {row.runsToday} 次（每日上限 {row.dailyCap}）· 上次运行：{lastRunText(row.lastRun)}
+                  </Muted>
+                  {row.ymlFields.length ? (
+                    <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+                      此项目有 maintenance.yml 局部覆盖：{row.ymlFields.map((k) => FIELD_LABEL[k]).join("、")}
+                    </Text>
+                  ) : null}
+                  {row.blocked ? (
+                    <Text
+                      style={{
+                        color: row.paused ? theme.colors.statusDanger : theme.colors.statusWarning,
+                        fontSize: 12,
+                      }}
+                    >
+                      {BLOCKED_TEXT[row.blocked] ?? row.blocked}
+                    </Text>
+                  ) : null}
+                  <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                    {row.paused ? (
+                      <Button
+                        theme={theme}
+                        label={busy === `resume:${row.id}` ? "恢复中..." : "恢复"}
+                        disabled={busy !== null}
+                        onPress={() => void resume(row)}
+                      />
+                    ) : null}
+                    <Button
+                      theme={theme}
+                      label={busy === `run:${row.id}` ? "运行中..." : `只运行「${row.projectName}」`}
+                      disabled={busy !== null || !row.enabled}
+                      onPress={() => void runNow(group, row)}
+                    />
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {editing === group.key ? (
             <RuleEditor
               theme={theme}
-              initial={draftFromDef(rule.def)}
-              sources={rule.sources}
+              initial={draftFromDef(group.def)}
+              initialScope={group.scope}
+              projects={s.projects}
+              sources={group.sources}
+              readOnly={group.readOnly}
               presets={s.presets}
-              saving={busy === `save:${rule.id}`}
+              saving={busy === `save:${group.key}`}
               onCancel={() => setEditing(null)}
-              onSave={(fields) =>
+              onSave={(fields, scope) =>
                 void saveConfig(
-                  `save:${rule.id}`,
+                  `save:${group.key}`,
                   (config) => ({
                     config: applyRuleEdit(
                       config,
-                      {
-                        projectId: rule.projectId,
-                        name: rule.name,
-                        origin: rule.origin,
-                        sources: rule.sources,
-                        base: rule.base,
-                      },
+                      { name: group.name, origin: group.origin === "custom" ? "custom" : "builtin", base: group.base },
                       fields,
+                      scope,
                     ),
                   }),
-                  `「${rule.name}」已保存`,
+                  `「${group.name}」已保存`,
                 )
               }
             />
@@ -255,21 +324,10 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
         <Section theme={theme} title="新建自定义规则">
           {creating ? (
             <>
-              <Muted theme={theme}>所属项目</Muted>
-              <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
-                {s.projects.map((p) => (
-                  <Button
-                    key={p.id}
-                    theme={theme}
-                    label={`${creating.projectId === p.id ? "● " : ""}${p.name}`}
-                    onPress={() => setCreating({ ...creating, projectId: p.id })}
-                  />
-                ))}
-              </View>
               <Muted theme={theme}>规则名称</Muted>
               <TextInput
                 value={creating.name}
-                onChangeText={(name) => setCreating({ ...creating, name })}
+                onChangeText={(name) => setCreating({ name })}
                 placeholder="例如 nightly-clean"
                 placeholderTextColor={theme.colors.foregroundMuted}
                 autoCapitalize="none"
@@ -287,27 +345,23 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
                 theme={theme}
                 creating
                 initial={draftFromDef(emptyDef("new"))}
+                initialScope="all"
+                projects={s.projects}
                 sources={ALL_BUILTIN}
                 presets={s.presets}
                 saving={busy === "create"}
                 onCancel={() => setCreating(null)}
-                onSave={(fields) =>
+                onSave={(fields, scope) =>
                   void saveConfig(
                     "create",
-                    (config) =>
-                      addCustomRule(config, creating.projectId, creating.name, namesIn(creating.projectId), fields),
+                    (config) => addCustomRule(config, creating.name, takenNames, fields, scope),
                     `已创建规则「${creating.name.trim()}」`,
                   )
                 }
               />
             </>
           ) : (
-            <Button
-              theme={theme}
-              label="新建规则"
-              disabled={s.projects.length === 0}
-              onPress={() => setCreating({ projectId: s.projects[0]?.id ?? "", name: "" })}
-            />
+            <Button theme={theme} label="新建规则" onPress={() => setCreating({ name: "" })} />
           )}
         </Section>
       ) : null}

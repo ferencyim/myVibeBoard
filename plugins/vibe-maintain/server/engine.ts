@@ -19,6 +19,8 @@ import {
   describeTrigger,
   mergeRuleLayers,
   progressText,
+  resolveGlobalRules,
+  ymlFieldsOf,
   type LayeredRule,
   type RuleDef,
   type RulesConfig,
@@ -66,7 +68,7 @@ export interface EngineOptions {
   git: GitRunner;
   checks: CheckRegistry;
   settings?: () => EngineSettings;
-  /** UI layer of the rule configuration (plugin settings); read on every sync. */
+  /** The global UI rule table (plugin settings); read on every sync. */
   uiRules?: () => RulesConfig;
   subAgent?: SubAgentRunner;
   fixLauncher?: FixLauncher;
@@ -93,6 +95,8 @@ export type FireOutcome =
   | { status: "blocked"; why: "paused" | "daily_cap" | "disabled" | "busy" };
 
 const MAX_EVENT_READ = 1024 * 1024;
+/** Key of the problems in the global UI rules (not tied to one project) in `status().configErrors`. */
+export const GLOBAL_ERRORS = "(界面规则)";
 
 export function createMaintenanceEngine(options: EngineOptions) {
   const { db, store, git, checks } = options;
@@ -212,19 +216,19 @@ export function createMaintenanceEngine(options: EngineOptions) {
   }
 
   /**
-   * Merge built-in defaults, the UI config and maintenance.yml per project (only when either of the
-   * last two changed) and update the rule table.
+   * Merge built-in defaults, the global UI rules and each project's maintenance.yml (only when
+   * either changed) and update the rule table: one row per rule x applicable project. A row whose
+   * rule no longer applies to its project is disabled, never deleted (history and counters stay).
    */
   async function syncRules(): Promise<void> {
     const ui = uiRules();
     for (const project of store.projects.list()) {
       if (!project.repoPath) continue;
       const config = await loadConfig(project.repoPath);
-      const uiLayer = ui.projects[project.id];
-      const signature = `${config.signature}|ui|${JSON.stringify(uiLayer ?? null)}`;
+      const signature = `${config.signature}|ui|${JSON.stringify(ui)}`;
       const cached = configCache.get(project.id);
       if (cached?.signature === signature) continue;
-      const merged = mergeRuleLayers({ builtin: BUILTIN_RULES, ui: uiLayer, yml: config.yml });
+      const merged = mergeRuleLayers({ builtin: BUILTIN_RULES, ui, projectId: project.id, yml: config.yml });
       const errors = [...config.errors, ...merged.errors];
       configCache.set(project.id, {
         signature,
@@ -740,11 +744,21 @@ export function createMaintenanceEngine(options: EngineOptions) {
     getRule,
     listRuns,
     consumer,
-    /** Manual run (ignores thresholds, the daily cap and a pause). */
+    /** Manual run of one rule x project row (ignores thresholds, the daily cap and a pause). */
     async runNow(ruleId: string): Promise<FireOutcome> {
       const rule = getRule(ruleId);
       if (!rule) throw new Error(`Unknown rule: ${ruleId}`);
       return execute(rule, { reason: "手动触发" }, true);
+    },
+    /** Manual run of a rule by name for one project, or for every project it applies to. */
+    async runRuleNow(name: string, projectId?: string): Promise<Array<{ projectId: string; outcome: FireOutcome }>> {
+      const rows = listRules().filter(
+        (r) => r.name === name && (!projectId || r.projectId === projectId) && layeredOf(r) !== undefined,
+      );
+      if (rows.length === 0) throw new Error(`Rule ${name} does not apply to ${projectId ?? "any project"}`);
+      const results: Array<{ projectId: string; outcome: FireOutcome }> = [];
+      for (const row of rows) results.push({ projectId: row.projectId, outcome: await execute(row, { reason: "手动触发" }, true) });
+      return results;
     },
     resume(ruleId: string): MaintenanceRule {
       const rule = getRule(ruleId);
@@ -754,6 +768,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
       return getRule(ruleId)!;
     },
     status() {
+      const globalErrors = resolveGlobalRules(BUILTIN_RULES, uiRules()).errors;
       return {
         rules: listRules().map((rule) => {
           const counters: Record<string, number> = {};
@@ -768,6 +783,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
             counters,
             origin: layered?.origin ?? null,
             sources: layered?.sources ?? null,
+            ymlFields: layered ? ymlFieldsOf(layered.sources) : [],
             base: layered?.base ?? null,
             prompts: { review: layered?.def.prompts.review ?? null, fix: layered?.def.prompts.fix ?? null },
             triggerText: describeTrigger(trigger),
@@ -781,9 +797,13 @@ export function createMaintenanceEngine(options: EngineOptions) {
             projectName: store.projects.get(rule.projectId)?.name ?? null,
           };
         }),
-        configErrors: Object.fromEntries(
-          [...configCache.entries()].filter(([, v]) => v.errors.length).map(([k, v]) => [k, v.errors]),
-        ),
+        rulesGlobal: resolveGlobalRules(BUILTIN_RULES, uiRules()).rules,
+        configErrors: {
+          ...(globalErrors.length ? { [GLOBAL_ERRORS]: globalErrors } : {}),
+          ...Object.fromEntries(
+            [...configCache.entries()].filter(([, v]) => v.errors.length).map(([k, v]) => [k, v.errors]),
+          ),
+        },
       };
     },
     start(): void {

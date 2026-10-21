@@ -1,5 +1,5 @@
-// .vibe/maintenance.yml: per-project maintenance rules, the top layer of the rule configuration
-// (built-in default < UI config < this file; see shared/rules.ts). A rule with the name of an
+// .vibe/maintenance.yml: a project's local override of the rules, the top layer of the rule configuration
+// (built-in default < global UI rules < this file; see shared/rules.ts). A rule with the name of an
 // existing rule overrides only the fields it writes; a new name must be complete.
 //
 //   rules:

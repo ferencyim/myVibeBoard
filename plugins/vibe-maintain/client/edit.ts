@@ -1,14 +1,14 @@
 // Pure editing logic of the rule editor: form draft <-> rule fields, and how an edit lands in the
-// UI layer of the rule configuration (plugin settings, see shared/rules.ts).
+// global rule table (plugin settings, see shared/rules.ts).
 
 import { unknownPlaceholders } from "../shared/prompts";
 import {
   FIELD_KEYS,
   RuleDefSchema,
   type FieldKey,
-  type FieldSource,
   type RuleDef,
   type RuleFields,
+  type RuleScope,
   type RulesConfig,
 } from "../shared/rules";
 
@@ -184,7 +184,7 @@ export function draftToFields(draft: RuleDraft): DraftResult {
   };
 }
 
-// ---- writing into the UI layer ---------------------------------------------------------------------
+// ---- writing into the global rule table ----------------------------------------------------------
 
 type Stored = Record<string, unknown>;
 
@@ -209,66 +209,52 @@ function setValue(stored: Stored, key: FieldKey, value: unknown): void {
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-function withProject(config: RulesConfig, projectId: string, change: (p: RulesConfig["projects"][string]) => void): RulesConfig {
-  const current = config.projects[projectId] ?? { overrides: {}, custom: {} };
-  const project = { overrides: { ...current.overrides }, custom: { ...current.custom } };
-  change(project);
-  return { ...config, projects: { ...config.projects, [projectId]: project } };
-}
-
 /**
- * Stores an edit of an existing rule. Fields the yml supplies are never written (read-only in the
- * UI). For built-in rules only differences from the built-in default are kept, so "restore
- * default" is just removing the entry and future default changes still apply.
+ * Stores an edit of a global rule: its fields and the projects it applies to. For built-in rules only
+ * differences from the built-in default are kept, so "restore default" is just removing the entry and
+ * future default changes still apply. `projects` and `splitFrom` (migration marker) are kept next
+ * to the fields; an entry that says nothing new (default fields, all projects) is removed.
  */
 export function applyRuleEdit(
   config: RulesConfig,
-  target: {
-    projectId: string;
-    name: string;
-    origin: "builtin" | "custom" | "yml" | null;
-    sources: Record<FieldKey, FieldSource>;
-    base: RuleDef | null;
-  },
+  target: { name: string; origin: "builtin" | "custom"; base: RuleDef | null },
   fields: NonNullable<DraftResult["fields"]>,
+  scope: RuleScope,
 ): RulesConfig {
   const custom = target.origin === "custom";
-  return withProject(config, target.projectId, (project) => {
-    const group = custom ? project.custom : project.overrides;
-    const stored: Stored = { ...(group[target.name] ?? {}) };
-    for (const key of FIELD_KEYS) {
-      if (target.sources[key] === "yml") continue;
-      const value = valueOf(fields as RuleFields, key);
-      const isDefault = !custom && target.base ? same(value, valueOf(target.base, key)) : false;
-      setValue(stored, key, value === undefined || isDefault ? undefined : value);
-    }
-    if (Object.keys(stored).length === 0 && !custom) delete group[target.name];
-    else group[target.name] = stored;
-  });
+  const previous = config.rules[target.name] ?? {};
+  const stored: Stored = {};
+  for (const key of FIELD_KEYS) {
+    const value = valueOf(fields as RuleFields, key);
+    const isDefault = !custom && target.base ? same(value, valueOf(target.base, key)) : false;
+    setValue(stored, key, value === undefined || isDefault ? undefined : value);
+  }
+  if (!custom && Object.keys(stored).length === 0 && scope === "all") {
+    const { [target.name]: _removed, ...rest } = config.rules;
+    return { ...config, rules: rest };
+  }
+  stored.projects = scope;
+  if (typeof previous.splitFrom === "string") stored.splitFrom = previous.splitFrom;
+  return { ...config, rules: { ...config.rules, [target.name]: stored } };
 }
 
 /** Creates a custom rule; returns an error text when the name is unusable. */
 export function addCustomRule(
   config: RulesConfig,
-  projectId: string,
   name: string,
   takenNames: string[],
   fields: NonNullable<DraftResult["fields"]>,
+  scope: RuleScope,
 ): { config: RulesConfig; error?: string } {
   const trimmed = name.trim();
   if (!trimmed) return { config, error: "规则名称不能为空" };
   if (trimmed.includes(":")) return { config, error: "规则名称不能包含冒号" };
-  if (takenNames.includes(trimmed)) return { config, error: `这个项目里已有叫「${trimmed}」的规则` };
-  return {
-    config: withProject(config, projectId, (project) => {
-      project.custom[trimmed] = fields as Stored;
-    }),
-  };
+  if (takenNames.includes(trimmed)) return { config, error: `已有叫「${trimmed}」的规则` };
+  return { config: { ...config, rules: { ...config.rules, [trimmed]: { ...(fields as Stored), projects: scope } } } };
 }
 
 /** Removes only the configuration entry; files and history stay. */
-export function removeCustomRule(config: RulesConfig, projectId: string, name: string): RulesConfig {
-  return withProject(config, projectId, (project) => {
-    delete project.custom[name];
-  });
+export function removeCustomRule(config: RulesConfig, name: string): RulesConfig {
+  const { [name]: _removed, ...rest } = config.rules;
+  return { ...config, rules: rest };
 }

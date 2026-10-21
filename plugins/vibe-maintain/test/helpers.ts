@@ -66,6 +66,32 @@ export interface Harness {
   maintenanceCards(): CardView[];
 }
 
+/** Completes `count` cards of a project (todo -> in progress -> verifying -> done). */
+export function complete(h: Pick<Harness, "store" | "clock">, project: Project, count = 1): void {
+  for (let i = 0; i < count; i++) {
+    const card = h.store.cards.create({ projectId: project.id, title: `Task ${i}-${h.clock.t}` });
+    h.store.cards.move(card.id, { to: "todo", actor: "user" });
+    h.store.cards.dispatch({ cardId: card.id, agentId: `agent-${card.id}`, provider: "claude", worktree: null });
+    h.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
+    h.store.cards.move(card.id, { to: "done", actor: "user" });
+  }
+}
+
+/** A further project with its own real repository. */
+export function addProject(
+  h: Pick<Harness, "store">,
+  name: string,
+  prefix: string,
+  options: { yml?: string } = {},
+): { project: Project; repo: string } {
+  const repo = makeRepo();
+  if (options.yml !== undefined) {
+    mkdirSync(join(repo, ".vibe"), { recursive: true });
+    write(join(repo, ".vibe"), "maintenance.yml", options.yml);
+  }
+  return { project: h.store.projects.create({ name, prefix, repoPath: repo, projectType: "other" }), repo };
+}
+
 export function setup(
   options: {
     repo?: string;

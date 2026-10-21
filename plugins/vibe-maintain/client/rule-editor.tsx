@@ -7,7 +7,7 @@ import {
   SYSTEM_CONSTRAINTS,
   type PromptKind,
 } from "../shared/prompts";
-import type { FieldKey, FieldSource } from "../shared/rules";
+import type { FieldKey, FieldSource, RuleScope } from "../shared/rules";
 import { CHECK_TYPES, PRIORITIES, draftToFields, type DraftResult, type RuleDraft } from "./edit";
 import { SOURCE_TEXT } from "./format";
 
@@ -187,10 +187,55 @@ export function PlaceholderHelp({ theme }: { theme: PluginTheme }) {
   );
 }
 
+/** Which projects a rule applies to: "all projects" or a multi-select of project chips. */
+export function ScopePicker({
+  theme,
+  scope,
+  projects,
+  onChange,
+}: {
+  theme: PluginTheme;
+  scope: RuleScope;
+  projects: Array<{ id: string; name: string }>;
+  onChange: (scope: RuleScope) => void;
+}) {
+  const all = scope === "all";
+  const chosen = all ? [] : scope;
+  return (
+    <View style={{ gap: 6 }}>
+      <Text style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}>适用项目</Text>
+      <Muted theme={theme}>
+        规则只在这里定义一份，对下面选中的项目都生效；修改一次，所有适用项目都会跟着变。进度、运行记录和每日上限仍按项目分别统计。
+      </Muted>
+      <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+        <Switch value={all} onValueChange={(v) => onChange(v ? "all" : projects.map((p) => p.id))} />
+        <Muted theme={theme}>全部项目（包括以后新建的）</Muted>
+      </View>
+      {all ? null : (
+        <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+          {projects.map((p) => (
+            <Chip
+              key={p.id}
+              theme={theme}
+              label={p.name}
+              active={chosen.includes(p.id)}
+              onPress={() => onChange(chosen.includes(p.id) ? chosen.filter((x) => x !== p.id) : [...chosen, p.id])}
+            />
+          ))}
+          {chosen.length === 0 ? <Muted theme={theme}>没有选中任何项目：规则暂时不会运行。</Muted> : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
 export function RuleEditor({
   theme,
   initial,
+  initialScope,
+  projects,
   sources,
+  readOnly,
   presets,
   creating,
   saving,
@@ -199,15 +244,20 @@ export function RuleEditor({
 }: {
   theme: PluginTheme;
   initial: RuleDraft;
+  initialScope: RuleScope;
+  projects: Array<{ id: string; name: string }>;
   sources: Sources;
+  /** A rule defined only by a project's maintenance.yml: values are shown, nothing is saved. */
+  readOnly?: boolean;
   presets: Array<{ id: string; name: string; spec: string }>;
   /** Creating a custom rule: the check type is chosen here (an existing rule keeps its type). */
   creating?: boolean;
   saving: boolean;
-  onSave: (fields: Fields, draft: RuleDraft) => void;
+  onSave: (fields: Fields, scope: RuleScope) => void;
   onCancel: () => void;
 }) {
   const [d, setD] = useState<RuleDraft>(initial);
+  const [scope, setScope] = useState<RuleScope>(initialScope);
   const [problems, setProblems] = useState<string[]>([]);
   const set = <K extends keyof RuleDraft>(key: K, value: RuleDraft[K]) => setD((prev) => ({ ...prev, [key]: value }));
   const preview = draftToFields(d);
@@ -220,11 +270,12 @@ export function RuleEditor({
   const save = () => {
     const result = draftToFields(d);
     setProblems(result.errors);
-    if (result.fields) onSave(result.fields, d);
+    if (result.fields) onSave(result.fields, scope);
   };
 
   return (
     <View style={{ gap: 12, borderTopWidth: 1, borderTopColor: theme.colors.border, paddingTop: 10 }}>
+      {readOnly ? null : <ScopePicker theme={theme} scope={scope} projects={projects} onChange={setScope} />}
       {f(
         "启用",
         ["enabled"],
@@ -359,10 +410,12 @@ export function RuleEditor({
           {m}
         </Text>
       ))}
-      <View style={{ flexDirection: "row", gap: 8 }}>
-        <Chip theme={theme} label={saving ? "保存中..." : "保存"} active disabled={saving} onPress={save} />
-        <Chip theme={theme} label="取消" disabled={saving} onPress={onCancel} />
-      </View>
+      {readOnly ? null : (
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Chip theme={theme} label={saving ? "保存中..." : "保存"} active disabled={saving} onPress={save} />
+          <Chip theme={theme} label="取消" disabled={saving} onPress={onCancel} />
+        </View>
+      )}
     </View>
   );
 }

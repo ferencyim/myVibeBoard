@@ -1,7 +1,14 @@
 // Pure helpers of the maintenance screen: the status RPC carries `rule` / `lastRun` as loose
 // objects, so the screen reads them through `parseStatus`.
 
-import { FIELD_KEYS, type FieldKey, type FieldSource, type RuleDef, type RuleOrigin } from "../shared/rules";
+import {
+  FIELD_KEYS,
+  type FieldKey,
+  type FieldSource,
+  type RuleDef,
+  type RuleOrigin,
+  type RuleScope,
+} from "../shared/rules";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -33,12 +40,31 @@ export interface RuleRow {
   paused: boolean;
   /** Why the rule cannot fire now: paused | daily_cap | disabled. */
   blocked: string | null;
+  /** Fields this project's maintenance.yml overrides (local override of the global rule). */
+  ymlFields: FieldKey[];
   counters: Record<string, number>;
   lastRun: { status: string; at: string; finishedAt: string; cards: number; error: string | null } | null;
 }
 
+/** One rule as the user sees it: defined once, with a state row per applicable project. */
+export interface RuleGroup {
+  key: string;
+  name: string;
+  origin: RuleOrigin | null;
+  /** A rule that only a project's maintenance.yml defines: shown, not editable. */
+  readOnly: boolean;
+  /** The rule's own values (global layers; for yml rules the effective values). */
+  def: RuleDef;
+  sources: Record<FieldKey, FieldSource>;
+  base: RuleDef | null;
+  scope: RuleScope;
+  /** Original name when the v1 -> v2 migration split this rule off one that differed per project. */
+  splitFrom: string | null;
+  rows: RuleRow[];
+}
+
 export interface MaintainView {
-  rules: RuleRow[];
+  groups: RuleGroup[];
   /** Project id (or name) -> problems found in its maintenance.yml / UI config. */
   configErrors: Array<{ project: string; errors: string[] }>;
   projects: Array<{ id: string; name: string }>;
@@ -77,7 +103,7 @@ function defOf(rule: Obj, prompts: { review: string | null; fix: string | null }
 
 export function parseStatus(raw: unknown): MaintainView {
   const o: Obj = isObj(raw) ? raw : {};
-  const rules = (Array.isArray(o.rules) ? o.rules : [])
+  const rows = (Array.isArray(o.rules) ? o.rules : [])
     .filter(isObj)
     .filter((r) => r.defined !== false)
     .map((r): RuleRow => {
@@ -111,6 +137,9 @@ export function parseStatus(raw: unknown): MaintainView {
         enabled: rule.enabled !== false,
         paused: typeof rule.pausedAt === "string" && rule.pausedAt.length > 0,
         blocked: typeof r.blocked === "string" ? r.blocked : null,
+        ymlFields: (Array.isArray(r.ymlFields) ? r.ymlFields : []).filter((k): k is FieldKey =>
+          (FIELD_KEYS as readonly string[]).includes(k as string),
+        ),
         counters: isObj(r.counters)
           ? Object.fromEntries(Object.entries(r.counters).map(([k, v]) => [k, num(v)]))
           : {},
@@ -134,11 +163,52 @@ export function parseStatus(raw: unknown): MaintainView {
   const list = <T>(v: unknown, pick: (x: Obj) => T): T[] =>
     (Array.isArray(v) ? v : []).filter(isObj).map(pick);
   return {
-    rules,
+    groups: buildGroups(rows, Array.isArray(o.rulesGlobal) ? o.rulesGlobal.filter(isObj) : []),
     configErrors,
     projects: list(o.projects, (p) => ({ id: str(p.id), name: str(p.name) })),
     presets: list(o.presets, (p) => ({ id: str(p.id), name: str(p.name), spec: str(p.spec) })),
   };
+}
+
+const ALL_YML = Object.fromEntries(FIELD_KEYS.map((k) => [k, "yml"])) as Record<FieldKey, FieldSource>;
+
+function buildGroups(rows: RuleRow[], globals: Obj[]): RuleGroup[] {
+  const groups: RuleGroup[] = globals.map((g) => {
+    const name = str(g.name);
+    const origin: RuleOrigin = g.origin === "custom" ? "custom" : "builtin";
+    const scope: RuleScope = Array.isArray(g.scope)
+      ? g.scope.filter((x): x is string => typeof x === "string")
+      : "all";
+    return {
+      key: name,
+      name,
+      origin,
+      readOnly: false,
+      def: { prompts: {}, ...(isObj(g.def) ? g.def : {}), name } as unknown as RuleDef,
+      sources: parseSources(g.sources, origin),
+      base: isObj(g.base) ? (g.base as unknown as RuleDef) : null,
+      scope,
+      splitFrom: typeof g.splitFrom === "string" ? g.splitFrom : null,
+      rows: rows.filter((r) => r.name === name && r.origin !== "yml"),
+    };
+  });
+  const byName = new Set(groups.map((g) => g.name));
+  for (const row of rows) {
+    if (row.origin !== "yml" && byName.has(row.name)) continue;
+    groups.push({
+      key: `${row.projectId}:${row.name}`,
+      name: row.name,
+      origin: row.origin,
+      readOnly: true,
+      def: row.def,
+      sources: ALL_YML,
+      base: null,
+      scope: [row.projectId],
+      splitFrom: null,
+      rows: [row],
+    });
+  }
+  return groups;
 }
 
 export const BLOCKED_TEXT: Record<string, string> = {
@@ -164,6 +234,20 @@ export const ORIGIN_TEXT: Record<RuleOrigin, string> = {
   builtin: "内置规则",
   custom: "自定义规则",
   yml: "maintenance.yml 规则",
+};
+
+/** Field names in words, for "this project overrides: ..." notes. */
+export const FIELD_LABEL: Record<FieldKey, string> = {
+  enabled: "启用",
+  trigger: "触发方式",
+  check: "检查",
+  agent: "执行 agent",
+  output: "输出方式",
+  priority: "优先级",
+  dedupe_key: "去重键",
+  daily_cap: "每日上限",
+  "prompts.review": "复核提示词",
+  "prompts.fix": "修复提示词",
 };
 
 export const fmtTime = (iso: string): string => (iso ? iso.slice(0, 16).replace("T", " ") : "-");

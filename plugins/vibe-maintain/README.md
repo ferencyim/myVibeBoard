@@ -1,15 +1,24 @@
 # vibe-maintain
 
 Automatic maintenance for myVibeBoard (docs/vibe/ARCHITECTURE.md WP-36, IMPLEMENTATION-PLAN.md M10).
-Rules live in each project's `.vibe/maintenance.yml`; when a rule fires its check runs and the result
-becomes a board card. Server-only plugin; it talks to the other plugins through the shared SQLite
+Rules are defined once (built-in + a global table in the plugin settings, each rule listing the projects it
+applies to, or "all") and a project's `.vibe/maintenance.yml` is only a local override for that project; when
+a rule fires its check runs and the result becomes a board card. Run state (counters, runs, daily cap, pause)
+is kept per rule x project (`maintenance_rule` has one row per pair; a project removed from a rule gets its
+row disabled, not deleted). Server-only plugin; it talks to the other plugins through the shared SQLite
 file (`vibe.db`) and the `vibe_event` bus.
 
 ```bash
 npm ci && npm run typecheck && npm test      # tests use real temporary git repositories (slow on Windows)
 ```
 
-## maintenance.yml
+## maintenance.yml (per-project local override)
+
+Layers: built-in default < global UI rule (settings `rules`, version 2: `{ rules: { <name>: { ...fields, projects: "all" | [ids] } } }`,
+built-in rules store only differing fields, custom rules the complete definition) < this file. A rule named
+like an applicable global rule overrides only the fields it writes, in this project only; any other name is a
+rule of this project alone (read-only in the UI). Settings version 1 (keyed by project) is converted once by
+`migrateRulesV1` (identical configs merge, differing ones split into `name`, `name-2`, ...).
 
 ```yaml
 rules:
@@ -136,5 +145,5 @@ built from `CheckOutput`.
 
 ## UI
 
-`index.client.tsx` adds a Maintenance screen (rules per project, trigger, last run, runs today vs. cap, pause state with
-"Resume" and "Run now" buttons over `maintain.resume` / `maintain.run`, maintenance.yml problems) and a settings page.
+`index.client.tsx` adds a Maintenance screen (rules with their applicable projects and a per-project state list (progress, last run, runs today vs. cap, pause state, yml
+local overrides) with "Resume" and "Run now" (all applicable projects, or one) over `maintain.resume` / `maintain.run`, maintenance.yml problems) and a settings page.

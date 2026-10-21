@@ -30,11 +30,14 @@ export const maintainSettings = defineSettings({
 });
 export type MaintainSettings = z.output<typeof maintainSettings.schema>;
 
-/** Per-project rule configuration made in the UI (the middle layer; see shared/rules.ts). */
+/**
+ * Rules defined in the UI, one global table (the middle layer; see shared/rules.ts). Version 1 was
+ * keyed by project; the server registers this definition with `migrate` (migrateRulesV1).
+ */
 export const rulesSettings = defineSettings({
   id: "rules",
   scope: "host",
-  version: 1,
+  version: 2,
   schema: RulesConfigSchema,
 });
 
@@ -56,13 +59,29 @@ const RuleView = z.object({
   progressText: z.string().nullable().default(null),
   checkText: z.string().default(""),
   defined: z.boolean().default(true),
+  /** Fields this project's maintenance.yml overrides (local override of the global rule). */
+  ymlFields: z.array(z.string()).default([]),
+});
+
+/** A rule defined once (built-in or custom), independent of any project. */
+const GlobalRuleView = z.object({
+  name: z.string(),
+  origin: z.string(),
+  def: z.unknown(),
+  sources: z.record(z.string(), z.string()),
+  base: z.unknown().nullable().default(null),
+  /** "all" or the project ids the rule applies to. */
+  scope: z.union([z.literal("all"), z.array(z.string())]),
+  splitFrom: z.string().nullable().default(null),
 });
 
 export const statusRpc = defineRpc({
   name: "maintain.status",
   input: z.object({}),
   output: z.object({
+    /** One row per rule x applicable project (run state is per row). */
     rules: z.array(RuleView),
+    rulesGlobal: z.array(GlobalRuleView).default([]),
     configErrors: z.record(z.string(), z.array(z.string())),
     projects: z.array(z.object({ id: z.string(), name: z.string() })).default([]),
     presets: z.array(z.object({ id: z.string(), name: z.string(), spec: z.string() })).default([]),
@@ -71,8 +90,20 @@ export const statusRpc = defineRpc({
 
 export const runRpc = defineRpc({
   name: "maintain.run",
-  input: z.object({ ruleId: z.string().min(1) }),
-  output: z.object({ status: z.string(), why: z.string().optional(), run: z.unknown().optional() }),
+  /** `ruleId` runs one rule x project row; `ruleName` runs it for `projectId` or, without it, every applicable project. */
+  input: z.object({
+    ruleId: z.string().min(1).optional(),
+    ruleName: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+  }),
+  output: z.object({
+    status: z.string(),
+    why: z.string().optional(),
+    run: z.unknown().optional(),
+    results: z
+      .array(z.object({ projectId: z.string(), status: z.string(), why: z.string().optional() }))
+      .default([]),
+  }),
 });
 
 export const resumeRpc = defineRpc({
