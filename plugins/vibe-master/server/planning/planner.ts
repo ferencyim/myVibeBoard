@@ -15,6 +15,8 @@ import type { Clock } from "../clock";
 import { buildProjectBlock } from "../master/prompts";
 import type { MasterSession } from "../master/session";
 import type { MemoryPort } from "../memory/files";
+import { defaultPromptPort, hashText, rulesUpdateMessage, type PromptPort } from "../prompts/port";
+import { defaultTuning, type TuningSource } from "../tuning";
 import type { Alerts } from "../subscription/alerts";
 import { isQuotaError } from "../subscription/quota";
 import { providerSpec } from "../subscription/target";
@@ -44,9 +46,6 @@ import {
 const LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
 /** Worker states that mean an executing agent can receive the owner's chat messages. */
 const EXECUTOR_ONLINE = ["starting", "working", "waiting", "idle"] as const;
-const MAX_RESEARCH_ROUNDS = 2;
-const MAX_LOOPS = 10;
-const SCOUT_TIMEOUT_MS = 5 * 60_000;
 /** Read-only mode of the known providers; any other provider is looked up in its mode catalog. */
 const SCOUT_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
 const READ_ONLY_MODE = /^(plan|read[-_ ]?only)$/i;
@@ -68,7 +67,12 @@ export interface PlanningDeps {
   getPaseo(): MasterPaseo | null;
   /** The master session: its current subscription decides model/provider of new planners. */
   master: Pick<MasterSession, "currentTarget" | "permission">;
-  rules: string | (() => string);
+  /** The system prompt in effect for a project scope (rules body + supplement). */
+  rules(projectId?: string | null): string;
+  /** Prompt texts (registry); defaults when omitted. */
+  prompts?: PromptPort;
+  /** Automation parameters (settings); defaults when omitted. */
+  tuning?: TuningSource;
   /** Max characters of the requirements document in the project block (settings). */
   requirementsChars?(): number;
   /** `<VIBE_HOME>/master`; planner scratch workspaces live under `planning/<KEY>`. */
@@ -93,6 +97,8 @@ interface Live {
   agent: MasterAgentHandle;
   session: AgentSession;
   rulesSent: boolean;
+  /** Hash of the rules text the agent has seen. */
+  rulesHash: string;
   fresh: boolean;
 }
 
@@ -101,10 +107,17 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export function createPlanning(deps: PlanningDeps) {
   const { store, db, clock } = deps;
   const log = deps.log ?? (() => undefined);
-  const rulesText = () => (typeof deps.rules === "function" ? deps.rules() : deps.rules);
+  const prompts = deps.prompts ?? defaultPromptPort();
+  const tuning = deps.tuning ?? defaultTuning;
   const handles = new Map<
     string,
-    { agent: MasterAgentHandle; sessionId: string; rulesSent: boolean; modeId?: string | null }
+    {
+      agent: MasterAgentHandle;
+      sessionId: string;
+      rulesSent: boolean;
+      rulesHash: string;
+      modeId?: string | null;
+    }
   >();
   const chains = new Map<string, Promise<void>>();
   const parked = new Set<string>();
@@ -190,6 +203,7 @@ export function createPlanning(deps: PlanningDeps) {
     const cwd = join(deps.dataDir, "planning", card.key);
     mkdirSync(cwd, { recursive: true });
     const modeId = (await deps.master.permission()).resolved.modeId;
+    const rules = deps.rules(card.projectId);
     const created = await paseo.agents.create({
       cwd,
       title: `Plan ${card.key} · ${card.title}`.slice(0, 80),
@@ -197,7 +211,7 @@ export function createPlanning(deps: PlanningDeps) {
       env: { VIBE_ROLE: "planner", VIBE_CARD_ID: card.id, VIBE_CARD_KEY: card.key },
       config: {
         provider: providerSpec(target),
-        systemPrompt: rulesText(),
+        systemPrompt: rules,
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
         ...(modeId ? { modeId } : {}),
       },
@@ -210,9 +224,10 @@ export function createPlanning(deps: PlanningDeps) {
     });
     store.cards.update(card.id, { planSessionId: session.id });
     const rulesSent = target.provider === "claude";
-    handles.set(card.id, { agent: created, sessionId: session.id, rulesSent, modeId });
+    const rulesHash = hashText(rules);
+    handles.set(card.id, { agent: created, sessionId: session.id, rulesSent, rulesHash, modeId });
     log(`planner ${created.id} for ${card.key} started on ${providerSpec(target)}`);
-    return { agent: created, session, rulesSent, fresh: true };
+    return { agent: created, session, rulesSent, rulesHash, fresh: true };
   }
 
   /** The planner of this card: the live one, or a fresh one seeded with the whole context. */
@@ -224,7 +239,13 @@ export function createPlanning(deps: PlanningDeps) {
       // discussion moves to a fresh planner seeded with the whole thread (the card holds it all).
       const wanted = (await deps.master.permission()).resolved.modeId;
       if (cached.modeId === undefined || cached.modeId === wanted) {
-        return { agent: cached.agent, session: live, rulesSent: cached.rulesSent, fresh: false };
+        return {
+          agent: cached.agent,
+          session: live,
+          rulesSent: cached.rulesSent,
+          rulesHash: cached.rulesHash,
+          fresh: false,
+        };
       }
       log(`planner for ${card.key}: permission mode changed (${cached.modeId} -> ${wanted}), restarting`);
       await archive(card, "mode_changed");
@@ -239,8 +260,10 @@ export function createPlanning(deps: PlanningDeps) {
         () => false,
       );
       if (alive) {
-        handles.set(card.id, { agent: candidate, sessionId: live.id, rulesSent: true });
-        return { agent: candidate, session: live, rulesSent: true, fresh: false };
+        // After a restart nothing records what the agent saw: assume the current rules.
+        const rulesHash = hashText(deps.rules(card.projectId));
+        handles.set(card.id, { agent: candidate, sessionId: live.id, rulesSent: true, rulesHash });
+        return { agent: candidate, session: live, rulesSent: true, rulesHash, fresh: false };
       }
       moveSession(live, "ended", { outcome: "lost" });
       handles.delete(card.id);
@@ -261,9 +284,19 @@ export function createPlanning(deps: PlanningDeps) {
     }
   }
 
-  async function ask(live: Live, card: Pick<CardView, "id">, prompt: string): Promise<string> {
+  async function ask(
+    live: Live,
+    card: Pick<CardView, "id" | "projectId">,
+    prompt: string,
+  ): Promise<string> {
     moveSession(live.session, "working");
-    const message = live.rulesSent ? prompt : `${rulesText()}\n\n---\n\n${prompt}`;
+    const rules = deps.rules(card.projectId);
+    const rulesHash = hashText(rules);
+    const message = !live.rulesSent
+      ? `${rules}\n\n---\n\n${prompt}`
+      : rulesHash !== live.rulesHash
+        ? `${rulesUpdateMessage(prompts, rules, card.projectId)}\n\n---\n\n${prompt}`
+        : prompt;
     const fail = (failure: MasterError): never => {
       moveSession(live.session, "error", { message: failure.message });
       if (failure.kind === "quota") {
@@ -274,7 +307,7 @@ export function createPlanning(deps: PlanningDeps) {
     const classify = (text: string) => new MasterError(isQuotaError(text) ? "quota" : "agent", text);
     let result;
     try {
-      result = await live.agent.run(message, { timeoutMs: 10 * 60_000 });
+      result = await live.agent.run(message, { timeoutMs: tuning().planTurnTimeoutMs });
     } catch (error) {
       return fail(classify(errorText(error)));
     }
@@ -291,22 +324,27 @@ export function createPlanning(deps: PlanningDeps) {
       return fail(new MasterError("agent", "The planning agent returned an empty reply"));
     }
     live.rulesSent = true;
+    live.rulesHash = rulesHash;
     const cached = handles.get(card.id);
-    if (cached) cached.rulesSent = true;
+    if (cached) {
+      cached.rulesSent = true;
+      cached.rulesHash = rulesHash;
+    }
     return result.lastMessage;
   }
 
-  /** Parse a reply into a PlanTurn; one repair round, then the raw text is the reply (the owner still gets an answer). */
+  /** Parse a reply into a PlanTurn; repair rounds (settings), then the raw text is the reply (the owner still gets an answer). */
   async function askTurn(live: Live, card: CardView, prompt: string): Promise<PlanTurn> {
     let reply = await ask(live, card, prompt);
     let parsed = parseReply(reply, PlanTurnSchema);
-    if (!parsed.ok) {
+    for (let retry = 0; retry < tuning().jsonRepairRetries && !parsed.ok; retry++) {
       log(`planner reply for ${card.key} rejected, asking for a fix: ${parsed.error}`);
       try {
-        reply = await ask(live, card, buildRepairMessage(parsed.error));
+        reply = await ask(live, card, buildRepairMessage(parsed.error, prompts, card.projectId));
         parsed = parseReply(reply, PlanTurnSchema);
       } catch (error) {
         if (!(error instanceof MasterError) || error.kind === "unavailable") throw error;
+        break;
       }
     }
     if (parsed.ok) return parsed.value;
@@ -339,8 +377,8 @@ export function createPlanning(deps: PlanningDeps) {
             config: { provider: providerSpec(target), ...(modeId ? { modeId } : {}) },
           });
           const out = await agent.run(
-            buildScoutMessage({ card, question: r.question, scope: r.scope }),
-            { timeoutMs: SCOUT_TIMEOUT_MS },
+            buildScoutMessage({ card, question: r.question, scope: r.scope, prompts }),
+            { timeoutMs: tuning().scoutTimeoutMs },
           );
           const answer = out.lastMessage?.trim();
           if (answer) return { ...r, ok: true, answer: answer.slice(0, 4000) };
@@ -411,17 +449,25 @@ export function createPlanning(deps: PlanningDeps) {
       const events = store.events.list(card.id);
       const prompt = live.fresh
         ? buildStartMessage({
-            projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.requirementsChars?.() }),
+            projectBlock: buildProjectBlock({
+              project,
+              tags,
+              presets,
+              openCards,
+              requirementsChars: deps.requirementsChars?.(),
+              cardLimit: tuning().projectBlockCardLimit,
+            }),
             memory: memoryText(project),
             card,
             tagNames: tagNames(card),
             plan: renderPlan(store.plans.list(card.id).at(-1)?.snapshot, presetName),
             earlier: messagesOf(events).filter((m) => !answers.includes(m.id)),
             pending,
+            prompts,
           })
-        : buildTurnMessage(pending);
+        : buildTurnMessage(pending, prompts, card.projectId);
       let result = await askTurn(live, card, prompt);
-      for (let round = 0; round < MAX_RESEARCH_ROUNDS && result.research.length > 0; round++) {
+      for (let round = 0; round < tuning().maxResearchRounds && result.research.length > 0; round++) {
         const items = await research(card, project, result.research);
         store.cards.addChat({
           cardId: card.id,
@@ -433,7 +479,7 @@ export function createPlanning(deps: PlanningDeps) {
             .join("\n\n"),
           key: `research:${answers[0]}:${round + 1}`,
         });
-        result = await askTurn(live, card, buildResultsMessage(items));
+        result = await askTurn(live, card, buildResultsMessage(items, prompts, card.projectId));
       }
       const current = store.cards.get(card.id) ?? card;
       const planVersion = result.plan ? applyPlan(current, result.plan) : null;
@@ -465,12 +511,13 @@ export function createPlanning(deps: PlanningDeps) {
           agent: cached.agent,
           session: live,
           rulesSent: cached.rulesSent,
+          rulesHash: cached.rulesHash,
           fresh: false,
         };
-        let reply = await ask(current, card, buildHandoffMessage());
+        let reply = await ask(current, card, buildHandoffMessage(prompts, card.projectId));
         let parsed = parseReply(reply, HandoffSchema);
-        if (!parsed.ok) {
-          reply = await ask(current, card, buildRepairMessage(parsed.error));
+        for (let retry = 0; retry < tuning().jsonRepairRetries && !parsed.ok; retry++) {
+          reply = await ask(current, card, buildRepairMessage(parsed.error, prompts, card.projectId));
           parsed = parseReply(reply, HandoffSchema);
         }
         if (parsed.ok) summary = parsed.value.summary;
@@ -478,7 +525,12 @@ export function createPlanning(deps: PlanningDeps) {
         log(`hand-off summary of ${card.key} fell back to the deterministic one`, error);
       }
     }
-    summary ??= fallbackHandoff({ card, plan, messages: messagesOf(store.events.list(card.id)) });
+    summary ??= fallbackHandoff({
+      card,
+      plan,
+      messages: messagesOf(store.events.list(card.id)),
+      prompts,
+    });
 
     const project = store.projects.get(card.projectId);
     let path: string | null = null;
@@ -499,7 +551,7 @@ export function createPlanning(deps: PlanningDeps) {
   // ---------- driver ----------
 
   async function processCard(cardId: string): Promise<void> {
-    for (let i = 0; i < MAX_LOOPS; i++) {
+    for (let i = 0; i < tuning().maxPlanLoops; i++) {
       const card = store.cards.get(cardId);
       const live = liveOf(cardId);
       if (!card || card.archivedAt) {

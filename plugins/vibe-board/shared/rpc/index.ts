@@ -18,6 +18,7 @@ import {
   CardPrioritySchema,
   CardViewSchema,
   PlanSnapshotSchema,
+  PromptDefSchema,
   PlanVersionSchema,
   PresetEnvironmentKindSchema,
   PresetPermissionModeSchema,
@@ -563,6 +564,43 @@ export const sessionsRecordSwitchRpc = defineRpc({
   output: z.object({ session: AgentSessionSchema.nullable() }),
 });
 
+// --- agent prompts (WP-98) -------------------------------------------------------------------
+
+/** A registered prompt with its overrides and the text in effect (PromptInfo of the contract). */
+export const promptInfoSchema = PromptDefSchema.extend({
+  globalOverride: z.string().nullable(),
+  /** Only filled when a project was asked for. */
+  projectOverride: z.string().nullable(),
+  source: z.enum(["default", "global", "project"]),
+  effectiveText: z.string(),
+  overriddenProjects: z.array(z.string()),
+});
+
+const promptScope = z.string().min(1).nullable().optional();
+
+export const promptsListRpc = defineRpc({
+  name: "vibe.prompts.list",
+  input: z.object({ projectId: promptScope }),
+  output: z.object({
+    prompts: z.array(promptInfoSchema),
+    /** Unarchived projects, for the scope switcher. */
+    projects: z.array(z.object({ id: z.string(), name: z.string(), prefix: z.string() })),
+  }),
+});
+
+/** Blank text clears the override. `projectId` null/omitted = global. */
+export const promptsSetRpc = defineRpc({
+  name: "vibe.prompts.set",
+  input: z.object({ key: z.string().min(1), text: z.string(), projectId: promptScope }),
+  output: z.object({ ok: z.literal(true) }),
+});
+
+export const promptsClearRpc = defineRpc({
+  name: "vibe.prompts.clear",
+  input: z.object({ key: z.string().min(1), projectId: promptScope }),
+  output: z.object({ ok: z.literal(true) }),
+});
+
 export const VIBE_BOARD_RPCS = {
   projectsListRpc,
   projectsCreateRpc,
@@ -606,6 +644,9 @@ export const VIBE_BOARD_RPCS = {
   replyCheckRpc,
   replySendRpc,
   localStatusRpc,
+  promptsListRpc,
+  promptsSetRpc,
+  promptsClearRpc,
 } as const;
 
 export * from "./sync";

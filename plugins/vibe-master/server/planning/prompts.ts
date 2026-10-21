@@ -1,6 +1,7 @@
 // Messages sent to a planning session. Order follows the master's cache-friendly layout:
 // rules (system prompt) -> per-project block -> memory -> the card -> the discussion.
 
+import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import type { CardView, PlanSnapshot } from "../vibe/contract";
 import { transcript, type ThreadMessage } from "./thread";
 
@@ -31,41 +32,33 @@ export function buildStartMessage(input: {
   plan: string;
   earlier: ThreadMessage[];
   pending: ThreadMessage[];
+  prompts?: PromptPort;
 }): string {
   const { card } = input;
-  return [
-    "[plan:start]",
-    `You are the planning session of card ${card.key}. Discuss the plan with the owner until it is executable.`,
-    input.projectBlock,
-    "",
-    "## Project memory (read-only)",
-    input.memory || "(empty)",
-    "",
-    `## Card ${card.key}`,
-    `Title: ${card.title}`,
-    `Priority: ${card.priority}`,
-    `Tags: ${input.tagNames.join(", ") || "none"}`,
-    `Description:\n${card.description || "(empty)"}`,
-    `Acceptance criteria:\n${card.acceptance || "(empty)"}`,
-    "",
-    "## Latest plan version",
-    input.plan,
-    "",
-    input.earlier.length ? `## Discussion so far\n${transcript(input.earlier)}\n` : "",
-    "## Owner message(s) to answer now",
-    transcript(input.pending),
-    "",
-    "Reply with the plan_discussion JSON object only.",
-  ].join("\n");
+  return (input.prompts ?? defaultPromptPort()).resolve("master.plan.start", {
+    projectId: card.projectId,
+    vars: {
+      project: input.projectBlock,
+      memory: input.memory || "(empty)",
+      "card.key": card.key,
+      "card.title": card.title,
+      "card.priority": card.priority,
+      "card.tags": input.tagNames.join(", ") || "none",
+      "card.description": card.description || "(empty)",
+      "card.acceptance": card.acceptance || "(empty)",
+      plan: input.plan,
+      discussion: input.earlier.length ? `## Discussion so far\n${transcript(input.earlier)}\n\n` : "",
+      pending: transcript(input.pending),
+    },
+  });
 }
 
-export function buildTurnMessage(pending: ThreadMessage[]): string {
-  return [
-    "[plan:turn]",
-    transcript(pending),
-    "",
-    "Reply with the plan_discussion JSON object only.",
-  ].join("\n");
+export function buildTurnMessage(
+  pending: ThreadMessage[],
+  prompts: PromptPort = defaultPromptPort(),
+  projectId?: string | null,
+): string {
+  return prompts.resolve("master.plan.turn", { projectId, vars: { pending: transcript(pending) } });
 }
 
 export interface ResearchItem {
@@ -75,43 +68,51 @@ export interface ResearchItem {
   ok: boolean;
 }
 
-export function buildResultsMessage(items: ResearchItem[]): string {
-  return [
-    "[plan:research_results]",
-    ...items.map(
+export function buildResultsMessage(
+  items: ResearchItem[],
+  prompts: PromptPort = defaultPromptPort(),
+  projectId?: string | null,
+): string {
+  const results = items
+    .map(
       (r, i) =>
         `### ${i + 1}. ${r.question}${r.scope ? ` (${r.scope})` : ""}\n${r.ok ? r.answer : `FAILED: ${r.answer}`}`,
-    ),
-    "",
-    "Continue the discussion with the plan_discussion JSON object only (no further research unless it is essential).",
-  ].join("\n\n");
+    )
+    .join("\n\n");
+  return prompts.resolve("master.plan.research_results", { projectId, vars: { results } });
 }
 
-export function buildHandoffMessage(): string {
-  return [
-    "[plan:handoff]",
-    "The owner is moving this card to todo. Write the hand-off summary for the executing agent.",
-    'Reply with `{ "summary": "<markdown>" }` only, in a ```json fence.',
-  ].join("\n");
+export function buildHandoffMessage(
+  prompts: PromptPort = defaultPromptPort(),
+  projectId?: string | null,
+): string {
+  return prompts.resolve("master.plan.handoff", { projectId });
 }
 
-export function buildRepairMessage(error: string): string {
-  return `Your reply was rejected: ${error}\nReply again with only the corrected plan_discussion JSON object in a \`\`\`json fence.`;
+export function buildRepairMessage(
+  error: string,
+  prompts: PromptPort = defaultPromptPort(),
+  projectId?: string | null,
+): string {
+  return prompts.resolve("master.repair_json", { projectId, vars: { kind: "plan_discussion", error } });
 }
 
 /** Read-only scout: one question, a short structured answer. */
-export function buildScoutMessage(input: { card: CardView; question: string; scope?: string }): string {
-  return [
-    `You are a read-only scout for card ${input.card.key} (${clip(input.card.title, 80)}).`,
-    "Answer the question below by reading code, logs or documents in this repository.",
-    "Do NOT modify, create or delete any file, do not run builds or install anything, do not use git commands that write.",
-    "Answer in at most 20 lines: findings with file paths, then the effort/risks if the question asks for an estimate.",
-    "",
-    `Question: ${input.question}`,
-    input.scope ? `Where to look: ${input.scope}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+export function buildScoutMessage(input: {
+  card: CardView;
+  question: string;
+  scope?: string;
+  prompts?: PromptPort;
+}): string {
+  return (input.prompts ?? defaultPromptPort()).resolve("master.plan.scout", {
+    projectId: input.card.projectId,
+    vars: {
+      "card.key": input.card.key,
+      "card.title": clip(input.card.title, 80),
+      question: input.question,
+      scope: input.scope ? `\nWhere to look: ${input.scope}` : "",
+    },
+  });
 }
 
 /** Deterministic hand-off when the planner cannot write one. */
@@ -119,16 +120,17 @@ export function fallbackHandoff(input: {
   card: CardView;
   plan: string;
   messages: ThreadMessage[];
+  prompts?: PromptPort;
 }): string {
   const lastPlanner = input.messages.filter((m) => m.role === "planner").at(-1)?.text;
-  return [
-    `# Hand-off: ${input.card.key} ${input.card.title}`,
-    "",
-    "## Goal",
-    input.card.description || input.card.title,
-    "",
-    "## Agreed plan (latest plan version)",
-    input.plan,
-    lastPlanner ? `\n## Last word of the planning discussion\n${clip(lastPlanner, 1500)}` : "",
-  ].join("\n");
+  return (input.prompts ?? defaultPromptPort()).resolve("master.plan.fallback_handoff", {
+    projectId: input.card.projectId,
+    vars: {
+      "card.key": input.card.key,
+      "card.title": input.card.title,
+      goal: input.card.description || input.card.title,
+      plan: input.plan,
+      lastWord: lastPlanner ? `\n\n## Last word of the planning discussion\n${clip(lastPlanner, 1500)}` : "",
+    },
+  });
 }

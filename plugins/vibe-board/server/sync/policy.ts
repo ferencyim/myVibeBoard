@@ -1,7 +1,7 @@
 // Admission rules for phone writes: vibe-shared's phonePolicy (writable tables, draft <-> todo
 // only) plus the rules that need the business tables of vibe.db.
 
-import { ChatEventBodySchema } from "../vibe/contract";
+import { ChatEventBodySchema, PROMPT_OVERRIDE_MAX_CHARS, parsePromptOverrideId } from "../vibe/contract";
 import type { VibeDb } from "../vibe/db";
 import { phonePolicy, type SyncPolicy } from "../vibe/sync";
 
@@ -40,7 +40,9 @@ export function createServerPolicy(db: VibeDb): SyncPolicy {
     const { table, rowId } = change;
 
     if (change.kind === "delete") {
-      if (table === "project" || table === "maintenance_rule" || table === "card_event") return readOnly;
+      // A prompt override is cleared by writing empty text, never by deleting the row.
+      if (table === "project" || table === "maintenance_rule" || table === "card_event" || table === "prompt_override")
+        return readOnly;
       if (table === "tag") {
         const row = db.prepare<{ builtin: number }>("SELECT builtin FROM tag WHERE id = ?").get(rowId);
         if (row?.builtin) return readOnly;
@@ -60,6 +62,15 @@ export function createServerPolicy(db: VibeDb): SyncPolicy {
     if (table === "tag") {
       const row = db.prepare<{ builtin: number }>("SELECT builtin FROM tag WHERE id = ?").get(rowId);
       if (row?.builtin) return readOnly;
+    }
+    if (table === "prompt_override") {
+      const scope = parsePromptOverrideId(rowId);
+      if (!scope || !db.prepare("SELECT 1 AS x FROM prompt_template WHERE key = ?").get(scope.key)) return readOnly;
+      if (scope.projectId !== null && !exists("project", scope.projectId)) return readOnly;
+      if (change.kind === "field") {
+        if (change.column !== "text") return readOnly;
+        if (typeof change.value !== "string" || change.value.length > PROMPT_OVERRIDE_MAX_CHARS) return readOnly;
+      }
     }
     if (table === "card" && change.column === "project_id" && exists("card", rowId)) return readOnly;
     if (table === "card_event") {

@@ -408,6 +408,25 @@ export function createBoardService(runtime: BoardRuntime) {
           return { deleted: true };
         }),
     },
+    /** Agent behaviour page (WP-98): every registered prompt with its overrides. */
+    prompts: {
+      list: (projectId?: string | null) =>
+        guard(() => ({
+          prompts: store.prompts.list({ projectId: projectId ?? null }),
+          projects: store.projects.list(false).map((p) => ({ id: p.id, name: p.name, prefix: p.prefix })),
+        })),
+      /** Blank text clears the override. */
+      set: (key: string, text: string, projectId?: string | null) =>
+        guard(() => {
+          store.prompts.setOverride(key, text, { projectId: projectId ?? null });
+          return { ok: true as const };
+        }),
+      clear: (key: string, projectId?: string | null) =>
+        guard(() => {
+          store.prompts.clearOverride(key, { projectId: projectId ?? null });
+          return { ok: true as const };
+        }),
+    },
     sessions: {
       list: (ref?: string) => guard(() => ({ sessions: store.sessions.list(ref ? { cardId: card(ref).id } : {}) })),
     },

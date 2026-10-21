@@ -20,6 +20,26 @@ describe("plugin host navigation", () => {
     return { navigation, destinations, browsers, workspaces };
   }
 
+  it("opens other plugins' screens and settings on the same host when the app provides them", () => {
+    const calls: unknown[] = [];
+    const navigation = createPluginHostNavigation("selected", {
+      browserAvailable: false,
+      resolveWorkspace: () => null,
+      openAgent: () => undefined,
+      openWorkspace: () => undefined,
+      createBrowser: () => ({ browserId: "b" }),
+      openPluginScreen: (input) => calls.push(["screen", input]),
+      openPluginSettings: (input) => calls.push(["settings", input]),
+    });
+    navigation.openPluginScreen!({ pluginId: "vibe-maintain", screenId: "main" });
+    navigation.openPluginSettings!({ pluginId: "vibe-master", screenId: "preferences" });
+    expect(calls).toEqual([
+      ["screen", { serverId: "selected", pluginId: "vibe-maintain", screenId: "main" }],
+      ["settings", { serverId: "selected", pluginId: "vibe-master", screenId: "preferences" }],
+    ]);
+    expect(setup().navigation.openPluginScreen).toBeUndefined();
+  });
+
   it("creates and focuses a local browser in the selected or explicit host workspace", () => {
     const { navigation, destinations, browsers } = setup();
     navigation.openBrowser!({ url: "https://example.com/one", workspaceId: "one" });

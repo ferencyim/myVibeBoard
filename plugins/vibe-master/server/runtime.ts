@@ -7,11 +7,13 @@ import type { MasterSettings, MasterStatus, ProviderInfo } from "../shared/rpc";
 import { createAssessor } from "./assess/assess";
 import { systemClock, type Clock } from "./clock";
 import { MASTER_RULES } from "./master/rules.generated";
-import { composeRules } from "./master/templates";
 import { createMasterSession } from "./master/session";
 import { createConsolidator } from "./memory/consolidate";
 import { createFileMemoryPort, type MemoryPort } from "./memory/files";
 import { createPlanning } from "./planning/planner";
+import { createPromptPort, rulesFor } from "./prompts/port";
+import { migrateLegacyPromptSettings } from "./prompts/migrate";
+import { tuningOf } from "./tuning";
 import { defaultSelector, type AgentSelector } from "./select";
 import { createAlerts } from "./subscription/alerts";
 import { createPermissionResolver, isBoardMcpCall } from "./subscription/permission";
@@ -47,6 +49,13 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   const log = deps.log ?? ((m, e) => console.error(`[vibe-master] ${m}`, e ?? ""));
   const { db, store } = deps;
   const state = createStateFile(deps.dataDir);
+  const tuning = () => tuningOf(deps.settings());
+  // Every prompt text goes through the shared registry, so the owner's overrides apply everywhere.
+  const prompts = createPromptPort(store, () => ({
+    rules: deps.rules ?? MASTER_RULES,
+    maintainRequirements: deps.settings().maintainRequirements,
+  }));
+  prompts.register();
 
   const quota = createQuotaReader({
     getPaseo: deps.getPaseo,
@@ -58,6 +67,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     state,
     clock,
     sessionId: () => state.read().agent?.sessionId ?? null,
+    tuning,
     log: (m) => log(m),
   });
   const session = createMasterSession({
@@ -66,8 +76,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     settings: deps.settings,
     state,
     permission: createPermissionResolver(deps.getPaseo),
-    rules: deps.rules ?? MASTER_RULES,
-    supplement: () => deps.settings().rulesSupplement,
+    rules: () => rulesFor(prompts),
+    prompts,
+    tuning,
     workspace: () => deps.settings().workspaceDir || join(deps.dataDir, "workspace"),
     alerts,
     log,
@@ -83,7 +94,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       const t = state.read().agent?.target;
       return t ? providerSpec(t) : null;
     },
-    template: () => deps.settings().templateAssessDraft,
+    prompts,
+    tuning,
     requirementsChars: () => deps.settings().requirementsExcerptChars,
     log,
   });
@@ -94,9 +106,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     master: session,
     assessor,
     memory,
+    prompts,
     options: {
-      templateDone: () => deps.settings().templateCardDone,
-      templateHelp: () => deps.settings().templateSessionHelp,
+      tuning,
       requirementsChars: () => deps.settings().requirementsExcerptChars,
       maintainRequirements: () => deps.settings().maintainRequirements,
     },
@@ -110,7 +122,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     store,
     getPaseo: deps.getPaseo,
     master: session,
-    rules: () => composeRules(deps.rules ?? MASTER_RULES, deps.settings().rulesSupplement),
+    rules: (projectId) => rulesFor(prompts, projectId),
+    prompts,
+    tuning,
     requirementsChars: () => deps.settings().requirementsExcerptChars,
     dataDir: deps.dataDir,
     clock,
@@ -195,6 +209,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     queue,
     enabled: () => deps.settings().enabled,
     debounceMs: () => deps.settings().debounceSeconds * 1000,
+    tuning,
     flags: () => deps.settings(),
     pollIntervalMs: deps.pollIntervalMs,
     log,
@@ -334,6 +349,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   }
 
   return {
+    prompts,
+    /** Copy prompts edited in the pre-registry settings into global overrides (once). */
+    migrateLegacyPrompts: () => migrateLegacyPromptSettings(db, store, deps.settings()),
     state,
     session,
     queue,

@@ -8,18 +8,16 @@ import {
 } from "@getpaseo/plugin/client";
 import { SettingsCard, SettingsInput, SettingsSection, SettingsSelect, SettingsSwitch, SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useEffect, useState, type ReactNode } from "react";
+import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import {
   masterSettings,
   permissionRpc,
-  promptsRpc,
   sessionsRpc,
   statusRpc,
   switchRpc,
-  type PromptInfo,
 } from "../shared/rpc";
-import { placeholdersIn, sessionDetail, sessionTitle, switchChoices, targetLabel, type SwitchChoice } from "./format";
+import { sessionDetail, sessionTitle, switchChoices, targetLabel, type SwitchChoice } from "./format";
 
 /** Modes a provider may offer; one the provider lacks falls back to auto. */
 const PERMISSION_CHOICES = [
@@ -320,111 +318,13 @@ const Button = ({ theme, label, onPress, disabled }: { theme: PluginTheme; label
   </Pressable>
 );
 
-/** Editable text with an explicit save: the value only reaches the settings when you press save. */
-function SavedText({
-  theme,
-  saved,
-  fallback,
-  onSave,
-  minHeight = 120,
-}: {
-  theme: PluginTheme;
-  /** Stored value ("" = unset). */
-  saved: string;
-  /** What an unset value stands for (the default template); shown and compared, never stored. */
-  fallback: string;
-  onSave(value: string): void;
-  minHeight?: number;
-}) {
-  const shown = saved || fallback;
-  const [draft, setDraft] = useState(shown);
-  useEffect(() => setDraft(shown), [shown]);
-  const dirty = draft !== shown;
-  return (
-    <View style={{ gap: 6 }}>
-      <TextInput
-        multiline
-        value={draft}
-        onChangeText={setDraft}
-        placeholderTextColor={theme.colors.foregroundMuted}
-        style={{
-          color: theme.colors.foreground,
-          backgroundColor: theme.colors.surface1,
-          borderColor: theme.colors.border,
-          borderWidth: 1,
-          borderRadius: 8,
-          padding: 10,
-          fontSize: 13,
-          minHeight,
-          textAlignVertical: "top",
-        }}
-      />
-      <View style={{ flexDirection: "row", gap: 8 }}>
-        <Button theme={theme} label="保存" disabled={!dirty} onPress={() => onSave(draft.trim() === fallback.trim() ? "" : draft)} />
-        <Button
-          theme={theme}
-          label="恢复默认"
-          disabled={!saved && !dirty}
-          onPress={() => {
-            setDraft(fallback);
-            onSave("");
-          }}
-        />
-      </View>
-    </View>
-  );
-}
+/** Host navigation to another plugin's screen (a fork addition; absent on older hosts). */
+type CrossPluginNavigation = {
+  openPluginScreen?: (input: { pluginId: string; screenId: string }) => void;
+};
 
-function TemplateEditor({
-  theme,
-  info,
-  saved,
-  onSave,
-}: {
-  theme: PluginTheme;
-  info: PromptInfo;
-  saved: string;
-  onSave(value: string): void;
-}) {
-  const known = new Set(info.placeholders.map((p) => p.name));
-  const unknown = placeholdersIn(saved).filter((n) => !known.has(n));
-  return (
-    <View style={{ gap: 6 }}>
-      <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>{info.label}</Text>
-      <Muted theme={theme}>{info.description}</Muted>
-      <Muted theme={theme}>
-        可用占位符：{info.placeholders.map((p) => `{{${p.name}}} ${p.description}`).join("；")}
-      </Muted>
-      <SavedText theme={theme} saved={saved} fallback={info.defaultTemplate} onSave={onSave} minHeight={220} />
-      {unknown.length ? (
-        <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
-          未知占位符会被替换为空：{unknown.map((n) => `{{${n}}}`).join("、")}
-        </Text>
-      ) : null}
-      <Muted theme={theme}>以下回复格式要求会自动附加在模板末尾，不能修改（保证总 agent 的回复能被解析）：</Muted>
-      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, fontStyle: "italic" }}>{info.formatSection}</Text>
-    </View>
-  );
-}
-
-export function MasterSettingsScreen({ theme }: PluginSurfaceProps) {
+export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) {
   const settings = useSettings(masterSettings);
-  const promptsCall = useRpc(promptsRpc);
-  const [prompts, setPrompts] = useState<PromptInfo[] | null>(null);
-  const [promptsError, setPromptsError] = useState<string | null>(null);
-  // the card_done format section depends on the requirements switch
-  const maintain = settings.status === "ready" ? settings.values.maintainRequirements : true;
-  useEffect(() => {
-    let alive = true;
-    promptsCall({}).then(
-      (r) => alive && setPrompts(r.prompts),
-      (e) => alive && setPromptsError(e instanceof Error ? e.message : String(e)),
-    );
-    return () => {
-      alive = false;
-    };
-  }, [maintain]);
-
   if (settings.status !== "ready") {
     return (
       <View style={{ padding: 16 }}>
@@ -540,28 +440,98 @@ export function MasterSettingsScreen({ theme }: PluginSurfaceProps) {
         </SettingsCard>
       </Group>
 
-      <Group theme={theme} title="提示词">
-        <View style={{ gap: 12 }}>
-          <View style={{ gap: 6 }}>
-            <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>规则补充</Text>
-            <Muted theme={theme}>追加在内置规则（SKILL）之后，对总 agent 和规划会话生效；修改后会在下一条消息里通知运行中的会话。</Muted>
-            <SavedText theme={theme} saved={values.rulesSupplement} fallback="" onSave={(rulesSupplement) => save({ ...values, rulesSupplement })} minHeight={100} />
-          </View>
+      <Group theme={theme} title="提示词与规则">
+        <View style={{ gap: 8 }}>
           <Muted theme={theme}>
-            唤醒消息模板：留空用默认。下面显示的就是默认模板全文，可直接修改或复制；「恢复默认」清除覆盖。
+            总 agent 的系统规则、规则补充、唤醒消息、规划会话与交接文字都集中在「Agent 行为」页编辑，可按项目覆盖，也能恢复默认。这里不再重复编辑。
           </Muted>
-          {promptsError ? <Muted theme={theme}>无法加载默认模板：{promptsError}</Muted> : null}
-          {!prompts && !promptsError ? <Muted theme={theme}>加载中...</Muted> : null}
-          {(prompts ?? []).map((info) => (
-            <TemplateEditor
-              key={info.settingKey}
+          {(navigation as CrossPluginNavigation | undefined)?.openPluginScreen ? (
+            <Button
               theme={theme}
-              info={info}
-              saved={values[info.settingKey]}
-              onSave={(value) => save({ ...values, [info.settingKey]: value })}
+              label="打开「Agent 行为」页"
+              onPress={() =>
+                (navigation as CrossPluginNavigation).openPluginScreen!({ pluginId: "vibe-board", screenId: "behaviour" })
+              }
             />
-          ))}
+          ) : (
+            <Muted theme={theme}>在侧栏的「Agent 行为」入口中打开。</Muted>
+          )}
         </View>
+      </Group>
+
+      <Group theme={theme} title="高级：自动化参数">
+        <SettingsCard>
+          <SettingsInput
+            label="向总 agent 提问的超时（分钟，1-120）"
+            initialValue={String(values.askTimeoutMinutes)}
+            onChangeText={(text) => save({ ...values, askTimeoutMinutes: integer(text, 5, 1, 120) })}
+          />
+          <SettingsInput
+            label="规划会话单回合超时（分钟，1-120）"
+            initialValue={String(values.planTurnTimeoutMinutes)}
+            onChangeText={(text) => save({ ...values, planTurnTimeoutMinutes: integer(text, 10, 1, 120) })}
+          />
+          <SettingsInput
+            label="规划探路兵超时（分钟，1-120）"
+            initialValue={String(values.scoutTimeoutMinutes)}
+            onChangeText={(text) => save({ ...values, scoutTimeoutMinutes: integer(text, 5, 1, 120) })}
+          />
+          <SettingsInput
+            label="每条用户消息最多探路轮数（0-10）"
+            initialValue={String(values.maxResearchRounds)}
+            onChangeText={(text) => save({ ...values, maxResearchRounds: Math.round(Math.min(10, Math.max(0, Number(text) || 0))) })}
+          />
+          <SettingsInput
+            label="规划会话一次处理最多连续回合数（1-100）"
+            initialValue={String(values.maxPlanLoops)}
+            onChangeText={(text) => save({ ...values, maxPlanLoops: integer(text, 10, 1, 100) })}
+          />
+          <SettingsInput
+            label="回复格式不合规时的重试次数（0-5，0 为不重试）"
+            initialValue={String(values.jsonRepairRetries)}
+            onChangeText={(text) => save({ ...values, jsonRepairRetries: Math.round(Math.min(5, Math.max(0, Number(text) || 0))) })}
+          />
+          <SettingsInput
+            label="采纳建议后不重新审查的窗口（秒，1-600）"
+            initialValue={String(values.proposalWindowSeconds)}
+            onChangeText={(text) => save({ ...values, proposalWindowSeconds: integer(text, 15, 1, 600) })}
+          />
+          <SettingsInput
+            label="启动补扫：多少小时内完成的卡要整理记忆（1-720）"
+            initialValue={String(values.sweepDoneWindowHours)}
+            onChangeText={(text) => save({ ...values, sweepDoneWindowHours: integer(text, 48, 1, 720) })}
+          />
+          <SettingsInput
+            label="额度偏低提醒的冷却（分钟，1-1440）"
+            initialValue={String(values.alertCooldownQuotaLowMinutes)}
+            onChangeText={(text) => save({ ...values, alertCooldownQuotaLowMinutes: integer(text, 360, 1, 1440) })}
+          />
+          <SettingsInput
+            label="额度报错 / 等待批准提醒的冷却（分钟，1-1440）"
+            initialValue={String(values.alertCooldownUrgentMinutes)}
+            onChangeText={(text) => save({ ...values, alertCooldownUrgentMinutes: integer(text, 10, 1, 1440) })}
+          />
+          <SettingsInput
+            label="维护暂停 / 需求文档失败提醒的冷却（分钟，1-1440）"
+            initialValue={String(values.alertCooldownRoutineMinutes)}
+            onChangeText={(text) => save({ ...values, alertCooldownRoutineMinutes: integer(text, 60, 1, 1440) })}
+          />
+          <SettingsInput
+            label="项目块里列出的其它未完成卡片数量（0-200）"
+            initialValue={String(values.projectBlockCardLimit)}
+            onChangeText={(text) => save({ ...values, projectBlockCardLimit: Math.round(Math.min(200, Math.max(0, Number(text) || 0))) })}
+          />
+          <SettingsInput
+            label="交接摘要的最大字符数（500-30000）"
+            initialValue={String(values.handoffMaxChars)}
+            onChangeText={(text) => save({ ...values, handoffMaxChars: integer(text, 3500, 500, 30000) })}
+          />
+          <SettingsInput
+            label="交接摘要回看的天数（1-60）"
+            initialValue={String(values.handoffRecentDays)}
+            onChangeText={(text) => save({ ...values, handoffRecentDays: integer(text, 7, 1, 60) })}
+          />
+        </SettingsCard>
       </Group>
     </SettingsSection>
   );

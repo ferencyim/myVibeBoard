@@ -111,6 +111,10 @@ export function registerBoardRpcs(
   server.handle(rpc.presetsDeleteRpc, (input) => board.presets.delete(input.presetId));
   server.handle(rpc.providersCatalogRpc, (_input, { paseo }) => providerCatalog(paseo));
 
+  server.handle(rpc.promptsListRpc, (input) => board.prompts.list(input.projectId));
+  server.handle(rpc.promptsSetRpc, (input) => board.prompts.set(input.key, input.text, input.projectId));
+  server.handle(rpc.promptsClearRpc, (input) => board.prompts.clear(input.key, input.projectId));
+
   server.handle(rpc.attachmentsListRpc, (input) => board.attachments.list(input.card));
   server.handle(rpc.attachmentsUploadRpc, ({ card, base64, ...input }) =>
     board.attachments.upload(card, { ...input, bytes: Buffer.from(base64, "base64") }),

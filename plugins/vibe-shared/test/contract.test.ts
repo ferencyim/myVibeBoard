@@ -296,7 +296,7 @@ describe("sync spec", () => {
         .map((t) => t.table)
         .sort(),
     ).toEqual(
-      ["card", "card_event", "card_tag", "maintenance_rule", "preset", "project", "tag"].sort(),
+      ["card", "card_event", "card_tag", "maintenance_rule", "preset", "project", "prompt_override", "tag"].sort(),
     );
     expect(syncSpec("card")?.fields).toContain("column");
     expect(syncSpec("usage_event")?.direction).toBe("local");

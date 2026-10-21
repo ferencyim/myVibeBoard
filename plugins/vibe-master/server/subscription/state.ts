@@ -12,6 +12,8 @@ export interface MasterAgentRecord {
   target: MasterTarget;
   /** Permission mode the agent was created with (null = provider default). */
   modeId?: string | null;
+  /** Hash of the rules text the agent was started with / last received (see master/session.ts). */
+  rulesHash?: string;
 }
 
 export interface MasterAlert {

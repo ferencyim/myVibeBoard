@@ -112,6 +112,9 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
       "paused_at",
     ],
   ),
+  // Prompt overrides (WP-98): the phone may edit the text; scope and key are the row id.
+  both("prompt_override", ["id"], ["text"]),
+  down("prompt_template", ["key"]),
   down("agent_session", ["id"]),
   down("plan_version", ["id"]),
   down("git_snapshot", ["project_id"]),

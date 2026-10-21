@@ -384,14 +384,16 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 
 ### 批次 6（第三轮反馈，2026-10-21；需求见 PRODUCT-REQUIREMENTS.md「第三轮反馈」）
 
-| WP    | 名称                                                        | 拥有                                                                                                                                                                   | 依赖  | 难度 |
-| ----- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ---- |
-| WP-90 | 契约：项目多类型/简介/需求文档、预设多用途、群聊与提案事件  | `plugins/vibe-shared/**` 及生成副本；消费者为通过编译所需的最小改动                                                                                                    | —     | 中   |
-| WP-91 | 看板 UI：项目编辑、需求文档、预设表单、手动触发、输入框光标 | `plugins/vibe-board/client/{presets,board,common}/**`、`plugins/vibe-board/server/requirements/**`                                                                     | 90    | 中   |
-| WP-93 | 总 agent：历史会话、交接、可配置触发与提示词、项目上下文    | `plugins/vibe-master/**`、`skills/vibe-master/**`                                                                                                                      | 90    | 中   |
-| WP-94 | 自动维护规则可配置                                          | `plugins/vibe-maintain/**`                                                                                                                                             | 90    | 中   |
-| WP-95 | [core] vivo 官方推送                                        | `services/vibe-push-gateway/**`、`packages/server/src/server/push/**`、`packages/app/src/push-notifications/**`、App 配置插件                                          | —     | 难   |
-| WP-92 | 卡片群聊                                                    | `plugins/vibe-board/client/{detail,planning}/**`、`plugins/vibe-board/server/{chat,dispatch,finalizer}/**`；vibe-master assess/planning、vibe-verify review 的发言接入 | 91,93 | 难   |
+| WP    | 名称                                                        | 拥有                                                                                                                                                                                                                                                                                                                    | 依赖  | 难度 |
+| ----- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ---- |
+| WP-90 | 契约：项目多类型/简介/需求文档、预设多用途、群聊与提案事件  | `plugins/vibe-shared/**` 及生成副本；消费者为通过编译所需的最小改动                                                                                                                                                                                                                                                     | —     | 中   |
+| WP-91 | 看板 UI：项目编辑、需求文档、预设表单、手动触发、输入框光标 | `plugins/vibe-board/client/{presets,board,common}/**`、`plugins/vibe-board/server/requirements/**`                                                                                                                                                                                                                      | 90    | 中   |
+| WP-93 | 总 agent：历史会话、交接、可配置触发与提示词、项目上下文    | `plugins/vibe-master/**`、`skills/vibe-master/**`                                                                                                                                                                                                                                                                       | 90    | 中   |
+| WP-94 | 自动维护规则可配置                                          | `plugins/vibe-maintain/**`                                                                                                                                                                                                                                                                                              | 90    | 中   |
+| WP-95 | [core] vivo 官方推送                                        | `services/vibe-push-gateway/**`、`packages/server/src/server/push/**`、`packages/app/src/push-notifications/**`、App 配置插件                                                                                                                                                                                           | —     | 难   |
+| WP-98 | Agent 行为中心（第一部分）                                  | `plugins/vibe-shared/{contract/prompts.ts,db}` 提示词注册表（`prompt_template`/`prompt_override`，core 迁移 5，手机可同步覆盖）；vibe-master 与 vibe-board 的全部提示词接入、高级自动化参数设置项；`plugins/vibe-board/client/behaviour/**` 中央「Agent 行为」页；[core] 插件导航 `openPluginScreen/openPluginSettings` | 90,93 | 中   |
+| WP-99 | Agent 行为中心（第二部分）                                  | vibe-verify、vibe-context、switch-provider 的提示词注册与设置界面，以及其余硬编码自动化参数转成设置                                                                                                                                                                                                                     | 98    | 中   |
+| WP-92 | 卡片群聊                                                    | `plugins/vibe-board/client/{detail,planning}/**`、`plugins/vibe-board/server/{chat,dispatch,finalizer}/**`；vibe-master assess/planning、vibe-verify review 的发言接入                                                                                                                                                  | 91,93 | 难   |
 
 - **WP-90**：`Project.projectTypes`（非空数组）取代单值，`projectType` 保留为 `projectTypes[0]` 的兼容字段（`COMPAT(project-types)`，旧手机端仍可同步）；
   `Project.description`、`Project.requirementsPath`（默认 `PRODUCT-REQUIREMENTS.md`）；`Preset.roleHints`（数组）取代 `roleHint`，同样保留兼容字段。
@@ -409,6 +411,10 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
   App 用配置插件接入 vivo 推送 SDK（SDK aar 与 AppID/AppKey 从本机未入库位置读取，缺失时不启用，构建照常）；FCM 路径不变。真机验收待用户提供凭据。
 - **WP-92**：卡片详情「群聊」页合并原讨论页与关键事件；总 agent 审查结论以 chat 发言 + proposal 给出，用户在群聊点「采纳」后写入描述；
   用户在群聊发言按卡片状态转给规划会话 / 执行 agent；执行 agent 的提问、完成总结与复核结论写入群聊；派发提示词直接用卡片描述与验收标准；
+- **WP-98 / WP-99**：提示词注册表在 vibe-shared（core 迁移 5：`prompt_template` 由注册插件启动时 upsert 默认值与元数据、从不改覆盖；`prompt_override` 以 `<key>@<项目id|*>` 为行 id，仅 `text` 字段按字段 LWW 同步，空串 = 无覆盖）。
+  命令层 `store.prompts.{register,resolve,body,setOverride,clearOverride,list}`：项目覆盖 > 全局覆盖 > 默认；`{{占位符}}` 单次渲染（未声明占位符的提示词原样返回）后追加 `fixedSuffix`（解析所需格式，界面只读）。
+  手机策略：`prompt_template` 为 down 表只读；`prompt_override` 只能写已注册 key 的 `text`，不能删除。中央页在 vibe-board（`vibe.prompts.list/set/clear`），按注册表自动列出，不写死插件。
+  新增提示词的插件：定义 `PromptDef`、启动时 `register(defs, {pruneMissing:true})`、用 `resolve` 取文本。`master.rules` 变化按文本哈希在下一条消息重发。
   卡片详情编辑框修复轮询回写导致的光标漂移。
 
 ### 中继部署（WP-48 仅写脚本与文档，**不连接、不执行**）

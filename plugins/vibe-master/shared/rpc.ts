@@ -43,10 +43,12 @@ export const masterSettings = defineSettings({
     /** At card done the master may also return an update of the project's requirements document. */
     maintainRequirements: z.boolean().default(true),
 
-    // ---- prompts (WP-93) ----
-    /** Appended after the static SKILL rules (system prompt). */
+    // ---- prompts (WP-93, moved to the prompt registry by WP-98) ----
+    // COMPAT(prompt-registry): added 2026-10-21, remove after 2027-04-01
+    // These four were edited here before the shared prompt registry existed. They are only read once,
+    // on the first start after the upgrade, and copied into global overrides (server/prompts/migrate.ts);
+    // after that the "Agent behaviour" page is the only place to edit them.
     rulesSupplement: z.string().default(""),
-    /** Wake templates with {{placeholders}}; empty = the built-in default. The reply format section is always appended. */
     templateAssessDraft: z.string().default(""),
     templateCardDone: z.string().default(""),
     templateSessionHelp: z.string().default(""),
@@ -54,6 +56,33 @@ export const masterSettings = defineSettings({
     // ---- project context (WP-93) ----
     /** Max characters of the requirements document handed to the master in the project block. */
     requirementsExcerptChars: z.number().int().min(0).max(50_000).default(6000),
+
+    // ---- advanced automation parameters (WP-98) ----
+    /** How long one question to the master may take (assessment, memory, advice). */
+    askTimeoutMinutes: z.number().int().min(1).max(120).default(5),
+    /** How long one planning-session turn may take. */
+    planTurnTimeoutMinutes: z.number().int().min(1).max(120).default(10),
+    /** How long a planning scout may take. */
+    scoutTimeoutMinutes: z.number().int().min(1).max(120).default(5),
+    /** Scout rounds a planning session may request per owner message. */
+    maxResearchRounds: z.number().int().min(0).max(10).default(2),
+    /** Turns one planning pass may run back to back. */
+    maxPlanLoops: z.number().int().min(1).max(100).default(10),
+    /** Extra asks after a reply failed validation (0 = take the first reply as it is). */
+    jsonRepairRetries: z.number().int().min(0).max(5).default(1),
+    /** Accepting a master proposal edits the card; edits within this window are not re-assessed. */
+    proposalWindowSeconds: z.number().int().min(1).max(600).default(15),
+    /** The start-up sweep consolidates cards that finished within this many hours. */
+    sweepDoneWindowHours: z.number().int().min(1).max(720).default(48),
+    /** Quiet period between two alerts of the same kind and subject. */
+    alertCooldownQuotaLowMinutes: z.number().int().min(1).max(1440).default(360),
+    alertCooldownUrgentMinutes: z.number().int().min(1).max(1440).default(10),
+    alertCooldownRoutineMinutes: z.number().int().min(1).max(1440).default(60),
+    /** Other open cards listed in the project block of every wake message. */
+    projectBlockCardLimit: z.number().int().min(0).max(200).default(40),
+    /** Size cap of the hand-off summary for a new master, and how many days "recent" covers. */
+    handoffMaxChars: z.number().int().min(500).max(30_000).default(3500),
+    handoffRecentDays: z.number().int().min(1).max(60).default(7),
   }),
 });
 export type MasterSettings = z.output<typeof masterSettings.schema>;
@@ -190,22 +219,4 @@ export const sessionsRpc = defineRpc({
   name: "master.sessions",
   input: z.object({ limit: z.number().int().min(1).max(100).default(30) }),
   output: z.object({ sessions: z.array(SessionRow) }),
-});
-
-const PromptInfo = z.object({
-  /** Settings key holding the override. */
-  settingKey: z.enum(["templateAssessDraft", "templateCardDone", "templateSessionHelp"]),
-  label: z.string(),
-  description: z.string(),
-  placeholders: z.array(z.object({ name: z.string(), description: z.string() })),
-  defaultTemplate: z.string(),
-  /** Appended automatically after the template; not editable. */
-  formatSection: z.string(),
-});
-export type PromptInfo = z.infer<typeof PromptInfo>;
-
-export const promptsRpc = defineRpc({
-  name: "master.prompts",
-  input: z.object({}),
-  output: z.object({ prompts: z.array(PromptInfo) }),
 });

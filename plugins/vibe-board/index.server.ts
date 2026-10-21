@@ -21,12 +21,31 @@ import { createReplyService, createSyncService } from "./server/sync";
 import { createRequirementsService } from "./server/requirements";
 import { createScoutService } from "./server/scout";
 import { createVerifyService } from "./server/verify";
+import { buildBoardInstructions } from "./server/mcp/instructions";
+import { createBoardPrompts } from "./server/prompts";
+import type { BriefLimits } from "./server/dispatch/brief";
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(boardSettings);
   const runtime = openBoardRuntime();
   const board = createBoardService(runtime);
   const dataDir = join(resolveVibeHome(), "board");
+  const prompts = createBoardPrompts(runtime.store);
+  try {
+    prompts.register({ pruneMissing: true });
+  } catch (error) {
+    console.error("vibe-board: could not register the prompt defaults, using built-in texts:", error);
+  }
+  const getLimits = async (): Promise<Partial<BriefLimits>> => {
+    const current = await settings.read();
+    return current.status === "ready"
+      ? {
+          recentEvents: current.values.briefRecentEvents,
+          chatLimit: current.values.briefChatLimit,
+          handoffMaxChars: current.values.briefHandoffMaxChars,
+        }
+      : {};
+  };
 
   // The SDK handle arrives later through hooks/RPCs (see below); scouts read it lazily.
   let paseo: PaseoApi | null = (server as { paseo?: PaseoApi }).paseo ?? null;
@@ -40,8 +59,12 @@ export default function contribute(server: PluginServerContext) {
         preset: values?.scoutPreset ?? "",
         maxParallel: values?.scoutMaxParallel ?? 4,
         timeoutMs: (values?.scoutTimeoutSec ?? 300) * 1000,
+        summaryMaxLines: values?.scoutSummaryMaxLines,
+        cacheTtlMs: values ? values.scoutCacheTtlMinutes * 60_000 : undefined,
+        maxTasksPerCall: values?.scoutMaxTasksPerCall,
       };
     },
+    prompts,
     publish: (type, cardId, projectId, payload) =>
       void publishEvent(runtime.db, { type, cardId, projectId, payload } as never),
   });
@@ -67,7 +90,7 @@ export default function contribute(server: PluginServerContext) {
   server.before("agent.create", async ({ request }) => {
     const inject = await autoInject();
     const active = bridge ?? (await bridgeReady);
-    return injectBoard(request, inject, active, process.execPath);
+    return injectBoard(request, inject, active, process.execPath, () => buildBoardInstructions(prompts));
   });
 
   server.before("agent.session_open", async ({ request }) => {
@@ -124,6 +147,8 @@ export default function contribute(server: PluginServerContext) {
     tracker: lifecycle,
     convert: convertNative,
     guardImport: (workspaceId, fn) => lifecycle.withoutSwitchRecord(workspaceId, fn),
+    prompts,
+    getLimits,
     log: (m, e) => console.error(`[vibe-board failover] ${m}`, e ?? ""),
   });
   const dispatcher = createDispatcher({
@@ -131,9 +156,12 @@ export default function contribute(server: PluginServerContext) {
     getPaseo: () => paseo,
     tracker: lifecycle,
     failoverEnabled,
+    prompts,
+    getLimits,
   });
   const watchdog = createWatchdog({
     board,
+    prompts,
     getPaseo: () => paseo,
     getConfig: async () => {
       const current = await settings.read();
@@ -146,8 +174,12 @@ export default function contribute(server: PluginServerContext) {
       };
     },
   });
-  watchdog.start();
-  const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, onError: (e) => console.error("vibe-board admission:", e) });
+  // The poll interval is read once at start-up.
+  void settings
+    .read()
+    .then((current) => watchdog.start(current.status === "ready" ? current.values.watchdogPollSeconds * 1000 : undefined))
+    .catch(() => watchdog.start());
+  const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, prompts, onError: (e) => console.error("vibe-board admission:", e) });
   const sync = createSyncService({ db: runtime.db, store: runtime.store });
   const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
   // Group chat: user messages go to the executor while it works (router), the rest is the master's.

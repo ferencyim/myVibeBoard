@@ -9,6 +9,7 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { AgentSession } from "../vibe/contract";
 import type { BoardService } from "../service";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 
 export interface StallConfig {
   enabled: boolean;
@@ -29,9 +30,8 @@ export const DEFAULT_STALL_CONFIG: StallConfig = {
 /** Roles that run turns on behalf of a card; the long-lived master has its own flows. */
 export const STALL_ROLES: readonly string[] = ["worker", "verifier", "reviewer", "planner"];
 
-export const CONTINUE_PROMPT =
-  "The board noticed no output from you for a while. Continue the task from where you stopped; " +
-  "if you are blocked, say what blocks you with a card comment.";
+/** Default text of the "continue" nudge (the owner may override it, see server/prompts). */
+export const CONTINUE_PROMPT = defaultPrompts.resolve("board.watchdog_continue");
 
 /** "claude=15, codex=8" -> { claude: 15, codex: 8 }; malformed pairs are ignored. */
 export function parseProviderMinutes(text: string | undefined): Record<string, number> {
@@ -55,6 +55,7 @@ export interface WatchdogOptions {
   getPaseo: () => Pick<PaseoApi, "agents"> | null;
   getConfig: () => Promise<StallConfig> | StallConfig;
   now?: () => number;
+  prompts?: PromptResolver;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -111,8 +112,13 @@ export function createWatchdog(options: WatchdogOptions) {
       paseo
     ) {
       interrupted.add(key);
+      const card = current.cardId ? store.cards.get(current.cardId) : undefined;
       // The default active-turn behaviour of send() interrupts the running turn first.
-      await paseo.agents.ref(current.agentId).send(CONTINUE_PROMPT);
+      await paseo.agents.ref(current.agentId).send(
+        (options.prompts ?? defaultPrompts).resolve("board.watchdog_continue", {
+          projectId: card?.projectId,
+        }),
+      );
       if (current.cardId) {
         store.events.add({
           cardId: current.cardId,

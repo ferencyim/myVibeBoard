@@ -14,7 +14,9 @@ import { join } from "node:path";
 import { parseWorkerHistory, type CardEvent, type CardView, type Preset, type Project } from "../vibe/contract";
 import type { VibeDb, VibeStore } from "../vibe/db";
 import { buildAssessMessage, buildProjectBlock, buildRepairMessage } from "../master/prompts";
+import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import { defaultSelector, type AgentSelector, type SelectResult } from "../select";
+import { defaultTuning, type TuningSource } from "../tuning";
 import type { QuotaReader } from "../subscription/quota";
 import type { MasterAsk } from "../types";
 import { parseReply } from "./parse";
@@ -30,8 +32,10 @@ export interface AssessDeps {
   master: MasterAsk;
   quota: QuotaReader;
   selector?: AgentSelector;
-  /** Owner override of the wake template and the requirements excerpt size (settings). */
-  template?(): string | undefined;
+  /** Prompt texts (registry); built-in defaults when omitted. */
+  prompts?: PromptPort;
+  /** Automation parameters and the requirements excerpt size (settings). */
+  tuning?: TuningSource;
   requirementsChars?(): number;
   /** Provider/model label stored with the assessment. */
   masterLabel?: () => string | null;
@@ -224,6 +228,8 @@ export function workerHistory(
 export function createAssessor(deps: AssessDeps) {
   const { store, db } = deps;
   const selector = deps.selector ?? defaultSelector;
+  const prompts = deps.prompts ?? defaultPromptPort();
+  const tuning = deps.tuning ?? defaultTuning;
   const log = deps.log ?? (() => undefined);
 
   function context(card: CardView) {
@@ -261,8 +267,15 @@ export function createAssessor(deps: AssessDeps) {
       history: workerHistory(project, presets),
     });
     const message = buildAssessMessage({
-      projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.requirementsChars?.() }),
-      template: deps.template?.(),
+      projectBlock: buildProjectBlock({
+        project,
+        tags,
+        presets,
+        openCards,
+        requirementsChars: deps.requirementsChars?.(),
+        cardLimit: tuning().projectBlockCardLimit,
+      }),
+      prompts,
       card,
       tagNames: names,
       quota,
@@ -271,9 +284,9 @@ export function createAssessor(deps: AssessDeps) {
 
     let reply = await deps.master.ask(message);
     let parsed = parseReply(reply, AssessmentSchema);
-    if (!parsed.ok) {
+    for (let retry = 0; retry < tuning().jsonRepairRetries && !parsed.ok; retry++) {
       log(`assessment of ${card.key} rejected, asking for a fix: ${parsed.error}`);
-      reply = await deps.master.ask(buildRepairMessage("assess_draft", parsed.error));
+      reply = await deps.master.ask(buildRepairMessage("assess_draft", parsed.error, prompts, card.projectId));
       parsed = parseReply(reply, AssessmentSchema);
     }
 

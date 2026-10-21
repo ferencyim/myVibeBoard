@@ -10,3 +10,4 @@ export * from "./state-machine";
 export * from "./sync-spec";
 export * from "./select";
 export * from "./paths";
+export * from "./prompts";

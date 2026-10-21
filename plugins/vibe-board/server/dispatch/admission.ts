@@ -8,6 +8,7 @@ import { createEventConsumer, publishEvent, type EventConsumer, type VibeDb } fr
 import type { BoardService } from "../service";
 import { BoardError } from "../service";
 import type { Dispatcher } from ".";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 
 export interface AdmissionOptions {
   db: VibeDb;
@@ -15,10 +16,12 @@ export interface AdmissionOptions {
   dispatcher: Pick<Dispatcher, "dispatch">;
   pollIntervalMs?: number;
   onError?: (error: unknown) => void;
+  prompts?: PromptResolver;
 }
 
 export function startAdmissionConsumer(options: AdmissionOptions): EventConsumer {
   const { db, board, dispatcher } = options;
+  const prompts = options.prompts ?? defaultPrompts;
 
   const consumer = createEventConsumer({
     db,
@@ -42,7 +45,10 @@ export function startAdmissionConsumer(options: AdmissionOptions): EventConsumer
           force: true, // the scheduler already admitted it
           ...(port
             ? {
-                extraInstructions: `The scheduler reserved dev-server port ${port} for this task. Run any dev server on that port so parallel tasks do not collide.`,
+                extraInstructions: prompts.resolve("board.port_hint", {
+                  projectId: card.projectId,
+                  vars: { port: String(port) },
+                }),
               }
             : {}),
         });

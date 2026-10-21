@@ -20,7 +20,8 @@ import type { AgentSession, CardView, Preset } from "../vibe/contract";
 import type { BoardService } from "../service";
 import type { AgentTracker } from "./index";
 import { ensurePresetModel } from "./model";
-import { buildDispatchBrief, modeIdFor, providerSpec } from "./brief";
+import { buildDispatchBrief, modeIdFor, providerSpec, type BriefLimits } from "./brief";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 import { loadHandoff } from "./handoff";
 import type { FailureCategory } from "../lifecycle/error-class";
 
@@ -45,6 +46,8 @@ export interface ReassignDeps {
   /** Runs `fn` while lifecycle ignores `import` session opens in the workspace (they are ours). */
   guardImport?: <T>(workspaceId: string | null, fn: () => Promise<T>) => Promise<T>;
   newAgentId?: () => string;
+  prompts?: PromptResolver;
+  getLimits?: () => Partial<BriefLimits> | Promise<Partial<BriefLimits>>;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -104,6 +107,7 @@ export async function renderTranscript(paseo: ReassignPaseo, agentId: string): P
 export function createReassigner(deps: ReassignDeps) {
   const { board, tracker } = deps;
   const { store } = board;
+  const prompts = deps.prompts ?? defaultPrompts;
   const log = deps.log ?? ((m, e) => console.error(`[vibe-board reassign] ${m}`, e ?? ""));
   const inflight = new Set<string>();
 
@@ -175,7 +179,6 @@ export function createReassigner(deps: ReassignDeps) {
     if (!project) throw new Error(`Project not found: ${card.projectId}`);
     const cwd = card.worktree ?? null;
     const events = store.events.list(card.id);
-    const why = `The previous agent (${old.currentProvider}) stopped with a ${failure.category} failure: ${failure.message}`;
 
     // 1. native conversion (the new agent receives the full history)
     if (deps.convert) {
@@ -196,20 +199,27 @@ export function createReassigner(deps: ReassignDeps) {
     } catch (error) {
       log("could not read the previous agent's timeline", error);
     }
+    const takeover = prompts.resolve("board.takeover", {
+      projectId: card.projectId,
+      vars: {
+        provider: old.currentProvider,
+        category: failure.category,
+        message: failure.message,
+        transcriptPath: transcriptPath
+          ? `The previous agent's transcript is in ${transcriptPath} (read it before you act).`
+          : "The previous agent's transcript is not available; rely on the worktree, the card notes and `.vibe/sessions/` notes.",
+      },
+    });
     const prompt = buildDispatchBrief({
+      prompts,
+      limits: await deps.getLimits?.(),
       card,
       project,
       preset,
       events,
       handoff: loadHandoff(project, card, events),
       latestPlan: store.plans.list(card.id).at(-1),
-      extraInstructions: [
-        why,
-        "You are taking over the same card in the SAME worktree: run `git status` and `git log` first to see what is already done, then continue; do not start over.",
-        transcriptPath
-          ? `The previous agent's transcript is in ${transcriptPath} (read it before you act).`
-          : "The previous agent's transcript is not available; rely on the worktree, the card notes and `.vibe/sessions/` notes.",
-      ].join("\n"),
+      extraInstructions: takeover,
     });
     const agentId = (deps.newAgentId ?? randomUUID)();
     tracker?.expect(agentId);
@@ -322,8 +332,10 @@ export function createReassigner(deps: ReassignDeps) {
           await paseo.agents
             .ref(started.agentId)
             .send(
-              `The previous agent on ${old.currentProvider} stopped (${failure.category}). Its history is above; ` +
-                `continue card ${card.key} in this worktree (check git status first).`,
+              prompts.resolve("board.takeover_nudge", {
+                projectId: card.projectId,
+                vars: { provider: old.currentProvider, category: failure.category, "card.key": card.key },
+              }),
             )
             .catch((error) => log("could not prompt the converted agent", error));
         }

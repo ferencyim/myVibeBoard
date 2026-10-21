@@ -4,7 +4,6 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   masterSettings,
   permissionRpc,
-  promptsRpc,
   sessionsRpc,
   statusRpc,
   switchRpc,
@@ -12,7 +11,6 @@ import {
   type MasterSettings,
 } from "./shared/rpc";
 import { createMasterRuntime } from "./server/runtime";
-import { promptInfos } from "./server/master/templates";
 import { startNotifyConsumer, type PushNotification } from "./server/notify";
 import { CARD_KEY_PATTERN } from "./server/vibe/contract";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
@@ -24,25 +22,38 @@ export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(masterSettings);
 
   let current: MasterSettings = masterSettings.schema.parse({});
+  let runtime: ReturnType<typeof createMasterRuntime> | null = null;
+  let maintainRequirements = current.maintainRequirements;
   const applySettings = (state: Awaited<ReturnType<typeof settings.read>>) => {
-    if (state.status === "ready") current = state.values;
+    if (state.status !== "ready") return;
+    current = state.values;
+    // The card_done reply format depends on this switch: refresh the registered suffix.
+    if (current.maintainRequirements !== maintainRequirements) {
+      maintainRequirements = current.maintainRequirements;
+      runtime?.prompts.register();
+    }
   };
-  void settings.read().then(applySettings);
+  void settings.read().then((state) => {
+    applySettings(state);
+    // One-time move of prompts edited in the old settings page into the prompt registry.
+    runtime?.migrateLegacyPrompts();
+  });
   const stopSettings = settings.subscribe(applySettings);
 
   // The SDK handle only reaches plugins through hook/RPC contexts: keep the newest one.
   let paseo: PaseoApi | null = null;
-  const runtime = createMasterRuntime({
+  const master = createMasterRuntime({
     db,
     store,
     getPaseo: () => paseo,
     settings: () => current,
     dataDir: join(resolveVibeHome(), "master"),
   });
+  runtime = master;
   const onPaseo = (api: PaseoApi) => {
     if (paseo === api) return;
     paseo = api;
-    runtime.onPaseoAvailable();
+    master.onPaseoAvailable();
   };
 
   const offs = [
@@ -52,7 +63,7 @@ export default function contribute(server: PluginServerContext) {
     server.on("workspace.created", (_e, { paseo: api }) => onPaseo(api)),
     server.on("agent.permission_requested", ({ agent, request }, { paseo: api }) => {
       onPaseo(api);
-      return runtime
+      return master
         .onPermissionRequest(agent.id, request, (requestId) =>
           api.agents.ref(agent.id).respondToPermission({ requestId, response: { behavior: "allow" } }),
         )
@@ -65,12 +76,12 @@ export default function contribute(server: PluginServerContext) {
 
   server.handle(statusRpc, async (input, { paseo: api }) => {
     onPaseo(api);
-    return runtime.status(input.includeProviders);
+    return master.status(input.includeProviders);
   });
 
   server.handle(switchRpc, async (input, { paseo: api }) => {
     onPaseo(api);
-    const result = await runtime.switchTo(
+    const result = await master.switchTo(
       { provider: input.provider, model: input.model, thinking: input.thinking },
       input.reason,
     );
@@ -79,21 +90,19 @@ export default function contribute(server: PluginServerContext) {
 
   server.handle(permissionRpc, async (input, { paseo: api }) => {
     onPaseo(api);
-    const result = await runtime.setPermission(input.mode);
-    return { changed: result.changed, permission: (await runtime.status(false)).permission };
+    const result = await master.setPermission(input.mode);
+    return { changed: result.changed, permission: (await master.status(false)).permission };
   });
 
   server.handle(sessionsRpc, async (input, { paseo: api }) => {
     onPaseo(api);
-    return { sessions: runtime.sessions(input.limit) };
+    return { sessions: master.sessions(input.limit) };
   });
-
-  server.handle(promptsRpc, async () => ({ prompts: promptInfos(current.maintainRequirements) }));
 
   server.handle(wakeRpc, async (input, { paseo: api }) => {
     onPaseo(api);
     const upper = input.card.toUpperCase();
-    return runtime.wake(CARD_KEY_PATTERN.test(upper) ? upper : input.card, input.reason, input.force);
+    return master.wake(CARD_KEY_PATTERN.test(upper) ? upper : input.card, input.reason, input.force);
   });
 
   // Hosts that expose the handle and push at start-up (server.paseo / server.notify) need no hook
@@ -109,15 +118,15 @@ export default function contribute(server: PluginServerContext) {
       })
     : null;
 
-  runtime.startQuotaMonitor();
-  runtime.planning.start();
-  runtime.sweep();
+  master.startQuotaMonitor();
+  master.planning.start();
+  master.sweep();
 
   return async () => {
     await notifier?.stop();
     for (const off of offs) off();
     stopSettings();
-    await runtime.dispose();
+    await master.dispose();
     db.close();
   };
 }
