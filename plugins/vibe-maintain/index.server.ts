@@ -3,10 +3,12 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   maintainSettings,
   resumeRpc,
+  rulesSettings,
   runRpc,
   statusRpc,
   type MaintainSettings,
 } from "./shared/rpc";
+import { EMPTY_RULES_CONFIG, type RulesConfig } from "./shared/rules";
 import { createMaintenanceEngine } from "./server/engine";
 import { perfSlowCheck } from "./server/checks/perf-slow";
 import { gitCheck } from "./server/git/check";
@@ -26,6 +28,14 @@ export default function contribute(server: PluginServerContext) {
     if (state.status === "ready") current = state.values;
   };
   const stopSettings = settings.subscribe(apply);
+  const rulesStore = server.registerSettings(rulesSettings);
+  let rulesConfig: RulesConfig = EMPTY_RULES_CONFIG;
+  const stopRules = rulesStore.subscribe((state) => {
+    if (state.status === "ready") rulesConfig = state.values;
+  });
+  void rulesStore.read().then((state) => {
+    if (state.status === "ready") rulesConfig = state.values;
+  });
 
   // The SDK handle only reaches plugins through hook/RPC contexts: keep the newest one.
   let paseo: PaseoApi | null = null;
@@ -42,6 +52,7 @@ export default function contribute(server: PluginServerContext) {
     git: execGit,
     checks: { git: gitCheck, "perf-slow": perfSlowCheck },
     settings: () => current,
+    uiRules: () => rulesConfig,
     subAgent: createSubAgentRunner(agentPorts),
     fixLauncher: createFixLauncher(agentPorts),
     log: (message, error) => console.error(`vibe-maintain: ${message}`, error ?? ""),
@@ -54,12 +65,22 @@ export default function contribute(server: PluginServerContext) {
     server.on("workspace.created", (_e, c) => remember(c.paseo)),
   ];
 
-  server.handle(statusRpc, (_input, c) => {
+  const specOf = (p: { provider: string; model: string }) =>
+    p.model.startsWith(`${p.provider}/`) ? p.model : `${p.provider}/${p.model}`;
+  server.handle(statusRpc, async (_input, c) => {
     remember(c.paseo);
-    return JSON.parse(JSON.stringify(engine.status()));
+    await engine.syncRules(); // a UI edit shows up without waiting for the next tick
+    return JSON.parse(
+      JSON.stringify({
+        ...engine.status(),
+        projects: store.projects.list().map((p) => ({ id: p.id, name: p.name })),
+        presets: store.presets.list().map((p) => ({ id: p.id, name: p.name, spec: specOf(p) })),
+      }),
+    );
   });
   server.handle(runRpc, async ({ ruleId }, c) => {
     remember(c.paseo);
+    await engine.syncRules();
     const outcome = await engine.runNow(ruleId);
     return outcome.status === "fired"
       ? { status: "fired", run: outcome.run }
@@ -89,6 +110,7 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     if (timer) clearInterval(timer);
     stopSettings();
+    stopRules();
     for (const stop of stopHooks) stop();
     await engine.stop();
     db.close();

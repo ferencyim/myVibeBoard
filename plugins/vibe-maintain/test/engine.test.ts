@@ -295,7 +295,7 @@ describe("rules from maintenance.yml", () => {
     expect(rules.map((r) => r.name)).toEqual(["git-health"]);
     expect(rules[0]!.enabled).toBe(false);
     const errors = Object.values(h.engine.status().configErrors).flat();
-    expect(errors.join()).toContain("rules[1]");
+    expect(errors.join()).toContain("broken");
   });
 
   it("defaults: built-in git-health is low priority, capped at 1 a day, suggest-only", async () => {

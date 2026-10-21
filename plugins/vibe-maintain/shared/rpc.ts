@@ -2,6 +2,7 @@
 
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
+import { RulesConfigSchema } from "./rules";
 
 export const maintainSettings = defineSettings({
   id: "preferences",
@@ -19,6 +20,14 @@ export const maintainSettings = defineSettings({
 });
 export type MaintainSettings = z.output<typeof maintainSettings.schema>;
 
+/** Per-project rule configuration made in the UI (the middle layer; see shared/rules.ts). */
+export const rulesSettings = defineSettings({
+  id: "rules",
+  scope: "host",
+  version: 1,
+  schema: RulesConfigSchema,
+});
+
 const RuleView = z.object({
   rule: z.unknown(),
   counters: z.record(z.string(), z.number()),
@@ -26,6 +35,17 @@ const RuleView = z.object({
   lastRun: z.unknown().nullable(),
   blocked: z.string().nullable(),
   projectName: z.string().nullable().default(null),
+  /** builtin | custom | yml; null until the project's rules were synced once. */
+  origin: z.string().nullable().default(null),
+  /** Which layer supplied each field (builtin | ui | yml), by field key. */
+  sources: z.record(z.string(), z.string()).nullable().default(null),
+  /** The built-in default of a built-in rule (for restore-default). */
+  base: z.unknown().nullable().default(null),
+  prompts: z.object({ review: z.string().nullable(), fix: z.string().nullable() }).default({ review: null, fix: null }),
+  triggerText: z.string().default(""),
+  progressText: z.string().nullable().default(null),
+  checkText: z.string().default(""),
+  defined: z.boolean().default(true),
 });
 
 export const statusRpc = defineRpc({
@@ -34,6 +54,8 @@ export const statusRpc = defineRpc({
   output: z.object({
     rules: z.array(RuleView),
     configErrors: z.record(z.string(), z.array(z.string())),
+    projects: z.array(z.object({ id: z.string(), name: z.string() })).default([]),
+    presets: z.array(z.object({ id: z.string(), name: z.string(), spec: z.string() })).default([]),
   }),
 });
 

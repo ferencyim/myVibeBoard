@@ -27,7 +27,8 @@ describe("CRLF checkouts", () => {
     const lf = await load(yml);
     const cr = await load(crlf(yml));
     expect(cr.errors).toEqual([]);
-    expect(cr.rules.map((r) => [r.name, r.agent])).toEqual(lf.rules.map((r) => [r.name, r.agent]));
+    expect(cr.yml).toEqual(lf.yml);
+    expect(cr.yml.map((r) => [r.name, r.fields.agent])).toEqual([["nightly-clean", "codex/gpt-6"]]);
   });
 
   it("parses CRLF slow-query logs with the same samples", () => {

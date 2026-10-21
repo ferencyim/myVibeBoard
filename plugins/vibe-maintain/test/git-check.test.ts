@@ -86,8 +86,8 @@ describe("git health check (real repositories)", () => {
     expect(by("unpushed")).toContain("main");
     // everything is committed by now
     expect(by("uncommitted")).toEqual([]);
-    expect(out!.title).toMatch(/^Git 体检：\d+ 项待整理$/);
-    expect(out!.body).toContain("## 长期未合并的分支");
+    expect(out!.title).toMatch(/^Git 体检：发现 \d+ 项待整理$/);
+    expect(out!.body).toContain("### 长期未合并的分支");
     expect(out!.body).toContain("`feat/conflict`");
   });
 

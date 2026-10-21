@@ -1,8 +1,9 @@
-// .vibe/maintenance.yml: per-project maintenance rules. The built-in "git-health" rule applies to
-// every project unless the file overrides it by name (e.g. `enabled: false`).
+// .vibe/maintenance.yml: per-project maintenance rules, the top layer of the rule configuration
+// (built-in default < UI config < this file; see shared/rules.ts). A rule with the name of an
+// existing rule overrides only the fields it writes; a new name must be complete.
 //
 //   rules:
-//     - name: git-health            # same name as a built-in = override it
+//     - name: git-health            # same name as a built-in = override those fields
 //       enabled: true
 //       trigger: { kind: workload, cards_done: 10, commits_merged: 30 }   # any reached threshold
 //       # trigger: { kind: time, cron: "0 3 * * *" }
@@ -13,51 +14,16 @@
 //       priority: low
 //       dedupe_key: git-health
 //       daily_cap: 1
+//       prompts:                    # optional {{placeholder}} templates, see shared/prompts.ts
+//         review: "..."
+//         fix: "..."
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { z } from "zod";
+import { RuleDefSchema, RuleFieldsSchema, type RuleDef, type YmlRule } from "../shared/rules";
 
-export const RuleDefSchema = z
-  .object({
-    name: z.string().min(1),
-    enabled: z.boolean().default(true),
-    trigger: z.discriminatedUnion("kind", [
-      z.object({
-        kind: z.literal("workload"),
-        cards_done: z.number().int().positive().optional(),
-        commits_merged: z.number().int().positive().optional(),
-        tokens: z.number().int().positive().optional(),
-      }),
-      z.object({ kind: z.literal("time"), cron: z.string().min(1) }),
-      z.object({
-        kind: z.literal("event"),
-        /** Relative to the repository root unless absolute. */
-        path: z.string().min(1),
-        /** Regular expression; only appended lines that match fire the rule. Default: any append. */
-        pattern: z.string().optional(),
-      }),
-    ]),
-    check: z.object({ type: z.string().min(1) }).passthrough(),
-    agent: z.string().nullish(),
-    output: z.enum(["suggest", "fix"]).default("suggest"),
-    priority: z.string().default("low"),
-    dedupe_key: z.string().nullish(),
-    daily_cap: z.number().int().min(0).default(1),
-  })
-  .superRefine((rule, ctx) => {
-    if (rule.trigger.kind === "workload") {
-      const t = rule.trigger;
-      if (!t.cards_done && !t.commits_merged && !t.tokens) {
-        ctx.addIssue({
-          code: "custom",
-          message: "workload trigger needs cards_done, commits_merged or tokens",
-        });
-      }
-    }
-  });
-export type RuleDef = z.output<typeof RuleDefSchema>;
+export { RuleDefSchema, type RuleDef };
 
 export const BUILTIN_RULES: RuleDef[] = [
   RuleDefSchema.parse({
@@ -72,39 +38,41 @@ export const BUILTIN_RULES: RuleDef[] = [
 ];
 
 export interface LoadedConfig {
-  rules: RuleDef[];
+  /** The rules written in the file, with only the fields each one sets. */
+  yml: YmlRule[];
   errors: string[];
-  /** The file's mtime-independent text, to detect changes. */
+  /** The file's text with LF endings, to detect changes. */
   signature: string;
 }
 
-/** Built-ins + `<repo>/.vibe/maintenance.yml`. A broken file keeps the built-ins and reports errors. */
+const issues = (error: { issues: Array<{ path: PropertyKey[]; message: string }> }) =>
+  error.issues.map((x) => `${x.path.join(".")} ${x.message}`).join("; ");
+
+/** `<repo>/.vibe/maintenance.yml`. A broken file yields no rules and reports errors. */
 export async function loadConfig(repoPath: string): Promise<LoadedConfig> {
   const errors: string[] = [];
+  const yml: YmlRule[] = [];
   let text = "";
   try {
     // A CRLF checkout must not look like an edit (the signature) nor leak "\r" into rule values.
     text = (await readFile(join(repoPath, ".vibe", "maintenance.yml"), "utf8")).replace(/\r\n/g, "\n");
   } catch {
-    // No file: built-ins only.
+    // No file: the lower layers only.
   }
-  const byName = new Map(BUILTIN_RULES.map((r) => [r.name, r]));
   if (text.trim()) {
     try {
       const doc = parse(text) as { rules?: unknown } | null;
       const list = Array.isArray(doc?.rules) ? doc.rules : [];
       for (const [i, raw] of list.entries()) {
-        const parsed = RuleDefSchema.safeParse(raw);
-        if (parsed.success) byName.set(parsed.data.name, parsed.data);
-        else {
-          errors.push(
-            `rules[${i}]: ${parsed.error.issues.map((x) => `${x.path.join(".")} ${x.message}`).join("; ")}`,
-          );
-        }
+        const name = (raw as { name?: unknown } | null)?.name;
+        const parsed = RuleFieldsSchema.safeParse(raw);
+        if (typeof name !== "string" || !name) errors.push(`rules[${i}]: name is required`);
+        else if (!parsed.success) errors.push(`rules[${i}]: ${issues(parsed.error)}`);
+        else yml.push({ name, fields: parsed.data });
       }
     } catch (error) {
       errors.push(`maintenance.yml: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { rules: [...byName.values()], errors, signature: text };
+  return { yml, errors, signature: text };
 }
