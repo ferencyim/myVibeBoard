@@ -127,6 +127,17 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       // A live planning session owns the plan of its card: its plan versions must not be overwritten.
       if (store.sessions.list({ cardId: job.cardId, role: "planner", states: PLANNER_LIVE }).length > 0) {
         log(`assess ${job.cardId}: skipped (planning session active)`);
+        // A manual review request must not look like a dead button: say where to ask instead.
+        if (job.force) {
+          store.cards.addChat({
+            cardId: job.cardId,
+            authorKind: "system",
+            author: "master",
+            kind: "info",
+            text: "规划会话进行中，请直接在群聊里向总 agent 提问。",
+            key: `assess-skipped:${job.cardId}:${Math.floor(clock.now() / 60_000)}`,
+          });
+        }
         return;
       }
       const outcome = await assessor.assess(job.cardId, { force: job.force });

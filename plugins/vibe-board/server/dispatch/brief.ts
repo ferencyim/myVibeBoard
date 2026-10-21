@@ -68,6 +68,39 @@ export interface BriefInput {
 const isDiscussion = (e: CardEvent) =>
   e.type === "note" && DISCUSSION_KINDS.has(String((e.body as { kind?: unknown } | null)?.kind));
 
+const CHAT_LIMIT = 8;
+const PROPOSAL_LIMIT = 5;
+const CHAT_CLIP = 600;
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/** Recent owner / master messages of the group chat: the agreed context after the hand-off summary. */
+function chatLines(events: readonly CardEvent[]): string {
+  return events
+    .filter((e) => e.type === "chat" && (e.authorKind === "user" || e.authorKind === "master"))
+    .slice(-CHAT_LIMIT)
+    .map((e) => {
+      const text = (e.body as { text?: unknown } | null)?.text;
+      return typeof text === "string" && text.trim()
+        ? `- [${e.authorKind === "user" ? "owner" : "master"}] ${clip(text.trim(), CHAT_CLIP)}`
+        : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Accepted master suggestions: why the card text says what it says now (the changes are already in the card). */
+function adoptedLines(events: readonly CardEvent[]): string {
+  return events
+    .filter((e) => e.type === "proposal" && (e.body as { status?: unknown } | null)?.status === "accepted")
+    .slice(-PROPOSAL_LIMIT)
+    .map((e) => {
+      const b = e.body as { rationale?: unknown; changes?: Record<string, unknown> };
+      const fields = Object.keys(b.changes ?? {}).join(", ");
+      return `- (${fields}) ${clip(String(b.rationale ?? "").trim(), CHAT_CLIP)}`;
+    })
+    .join("\n");
+}
+
 function eventLine(e: CardEvent): string {
   const body = e.body as { text?: unknown } | null;
   const text = typeof body?.text === "string" ? body.text : "";
@@ -92,6 +125,7 @@ export function buildDispatchBrief(input: BriefInput): string {
   const plan = input.latestPlan?.snapshot;
   const sections = [
     `# ${card.key} · ${card.title}`,
+    "The title, description and acceptance criteria below are the card as it stands now, including every change the owner accepted. They are authoritative: where the plan or hand-off further down says something different, follow the card.",
     section("Description", card.description || "No description provided."),
     section("Acceptance criteria", card.acceptance),
     section("Reference images", card.refImages.map((id) => `- attachment ${id}`).join("\n")),
@@ -107,6 +141,8 @@ export function buildDispatchBrief(input: BriefInput): string {
           ].join("\n\n"),
         )
       : "",
+    adoptedLines(input.events) ? section("Adopted suggestions (already applied to the card)", adoptedLines(input.events)) : "",
+    chatLines(input.events) ? section("Group chat (recent)", chatLines(input.events)) : "",
     plan
       ? section(
           "Plan",

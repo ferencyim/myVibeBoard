@@ -58,7 +58,8 @@ Acceptance criteria:
 
 Provider quota: {{quota}}
 Scheduler hint: {{hint}}`,
-    formatSection: () => "Reply with the assess_draft JSON object only.",
+    formatSection: () =>
+      `Optional additions to the JSON object: "verdict" is what the owner reads in the card chat (markdown, 2 to 6 sentences: is it feasible, what is unclear or risky, what you recommend; written in the card's language). "proposal" is {"title"?, "description"?, "acceptance"?, "rationale"} with replacement text for those card fields, only for a field that is really worth changing. You never edit the card's fields yourself; the owner accepts a proposal in the chat.\n\nReply with the assess_draft JSON object only.`,
   },
   card_done: {
     id: "card_done",

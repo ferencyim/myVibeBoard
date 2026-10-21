@@ -323,6 +323,32 @@ export const eventsAddRpc = defineRpc({
   output: z.object({ event: CardEventSchema }),
 });
 
+// --- group chat (WP-92) ---------------------------------------------------------------------
+
+export const chatSendRpc = defineRpc({
+  name: "vibe.chat.send",
+  /** The owner says something in the card's group chat: a `chat` card event (author kind user).
+   *  The server routes it by the card's column (planner / master for draft and todo, the executor
+   *  session while in_progress / verifying, recorded only when done). `actor: "phone"` marks
+   *  messages typed on the phone. */
+  input: z.object({ card: cardRef, text: nonBlank, actor: moveActorSchema.optional() }),
+  output: z.object({ event: CardEventSchema }),
+});
+
+export const proposalsAcceptRpc = defineRpc({
+  name: "vibe.proposals.accept",
+  /** Applies a pending `proposal` event's changes to the card (one card.updated) and marks it
+   *  accepted. The only way to accept: the phone sync refuses proposal events and edits. */
+  input: z.object({ eventId: z.string().min(1), actor: moveActorSchema.optional() }),
+  output: z.object({ event: CardEventSchema, card: CardViewSchema }),
+});
+
+export const proposalsRejectRpc = defineRpc({
+  name: "vibe.proposals.reject",
+  input: z.object({ eventId: z.string().min(1), actor: moveActorSchema.optional() }),
+  output: z.object({ event: CardEventSchema }),
+});
+
 // --- plan versions -------------------------------------------------------------------------
 
 export const plansListRpc = defineRpc({
@@ -553,6 +579,9 @@ export const VIBE_BOARD_RPCS = {
   cardsDeleteRpc,
   eventsListRpc,
   eventsAddRpc,
+  chatSendRpc,
+  proposalsAcceptRpc,
+  proposalsRejectRpc,
   plansListRpc,
   plansSaveRpc,
   tagsListRpc,

@@ -2,7 +2,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createPipeline } from "../server/pipeline";
+import { createPipeline, returnReason, verificationLine } from "../server/pipeline";
+import { reviewChatText } from "../server/review";
 import { createVerifyStore } from "../server/store";
 import type { LaunchInput, VerifierLauncher } from "../server/verifier/agent";
 import { createCollectorRegistry, createScriptedRunner } from "../server/vibe/contract";
@@ -167,6 +168,36 @@ describe("model review", () => {
     expect(h.sent).toHaveLength(2);
     expect(h.events("master.alert")).toMatchObject([{ kind: "review_loop" }]);
     expect(h.events("review.finished")[2]).toMatchObject({ verdict: "severe" });
+  });
+
+  it("writes the reviewer's conclusion and the return reason to the card's group chat, once per verification", async () => {
+    const h = setup({ replies: [severe] });
+    const result = await h.pipeline.run(h.cardId);
+    const chats = h.board.events.list(h.cardId).filter((e) => e.type === "chat");
+    expect(chats).toHaveLength(1);
+    expect(chats[0]).toMatchObject({
+      authorKind: "reviewer",
+      author: "Reviewer",
+      body: { kind: "verdict", agentId: "reviewer-1", key: `review:${result!.verificationId}` },
+    });
+    expect((chats[0]!.body as { text: string }).text).toContain("src/a.ts:12");
+    // the same verification never writes a second conclusion
+    h.board.cards.addChat({ cardId: h.cardId, authorKind: "reviewer", text: "again", key: `review:${result!.verificationId}` });
+    expect(h.board.events.list(h.cardId).filter((e) => e.type === "chat")).toHaveLength(1);
+    // the automatic return explains itself (system line in the chat), the verification line carries counts
+    const events = h.board.events.list(h.cardId);
+    expect((events.find((e) => e.type === "reject")!.body as { text: string }).text).toContain("复核发现严重问题");
+    expect(JSON.stringify(events.find((e) => (e.body as { kind?: string }).kind === "verification")!.body)).toContain("失败 1");
+  });
+
+  it("formats the chat texts", () => {
+    expect(reviewChatText("pass", "ok", [])).toBe("复核通过：ok");
+    expect(reviewChatText("severe", "", ["[severe] a.ts bug"])).toContain("- [severe] a.ts bug");
+    expect(reviewChatText("issues", "", [], "超时")).toBe("复核没有完成：超时");
+    expect(returnReason(false, [{ text: "login fails" }])).toBe("验证未通过，已自动退回执行 agent：login fails");
+    expect(verificationLine("fail", [{ judgement: "fail" }, { judgement: "pass" }], "abcdef123456", false)).toBe(
+      "验证未通过（通过 1 / 存疑 0 / 失败 1）· 提交 abcdef12",
+    );
   });
 
   it("an unparsable review is doubtful, never a return", async () => {

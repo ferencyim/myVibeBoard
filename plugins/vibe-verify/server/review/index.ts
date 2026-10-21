@@ -91,3 +91,22 @@ Use an empty issues array and verdict "pass" when you find nothing worth reporti
 export function issueLocation(issue: ReviewIssue): string {
   return issue.file ? `${issue.file}${issue.line ? `:${issue.line}` : ""}` : "";
 }
+
+/** The reviewer's conclusion as one chat message for the card (Chinese; issue lines are the reviewer's own text). */
+export function reviewChatText(
+  verdict: "pass" | "issues" | "severe",
+  summary: string,
+  issues: readonly string[],
+  failure?: string,
+): string {
+  if (failure) return `复核没有完成：${failure}`;
+  const head =
+    verdict === "pass"
+      ? "复核通过"
+      : verdict === "severe"
+        ? `复核发现严重问题（共 ${issues.length} 条）`
+        : `复核发现 ${issues.length} 条问题`;
+  const lines = issues.slice(0, 8).map((i) => `- ${i}`);
+  if (issues.length > lines.length) lines.push(`- 另有 ${issues.length - lines.length} 条，见验证标签`);
+  return [summary ? `${head}：${summary}` : head, ...lines].join("\n");
+}

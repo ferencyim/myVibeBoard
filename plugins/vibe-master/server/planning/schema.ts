@@ -1,6 +1,7 @@
 // Structured replies of a planning session (rules: skills/vibe-master/SKILL.md, plan_discussion).
 
 import { z } from "zod";
+import { OptionalProposal } from "../assess/schema";
 
 const text = z.string().trim().min(1);
 
@@ -24,6 +25,8 @@ export const PlanTurnSchema = z.object({
       files: z.array(text).default([]),
     })
     .optional(),
+  /** Suggested new title / description / acceptance; the owner accepts it in the chat. */
+  proposal: OptionalProposal,
   /** A hint for the owner ("the plan can be executed"); never moves anything. */
   ready: z.boolean().default(false),
 });

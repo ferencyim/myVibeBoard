@@ -260,6 +260,7 @@ describe("rpc contract", () => {
       lifecycle: {} as never,
       sync: {} as never,
       replies: {} as never,
+      chat: {} as never,
       requirements: {} as never,
     });
     const names = Object.values(rpc.VIBE_BOARD_RPCS).map((r) => r.name);

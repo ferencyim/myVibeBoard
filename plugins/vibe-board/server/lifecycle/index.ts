@@ -6,13 +6,15 @@
 //                           (the user continued the session). A turn a plugin announced with
 //                           expectSystemTurn() (compaction, ...) only updates the session state.
 //   turn_ended completed    session -> idle; no open question -> card in_progress -> verifying
-//                           (not after a system turn)
+//                           (not after a system turn); the last assistant message is written to the
+//                           group chat (chat(executor, summary), once per session and turn)
 //   turn_ended failed       a provider-side failure (quota, login, provider/model unavailable) of a worker is
 //                           handed to options.onFailure (failover to the preset's fallback chain); otherwise,
 //                           or when nothing took over, session -> error (the badge shows the error)
 //   every hook above        touchActivity: feeds the stall watchdog and clears a stalled mark
 //   permission_requested    a worker writing .vibe/sessions/*.md in its worktree is approved at once;
 //                           otherwise session -> waiting (waiting_since + pending_question: the red dot)
+//                           and the question goes to the card's group chat (chat(executor, question))
 //   permission_resolved     last pending request resolved -> session -> working (session.answered)
 //   agent.closed/archived   session -> ended
 //   completed compaction    compaction card event
@@ -23,6 +25,9 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginLifecycleRegistration } from "@getpaseo/plugin/server";
 import type { AgentSession, SessionState } from "../vibe/contract";
+import { createHash } from "node:crypto";
+import { lastAssistantText, questionSummary } from "../chat/format";
+import { postChat } from "../chat/post";
 import type { AgentTracker } from "../dispatch";
 import type { BoardService } from "../service";
 import { approveSessionNoteWrite, mayWriteFile } from "./auto-approve";
@@ -135,6 +140,51 @@ export function registerLifecycle(
     for (let i = recorded; i < completed; i++) store.sessions.recordCompaction(s.id, "auto");
   }
 
+  /** The executor's last message of a finished round, for the card's group chat (idempotent per turn). */
+  function summarizeTurn(
+    s: AgentSession,
+    turnId: string | null,
+    timeline: readonly { type: string; text?: unknown }[],
+  ) {
+    if (s.role !== "worker" || !s.cardId) return;
+    const text = lastAssistantText(timeline);
+    if (!text) return;
+    const turn = turnId ?? createHash("sha256").update(text).digest("hex").slice(0, 12);
+    postChat(
+      store,
+      {
+        cardId: s.cardId,
+        authorKind: "executor",
+        author: s.currentProvider,
+        kind: "summary",
+        text,
+        agentId: s.agentId,
+        sessionId: s.id,
+        key: `summary:${s.id}:${turn}`,
+      },
+      log,
+    );
+  }
+
+  /** The executor waits for the owner: say so in the group chat (once per request). */
+  function askInChat(s: AgentSession, request: Question) {
+    if (s.role !== "worker" || !s.cardId) return;
+    postChat(
+      store,
+      {
+        cardId: s.cardId,
+        authorKind: "executor",
+        author: s.currentProvider,
+        kind: "question",
+        text: questionSummary(request),
+        agentId: s.agentId,
+        sessionId: s.id,
+        key: `question:${s.id}:${request.requestId}`,
+      },
+      log,
+    );
+  }
+
   function end(agentId: string, outcome: string) {
     pending.delete(agentId);
     systemTurns.delete(agentId);
@@ -199,7 +249,7 @@ export function registerLifecycle(
       });
     }),
 
-    server.on("agent.turn_ended", ({ agent, outcome, timeline }, { paseo }) => {
+    server.on("agent.turn_ended", ({ agent, turnId, outcome, timeline }, { paseo }) => {
       options.onPaseo?.(paseo);
       const system = systemTurns.delete(agent.id);
       withSession(agent.id, "turn_ended", (s) => {
@@ -232,6 +282,7 @@ export function registerLifecycle(
         setState(s, "idle", { outcome: outcome.kind });
         touch(s);
         if (outcome.kind === "completed" && !system) {
+          summarizeTurn(s, turnId, timeline);
           moveCard(s, "verifying", "round completed, no open question");
         }
       });
@@ -254,6 +305,7 @@ export function registerLifecycle(
           pending.set(agent.id, open);
           setState(s, "waiting", { question: { ...question, pending: open.size } });
           touch(s); // waiting for the user is never a stall
+          askInChat(s, question);
         });
       // Only a worker's file-writing tool request can be a session-note write; the rest stays synchronous.
       const owner = mayWriteFile(request) ? store.sessions.getByAgent(agent.id) : undefined;

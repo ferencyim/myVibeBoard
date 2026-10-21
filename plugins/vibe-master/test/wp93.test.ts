@@ -102,7 +102,10 @@ describe("templates", () => {
     const card = board.draft("Templated");
     const base = { projectBlock: "PROJ", card, tagNames: [], quota: {}, hint: null };
     const custom = buildAssessMessage({ ...base, template: "Look at {{card.key}} only" });
-    expect(custom).toBe(`Look at ${card.key} only\n\nReply with the assess_draft JSON object only.`);
+    expect(custom.startsWith(`Look at ${card.key} only\n\n`)).toBe(true);
+    expect(custom.endsWith("\n\nReply with the assess_draft JSON object only.")).toBe(true);
+    expect(custom).toContain('"verdict"');
+    expect(custom).toContain('"proposal"');
     const dflt = buildAssessMessage(base);
     expect(buildAssessMessage({ ...base, template: "  " })).toBe(dflt);
     expect(dflt.startsWith("[wake:assess_draft]\nPROJ\n")).toBe(true);

@@ -3,7 +3,10 @@
 //   - an `evaluation` card event (the structured JSON plus a readable summary) -> card.assessed
 //   - a plan version whose `checks` vibe-verify turns into the verification checklist
 //   - card.suggested_preset_id (the recommended execution preset)
-// It never moves a card and never touches the owner's fields (title, description, tags, ...).
+//   - a `chat` message (kind verdict) in the card group chat, plus a `proposal` event when the master
+//     suggests new title / description / acceptance text
+// It never moves a card and never touches the owner's fields (title, description, tags, ...): the
+// owner accepts a proposal in the chat.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -15,6 +18,7 @@ import { defaultSelector, type AgentSelector, type SelectResult } from "../selec
 import type { QuotaReader } from "../subscription/quota";
 import type { MasterAsk } from "../types";
 import { parseReply } from "./parse";
+import { proposeChanges } from "./proposal";
 import { AssessmentSchema, type Assessment } from "./schema";
 
 export const ASSESSMENT_VERSION = 1;
@@ -75,6 +79,10 @@ export function lastAssessmentMarker(events: readonly CardEvent[]): Marker | nul
     }
     if (e.type === "status" && body.kind === "assessment_failed") {
       return { hash: body.contentHash, failed: true };
+    }
+    // An accepted proposal (the master's own suggestion) is content the master already evaluated.
+    if (e.type === "status" && body.kind === "proposal_applied") {
+      return { hash: body.contentHash, failed: false };
     }
   }
   return null;
@@ -146,6 +154,53 @@ export function renderAssessment(a: Assessment, applied: AppliedAssessment): str
     bullet(a.checks.map((c) => (c.method ? `${c.text} (${c.method})` : c.text))),
   );
   return lines.join("\n");
+}
+
+/** Plain Chinese summary of an assessment, used when the master gave no `verdict` of its own. */
+export function summarizeAssessment(a: Assessment, applied: Pick<AppliedAssessment, "presetName">): string {
+  const lines: string[] = [
+    a.clarity.status === "clear"
+      ? `需求清晰，可以开始：${a.clarity.summary}`
+      : `需求还需要澄清：${a.clarity.summary}`,
+  ];
+  if (a.clarity.questions.length) lines.push(`需要你回答的问题：\n${bullet(a.clarity.questions)}`);
+  lines.push(
+    `预估规模 ${a.estimate.size}（${a.estimate.rationale}）；推荐执行 agent：${applied.presetName ?? a.recommendation.agent}（${a.recommendation.reason}）。`,
+  );
+  lines.push(
+    a.split.suggested
+      ? `建议拆分${a.split.reason ? `：${a.split.reason}` : ""}\n${bullet(a.split.subCards.map((s) => s.title))}`
+      : "无需拆分。",
+  );
+  if (a.risks.length) lines.push(`风险：\n${bullet(a.risks)}`);
+  return lines.join("\n\n");
+}
+
+/**
+ * The assessment as a group-chat message (kind verdict), plus the master's proposal. Idempotent per
+ * evaluation event: a second call changes nothing.
+ */
+export function writeVerdictChat(
+  store: VibeStore,
+  card: CardView,
+  evaluationEventId: string,
+  assessment: Assessment,
+  applied: Pick<AppliedAssessment, "presetName">,
+): CardEvent {
+  const key = `assess:${evaluationEventId}`;
+  const existed = store.events
+    .list(card.id)
+    .some((e) => e.type === "chat" && (e.body as { key?: string } | null)?.key === key);
+  const chat = store.cards.addChat({
+    cardId: card.id,
+    authorKind: "master",
+    author: MASTER_AUTHOR,
+    kind: "verdict",
+    text: assessment.verdict?.trim() || summarizeAssessment(assessment, applied),
+    key,
+  });
+  if (!existed) proposeChanges(store, card, assessment.proposal, MASTER_AUTHOR);
+  return chat;
 }
 
 /** Track record per preset id from `<repo>/.vibe/workers/<provider>/MEMORY.md` (scheduler format). */
@@ -339,6 +394,7 @@ export function createAssessor(deps: AssessDeps) {
         author: MASTER_AUTHOR,
         body,
       });
+      writeVerdictChat(store, card, event.id, a, applied);
       return { eventId: event.id, applied };
     });
   }

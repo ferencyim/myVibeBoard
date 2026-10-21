@@ -22,7 +22,7 @@ import {
 import { publishEvent, type VibeStore } from "../vibe/db";
 import { VerifyConfigSchema, loadVerifyConfig, type PerfConfig, type VerifyConfig } from "../collectors/common";
 import { type VerifierLauncher, type PickVerifier, VerdictSchema, parseJsonLoose, pickDifferentProvider } from "../verifier/agent";
-import { aggregate, SUMMARY, type VerifyStore } from "../store";
+import { aggregate, type VerifyStore } from "../store";
 import { runAutoChecks, splitChecks } from "./checks";
 import { changeDiff, prepareBaseline, type Baseline, removeWorktree, sameSnapshot, snapshotTree, headCommit } from "./git";
 import { buildFailurePrompt, buildJudgePrompt, buildSetupPrompt, type FailedItem } from "./prompts";
@@ -32,6 +32,7 @@ import {
   buildReviewPrompt,
   issueJudgement,
   issueLocation,
+  reviewChatText,
   reviewVerdict,
   type ReviewIssue,
 } from "../review";
@@ -88,6 +89,28 @@ function readExistingPerf(worktree: string): PerfConfig | undefined {
   }
 }
 
+const CONCLUSION_ZH: Record<Judgement, string> = { pass: "验证通过", doubt: "验证存疑", fail: "验证未通过" };
+const clipText = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/** One system line for the card's group chat: result, counts per judgement, commit (the UI links it to the verification tab). */
+export function verificationLine(
+  conclusion: Judgement,
+  items: readonly Pick<VerificationItem, "judgement">[],
+  commitHash: string,
+  voided: boolean,
+): string {
+  const count = (j: Judgement) => items.filter((i) => i.judgement === j).length;
+  const parts = `通过 ${count("pass")} / 存疑 ${count("doubt")} / 失败 ${count("fail")}`;
+  return `${CONCLUSION_ZH[conclusion]}（${parts}）· 提交 ${commitHash.slice(0, 8)}${voided ? "，验证 agent 改动了代码，证据作废" : ""}`;
+}
+
+/** Why an automatic return happened, with the failing checks (shown as a system line in the group chat). */
+export function returnReason(review: boolean, failed: readonly { text: string }[]): string {
+  const head = review ? "复核发现严重问题，已自动退回执行 agent" : "验证未通过，已自动退回执行 agent";
+  const list = failed.slice(0, 5).map((f) => clipText(f.text, 120));
+  return list.length ? `${head}：${list.join("；")}${failed.length > list.length ? `（另有 ${failed.length - list.length} 项）` : ""}` : head;
+}
+
 export function createPipeline(deps: PipelineDeps) {
   const { board, verify, registry, runner } = deps;
   const now = deps.now ?? (() => new Date());
@@ -135,12 +158,14 @@ export function createPipeline(deps: PipelineDeps) {
         { type, cardId: card.id, projectId: input.project.id, payload } as never,
         now,
       );
+    let reviewerAgentId: string | undefined;
     const finish = (
       verdict: "pass" | "issues" | "severe",
       issues: string[],
       summary: string,
       sessionId?: string,
-    ) =>
+      failure?: string,
+    ) => {
       publish("review.finished", {
         verdict,
         issues,
@@ -149,9 +174,25 @@ export function createPipeline(deps: PipelineDeps) {
         sessionId,
         verificationId: vid,
       });
+      // The conclusion also goes to the card's group chat (idempotent per verification).
+      try {
+        board.cards.addChat({
+          cardId: card.id,
+          authorKind: "reviewer",
+          author: preset?.name ?? "reviewer",
+          kind: "verdict",
+          text: reviewChatText(verdict, summary, issues, failure),
+          agentId: reviewerAgentId,
+          sessionId,
+          key: `review:${vid}`,
+        });
+      } catch (e) {
+        log("could not write the review conclusion to the chat", e);
+      }
+    };
     if (!preset) {
       doubt("The reviewer preset no longer exists");
-      finish("issues", ["Reviewer preset missing"], "Review skipped");
+      finish("issues", ["Reviewer preset missing"], "Review skipped", undefined, "复核预设已不存在");
       return;
     }
 
@@ -169,6 +210,7 @@ export function createPipeline(deps: PipelineDeps) {
         outputDir: input.outputDir,
         role: "reviewer",
       });
+      reviewerAgentId = agent.agentId;
       if (agent.note) notes.push(`Review: ${agent.note}`);
       sessionId = board.sessions.start({
         cardId: card.id,
@@ -202,7 +244,7 @@ export function createPipeline(deps: PipelineDeps) {
       const after = await snapshotTree(runner, input.worktree);
       if (!sameSnapshot(before, after)) {
         doubt("The reviewer modified the code; its review is void");
-        finish("issues", ["Reviewer modified the code"], "Review void", sessionId);
+        finish("issues", ["Reviewer modified the code"], "Review void", sessionId, "复核 agent 改动了代码，结论作废");
         return;
       }
       const raw = parseJsonLoose(result.text);
@@ -213,7 +255,7 @@ export function createPipeline(deps: PipelineDeps) {
             ? `reviewer round ended with status ${result.status}`
             : "no valid review result";
         doubt(`Review could not be completed: ${why}`);
-        finish("issues", [`Review could not be completed: ${why}`], "", sessionId);
+        finish("issues", [`Review could not be completed: ${why}`], "", sessionId, why);
         return;
       }
       const review = parsed.data;
@@ -268,7 +310,7 @@ export function createPipeline(deps: PipelineDeps) {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       doubt(`Review could not be completed: ${message}`);
-      finish("issues", [`Review could not be completed: ${message}`], "", sessionId);
+      finish("issues", [`Review could not be completed: ${message}`], "", sessionId, message);
     } finally {
       if (agent) await agent.close().catch(() => undefined);
       if (sessionId) {
@@ -609,7 +651,7 @@ export function createPipeline(deps: PipelineDeps) {
         verificationId: vid,
         conclusion,
         voided,
-        text: `${SUMMARY[conclusion]} (${commitHash.slice(0, 8)})${voided ? " - verifier modified the code, evidence void" : ""}`,
+        text: verificationLine(conclusion, finalItems, commitHash, voided),
       },
     });
 
@@ -664,7 +706,7 @@ export function createPipeline(deps: PipelineDeps) {
       authorKind: input.source === "user" ? "user" : "system",
       author: input.source === "user" ? "user" : "verifier",
       body: {
-        text: input.comment ?? (input.review ? "Review found severe issues" : "Verification failed"),
+        text: input.comment ?? returnReason(input.review === true, input.failed),
         verificationId: input.verificationId,
         prompt,
         ...(input.review ? { reviewReturn: true } : {}),

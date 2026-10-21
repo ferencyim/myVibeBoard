@@ -1,14 +1,16 @@
 // Per-card planning sessions (WP-33). Each draft card that the owner discusses gets its own Paseo
 // agent (role=planner, same model and rules as the master, own context), so discussions never
-// pollute the master's main session. The conversation is a set of `note` events on the card
+// pollute the master's main session. The conversation is the card's group chat, `chat` events
 // (see thread.ts); this module polls for unanswered owner messages, runs one turn per batch
 // (optionally with read-only scout sub-agents), writes the agreed plan back as a plan version and,
 // when the owner moves the card on, writes a hand-off summary to `.vibe/sessions/<KEY>-plan.md`
-// and archives the session. It never moves a card.
+// and archives the session. It never moves a card and never edits the card's title, description or
+// acceptance: changes are suggested as proposals that the owner accepts in the chat.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseReply } from "../assess/parse";
+import { proposeChanges } from "../assess/proposal";
 import type { Clock } from "../clock";
 import { buildProjectBlock } from "../master/prompts";
 import type { MasterSession } from "../master/session";
@@ -32,8 +34,6 @@ import {
 } from "./prompts";
 import { HandoffSchema, PlanTurnSchema, type PlanTurn } from "./schema";
 import {
-  DISCUSSION,
-  DISCUSSION_RESEARCH,
   HANDOFF,
   PLANNER_AUTHOR,
   messagesOf,
@@ -42,6 +42,8 @@ import {
 } from "./thread";
 
 const LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
+/** Worker states that mean an executing agent can receive the owner's chat messages. */
+const EXECUTOR_ONLINE = ["starting", "working", "waiting", "idle"] as const;
 const MAX_RESEARCH_ROUNDS = 2;
 const MAX_LOOPS = 10;
 const SCOUT_TIMEOUT_MS = 5 * 60_000;
@@ -163,6 +165,12 @@ export function createPlanning(deps: PlanningDeps) {
     }
   }
 
+  const executorOnline = (cardId: string) =>
+    store.sessions.list({ cardId, role: "worker", states: EXECUTOR_ONLINE }).length > 0;
+  const stateOf = (card: CardView) =>
+    threadState(store.events.list(card.id), { column: card.column, executorOnline: executorOnline(card.id) });
+
+  /** Hand-off notes stay `note` events (dispatch reads them). */
   function post(card: Pick<CardView, "id">, body: Record<string, unknown>) {
     return store.events.add({
       cardId: card.id,
@@ -386,8 +394,20 @@ export function createPlanning(deps: PlanningDeps) {
     const pending = state.pending;
     const answers = pending.map((m) => m.id);
     const { project, tags, presets, openCards } = context(card);
+    let live: Live | undefined;
+    const reply = (text: string, extra: { planVersion?: number; ready?: boolean; error?: boolean } = {}) =>
+      store.cards.addChat({
+        cardId: card.id,
+        authorKind: "master",
+        author: PLANNER_AUTHOR,
+        text,
+        answers,
+        key: `reply:${answers.join("+")}`,
+        ...(live ? { agentId: live.agent.id, sessionId: live.session.id } : {}),
+        ...extra,
+      });
     try {
-      const live = await ensure(card);
+      live = await ensure(card);
       const events = store.events.list(card.id);
       const prompt = live.fresh
         ? buildStartMessage({
@@ -403,25 +423,22 @@ export function createPlanning(deps: PlanningDeps) {
       let result = await askTurn(live, card, prompt);
       for (let round = 0; round < MAX_RESEARCH_ROUNDS && result.research.length > 0; round++) {
         const items = await research(card, project, result.research);
-        post(card, {
-          kind: DISCUSSION_RESEARCH,
+        store.cards.addChat({
+          cardId: card.id,
+          authorKind: "scout",
+          author: "scout",
+          kind: "summary",
           text: items
             .map((r) => `Q: ${r.question}\n${r.ok ? r.answer : `(failed) ${r.answer}`}`)
             .join("\n\n"),
-          items,
+          key: `research:${answers[0]}:${round + 1}`,
         });
         result = await askTurn(live, card, buildResultsMessage(items));
       }
       const current = store.cards.get(card.id) ?? card;
       const planVersion = result.plan ? applyPlan(current, result.plan) : null;
-      post(card, {
-        kind: DISCUSSION,
-        role: "planner",
-        text: result.reply,
-        answers,
-        ready: result.ready,
-        ...(planVersion ? { planVersion } : {}),
-      });
+      reply(result.reply, { ready: result.ready, ...(planVersion ? { planVersion } : {}) });
+      proposeChanges(store, store.cards.get(card.id) ?? card, result.proposal, PLANNER_AUTHOR);
       moveSession(live.session, "idle");
     } catch (error) {
       if (error instanceof MasterError && error.kind === "unavailable") {
@@ -429,13 +446,7 @@ export function createPlanning(deps: PlanningDeps) {
         throw error;
       }
       log(`planning turn for ${card.key} failed`, error);
-      post(card, {
-        kind: DISCUSSION,
-        role: "planner",
-        error: true,
-        text: `The planning session failed: ${errorText(error)}. Send another message to retry.`,
-        answers,
-      });
+      reply(`规划会话出错：${errorText(error)}。再发一条消息即可重试。`, { error: true });
     }
   }
 
@@ -495,8 +506,16 @@ export function createPlanning(deps: PlanningDeps) {
         if (live) await archive({ id: cardId }, "card_gone");
         return;
       }
-      const state = threadState(store.events.list(card.id));
+      const state = stateOf(card);
+      // `pending` only holds the messages that belong to the planner in this column (see thread.ts):
+      // draft/todo always, in_progress/verifying without an online executor or after a failed forward.
+      if (state.pending.length > 0 && deps.enabled()) {
+        await turn(card, state);
+        continue;
+      }
       if (card.column !== "draft") {
+        // Discussion in todo goes on with the live session: the hand-off already exists.
+        if (card.column === "todo" && state.handoff) return;
         // The owner moved the card on: hand over (once per discussion) and close the session.
         if (live) {
           if (!state.handoff || state.discussedAfterHandoff) await handoff(card, state);
@@ -505,8 +524,7 @@ export function createPlanning(deps: PlanningDeps) {
         return;
       }
       if (!deps.enabled()) return;
-      if (state.pending.length > 0) await turn(card, state);
-      else if (state.handoffRequests.length > 0) await handoff(card, state);
+      if (state.handoffRequests.length > 0) await handoff(card, state);
       else return;
     }
   }
@@ -528,13 +546,16 @@ export function createPlanning(deps: PlanningDeps) {
     return next;
   }
 
-  /** One poll: new owner messages / hand-off requests, and live sessions whose card moved on. */
+  /** One poll: new owner chat messages, routing fallbacks and hand-off requests, plus live sessions whose card moved on. */
   async function tick(): Promise<void> {
     const rows = db
       .prepare<{ rid: number; card_id: string }>(
         `SELECT rowid AS rid, card_id FROM card_event
-         WHERE rowid > ? AND type = 'note' AND author_kind != 'agent'
-           AND json_extract(body_json, '$.kind') IN ('discussion', 'handoff_request')
+         WHERE rowid > ? AND (
+           (type = 'chat' AND author_kind = 'user')
+           OR (type = 'chat' AND author_kind = 'system' AND json_extract(body_json, '$.fallback') IS NOT NULL)
+           OR (type = 'note' AND author_kind != 'agent' AND json_extract(body_json, '$.kind') = 'handoff_request')
+         )
          ORDER BY rowid`,
       )
       .all(cursor);

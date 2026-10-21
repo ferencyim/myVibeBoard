@@ -145,10 +145,32 @@ describe("chat and proposal card events", () => {
     expect(s.store.events.list(card.id).map((x) => x.type)).toContain("chat");
   });
 
+  it("addChat with a key is idempotent and keeps the routing fields", () => {
+    const { s, card } = seed();
+    const first = s.store.cards.addChat({
+      cardId: card.id,
+      authorKind: "system",
+      text: "dispatched",
+      kind: "info",
+      key: "dispatch:s1",
+      answers: ["m1"],
+      fallback: ["m2"],
+      detail: "full prompt",
+    });
+    const again = s.store.cards.addChat({ cardId: card.id, authorKind: "system", text: "dispatched again", key: "dispatch:s1" });
+    expect(again.id).toBe(first.id);
+    expect(first.body).toMatchObject({ key: "dispatch:s1", answers: ["m1"], fallback: ["m2"], detail: "full prompt" });
+    expect(s.store.events.list(card.id).filter((e) => e.type === "chat")).toHaveLength(1);
+    s.store.cards.addChat({ cardId: card.id, authorKind: "system", text: "other", key: "dispatch:s2" });
+    expect(s.store.events.list(card.id).filter((e) => e.type === "chat")).toHaveLength(2);
+  });
+
   it("propose supersedes older pending proposals; accept applies changes; reject only marks", () => {
     const { s, card } = seed();
     const p1 = s.store.cards.propose({ cardId: card.id, changes: { title: "T1" }, rationale: "r1" });
     expect(p1).toMatchObject({ type: "proposal", authorKind: "master", body: { status: "pending", changes: { title: "T1" } } });
+    // the before/after view: the values the proposal replaces
+    expect((p1.body as { before: unknown }).before).toEqual({ title: s.store.cards.get(card.id)!.title });
     const p2 = s.store.cards.propose({ cardId: card.id, changes: { title: "T2", acceptance: "A2" }, rationale: "r2" });
     const status = (id: string) => (s.store.events.list(card.id).find((e) => e.id === id)!.body as { status: string }).status;
     expect(status(p1.id)).toBe("superseded");

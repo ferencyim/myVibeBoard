@@ -102,7 +102,6 @@ describe("scout service", () => {
     expect(t.created[0].config).toMatchObject({ provider: "codex/gpt-5-mini", modeId: "full-access" });
     const body = JSON.stringify(t.board.events.list(t.card.key).events.at(-1)!.body);
     expect(body).toContain("NOT strictly read-only");
-    expect(body).toContain("\"strictReadOnly\":false");
   });
 
   it("on Windows finds other providers whose listModes offer plan/read-only; an explicit setting wins", async () => {

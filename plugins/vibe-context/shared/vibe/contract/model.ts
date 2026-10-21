@@ -123,6 +123,19 @@ export const ChatEventBodySchema = z.object({
   sessionId: z.string().optional(),
   agentId: z.string().optional(),
   kind: ChatKindSchema.optional(),
+  /** Idempotency key, unique per card: a second write-back with the same key is a no-op. */
+  key: z.string().optional(),
+  /** Ids of the user chat messages this message answers or hands over (routing bookkeeping). */
+  answers: z.array(z.string()).optional(),
+  /** User chat messages that could not be forwarded to the executor and fall back to the master. */
+  fallback: z.array(z.string()).optional(),
+  /** Long text shown on demand (for example the full dispatch prompt). */
+  detail: z.string().optional(),
+  /** Planner reply: the plan version it wrote, and the hint "the plan can be executed". */
+  planVersion: z.number().int().optional(),
+  ready: z.boolean().optional(),
+  /** The message reports a failure (for example a planning turn that failed). */
+  error: z.boolean().optional(),
 });
 export type ChatEventBody = z.infer<typeof ChatEventBodySchema>;
 
@@ -139,6 +152,8 @@ export const ProposalEventBodySchema = z.object({
   changes: ProposalChangesSchema,
   rationale: z.string(),
   status: ProposalStatusSchema,
+  /** The card's values of the changed fields when the proposal was made (for the before/after view). */
+  before: ProposalChangesSchema.optional(),
   /** Who accepted/rejected it and when (set with the status change). */
   resolvedBy: z.string().optional(),
   resolvedAt: Iso.optional(),

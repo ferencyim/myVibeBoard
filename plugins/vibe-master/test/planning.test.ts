@@ -38,13 +38,7 @@ function setup(script: Script, options: { noPaseo?: boolean } = {}) {
     log: () => undefined,
   });
   const say = (cardId: string, text: string) =>
-    board.store.events.add({
-      cardId,
-      type: "note",
-      authorKind: "user",
-      author: "user",
-      body: { kind: "discussion", text },
-    });
+    board.store.cards.addChat({ cardId, authorKind: "user", author: "user", text });
   const requestHandoff = (cardId: string) =>
     board.store.events.add({
       cardId,
@@ -85,16 +79,16 @@ describe("thread state", () => {
     const t = setup(() => "");
     const draft = t.draft("Thread");
     const first = t.say(draft.id, "hello");
-    t.store.events.add({
+    t.store.cards.addChat({
       cardId: draft.id,
-      type: "note",
-      authorKind: "agent",
+      authorKind: "master",
       author: "planner",
-      body: { kind: "discussion", role: "planner", text: "hi", answers: [first.id] },
+      text: "hi",
+      answers: [first.id],
     });
     const second = t.say(draft.id, "more");
     t.requestHandoff(draft.id);
-    const state = threadState(t.store.events.list(draft.id));
+    const state = threadState(t.store.events.list(draft.id), { column: "draft", executorOnline: false });
     expect(state.pending.map((m) => m.id)).toEqual([second.id]);
     expect(state.handoffRequests).toHaveLength(1);
     expect(state.hasDiscussion).toBe(true);
@@ -162,9 +156,9 @@ describe("planning session", () => {
     expect(t.store.plans.list(card.id).map((p) => p.version)).toEqual([1, 2]);
     const last = t.store.events
       .list(card.id)
-      .filter((e) => e.authorKind === "agent")
+      .filter((e) => e.type === "chat" && e.authorKind === "master")
       .at(-1)!;
-    expect(last.body).toMatchObject({ kind: "discussion", ready: true, planVersion: 2 });
+    expect(last.body).toMatchObject({ ready: true, planVersion: 2, agentId: agent.id, sessionId: live.id });
     expect(t.store.cards.get(card.id)!.column).toBe("draft");
     expect(t.discussion(card.id).filter((m) => m.role === "planner")).toHaveLength(3);
     expect(t.eventTypes()).toContain("plan.updated");
@@ -182,7 +176,9 @@ describe("planning session", () => {
     expect(t.store.cards.get(card.id)!.column).toBe("draft");
     const handoff = t.store.events.list(card.id).find((e) => (e.body as { kind?: string }).kind === "handoff")!;
     expect(handoff.body).toMatchObject({ path: file });
-    expect(threadState(t.store.events.list(card.id)).handoffRequests).toHaveLength(0);
+    expect(
+      threadState(t.store.events.list(card.id), { column: "draft", executorOnline: false }).handoffRequests,
+    ).toHaveLength(0);
   });
 
   it("runs read-only scouts, shows their findings and feeds them back", async () => {
@@ -205,7 +201,9 @@ describe("planning session", () => {
     const planner = t.fake.agents.find((a) => (a.options.labels as Record<string, string>).role === "planner")!;
     expect(planner.prompts[1]).toContain("settings.ts holds the theme");
     const events = t.store.events.list(card.id);
-    expect(events.some((e) => (e.body as { kind?: string }).kind === "discussion_research")).toBe(true);
+    const findings = events.find((e) => e.type === "chat" && e.authorKind === "scout")!;
+    expect(findings.body).toMatchObject({ kind: "summary", key: `research:${events.find((e) => e.type === "chat" && e.authorKind === "user")!.id}:1` });
+    expect((findings.body as { text: string }).text).toContain("settings.ts holds the theme");
     expect(t.discussion(card.id).at(-1)!.text).toContain("small change in settings.ts");
     // scouts are not board sessions
     expect(t.store.sessions.list({ cardId: card.id }).map((s) => s.role)).toEqual(["planner"]);
@@ -224,10 +222,11 @@ describe("planning session", () => {
     expect(readFileSync(handoffPath(t.repoPath, card.key), "utf8")).toContain("Late summary");
     expect(t.planning.liveOf(card.id)).toBeUndefined();
     expect(t.fake.agents[0]!.archived).toBe(true);
-    // no new session for messages on a card that is not a draft
+    // the discussion may go on in todo: a fresh planner answers
     t.say(card.id, "still there?");
     await t.planning.tick();
-    expect(t.fake.agents).toHaveLength(1);
+    expect(t.fake.agents).toHaveLength(2);
+    expect(t.discussion(card.id).at(-1)!.role).toBe("planner");
   });
 
   it("falls back to a deterministic summary when the planner cannot write one", async () => {
@@ -260,6 +259,7 @@ describe("planning session", () => {
     const msg = t.say(card.id, "again");
     await t.planning.tick();
     const failure = t.store.events.list(card.id).at(-1)!;
+    expect(failure.type).toBe("chat");
     expect(failure.body).toMatchObject({ error: true, answers: [msg.id] });
     expect(t.planning.liveOf(card.id)!.state).toBe("error");
     // the session recovers on the next message
@@ -371,13 +371,7 @@ describe("planning inside the master runtime", () => {
       log: () => undefined,
     });
     const card = board.draft("Runtime planning");
-    board.store.events.add({
-      cardId: card.id,
-      type: "note",
-      authorKind: "user",
-      author: "user",
-      body: { kind: "discussion", text: "let us plan" },
-    });
+    board.store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text: "let us plan" });
     await runtime.planning.tick();
     expect(fake.agents.map((a) => (a.options.labels as Record<string, string>).role)).toEqual(["planner"]);
     expect(board.store.sessions.list({ role: "master" })).toHaveLength(0);

@@ -5,6 +5,8 @@ import { boardSettings } from "./shared/settings";
 import { publishEvent, resolveVibeHome } from "./server/vibe/db";
 import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
 import { injectBoard } from "./server/mcp/inject";
+import { createChatService } from "./server/chat";
+import { createChatRouter } from "./server/chat/router";
 import { createDispatcher } from "./server/dispatch";
 import { convertNative } from "./server/dispatch/convert";
 import { createReassigner } from "./server/dispatch/reassign";
@@ -148,6 +150,10 @@ export default function contribute(server: PluginServerContext) {
   const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, onError: (e) => console.error("vibe-board admission:", e) });
   const sync = createSyncService({ db: runtime.db, store: runtime.store });
   const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
+  // Group chat: user messages go to the executor while it works (router), the rest is the master's.
+  const chatRouter = createChatRouter({ db: runtime.db, board, getPaseo: () => paseo, replies });
+  chatRouter.start();
+  const chat = createChatService(board, runtime.db, () => void chatRouter.poll());
   const finalizer = startFinalizer({
     db: runtime.db,
     board,
@@ -179,6 +185,7 @@ export default function contribute(server: PluginServerContext) {
     onPaseo,
     sync,
     replies,
+    chat,
     requirements: createRequirementsService({ board, db: runtime.db }),
     verify: createVerifyService({ db: runtime.db, board }),
   });
@@ -186,6 +193,7 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     watchdog.stop();
     await admission.stop();
+    await chatRouter.stop();
     lifecycle.close();
     await finalizer.stop();
     await (bridge ?? (await bridgeReady))?.close();
