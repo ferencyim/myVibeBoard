@@ -4,6 +4,7 @@ import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import * as rpc from "../shared/rpc";
 import type { Dispatcher } from "./dispatch";
+import type { RequirementsService } from "./requirements";
 import type { Lifecycle } from "./lifecycle";
 import type { ReplyService, SyncService } from "./sync";
 import type { BoardService } from "./service";
@@ -31,11 +32,22 @@ async function providerCatalog(paseo: PaseoApi) {
     const available = await paseo.providers.listAvailable();
     const providers = await Promise.all(
       available.providers.map(async (p) => {
-        let models: Array<{ id: string; name: string }> = [];
+        let models: Array<{
+          id: string;
+          name: string;
+          thinkingOptions?: Array<{ id: string; label: string }>;
+          defaultThinkingOptionId?: string;
+        }> = [];
         if (p.available) {
           try {
             const res = await paseo.providers.listModels(p.provider);
-            models = (res.models ?? []).map((m) => ({ id: m.id, name: m.label || m.id }));
+            models = (res.models ?? []).map((m) => ({
+              id: m.id,
+              name: m.label || m.id,
+              thinkingOptions: m.thinkingOptions?.map((o) => ({ id: o.id, label: o.label || o.id })),
+              defaultThinkingOptionId:
+                m.defaultThinkingOptionId ?? m.thinkingOptions?.find((o) => o.isDefault)?.id,
+            }));
           } catch {
             // model listing is best effort
           }
@@ -54,6 +66,8 @@ export interface BoardRpcExtras {
   lifecycle?: Lifecycle;
   sync?: SyncService;
   replies?: ReplyService;
+  /** Project requirements document + manual review request. */
+  requirements?: RequirementsService;
   /** Verification result for the card UI (WP-21). */
   verify?: VerifyService;
   /** Keeps the newest SDK handle for dispatch outside hooks. */
@@ -105,7 +119,12 @@ export function registerBoardRpcs(
   server.handle(rpc.attachmentsDeleteRpc, (input) => board.attachments.delete(input.attachmentId));
   server.handle(rpc.sessionsListRpc, (input) => board.sessions.list(input.card));
 
-  const { dispatcher, lifecycle, sync, replies, verify } = extras;
+  const { dispatcher, lifecycle, sync, replies, verify, requirements } = extras;
+  if (requirements) {
+    server.handle(rpc.requirementsGetRpc, (input) => requirements.get(input.project));
+    server.handle(rpc.requirementsSaveRpc, (input) => requirements.save(input.project, input.content));
+    server.handle(rpc.cardsRequestReviewRpc, (input) => requirements.requestReview(input.card));
+  }
   if (verify) {
     server.handle(rpc.verifyGetRpc, (input) => verify.get(input.card, input.verificationId));
     server.handle(rpc.verifyListRpc, (input) => verify.list(input.card));

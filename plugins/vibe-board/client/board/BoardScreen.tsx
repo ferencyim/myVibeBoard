@@ -116,6 +116,18 @@ function BoardContent({ initialProject, initialCard }: { initialProject?: string
   const onMenuAction = (card: CardView, action: MenuAction) => {
     if (action.type === "open") return setOpenKey(card.key);
     if (action.type === "archive") return run(() => api.cardsArchive({ card: card.id }));
+    if (action.type === "review") {
+      return run(async () => {
+        await api.cardsRequestReview({ card: card.id });
+        toast.show(`已请总 agent 审查 ${card.key}`, { variant: "success" });
+      });
+    }
+    if (action.type === "dispatch") {
+      return run(async () => {
+        const { session } = await api.cardsDispatch({ card: card.id });
+        toast.show(`已派发 ${card.key}（${session.currentProvider}）`, { variant: "success" });
+      });
+    }
     if (action.type === "move") return applyDrop(card, { type: "move", to: action.to, place: null });
     const place = stepNeighbours(columns[card.column], card.id, action.step);
     if (place) return run(() => api.cardsReorder({ card: card.id, ...place }));

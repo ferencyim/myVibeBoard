@@ -8,6 +8,7 @@ import {
   PRESET_ENVIRONMENT_KINDS,
   PRESET_PERMISSION_MODES,
   PROJECT_TYPES,
+  ROLE_HINTS,
   type Preset,
   type Project,
   type Tag,
@@ -20,14 +21,25 @@ import {
   ENVIRONMENT_LABELS,
   EMPTY_PRESET_DRAFT,
   PERMISSION_LABELS,
+  PROJECT_TYPE_LABELS,
   ROLE_HINT_LABELS,
   draftToPayload,
+  emptyProjectDraft,
   presetToDraft,
+  projectDraftToPayload,
+  projectToDraft,
+  thinkingAfterModelChange,
+  thinkingChoices,
   toggleFallback,
+  toggleProjectType,
+  toggleRoleHint,
   validateDraft,
+  validateProjectDraft,
   type PresetDraft,
+  type ProjectDraft,
   type ProviderUsageLike,
 } from "./logic";
+import { RequirementsPanel } from "./requirements";
 import { QuotaBadge } from "./usage";
 
 export const COLOR_CHOICES = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
@@ -73,14 +85,85 @@ export function ManageModal(props: ManageProps) {
   );
 }
 
+function Row({ children }: { children: React.ReactNode }) {
+  return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>{children}</View>;
+}
+
+/** Shared by "新建项目" and the per-project edit mode. Module-level so typing never remounts inputs. */
+function ProjectForm({
+  mode,
+  draft,
+  onChange,
+  presets,
+}: {
+  mode: "create" | "edit";
+  draft: ProjectDraft;
+  onChange: (patch: Partial<ProjectDraft>) => void;
+  presets: readonly Preset[];
+}) {
+  return (
+    <View style={{ gap: 10 }}>
+      <Field label="名称">
+        <TextField value={draft.name} onChangeText={(name) => onChange({ name })} placeholder="例如 官网" />
+      </Field>
+      <Field label={mode === "create" ? "前缀（大写字母数字，如 WEB，用于卡片编号 WEB-1）" : "前缀（创建后不可修改）"}>
+        {mode === "create" ? (
+          <TextField value={draft.prefix} onChangeText={(prefix) => onChange({ prefix })} autoCapitalize="characters" placeholder="WEB" />
+        ) : (
+          <Text style={{ fontWeight: "600" }}>{draft.prefix}</Text>
+        )}
+      </Field>
+      <Field label="仓库路径">
+        <TextField value={draft.repoPath} onChangeText={(repoPath) => onChange({ repoPath })} placeholder="D:\repo\my-app" autoCapitalize="none" />
+      </Field>
+      <Field label="类型（可多选，至少一个；第一个为主类型）">
+        <Row>
+          {PROJECT_TYPES.map((t) => (
+            <Chip
+              key={t}
+              label={PROJECT_TYPE_LABELS[t]}
+              selected={draft.projectTypes.includes(t)}
+              onPress={() => onChange({ projectTypes: toggleProjectType(draft.projectTypes, t) })}
+            />
+          ))}
+        </Row>
+      </Field>
+      <Field label="简介（目标、技术栈等，会作为上下文交给 agent）">
+        <TextField multiline value={draft.description} onChangeText={(description) => onChange({ description })} />
+      </Field>
+      <Field label="需求文档路径（相对仓库根目录）">
+        <TextField value={draft.requirementsPath} onChangeText={(requirementsPath) => onChange({ requirementsPath })} autoCapitalize="none" />
+      </Field>
+      <Field label="默认预设">
+        <Row>
+          <Chip label="无" selected={draft.defaultPresetId === null} onPress={() => onChange({ defaultPresetId: null })} />
+          {presets.map((p) => (
+            <Chip key={p.id} label={p.name} selected={draft.defaultPresetId === p.id} onPress={() => onChange({ defaultPresetId: p.id })} />
+          ))}
+        </Row>
+      </Field>
+      <Field label="并发上限（留空不限）">
+        <TextField value={draft.concurrencyLimit} onChangeText={(concurrencyLimit) => onChange({ concurrencyLimit })} keyboardType="number-pad" />
+      </Field>
+      <Field label="设备（逗号分隔，留空不限）">
+        <TextField value={draft.devices} onChangeText={(devices) => onChange({ devices })} autoCapitalize="none" />
+      </Field>
+      <Field label="颜色">
+        <Row>
+          {COLOR_CHOICES.map((c) => (
+            <Chip key={c} label="" color={c} selected={draft.color === c} onPress={() => onChange({ color: c })} />
+          ))}
+        </Row>
+      </Field>
+    </View>
+  );
+}
+
 function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
   const toast = useToast();
-  const [name, setName] = useState("");
-  const [prefix, setPrefix] = useState("");
-  const [repoPath, setRepoPath] = useState("");
-  const [color, setColor] = useState(COLOR_CHOICES[projects.length % COLOR_CHOICES.length]!);
-  const [type, setType] = useState<(typeof PROJECT_TYPES)[number]>("other");
-  const [defaultPresetId, setDefaultPresetId] = useState<string | null>(null);
+  const nextColor = (n: number) => COLOR_CHOICES[n % COLOR_CHOICES.length]!;
+  const [createDraft, setCreateDraft] = useState<ProjectDraft>(() => emptyProjectDraft(nextColor(projects.length)));
+  const [edit, setEdit] = useState<{ id: string; draft: ProjectDraft } | null>(null);
 
   const run = async (fn: () => Promise<unknown>) => {
     try {
@@ -91,82 +174,63 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
     }
   };
 
-  const create = () =>
-    run(async () => {
-      await api.projectsCreate({
-        name,
-        prefix: prefix.trim().toUpperCase(),
-        repoPath,
-        color,
-        projectType: type,
-        defaultPresetId,
-      });
-      setName("");
-      setPrefix("");
-      setRepoPath("");
-      setColor(COLOR_CHOICES[(projects.length + 1) % COLOR_CHOICES.length]!);
+  const create = () => {
+    const problem = validateProjectDraft(createDraft, "create");
+    if (problem) return toast.error(problem);
+    return run(async () => {
+      await api.projectsCreate({ ...projectDraftToPayload(createDraft), prefix: createDraft.prefix.trim().toUpperCase() });
+      setCreateDraft(emptyProjectDraft(nextColor(projects.length + 1)));
     });
+  };
+
+  const saveEdit = () => {
+    if (!edit) return;
+    const problem = validateProjectDraft(edit.draft, "edit");
+    if (problem) return toast.error(problem);
+    return run(async () => {
+      await api.projectsUpdate({ project: edit.id, ...projectDraftToPayload(edit.draft) });
+      setEdit(null);
+    });
+  };
 
   return (
     <View style={{ gap: 14 }}>
-      {projects.map((p, i) => (
-        <View key={p.id} style={{ gap: 6 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {projects.map((p, i) =>
+        edit?.id === p.id ? (
+          <View key={p.id} style={{ gap: 10 }}>
+            <Text style={{ fontWeight: "600" }}>编辑项目 · {p.prefix}</Text>
+            <ProjectForm
+              mode="edit"
+              draft={edit.draft}
+              presets={presets}
+              onChange={(patch) => setEdit((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e))}
+            />
+            <RequirementsPanel api={api} projectId={p.id} />
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Btn variant="primary" label="保存" onPress={saveEdit} />
+              <Btn label="取消" onPress={() => setEdit(null)} />
+            </View>
+          </View>
+        ) : (
+          <View key={p.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <Dot color={projectColor(p, i)} size={12} />
-            <Text style={{ flex: 1 }}>
-              <Text style={{ fontWeight: "600" }}>{p.name}</Text>
-              <Text> · {p.prefix}</Text>
-            </Text>
+            <View style={{ flex: 1 }}>
+              <Text>
+                <Text style={{ fontWeight: "600" }}>{p.name}</Text>
+                <Text> · {p.prefix}</Text>
+              </Text>
+              <Muted>{p.projectTypes.map((t) => PROJECT_TYPE_LABELS[t]).join(" / ")}</Muted>
+            </View>
+            <Btn small label="编辑" onPress={() => setEdit({ id: p.id, draft: projectToDraft(p, nextColor(i)) })} />
             <Btn small variant="ghost" label="归档" onPress={() => run(() => api.projectsUpdate({ project: p.id, archived: true }))} />
           </View>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {COLOR_CHOICES.map((c) => (
-              <Chip
-                key={c}
-                label=""
-                color={c}
-                selected={p.color === c}
-                onPress={() => run(() => api.projectsUpdate({ project: p.id, color: c }))}
-              />
-            ))}
-          </View>
-        </View>
-      ))}
+        ),
+      )}
       {projects.length === 0 ? <Muted>还没有项目，先在下面创建一个。</Muted> : null}
       <View style={{ gap: 10 }}>
         <Text style={{ fontWeight: "600" }}>新建项目</Text>
-        <Field label="名称">
-          <TextField value={name} onChangeText={setName} placeholder="例如 官网" />
-        </Field>
-        <Field label="前缀（大写字母数字，如 WEB，用于卡片编号 WEB-1）">
-          <TextField value={prefix} onChangeText={setPrefix} autoCapitalize="characters" placeholder="WEB" />
-        </Field>
-        <Field label="仓库路径">
-          <TextField value={repoPath} onChangeText={setRepoPath} placeholder="D:\repo\my-app" autoCapitalize="none" />
-        </Field>
-        <Field label="类型">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {PROJECT_TYPES.map((t) => (
-              <Chip key={t} label={t} selected={type === t} onPress={() => setType(t)} />
-            ))}
-          </View>
-        </Field>
-        <Field label="颜色">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {COLOR_CHOICES.map((c) => (
-              <Chip key={c} label="" color={c} selected={color === c} onPress={() => setColor(c)} />
-            ))}
-          </View>
-        </Field>
-        <Field label="默认预设">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            <Chip label="无" selected={defaultPresetId === null} onPress={() => setDefaultPresetId(null)} />
-            {presets.map((p) => (
-              <Chip key={p.id} label={p.name} selected={defaultPresetId === p.id} onPress={() => setDefaultPresetId(p.id)} />
-            ))}
-          </View>
-        </Field>
-        <Btn variant="primary" label="创建项目" icon="Plus" disabled={!name.trim() || !prefix.trim()} onPress={create} />
+        <ProjectForm mode="create" draft={createDraft} presets={presets} onChange={(patch) => setCreateDraft((d) => ({ ...d, ...patch }))} />
+        <Btn variant="primary" label="创建项目" icon="Plus" disabled={!createDraft.name.trim() || !createDraft.prefix.trim()} onPress={create} />
       </View>
     </View>
   );
@@ -212,7 +276,7 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
                 key={p.id}
                 label={`${p.id}${p.available ? "" : "（不可用）"}`}
                 selected={draft.provider === p.id}
-                onPress={() => patch({ provider: p.id, model: "" })}
+                onPress={() => patch({ provider: p.id, model: "", thinking: "" })}
               />
             ))}
           </View>
@@ -221,20 +285,34 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
         <Field label="模型（必填）">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {models.map((m) => (
-              <Chip key={m.id} label={m.name} selected={draft.model === m.id} onPress={() => patch({ model: m.id })} />
+              <Chip
+                key={m.id}
+                label={m.name}
+                selected={draft.model === m.id}
+                onPress={() => patch({ model: m.id, thinking: thinkingAfterModelChange(models, m.id, draft.thinking) })}
+              />
             ))}
           </View>
-          <TextField value={draft.model} onChangeText={(model) => patch({ model })} placeholder="必填：点选上方模型或手动输入" autoCapitalize="none" />
+          <TextField value={draft.model} onChangeText={(model) => patch({ model, thinking: thinkingAfterModelChange(models, model, draft.thinking) })} placeholder="必填：点选上方模型或手动输入" autoCapitalize="none" />
         </Field>
-        <Field label="用途">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {Object.entries(ROLE_HINT_LABELS).map(([value, label]) => (
-              <Chip key={value} label={label} selected={draft.roleHint === value} onPress={() => patch({ roleHint: value })} />
+        <Field label="用途（可多选，都不选表示不指定）">
+          <Row>
+            {ROLE_HINTS.map((hint) => (
+              <Chip
+                key={hint}
+                label={ROLE_HINT_LABELS[hint]}
+                selected={draft.roleHints.includes(hint)}
+                onPress={() => patch({ roleHints: toggleRoleHint(draft.roleHints, hint) })}
+              />
             ))}
-          </View>
+          </Row>
         </Field>
         <Field label="思考强度">
-          <TextField value={draft.thinking} onChangeText={(thinking) => patch({ thinking })} placeholder="可留空" autoCapitalize="none" />
+          <Row>
+            {thinkingChoices(models, draft.model, draft.thinking).map((o) => (
+              <Chip key={o.id || "default"} label={o.label} selected={draft.thinking === o.id} onPress={() => patch({ thinking: o.id })} />
+            ))}
+          </Row>
         </Field>
         <Field label="权限模式">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
@@ -293,7 +371,7 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
             <Text style={{ fontWeight: "600" }}>{p.name}</Text>
             <Muted>
               {p.provider} / {p.model}
-              {p.roleHint ? `  [${ROLE_HINT_LABELS[p.roleHint] ?? p.roleHint}]` : ""}
+              {p.roleHints.length ? `  [${p.roleHints.map((h) => ROLE_HINT_LABELS[h]).join("/")}]` : ""}
               {p.fallbackPresetIds?.length
                 ? `  →  ${p.fallbackPresetIds.map((id) => presets.find((x) => x.id === id)?.name ?? "?").join(" → ")}`
                 : ""}

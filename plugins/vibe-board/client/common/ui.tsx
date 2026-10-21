@@ -1,9 +1,13 @@
 // Small themed primitives shared by the board screens.
 
 import { Icon, TextInput } from "@getpaseo/plugin/client/react-native";
-import React, { type ReactNode } from "react";
+import React, { useState, type ReactNode } from "react";
 import { Pressable, Text, View, type TextInputProps } from "react-native";
 import { useHost } from "./ctx";
+import { displayedFieldValue } from "./field";
+
+type FocusEvt = Parameters<NonNullable<TextInputProps["onFocus"]>>[0];
+type BlurEvt = Parameters<NonNullable<TextInputProps["onBlur"]>>[0];
 
 export function Dot({ color, size = 10 }: { color: string; size?: number }) {
   return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }} />;
@@ -119,10 +123,33 @@ export function Field({
 
 export function TextField(props: TextInputProps & { multiline?: boolean }) {
   const { theme } = useHost();
+  // Own the text while focused: the parent's value round-trips through async host re-renders,
+  // and echoing a stale value back into the native input moves the caret (and can drop keystrokes).
+  const [focused, setFocused] = useState(false);
+  const [local, setLocal] = useState(props.value ?? "");
+  const controlled = props.value !== undefined;
   return (
     <TextInput
       placeholderTextColor={theme.colors.foregroundMuted}
       {...props}
+      {...(controlled
+        ? {
+            value: displayedFieldValue(focused, local, props.value!),
+            onChangeText: (text: string) => {
+              setLocal(text);
+              props.onChangeText?.(text);
+            },
+            onFocus: (e: FocusEvt) => {
+              setLocal(props.value!);
+              setFocused(true);
+              props.onFocus?.(e);
+            },
+            onBlur: (e: BlurEvt) => {
+              setFocused(false);
+              props.onBlur?.(e);
+            },
+          }
+        : {})}
       style={[
         {
           color: theme.colors.foreground,
