@@ -3,7 +3,7 @@
 
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { type CardView, type Preset, type Project, type Tag } from "../../shared/vibe/contract";
 import { ReviewerSelect } from "../board/ReviewerSelect";
@@ -12,18 +12,19 @@ import { queryKey, type BoardApi } from "../common/api";
 import { useHost } from "../common/ctx";
 import { canPickFile, pickImage } from "../common/pick-file";
 import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
-import { Discussion } from "../planning/Discussion";
+import { Chat } from "../planning/Chat";
 import { PresetSelector, PrioritySelector, TagSelector } from "../presets/selectors";
 import type { ProviderUsageLike } from "../presets/logic";
 import { VerificationPanel } from "../verification/VerificationPanel";
+import { discard, edit, initialDraft, isDirty, reconcileField } from "./draft";
 import { EVENT_TYPE_LABELS, describeEvent } from "./events";
 
-type Tab = "details" | "timeline" | "plans" | "discussion" | "verification";
+type Tab = "details" | "chat" | "timeline" | "plans" | "verification";
 const TAB_LABELS: Record<Tab, string> = {
   details: "详情",
+  chat: "群聊",
   timeline: "时间线",
   plans: "方案",
-  discussion: "讨论",
   verification: "验证",
 };
 
@@ -100,14 +101,15 @@ export function CardDetail(props: CardDetailProps) {
           <Timeline api={api} card={card} events={data.events} reload={reload} />
         ) : null}
         {tab === "plans" ? <Plans plans={data.plans} /> : null}
-        {tab === "discussion" ? (
-          <Discussion
+        {tab === "chat" ? (
+          <Chat
             api={api}
             card={card}
             events={data.events}
             sessions={data.sessions}
             plans={data.plans}
             reload={reload}
+            onOpenVerification={() => setTab("verification")}
           />
         ) : null}
         {tab === "verification" ? (
@@ -157,15 +159,36 @@ function Details({
 }) {
   const { openAgent } = useHost();
   const toast = useToast();
-  const [title, setTitle] = useState(card.title);
-  const [description, setDescription] = useState(card.description);
-  const [acceptance, setAcceptance] = useState(card.acceptance);
-  // Re-sync text drafts when another client changes the card.
-  useEffect(() => setTitle(card.title), [card.title]);
-  useEffect(() => setDescription(card.description), [card.description]);
-  useEffect(() => setAcceptance(card.acceptance), [card.acceptance]);
-  const dirty =
-    title !== card.title || description !== card.description || acceptance !== card.acceptance;
+  // The card is polled; edited fields keep the user's text, untouched ones follow the server.
+  const [drafts, setDrafts] = useState({
+    title: initialDraft(card.title),
+    description: initialDraft(card.description),
+    acceptance: initialDraft(card.acceptance),
+  });
+  const synced = {
+    title: reconcileField(drafts.title, card.title),
+    description: reconcileField(drafts.description, card.description),
+    acceptance: reconcileField(drafts.acceptance, card.acceptance),
+  };
+  if (
+    synced.title !== drafts.title ||
+    synced.description !== drafts.description ||
+    synced.acceptance !== drafts.acceptance
+  ) {
+    setDrafts(synced);
+  }
+  const title = synced.title.local;
+  const description = synced.description.local;
+  const acceptance = synced.acceptance.local;
+  const setField = (field: keyof typeof drafts, value: string) =>
+    setDrafts((d) => ({ ...d, [field]: edit(d[field], value) }));
+  const dirty = isDirty(synced.title) || isDirty(synced.description) || isDirty(synced.acceptance);
+  const discardEdits = () =>
+    setDrafts({
+      title: discard(card.title),
+      description: discard(card.description),
+      acceptance: discard(card.acceptance),
+    });
 
   const update = async (patch: Parameters<BoardApi["cardsUpdate"]>[0]) => {
     try {
@@ -195,20 +218,23 @@ function Details({
   return (
     <>
       <Field label="标题">
-        <TextField value={title} onChangeText={setTitle} />
+        <TextField value={title} onChangeText={(v) => setField("title", v)} />
       </Field>
       <Field label="描述">
-        <TextField multiline value={description} onChangeText={setDescription} />
+        <TextField multiline value={description} onChangeText={(v) => setField("description", v)} />
       </Field>
       <Field label="验收标准" hint="独立验证 agent 按此逐条检查。">
-        <TextField multiline value={acceptance} onChangeText={setAcceptance} />
+        <TextField multiline value={acceptance} onChangeText={(v) => setField("acceptance", v)} />
       </Field>
       {dirty ? (
-        <Btn
-          variant="primary"
-          label="保存修改"
-          onPress={() => update({ card: card.id, title, description, acceptance })}
-        />
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Btn
+            variant="primary"
+            label="保存修改"
+            onPress={() => update({ card: card.id, title, description, acceptance })}
+          />
+          <Btn label="放弃修改" onPress={discardEdits} />
+        </View>
       ) : null}
 
       <Field label="状态流转（仅限允许的移动）">

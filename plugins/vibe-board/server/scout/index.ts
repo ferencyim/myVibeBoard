@@ -5,10 +5,11 @@
 // role=scout so vibe-stats can tell their usage apart from workers'.
 
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
 import { selectAgent, type AgentProfile, type Preset, type SelectContext } from "../vibe/contract";
 import { BoardError, type BoardService } from "../service";
+import { postChat } from "../chat/post";
 import { ensurePresetModel } from "../dispatch/model";
 
 export type ScoutPaseo = Pick<PaseoApi, "agents"> & {
@@ -354,10 +355,19 @@ export function createScoutService(options: ScoutServiceOptions) {
       outcome: ok > 0 ? "ok" : "failed",
       summary: summary.slice(0, 1000),
     });
-    board.events.add(
-      card.id,
-      { type: "note", authorKind: "system", author: "scout", body: { kind: "scout", text: summary, strictReadOnly: readOnly.strict } },
-    );
+    // Cached answers were written to the chat when they were first found.
+    if (results.some((r) => !r.cached)) {
+      const goals = results.map((r) => r.goal).join("；");
+      postChat(board.store, {
+        cardId: card.id,
+        authorKind: "scout",
+        author: preset.name,
+        kind: "summary",
+        text: `探路兵（${preset.name}）完成 ${ok}/${results.length} 项：${goals}`.slice(0, 600),
+        detail: [summary, ...results.map((r) => `### ${r.goal} [${r.status}]\n${r.summary}`)].join("\n\n"),
+        key: `scout:${now()}:${createHash("sha256").update(JSON.stringify([card.id, goals])).digest("hex").slice(0, 10)}`,
+      });
+    }
     return { preset: preset.name, results };
   }
 

@@ -3,6 +3,7 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import * as rpc from "../shared/rpc";
+import type { ChatService } from "./chat";
 import type { Dispatcher } from "./dispatch";
 import type { RequirementsService } from "./requirements";
 import type { Lifecycle } from "./lifecycle";
@@ -70,6 +71,8 @@ export interface BoardRpcExtras {
   requirements?: RequirementsService;
   /** Verification result for the card UI (WP-21). */
   verify?: VerifyService;
+  /** Group chat: owner messages and accept / reject of the master's proposals (WP-92). */
+  chat?: ChatService;
   /** Keeps the newest SDK handle for dispatch outside hooks. */
   onPaseo?: (paseo: PaseoApi) => void;
 }
@@ -119,7 +122,12 @@ export function registerBoardRpcs(
   server.handle(rpc.attachmentsDeleteRpc, (input) => board.attachments.delete(input.attachmentId));
   server.handle(rpc.sessionsListRpc, (input) => board.sessions.list(input.card));
 
-  const { dispatcher, lifecycle, sync, replies, verify, requirements } = extras;
+  const { dispatcher, lifecycle, sync, replies, verify, requirements, chat } = extras;
+  if (chat) {
+    server.handle(rpc.chatSendRpc, (input) => chat.send(input.card, input.text, input.actor));
+    server.handle(rpc.proposalsAcceptRpc, (input) => chat.accept(input.eventId, input.actor));
+    server.handle(rpc.proposalsRejectRpc, (input) => chat.reject(input.eventId, input.actor));
+  }
   if (requirements) {
     server.handle(rpc.requirementsGetRpc, (input) => requirements.get(input.project));
     server.handle(rpc.requirementsSaveRpc, (input) => requirements.save(input.project, input.content));

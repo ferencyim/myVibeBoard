@@ -1,7 +1,8 @@
 // Human readable one-liners for card timeline events. Pure.
 
-import type { CardEvent, CardEventType } from "../../shared/vibe/contract";
+import type { CardEvent, CardEventType, ProposalStatus } from "../../shared/vibe/contract";
 import { COLUMN_LABELS } from "../board/logic";
+import { AUTHOR_LABELS, PROPOSAL_STATUS_LABELS } from "../planning/logic";
 
 export const EVENT_TYPE_LABELS: Record<CardEventType, string> = {
   evaluation: "评估",
@@ -27,7 +28,7 @@ const SESSION_STATE_LABELS: Record<string, string> = {
 
 const col = (v: unknown) => COLUMN_LABELS[v as keyof typeof COLUMN_LABELS] ?? String(v);
 
-export function describeEvent(event: Pick<CardEvent, "type" | "body">): string {
+export function describeEvent(event: Pick<CardEvent, "type" | "body"> & { authorKind?: string }): string {
   const body = event.body;
   if (typeof body === "string") return body;
   if (!isRecord(body)) return body == null ? "" : String(body);
@@ -35,6 +36,13 @@ export function describeEvent(event: Pick<CardEvent, "type" | "body">): string {
   if (body.kind === "reply_stale") {
     const why = body.reason === "already_answered" ? "问题已被回答" : "问题已不存在";
     return `离线回复未发送（${why}）：${String(body.text ?? "")}`;
+  }
+  if (event.type === "chat" && typeof body.text === "string") {
+    return `[${(AUTHOR_LABELS as Record<string, string>)[event.authorKind ?? ""] ?? event.authorKind ?? "?"}] ${body.text}`;
+  }
+  if (event.type === "proposal") {
+    const status = PROPOSAL_STATUS_LABELS[body.status as ProposalStatus] ?? "";
+    return `修改建议（${status}）：${String(body.rationale ?? "")}`;
   }
   if (typeof body.text === "string") return body.text;
   switch (body.kind) {

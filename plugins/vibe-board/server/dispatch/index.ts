@@ -11,6 +11,7 @@ import type { PaseoApi } from "@getpaseo/client";
 import type { AgentSession, CardView, Preset, Project } from "../vibe/contract";
 import { BoardError, toBoardError, type BoardService } from "../service";
 import { classifyFailure, isReassignable } from "../lifecycle/error-class";
+import { postChat } from "../chat/post";
 import { loadHandoff } from "./handoff";
 import { ensurePresetModel, type ModelCatalog } from "./model";
 import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug } from "./brief";
@@ -116,6 +117,8 @@ export function createDispatcher(options: DispatcherOptions) {
 
       let workspaceId = "";
       let worktree: string | null = null;
+      /** The prompt the started agent actually received (shown in the group chat). */
+      let usedPrompt = "";
       try {
         const target = await findPaseoProject(paseo, project);
         const useWorktree = preset.environmentKind === "new-worktree" && target.projectKind === "git";
@@ -190,6 +193,7 @@ export function createDispatcher(options: DispatcherOptions) {
             });
             agentId = id;
             usedPreset = current;
+            usedPrompt = prompt;
             break;
           } catch (error) {
             tracker?.release(id);
@@ -232,6 +236,18 @@ export function createDispatcher(options: DispatcherOptions) {
         presetId: usedPreset.id,
       });
       await tracker?.bind(startedId);
+      const fellBack = usedPreset.id !== preset.id ? `（首选预设「${preset.name}」无法启动，已用备用预设）` : "";
+      postChat(store, {
+        cardId: card.id,
+        authorKind: "system",
+        author: "dispatch",
+        kind: "info",
+        text: `已派发给「${usedPreset.name}」（${usedPreset.provider}/${usedPreset.model}）${fellBack}${worktree ? `，工作目录 ${worktree}` : ""}。`,
+        agentId: startedId,
+        sessionId: result.session.id,
+        detail: usedPrompt,
+        key: `dispatch:${result.session.id}`,
+      });
       return { ...result, workspaceId, agentId: startedId };
     } catch (error) {
       if (agentId) tracker?.release(agentId);

@@ -8,6 +8,20 @@ export type Size = (typeof SIZES)[number];
 
 const text = z.string().trim().min(1);
 
+/**
+ * The master's suggestion for the card's own fields. The master never edits them itself: the owner
+ * accepts or rejects the proposal in the card chat. A proposal without any changed field is ignored.
+ */
+export const ProposalSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  acceptance: z.string().optional(),
+  rationale: text,
+});
+export type ProposalInput = z.infer<typeof ProposalSchema>;
+/** A malformed proposal is dropped instead of failing the whole reply. */
+export const OptionalProposal = ProposalSchema.optional().catch(undefined);
+
 /** assess_draft: evaluation of a draft card (also the body of the `evaluation` card event). */
 export const AssessmentSchema = z
   .object({
@@ -60,6 +74,10 @@ export const AssessmentSchema = z
     files: z.array(text).default([]),
     /** Acceptance checks, written to the card (plan version) for vibe-verify. */
     checks: z.array(z.object({ text, method: z.string().optional() })).min(1),
+    /** What the owner reads in the card chat (markdown, 2 to 6 sentences); generated from the fields when absent. */
+    verdict: z.string().optional(),
+    /** Suggested new title / description / acceptance; the owner accepts it in the chat. */
+    proposal: OptionalProposal,
   })
   .refine((a) => a.clarity.status === "clear" || a.clarity.questions.length > 0, {
     message: "clarity.questions must list at least one question when status is needs_clarification",

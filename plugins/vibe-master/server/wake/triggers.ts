@@ -8,17 +8,22 @@
 //   maintenance.paused                         -> master.alert (maintenance_paused); .triggered is only logged
 // The master's own write-back (suggested preset, plan version, evaluation event) does not
 // restart the debounce: only owner fields count, and the content hash is the final arbiter.
+// Accepting one of the master's proposals edits owner fields too, but that content is the master's
+// own suggestion: it does not restart the debounce and is recorded as already evaluated.
 
 import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } from "../vibe/db";
-import { isEvent } from "../vibe/contract";
+import { isEvent, type ProposalEventBody } from "../vibe/contract";
 import { contentHash, lastAssessmentMarker } from "../assess/assess";
 import type { Clock } from "../clock";
 import type { WakeJob } from "../types";
 import { createDebouncer, type Debouncer } from "./debounce";
 import type { WakeQueue } from "./queue";
 
-/** card.updated field names (DB columns) that change what the owner asked for. */
-const OWNER_FIELDS = new Set(["title", "description", "acceptance", "ref_images_json", "tags"]);
+/** card.updated field names (camelCase keys of the update, or DB columns) that change what the owner asked for. */
+const OWNER_FIELDS = new Set(["title", "description", "acceptance", "refImages", "ref_images_json", "tags"]);
+/** Fields a proposal can change, and how far apart acceptance and its card.updated may be. */
+const PROPOSAL_FIELDS = ["title", "description", "acceptance"] as const;
+const PROPOSAL_WINDOW_MS = 15_000;
 const SWEEP_DRAFTS = 10;
 
 /** Owner switches (settings). Review requests from the board ignore them: asking is explicit. */
@@ -86,6 +91,53 @@ export function createTriggers(options: TriggersOptions): Triggers {
     return !!card && card.column === "draft" && !card.archivedAt;
   }
 
+  /**
+   * Is this edit just the newest accepted proposal being applied? True when every owner field of the
+   * event is covered by that proposal's changes, the card still holds exactly those values and the
+   * acceptance happened within seconds of the event. Records the content as evaluated (once per proposal).
+   */
+  function appliedProposal(cardId: string, fields: string[], eventTs: string): boolean {
+    const card = store.cards.get(cardId);
+    if (!card) return false;
+    const owner = fields.filter((f) => OWNER_FIELDS.has(f));
+    const events = store.events.list(cardId);
+    let latest: { id: string; changes: Record<string, string | undefined>; resolvedAt: string } | null = null;
+    for (const e of events) {
+      const body = e.type === "proposal" ? (e.body as ProposalEventBody | null) : null;
+      if (body?.status !== "accepted" || !body.resolvedAt) continue;
+      if (!latest || body.resolvedAt >= latest.resolvedAt) {
+        latest = { id: e.id, changes: body.changes, resolvedAt: body.resolvedAt };
+      }
+    }
+    if (!latest || owner.length === 0) return false;
+    const gap = Math.abs(Date.parse(latest.resolvedAt) - Date.parse(eventTs));
+    if (!(gap <= PROPOSAL_WINDOW_MS)) return false;
+    const { id: proposalId, changes } = latest;
+    const covered = owner.every((f) => {
+      const field = PROPOSAL_FIELDS.find((x) => x === f);
+      return !!field && changes[field] !== undefined && card[field] === changes[field];
+    });
+    if (!covered) return false;
+    if (!events.some((e) => e.type === "status" && (e.body as { proposalId?: string } | null)?.proposalId === proposalId)) {
+      const names = card.tags
+        .map((id) => store.tags.list().find((t) => t.id === id)?.name)
+        .filter((n): n is string => !!n);
+      store.events.add({
+        cardId,
+        type: "status",
+        authorKind: "system",
+        author: "master",
+        body: {
+          kind: "proposal_applied",
+          contentHash: contentHash(card, names),
+          proposalId,
+          text: "The accepted proposal was applied; this content counts as reviewed.",
+        },
+      });
+    }
+    return true;
+  }
+
   const consumer = createEventConsumer({
     db: options.db,
     consumer: "vibe-master",
@@ -133,10 +185,11 @@ export function createTriggers(options: TriggersOptions): Triggers {
         if (f.autoAssessOnCreate && cardId && event.payload.column === "draft") debouncer.touch(cardId);
       } else if (isEvent(event, "card.updated")) {
         if (
-          f.autoAssessOnEdit &&
           cardId &&
           event.payload.fields.some((field) => OWNER_FIELDS.has(field)) &&
-          isDraft(cardId)
+          isDraft(cardId) &&
+          !appliedProposal(cardId, event.payload.fields, event.ts) &&
+          f.autoAssessOnEdit
         ) {
           debouncer.touch(cardId);
         }
