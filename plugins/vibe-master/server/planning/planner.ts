@@ -13,6 +13,7 @@ import { parseReply } from "../assess/parse";
 import { proposeChanges } from "../assess/proposal";
 import type { Clock } from "../clock";
 import { buildProjectBlock } from "../master/prompts";
+import { reviveAgent } from "../master/revive";
 import type { MasterSession } from "../master/session";
 import type { MemoryPort } from "../memory/files";
 import { defaultPromptPort, hashText, rulesUpdateMessage, type PromptPort } from "../prompts/port";
@@ -255,11 +256,7 @@ export function createPlanning(deps: PlanningDeps) {
     if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
     if (live) {
       const candidate = paseo.agents.ref(live.agentId);
-      const alive = await candidate.refresh().then(
-        (r) => r != null,
-        () => false,
-      );
-      if (alive) {
+      if (await reviveAgent(candidate)) {
         // After a restart nothing records what the agent saw: assume the current rules.
         const rulesHash = hashText(deps.rules(card.projectId));
         handles.set(card.id, { agent: candidate, sessionId: live.id, rulesSent: true, rulesHash });

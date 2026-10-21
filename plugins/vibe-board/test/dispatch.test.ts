@@ -502,3 +502,16 @@ describe("finalizer", () => {
     expect(kinds).toContain("finalized");
   });
 });
+
+describe("agent.closed", () => {
+  it("keeps a master or planner session open (it is resumed after a daemon restart) but ends a worker", () => {
+    const t = setup();
+    const master = t.store.sessions.start({ cardId: null, agentId: "m1", role: "master", provider: "claude" });
+    const planner = t.store.sessions.start({ cardId: t.card.id, agentId: "p1", role: "planner", provider: "claude" });
+    const worker = t.store.sessions.start({ cardId: t.card.id, agentId: "w1", role: "worker", provider: "codex" });
+    for (const id of ["m1", "p1", "w1"]) t.hooks.emit("agent.closed", { agent: agent(id) });
+    expect(t.store.sessions.get(master.id)!.state).not.toBe("ended");
+    expect(t.store.sessions.get(planner.id)!.state).not.toBe("ended");
+    expect(t.store.sessions.get(worker.id)!.state).toBe("ended");
+  });
+});

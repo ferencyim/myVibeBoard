@@ -16,6 +16,8 @@ export interface MasterAgentHandle {
   archive(): Promise<unknown>;
   /** Hosts older than v0.12.1 do not have it. */
   setTitle?(title: string): Promise<unknown>;
+  /** Loads a closed agent back from its persisted session. Hosts older than the call do not have it. */
+  resume?(): Promise<unknown>;
 }
 
 export interface ModelInfoLike {

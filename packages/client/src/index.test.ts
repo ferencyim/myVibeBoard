@@ -996,6 +996,22 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
   );
   await expect(titlePromise).resolves.toBeUndefined();
 
+  const resumePromise = agent.resume();
+  const resumeRequest = parseSentSessionMessage(ws.sent.at(-1));
+  expect(resumeRequest).toMatchObject({ type: "refresh_agent_request", agentId: "agent_sdk" });
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_refreshed",
+        agentId: "agent_sdk",
+        requestId: resumeRequest.requestId,
+        timelineSize: 0,
+      },
+    }),
+  );
+  await expect(resumePromise).resolves.toBeUndefined();
+
   unsubscribe();
   await client.close();
 });

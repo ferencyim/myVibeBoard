@@ -302,6 +302,31 @@ describe("planning session", () => {
     expect(t.discussion(card.id).map((m) => m.role)).toEqual(["user", "planner", "user", "planner"]);
   });
 
+  it("resumes a planner the daemon closed instead of starting a new one", async () => {
+    const t = setup(() => fence({ reply: "fine" }));
+    const card = t.draft("Closed");
+    t.say(card.id, "one");
+    await t.planning.tick();
+    t.fake.agents[0]!.closed = true; // the daemon stopped
+    t.say(card.id, "two");
+    const restarted = createPlanning({
+      db: t.db,
+      store: t.store,
+      getPaseo: () => t.fake.paseo,
+      master: fakeMaster(t.fake),
+      rules: () => MASTER_RULES,
+      dataDir: tempDir("vibe-master-data-"),
+      clock: new ManualClock(),
+      memory,
+      enabled: () => true,
+      log: () => undefined,
+    });
+    await restarted.tick();
+    expect(t.fake.agents).toHaveLength(1);
+    expect(t.fake.agents[0]).toMatchObject({ closed: false, resumes: 1 });
+    expect(t.fake.agents[0]!.prompts).toHaveLength(2);
+  });
+
   it("starts a fresh session seeded with the earlier discussion after the old agent is gone", async () => {
     const t = setup(() => fence({ reply: "fine" }));
     const card = t.draft("Reseed");
