@@ -133,6 +133,16 @@ describe("rule layers: built-in < global UI rule < project maintenance.yml", () 
     ]);
   });
 
+  it("applies a yml rule written for the original name to the copy a migration split off", () => {
+    const config = ui({
+      "git-health": { projects: ["p1"], splitFrom: "git-health" },
+      "git-health-2": { ...BUILTIN_RULES[0], name: undefined, daily_cap: 3, projects: ["p2"], splitFrom: "git-health" },
+    });
+    const { rules, errors } = merge({ ui: config, projectId: "p2", yml: [yml("git-health", { priority: "high" })] });
+    expect(errors).toEqual([]);
+    expect(rules.map((r) => [r.def.name, r.def.priority, r.def.daily_cap])).toEqual([["git-health-2", "high", 3]]);
+  });
+
   it("reports a broken global rule once and keeps the others", () => {
     const config = ui({ "git-health": { daily_cap: -1 }, half: { enabled: true } });
     const global = resolveGlobalRules(BUILTIN_RULES, config);

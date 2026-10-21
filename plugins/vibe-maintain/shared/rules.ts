@@ -242,7 +242,8 @@ export function resolveGlobalRules(
 /**
  * The rules of one project: every global rule whose scope includes the project, with that
  * project's `maintenance.yml` on top (per field). A yml rule whose name is not an applicable global
- * rule belongs to this project only (origin "yml", must be complete). A merged result that is
+ * rule (or the copy a migration split off a rule of that name) belongs to this project only (origin
+ * "yml", must be complete). A merged result that is
  * invalid is dropped with an error, unless the global rule itself is already reported as invalid.
  */
 export function mergeRuleLayers(input: {
@@ -255,14 +256,20 @@ export function mergeRuleLayers(input: {
   const yml = input.yml ?? [];
   const { entries } = globalEntries(input.builtin, input.ui);
   const applicable = new Map(entries.filter((e) => scopeIncludes(e.scope, input.projectId)).map((e) => [e.name, e]));
+  // A yml rule overrides the applicable rule of that name; failing that, the applicable copy the
+  // migration split off a rule of that name (its project's yml was written for the original name).
+  const target = (y: YmlRule) =>
+    applicable.has(y.name) ? y.name : [...applicable.values()].find((e) => e.splitFrom === y.name)?.name;
   const names = [...applicable.keys()];
-  for (const y of yml) if (!names.includes(y.name)) names.push(y.name);
+  for (const y of yml) if (!target(y) && !names.includes(y.name)) names.push(y.name);
 
   const rules: LayeredRule[] = [];
   for (const name of names) {
     const entry = applicable.get(name);
     const layers: Layer[] = [...(entry?.layers ?? [])];
-    for (const y of yml.filter((r) => r.name === name)) layers.push({ source: "yml", fields: y.fields });
+    for (const y of yml.filter((r) => target(r) === name || (!target(r) && r.name === name))) {
+      layers.push({ source: "yml", fields: y.fields });
+    }
     const m = layerMerge(name, layers);
     if (!m.def) {
       // A broken global rule is reported once by resolveGlobalRules; only new problems count here.
