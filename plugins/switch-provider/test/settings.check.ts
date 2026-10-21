@@ -47,7 +47,7 @@ const turnsLeft = (c: Common) => c.messages.filter((m) => m.role === "user" && J
 const standard = await compact(common, 40_000);
 assert.ok(standard, "compacted with the defaults");
 assert.ok(first(standard.common).startsWith("Build the widget" + String.fromCharCode(10).repeat(2) + "本会话已切换到新的 provider"), "the title is the opening request");
-assert.match(first(standard.common), /Files edited \(14 detected/);
+assert.match(first(standard.common), /编辑过的文件（检测到 14 个/);
 assert.equal(second(standard.common), DEFAULT_SUMMARY_ACK);
 
 const custom = await compact(common, 40_000, {
@@ -60,7 +60,7 @@ const custom = await compact(common, 40_000, {
 assert.ok(custom, "compacted with custom options");
 assert.match(first(custom.common), /Build the widget \/ custom header \//);
 assert.doesNotMatch(first(custom.common), /本会话已切换到新的 provider/);
-assert.equal(first(custom.common).split("Files edited")[1].split(String.fromCharCode(10)).filter((l) => l.startsWith("- /p/")).length, 3, "listCap cuts the file list");
+assert.equal(first(custom.common).split("编辑过的文件")[1].split(String.fromCharCode(10)).filter((l) => l.startsWith("- /p/")).length, 3, "listCap cuts the file list");
 assert.equal(second(custom.common), "Got it.");
 assert.ok(turnsLeft(custom.common) <= turnsLeft(standard.common), "fewer turns are kept word for word");
 

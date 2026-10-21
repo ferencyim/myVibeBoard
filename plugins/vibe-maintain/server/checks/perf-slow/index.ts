@@ -305,7 +305,7 @@ export function createPerfSlowCheck(deps: { bench?: BenchRunner } = {}): CheckFn
           ? `- 复现：命令 \`${[repro.command, ...repro.args].join(" ")}\` 执行失败，未能复现。`
           : `- 复现：\`${[repro.command, ...repro.args].join(" ")}\` 运行 ${repro.runs.length} 次（${repro.runs.join("/")}ms），中位 ${round(repro.medianMs)}ms，${repro.reproduced ? "**已复现**（超过" : "**未复现**（未超过"} ${repro.thresholdMs}ms）`
         : "- 复现：规则未配置 `repro` 命令，无法自动复现与度量修复效果。",
-      automatic ? "" : "- **结论：没有把握自动修复，已降级为草稿卡**，供人工或主控 agent 评估后再决定。",
+      automatic ? "" : "- **结论：没有把握自动修复，已降级为草稿卡**，供人工或总 agent 评估后再决定。",
       "",
       ...(others.length
         ? [

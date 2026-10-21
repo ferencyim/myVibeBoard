@@ -26,7 +26,7 @@ export function renderAgentsGuide(): string {
     "## 项目上下文（myVibeBoard）",
     "",
     "项目目标、指令、决策、经验教训和当前状态都在 `.vibe/` 目录。",
-    "先读 `.vibe/INDEX.md` 和 `.vibe/PROJECT_STATE.md`；主人的规则在 `.vibe/instructions/`。",
+    "先读 `.vibe/INDEX.md` 和 `.vibe/PROJECT_STATE.md`；用户的规则在 `.vibe/instructions/`。",
     "这些文件是权威依据，对你只读：需要修改时请告知总 agent，不要自己改。",
     AGENTS_BLOCK_END,
   ].join("\n");

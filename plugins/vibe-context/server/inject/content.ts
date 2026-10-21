@@ -38,7 +38,7 @@ export function buildContextBlock(store: MemoryStore, options: ContextOptions = 
   parts.push(prompts.resolve("context.scout_guidance"));
 
   const directives = store.readUserDirectives()?.trim();
-  if (directives) parts.push("## 主人的指令", directives);
+  if (directives) parts.push("## 用户的指令", directives);
 
   const instructions = store.readInstructions().filter((f) => f.text.trim());
   if (instructions.length) {

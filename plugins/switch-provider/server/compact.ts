@@ -28,7 +28,7 @@ const tokens = (chars: number) => Math.ceil(chars / 4);
 const blocks = (message: Message): Block[] =>
   typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
 const asText = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
-const clip = (text: string, cap: number) => (text.length > cap ? `${text.slice(0, cap)}… [cut ${text.length - cap} characters]` : text);
+const clip = (text: string, cap: number) => (text.length > cap ? `${text.slice(0, cap)}…［已截断 ${text.length - cap} 个字符］` : text);
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 
 function resultText(content: unknown): string {
@@ -60,20 +60,20 @@ function resultMap(common: Common) {
 
 /** The complete conversation as Markdown, plus the line range each block of each message occupies. */
 function transcript(common: Common, blockCap: number) {
-  const lines: string[] = ["# Detailed transcript (long tool blocks may be cut)", ""];
+  const lines: string[] = ["# 详细记录（过长的工具块可能被截断）", ""];
   const ranges: [number, number][][] = [];
   const results = resultMap(common);
   common.messages.forEach((message, index) => {
     const perBlock: [number, number][] = [];
     for (const b of blocks(message)) {
       const start = lines.length + 1;
-      if (b.type === "text") lines.push(`## ${message.role === "user" ? "User" : "Assistant"} (message ${index + 1})`, "", ...String(b.text).split("\n"), "");
-      else if (b.type === "image") lines.push("[image omitted]", "");
+      if (b.type === "text") lines.push(`## ${message.role === "user" ? "用户" : "助手"}（第 ${index + 1} 条消息）`, "", ...String(b.text).split("\n"), "");
+      else if (b.type === "image") lines.push("[已省略图片]", "");
       else if (b.type === "tool_use") {
         const { name, input } = toolInfo(b);
         const result = results.get(String(b.id));
-        lines.push(`### Tool call: ${name}`, "", ...clip(asText(input), blockCap).split("\n"), "");
-        lines.push(`### Tool result${result?.error ? " (error)" : ""}`, "", ...clip(result?.text ?? "", blockCap).split("\n"), "");
+        lines.push(`### 工具调用：${name}`, "", ...clip(asText(input), blockCap).split("\n"), "");
+        lines.push(`### 工具结果${result?.error ? "（出错）" : ""}`, "", ...clip(result?.text ?? "", blockCap).split("\n"), "");
       }
       perBlock.push([start, lines.length]);
     }
@@ -175,10 +175,10 @@ function sections(common: Common, ranges: [number, number][][], listCap: number)
   const goal = first ? clip(blocks(first).filter((b) => b.type === "text").map((b) => String(b.text)).join(" ").trim(), 600) : "";
   const recent = [...files.entries()].slice(-listCap).reverse();
   const out: string[] = [];
-  if (goal) out.push(`Session goal: ${goal}`, "");
-  if (recent.length) out.push(`Files edited (${files.size} detected, newest first):`, ...recent.map(([path, f]) => `- ${path} (${f.edits} edit${f.edits === 1 ? "" : "s"}) ${f.pointer}`), "");
-  if (commits.length) out.push(`Commits (${commits.length}):`, ...commits.slice(-listCap), "");
-  if (todos.length) out.push("Unfinished tasks from the last task list:", ...todos.slice(0, listCap), "");
+  if (goal) out.push(`会话目标：${goal}`, "");
+  if (recent.length) out.push(`编辑过的文件（检测到 ${files.size} 个，最新的在前）：`, ...recent.map(([path, f]) => `- ${path} （${f.edits} 次编辑） ${f.pointer}`), "");
+  if (commits.length) out.push(`提交（${commits.length} 个）：`, ...commits.slice(-listCap), "");
+  if (todos.length) out.push("最近一份任务清单里未完成的任务：", ...todos.slice(0, listCap), "");
   return out.join("\n");
 }
 
@@ -192,11 +192,11 @@ function brief(common: Common, count: number, ranges: [number, number][][], text
       const [from, to] = ranges[i][j];
       const pointer = `[L${from}-L${to}]`;
       if (b.type === "text" && String(b.text).trim())
-        entries.push(`- ${pointer} ${message.role === "user" ? "User" : "Assistant"}: ${clip(String(b.text).trim(), textCap)}`);
+        entries.push(`- ${pointer} ${message.role === "user" ? "用户" : "助手"}：${clip(String(b.text).trim(), textCap)}`);
       else if (b.type === "tool_use") {
         const { name, input } = toolInfo(b);
         const result = results.get(String(b.id));
-        const outcome = result?.error ? `ERROR: ${clip(result.text, 2000)}` : result ? `ok: ${clip(oneLine(result.text), resultCap)}` : "no result";
+        const outcome = result?.error ? `出错：${clip(result.text, 2000)}` : result ? `成功：${clip(oneLine(result.text), resultCap)}` : "无结果";
         entries.push(`- ${pointer} ${name}(${clip(oneLine(asText(input)), 160)}) -> ${outcome}`);
       }
     });
@@ -208,7 +208,7 @@ function brief(common: Common, count: number, ranges: [number, number][][], text
 function plain(message: Message): Message | null {
   const kept = blocks(message)
     .filter((b) => b.type !== "thinking")
-    .map((b) => (b.type === "image" ? { type: "text", text: "[image omitted]" } : b));
+    .map((b) => (b.type === "image" ? { type: "text", text: "[已省略图片]" } : b));
   return kept.length ? { ...message, content: kept } : null;
 }
 
@@ -248,7 +248,7 @@ export async function compact(
     const tail = common.messages.slice(cut).map(plain).filter((m): m is Message => m !== null);
     const summary: Message[] = entries.length
       ? [
-          { role: "user", content: [{ type: "text", text: `${header}${facts}\nEarlier history, oldest first:\n${entries.join("\n")}` }], timestamp: stamp },
+          { role: "user", content: [{ type: "text", text: `${header}${facts}\n较早的历史，最早的在前：\n${entries.join("\n")}` }], timestamp: stamp },
           { role: "assistant", content: [{ type: "text", text: textOrDefault(options.summaryAck, DEFAULT_SUMMARY_ACK) }], timestamp: stamp },
         ]
       : [];

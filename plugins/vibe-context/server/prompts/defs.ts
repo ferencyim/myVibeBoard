@@ -1,6 +1,6 @@
 // vibe-context 发给 agent 或注入其上下文的全部提示词及其默认值（WP-99）。默认文本一律用中文写；
 // 命令（如 /compact）、MCP 工具名、{{占位符}}、文件路径保持原样。代码通过 ./index.ts 解析，
-// 主人可在“Agent 行为”页全局或按项目覆盖。这里的文本都不从回复里解析，所以没有 fixedSuffix。
+// 用户可在“Agent 行为”页全局或按项目覆盖。这里的文本都不从回复里解析，所以没有 fixedSuffix。
 
 import type { PromptDef } from "../vibe/contract";
 

@@ -191,7 +191,7 @@ describe("model review", () => {
     await h.pipeline.run(h.cardId);
     expect(await h.pipeline.reject(h.cardId, "not good")).toBe(true);
     expect(h.board.cards.get(h.cardId)!.column).toBe("in_progress");
-    expect(h.sent[0]!.prompt).toContain("被主人驳回了");
+    expect(h.sent[0]!.prompt).toContain("被用户驳回了");
   });
 
   it("the severity map decides the judgement: severe -> doubt keeps the card, major -> fail sends it back", async () => {

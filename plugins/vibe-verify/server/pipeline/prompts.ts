@@ -125,7 +125,7 @@ export function buildFailurePrompt(
     vars: {
       "card.key": input.card.key,
       commitHash: input.commitHash,
-      comment: input.comment ? `主人评论：${input.comment}\n\n` : "",
+      comment: input.comment ? `用户评论：${input.comment}\n\n` : "",
       failed: failed ? `未通过的检查：\n${failed}\n\n` : "",
     },
   });

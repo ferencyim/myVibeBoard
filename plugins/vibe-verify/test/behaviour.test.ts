@@ -37,7 +37,7 @@ function legacyFailurePrompt(input: {
 }): string {
   const head =
     input.source === "user"
-      ? "你在 DEMO-1 上的工作被主人驳回了。"
+      ? "你在 DEMO-1 上的工作被用户驳回了。"
       : input.review
         ? "对 DEMO-1（提交 abc123）的独立代码复核发现了严重问题（连同未通过的检查项一并列在下面），所以卡片被退回给你。"
         : "对 DEMO-1（提交 abc123）的独立验证发现有检查项未通过，所以卡片被退回给你。";
@@ -53,7 +53,7 @@ function legacyFailurePrompt(input: {
     : "";
   return [
     head,
-    input.comment ? `主人评论：${input.comment}` : "",
+    input.comment ? `用户评论：${input.comment}` : "",
     body ? `未通过的检查：\n${body}` : "",
     "请修复这些问题，运行项目的测试，然后结束本轮；卡片会被重新验证。",
   ]

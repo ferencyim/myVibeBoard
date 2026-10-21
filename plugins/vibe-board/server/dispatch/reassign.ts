@@ -62,20 +62,20 @@ export type ReassignResult =
 
 const MAX_BLOCK = 20_000;
 const clip = (text: string) =>
-  text.length > MAX_BLOCK ? `${text.slice(0, MAX_BLOCK)}\n[cut: ${text.length - MAX_BLOCK} more characters]` : text;
+  text.length > MAX_BLOCK ? `${text.slice(0, MAX_BLOCK)}\n[已截断：还有 ${text.length - MAX_BLOCK} 个字符]` : text;
 
 function renderItem(item: Record<string, unknown>): string | null {
   switch (item.type) {
     case "user_message":
-      return `## User\n\n${item.text}`;
+      return `## 用户\n\n${item.text}`;
     case "assistant_message":
-      return `## Assistant\n\n${item.text}`;
+      return `## 助手\n\n${item.text}`;
     case "reasoning":
-      return `### Reasoning\n\n${item.text}`;
+      return `### 推理\n\n${item.text}`;
     case "tool_call":
-      return `### Tool call: ${item.name} (${item.status})\n\n\`\`\`json\n${clip(JSON.stringify({ detail: item.detail, error: item.error }, null, 1))}\n\`\`\``;
+      return `### 工具调用：${item.name}（${item.status}）\n\n\`\`\`json\n${clip(JSON.stringify({ detail: item.detail, error: item.error }, null, 1))}\n\`\`\``;
     case "todo":
-      return `### Todo list\n\n${clip(JSON.stringify(item.items))}`;
+      return `### 任务清单\n\n${clip(JSON.stringify(item.items))}`;
     case "error":
     case "notification":
       return `### ${item.type}\n\n${item.message}`;

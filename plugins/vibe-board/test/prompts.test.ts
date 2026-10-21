@@ -20,7 +20,7 @@ import { setupBoard, tempDir } from "./helpers";
 const GOLDEN_BRIEF = [
   "# DEMO-1 · Fix it",
   "",
-  "下面的标题、描述和验收标准是卡片的当前内容，已包含主人采纳的全部改动，以它们为准：后文的计划或交接内容与之不一致时，按卡片执行。",
+  "下面的标题、描述和验收标准是卡片的当前内容，已包含用户采纳的全部改动，以它们为准：后文的计划或交接内容与之不一致时，按卡片执行。",
   "",
   "## 描述",
   "desc",
@@ -39,7 +39,7 @@ const GOLDEN_BRIEF = [
   "- 类型：web",
   "",
   "## 项目记忆",
-  "项目目标、规则和当前状态都在 `.vibe/` 目录（先读 `.vibe/INDEX.md` 和 `.vibe/PROJECT_STATE.md`；主人的规则在 `.vibe/instructions/`）。这些文件是权威依据，对你只读：需要修改时请在卡片评论里说明，不要自己改。",
+  "项目目标、规则和当前状态都在 `.vibe/` 目录（先读 `.vibe/INDEX.md` 和 `.vibe/PROJECT_STATE.md`；用户的规则在 `.vibe/instructions/`）。这些文件是权威依据，对你只读：需要修改时请在卡片评论里说明，不要自己改。",
   "",
   "## 回报约定",
   "你是卡片 DEMO-1 的执行者。用 `vibe-board show DEMO-1`（MCP 工具 `vibe_show`）读取卡片。用 `vibe-board comment DEMO-1 --body \"...\"` 汇报进展或提问。用 `vibe-board attachment add DEMO-1 --file <path>` 上传结果文件。本轮结束前，把完成的工作提交到工作树分支（批准后看板会合并该分支，不会处理未提交的改动）。你不能移动卡片：本轮结束时若没有未解决的提问，看板会把卡片移到“验证中”（verifying）。",

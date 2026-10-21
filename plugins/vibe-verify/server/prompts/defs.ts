@@ -1,7 +1,7 @@
 // vibe-verify 发给 agent 的全部提示词及其默认值（WP-99）。默认文本一律用中文写；
 // JSON 键名与枚举值（pass/doubt/fail、severe/major/minor 等）、命令、{{占位符}}、文件路径保持原样。
-// 默认文本是唯一来源：代码通过 ./index.ts 解析，主人可在“Agent 行为”页全局或按项目覆盖。
-// 解析器依赖的回复格式放在 fixedSuffix（追加在可能被覆盖的正文之后，主人只读）。
+// 默认文本是唯一来源：代码通过 ./index.ts 解析，用户可在“Agent 行为”页全局或按项目覆盖。
+// 解析器依赖的回复格式放在 fixedSuffix（追加在可能被覆盖的正文之后，用户只读）。
 
 import { z } from "zod";
 import { VerifyConfigSchema } from "../collectors/common";
@@ -104,7 +104,7 @@ const REVIEW_SUFFIX = `回复一个 JSON 对象（放在 \`\`\`json 围栏里，
 const SEND_BACK_TAIL =
   "请修复这些问题，运行项目的测试，然后结束本轮；卡片会被重新验证。";
 
-const SEND_BACK_USER = `你在 {{card.key}} 上的工作被主人驳回了。
+const SEND_BACK_USER = `你在 {{card.key}} 上的工作被用户驳回了。
 
 {{comment}}{{failed}}${SEND_BACK_TAIL}`;
 
@@ -124,7 +124,7 @@ const SEGMENT = (name: string, description: string) => ({
 const SEND_BACK_VARS = [
   CARD_KEY,
   { name: "commitHash", description: "被验证的提交" },
-  SEGMENT("comment", "主人的评论，自带“主人评论：”前缀与段尾空行"),
+  SEGMENT("comment", "用户的评论，自带“用户评论：”前缀与段尾空行"),
   SEGMENT("failed", "未通过的检查清单，自带“未通过的检查：”前缀与段尾空行"),
 ];
 
@@ -252,9 +252,9 @@ export const VERIFY_PROMPT_DEFS: readonly PromptDef[] = [
     key: "verify.send_back.user",
     plugin: PLUGIN,
     role: "executor",
-    title: "退回执行 agent：主人驳回",
-    description: "主人在验证页驳回卡片并附一句话时，发给原执行 agent 的消息。",
-    whenSent: "主人驳回卡片时",
+    title: "退回执行 agent：用户驳回",
+    description: "用户在验证页驳回卡片并附一句话时，发给原执行 agent 的消息。",
+    whenSent: "用户驳回卡片时",
     audience: "执行 agent",
     defaultText: SEND_BACK_USER,
     placeholders: SEND_BACK_VARS,

@@ -97,7 +97,7 @@ function chatLines(events: readonly CardEvent[], limit: number): string {
     .map((e) => {
       const text = (e.body as { text?: unknown } | null)?.text;
       return typeof text === "string" && text.trim()
-        ? `- [${e.authorKind === "user" ? "主人" : "主控"}] ${clip(text.trim(), CHAT_CLIP)}`
+        ? `- [${e.authorKind === "user" ? "用户" : "总 agent"}] ${clip(text.trim(), CHAT_CLIP)}`
         : "";
     })
     .filter(Boolean)
@@ -151,7 +151,7 @@ export function buildDispatchBrief(input: BriefInput): string {
       ? section(
           "规划交接（从这里开始）",
           [
-            "主人和规划会话已就下面的方案达成一致；请按此执行，有偏差时在卡片评论里说明。" +
+            "用户和规划会话已就下面的方案达成一致；请按此执行，有偏差时在卡片评论里说明。" +
               (input.handoff.path ? ` 完整文件：${input.handoff.path}` : ""),
             input.handoff.text.length > limits.handoffMaxChars
               ? `${input.handoff.text.slice(0, limits.handoffMaxChars)}\n…（已截断，见文件）`

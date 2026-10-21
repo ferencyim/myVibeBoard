@@ -1,18 +1,18 @@
 // vibe-board 发给 agent 的全部提示词及其默认值（WP-98）。默认文本一律用中文写；
 // JSON 键名、命令、MCP 工具名、{{占位符}}、文件路径等机器标识保持原样。
-// 默认文本是唯一来源：代码通过 ./index.ts 解析，主人可在“Agent 行为”页全局或按项目覆盖。
+// 默认文本是唯一来源：代码通过 ./index.ts 解析，用户可在“Agent 行为”页全局或按项目覆盖。
 
 import type { PromptDef } from "../vibe/contract";
 
 const PLUGIN = "vibe-board";
 
 const AUTHORITY =
-  "下面的标题、描述和验收标准是卡片的当前内容，已包含主人采纳的全部改动，以它们为准：后文的计划或交接内容与之不一致时，按卡片执行。";
+  "下面的标题、描述和验收标准是卡片的当前内容，已包含用户采纳的全部改动，以它们为准：后文的计划或交接内容与之不一致时，按卡片执行。";
 
 // 只放指引，不放内容：正文由 vibe-context 注入（WP-31）。
 const MEMORY_POINTER =
   "项目目标、规则和当前状态都在 `.vibe/` 目录（先读 `.vibe/INDEX.md` 和 " +
-  "`.vibe/PROJECT_STATE.md`；主人的规则在 `.vibe/instructions/`）。这些文件是权威依据，对你只读：" +
+  "`.vibe/PROJECT_STATE.md`；用户的规则在 `.vibe/instructions/`）。这些文件是权威依据，对你只读：" +
   "需要修改时请在卡片评论里说明，不要自己改。";
 
 const BRIEF = [
@@ -92,8 +92,8 @@ export const BOARD_PROMPT_DEFS: readonly PromptDef[] = [
       SEGMENT("acceptance", "验收标准"),
       SEGMENT("referenceImages", "参考图片列表"),
       SEGMENT("handoff", "规划会话的交接摘要"),
-      SEGMENT("adopted", "已采纳的主控建议"),
-      SEGMENT("chat", "群聊中最近的主人/主控消息"),
+      SEGMENT("adopted", "已采纳的总 agent建议"),
+      SEGMENT("chat", "群聊中最近的用户/总 agent消息"),
       SEGMENT("plan", "最新计划与检查项"),
       SEGMENT("notes", "最近的备注、驳回与评估"),
       SEGMENT("project", "项目名称与类型"),

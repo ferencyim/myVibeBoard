@@ -213,7 +213,7 @@ describe("reassigner", () => {
 
   it("renders a transcript from timeline pages", async () => {
     const md = await renderTranscript(fakePaseo().paseo, "x");
-    expect(md).toContain("## User");
+    expect(md).toContain("## 用户");
     expect(md).toContain("### error");
   });
 });
