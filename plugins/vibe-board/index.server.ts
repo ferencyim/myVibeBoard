@@ -16,6 +16,7 @@ import { createGitFinalizer } from "./server/lifecycle/git-finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
 import { createReplyService, createSyncService } from "./server/sync";
+import { createRequirementsService } from "./server/requirements";
 import { createScoutService } from "./server/scout";
 import { createVerifyService } from "./server/verify";
 
@@ -178,6 +179,7 @@ export default function contribute(server: PluginServerContext) {
     onPaseo,
     sync,
     replies,
+    requirements: createRequirementsService({ board, db: runtime.db }),
     verify: createVerifyService({ db: runtime.db, board }),
   });
 

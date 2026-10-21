@@ -12,7 +12,9 @@ export type MenuAction =
   | { type: "open" }
   | { type: "move"; to: CardColumn }
   | { type: "step"; step: "up" | "down" | "top" | "bottom" }
-  | { type: "archive" };
+  | { type: "archive" }
+  | { type: "review" }
+  | { type: "dispatch" };
 
 export function CardMenu({
   card,
@@ -59,6 +61,15 @@ export function CardMenu({
                   <Btn key={s} label={labels[s]} onPress={() => act({ type: "step", step: s })} />
                 ))}
               </View>
+            </Field>
+          ) : null}
+          {card.column === "draft" || card.column === "todo" ? (
+            <Field label="手动触发">
+              {card.column === "draft" ? (
+                <Btn icon="MessageSquare" label="让总 agent 审查" onPress={() => act({ type: "review" })} />
+              ) : (
+                <Btn icon="Play" label="立即执行" onPress={() => act({ type: "dispatch" })} />
+              )}
             </Field>
           ) : null}
           <View style={{ flexDirection: "row", gap: 8 }}>

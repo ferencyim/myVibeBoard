@@ -418,7 +418,15 @@ export const providersCatalogRpc = defineRpc({
       z.object({
         id: z.string(),
         available: z.boolean(),
-        models: z.array(z.object({ id: z.string(), name: z.string() })),
+        models: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            /** Thinking levels this model accepts; absent/empty = no choice. */
+            thinkingOptions: z.array(z.object({ id: z.string(), label: z.string() })).optional(),
+            defaultThinkingOptionId: z.string().optional(),
+          }),
+        ),
       }),
     ),
   }),
@@ -481,6 +489,41 @@ export const cardsDispatchRpc = defineRpc({
   output: z.object({ card: CardViewSchema, session: AgentSessionSchema }),
 });
 
+export const cardsRequestReviewRpc = defineRpc({
+  name: "vibe.cards.request_review",
+  /** Draft card: asks the master agent to review it now (publishes card.review_requested). */
+  input: z.object({ card: cardRef }),
+  output: z.object({ requested: z.literal(true) }),
+});
+
+// --- project requirements document ---------------------------------------------------------
+
+const requirementsDocShape = {
+  /** Repo-relative path, forward slashes. */
+  path: z.string(),
+  exists: z.boolean(),
+  /** "" when the file does not exist yet. */
+  content: z.string(),
+};
+
+export const requirementsGetRpc = defineRpc({
+  name: "vibe.requirements.get",
+  input: z.object({ project: z.string().min(1) }),
+  output: z.object(requirementsDocShape),
+});
+
+export const requirementsSaveRpc = defineRpc({
+  name: "vibe.requirements.save",
+  /** Writes the file and commits only that file (no push). `committed:false` = content unchanged. */
+  input: z.object({ project: z.string().min(1), content: z.string() }),
+  output: z.object({
+    ...requirementsDocShape,
+    committed: z.boolean(),
+    commit: z.string().nullable(),
+    created: z.boolean(),
+  }),
+});
+
 export const sessionsRecordSwitchRpc = defineRpc({
   name: "vibe.sessions.record_switch",
   /** The agent was continued on another provider (switch-provider returned `toAgentId`):
@@ -526,6 +569,9 @@ export const VIBE_BOARD_RPCS = {
   attachmentsDeleteRpc,
   sessionsListRpc,
   cardsDispatchRpc,
+  cardsRequestReviewRpc,
+  requirementsGetRpc,
+  requirementsSaveRpc,
   sessionsRecordSwitchRpc,
   syncExchangeRpc,
   replyCheckRpc,
