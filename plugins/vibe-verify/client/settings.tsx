@@ -19,7 +19,7 @@ export const BASIC_FIELDS: readonly Field[] = [
     label: "复核严重问题连续自动退回的最大次数（0-20；留空沿用环境变量 VIBE_REVIEW_MAX_RETURNS，没有则 3）",
     min: 0,
     max: 20,
-    nullable: true,
+    blank: "null",
   },
   { kind: "bool", key: "preferDifferentProvider", label: "验证 agent 优先选用与执行者不同的 provider（关闭则优先同一 provider）" },
 ];

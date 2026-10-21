@@ -6,6 +6,8 @@ import { existsSync } from "node:fs";
 import { estimateTokens } from "../memory/tokens";
 import type { MemoryStore } from "../memory/store";
 import type { ProjectMemoryFile } from "../memory/layout";
+import { DEFAULT_MEMORY_TOKENS } from "./settings";
+import { defaultPrompts, type PromptResolver } from "../prompts";
 
 export const CONTEXT_START = "<!-- vibe:context:start -->";
 export const CONTEXT_END = "<!-- vibe:context:end -->";
@@ -18,18 +20,10 @@ const MEMORY_ORDER: readonly ProjectMemoryFile[] = [
   "LESSONS.md",
 ];
 
-/** Only meaningful when the board MCP offers `vibe_scout` (execution and planning sessions). */
-export const SCOUT_GUIDANCE =
-  "## Scouting (if the `vibe_scout` tool is available)\n" +
-  "Before editing in a large repo, call `vibe_scout` once with several independent questions " +
-  "(`kind`: locate / inventory / research) so cheap read-only sub-agents search in parallel; you get back " +
-  "short findings with path:line anchors instead of reading everything yourself. Good for: locating code " +
-  "in an unfamiliar repo, counting/listing usages in bulk, gathering facts from several sources. " +
-  "Skip it for a small change in one or two known files. Verify anchors you rely on before editing.";
-
-export const DEFAULT_MEMORY_TOKENS = 6000;
 
 export interface ContextOptions {
+  /** Texts of the frame and the scouting advice (registry); defaults to the registered defaults. */
+  prompts?: PromptResolver;
   /** Total tokens of memory file text to inline; files that do not fit are listed as pointers. */
   maxMemoryTokens?: number;
 }
@@ -38,15 +32,10 @@ export interface ContextOptions {
 export function buildContextBlock(store: MemoryStore, options: ContextOptions = {}): string | null {
   if (!existsSync(store.layout.vibeDir)) return null;
   let remaining = options.maxMemoryTokens ?? DEFAULT_MEMORY_TOKENS;
-  const parts: string[] = [
-    CONTEXT_START,
-    "# Project context (myVibeBoard)",
-    "Generated from the files under `.vibe/` when this session started. It is authoritative and " +
-      "read-only for you: never edit these files; report needed corrections to the master agent " +
-      "(for a board task, in a card comment).",
-  ];
+  const prompts = options.prompts ?? defaultPrompts;
+  const parts: string[] = [CONTEXT_START, prompts.resolve("context.inject_frame")];
 
-  parts.push(SCOUT_GUIDANCE);
+  parts.push(prompts.resolve("context.scout_guidance"));
 
   const directives = store.readUserDirectives()?.trim();
   if (directives) parts.push("## User directives", directives);

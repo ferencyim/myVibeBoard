@@ -6,21 +6,18 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import { SettingsCard, SettingsInput, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
+import { clampNumber, formatMap, parseList, parseMap } from "./field-parse";
 
 export type Field =
   | { kind: "bool"; key: string; label: string }
   | { kind: "text"; key: string; label: string }
-  | { kind: "int"; key: string; label: string; min: number; max: number; nullable?: boolean }
-  | { kind: "number"; key: string; label: string; min: number; max: number }
+  /** blank: what an emptied number field stores ("null" or the key removed); absent = the number cannot be blank. */
+  | { kind: "int" | "number"; key: string; label: string; min: number; max: number; blank?: "null" | "unset" }
+  /** Comma-separated list of words. */
+  | { kind: "list"; key: string; label: string }
+  /** Comma-separated `key=value` pairs. */
+  | { kind: "map"; key: string; label: string; valueType: "string" | "number" }
   | { kind: "select"; key: string; label: string; options: ReadonlyArray<{ label: string; value: string }> };
-
-/** Clamp typed text into [min, max]; text that is not a number keeps `fallback`. */
-export function clampNumber(text: string, min: number, max: number, fallback: number, integer: boolean): number {
-  const n = Number(text);
-  if (text.trim() === "" || !Number.isFinite(n)) return fallback;
-  const clamped = Math.min(max, Math.max(min, n));
-  return integer ? Math.round(clamped) : clamped;
-}
 
 /** One card of fields bound to a settings object; `save` receives the whole next value. */
 export function FieldsCard<V extends Record<string, unknown>>({
@@ -66,21 +63,35 @@ export function FieldsCard<V extends Record<string, unknown>>({
                 onValueChange={(v: string) => set(f.key, v)}
               />
             );
+          case "list":
+            return (
+              <SettingsInput
+                key={f.key}
+                label={f.label}
+                initialValue={Array.isArray(current) ? current.join(", ") : ""}
+                onChangeText={(text) => set(f.key, parseList(text))}
+              />
+            );
+          case "map":
+            return (
+              <SettingsInput
+                key={f.key}
+                label={f.label}
+                initialValue={formatMap(current)}
+                onChangeText={(text) => set(f.key, parseMap(text, f.valueType))}
+              />
+            );
           default: {
             const integer = f.kind === "int";
-            const nullable = f.kind === "int" && f.nullable === true;
             return (
               <SettingsInput
                 key={f.key}
                 label={f.label}
                 initialValue={current === null || current === undefined ? "" : String(current)}
                 onChangeText={(text) =>
-                  set(
-                    f.key,
-                    nullable && text.trim() === ""
-                      ? null
-                      : clampNumber(text, f.min, f.max, typeof current === "number" ? current : f.min, integer),
-                  )
+                  text.trim() === "" && f.blank
+                    ? set(f.key, f.blank === "null" ? null : undefined)
+                    : set(f.key, clampNumber(text, f.min, f.max, typeof current === "number" ? current : f.min, integer))
                 }
               />
             );

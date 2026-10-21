@@ -6,16 +6,24 @@ export const COMPACT_PROVIDERS: readonly string[] = ["claude", "codex"];
 /** "claude/sonnet" -> "claude". */
 export const baseProvider = (provider: string): string => provider.split("/")[0].toLowerCase();
 
-export const supportsCompact = (provider: string): boolean =>
-  COMPACT_PROVIDERS.includes(baseProvider(provider));
+export const supportsCompact = (provider: string, providers: readonly string[] = COMPACT_PROVIDERS): boolean =>
+  providers.includes(baseProvider(provider));
 
 /** Default cache TTLs (seconds) per provider; users override them in the plugin settings. */
 export const DEFAULT_TTL_SECONDS: Record<string, number> = { claude: 3600, codex: 300 };
 export const FALLBACK_TTL_SECONDS = 300;
 
+/** TTL at or above `longFrom` opens the window `long` seconds before expiry, shorter ones `short` (never over half). */
+export interface MarginRule {
+  longFrom: number;
+  long: number;
+  short: number;
+}
+export const DEFAULT_MARGIN_RULE: MarginRule = { longFrom: 3600, long: 180, short: 60 };
+
 /** How long before expiry the window opens: 3 min for a 1 h TTL, 1 min for 5 min (never over half). */
-export function marginSeconds(ttlSeconds: number): number {
-  return Math.min(ttlSeconds >= 3600 ? 180 : 60, ttlSeconds / 2);
+export function marginSeconds(ttlSeconds: number, rule: MarginRule = DEFAULT_MARGIN_RULE): number {
+  return Math.min(ttlSeconds >= rule.longFrom ? rule.long : rule.short, ttlSeconds / 2);
 }
 
 export type SkipReason =
