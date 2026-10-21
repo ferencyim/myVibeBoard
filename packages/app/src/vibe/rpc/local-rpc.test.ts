@@ -154,6 +154,25 @@ describe("local vibe-board RPC", () => {
     ).rejects.toThrow("[actor_not_allowed]");
   });
 
+  it("sends group chat messages as user chat events and still refuses proposals offline", async () => {
+    const { event } = await call(rpc, "vibe.chat.send", {
+      card: "ALP-1",
+      text: "hi",
+      actor: "phone",
+    });
+    expect(event).toMatchObject({
+      type: "chat",
+      authorKind: "user",
+      author: "phone",
+      body: { text: "hi" },
+    });
+    const events = (await call(rpc, "vibe.events.list", { card: "ALP-1" })).events;
+    expect(events.filter((e: any) => e.type === "chat")).toHaveLength(1);
+    await expect(rpc.invoke("vibe.proposals.accept", { eventId: event.id })).rejects.toBeInstanceOf(
+      OfflineRpcError,
+    );
+  });
+
   it("refuses what needs the computer with an offline error", async () => {
     for (const method of [
       "vibe.cards.dispatch",

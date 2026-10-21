@@ -356,24 +356,37 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
     return { deleted: true };
   }
 
+  /** A user-authored event; the daemon admits only notes and plain chat messages from the phone. */
+  function addUserEvent(cardId: string, type: "note" | "chat", author: string, body: unknown) {
+    const id = newId(now());
+    replica.mutate((sync) =>
+      sync.write("card_event", id, {
+        card_id: cardId,
+        type,
+        author_kind: "user",
+        author,
+        created_at: isoNow(),
+        body_json: JSON.stringify(body),
+      }),
+    );
+    return { event: toEvent(rowsOf("card_event").find((r) => r.id === id) as RawRow) };
+  }
+
   function eventsAdd(i: Input) {
     const card = cardOf(load(), String(i.card));
     const type = asString(i.type) ?? "note";
     if (type !== "note") throw new RpcError("actor_not_allowed", "Only notes can be added offline");
     const body = i.body ?? (typeof i.text === "string" ? { text: i.text } : undefined);
     if (body === undefined) throw new RpcError("invalid", "text or body is required");
-    const id = newId(now());
-    replica.mutate((sync) =>
-      sync.write("card_event", id, {
-        card_id: card.id,
-        type,
-        author_kind: "user",
-        author: "user",
-        created_at: isoNow(),
-        body_json: JSON.stringify(body),
-      }),
-    );
-    return { event: toEvent(rowsOf("card_event").find((r) => r.id === id) as RawRow) };
+    return addUserEvent(card.id, type, "user", body);
+  }
+
+  /** Group chat message written offline: synced later, then routed by the daemon's chat router. */
+  function chatSend(i: Input) {
+    const card = cardOf(load(), String(i.card));
+    const text = String(i.text ?? "");
+    if (!text.trim()) throw new RpcError("invalid", "Message must not be blank");
+    return addUserEvent(card.id, "chat", asString(i.actor) ?? "user", { text });
   }
 
   function replySend(i: Input) {
@@ -426,6 +439,7 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
     "vibe.cards.archive": cardsArchive,
     "vibe.cards.delete": cardsDelete,
     "vibe.events.add": eventsAdd,
+    "vibe.chat.send": chatSend,
   };
 
   return {
