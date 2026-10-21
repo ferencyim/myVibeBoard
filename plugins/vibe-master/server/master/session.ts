@@ -123,11 +123,20 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     return deps.permission.resolve(target.provider, requestedMode());
   }
 
-  /** The old agent keeps its conversation and stays openable; only the board session ends. */
-  function retire(session: AgentSession | undefined, outcome: string): void {
+  /**
+   * The old agent keeps its conversation and stays openable; only the board session ends. It is
+   * renamed so the owner can tell it from the live master (skipped on hosts without `setTitle`).
+   */
+  async function retire(session: AgentSession | undefined, outcome: string): Promise<void> {
     if (!session) return;
     moveSession(session, "ended", { outcome });
     note(session.id, { retiredReason: outcome, retiredAt: new Date(nowMs()).toISOString() });
+    const day = new Date(nowMs()).toISOString().slice(0, 10);
+    try {
+      await deps.getPaseo()?.agents.ref(session.agentId).setTitle?.(`Vibe Master（已退役 ${day}）`);
+    } catch (error) {
+      deps.log(`could not rename the retired master agent ${session.agentId}`, error);
+    }
   }
 
   function handoffFor(reason: string): string {
@@ -205,7 +214,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       }
     }
     const fresh = await spawn(paseo, target, "replaced");
-    if (live && live.id !== fresh.id) retire(live, "replaced");
+    if (live && live.id !== fresh.id) await retire(live, "replaced");
     return handle!;
   }
 
@@ -252,7 +261,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       }
       // Start the new agent first: if it cannot start, the old one keeps working.
       const fresh = await spawn(paseo, target, "mode_changed");
-      retire(live, "mode_changed");
+      await retire(live, "mode_changed");
       return { changed: true, sessionId: fresh.id };
     },
 
@@ -360,7 +369,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
             deps.log("could not record the provider switch", error);
           }
         }
-        retire(live, "switched");
+        await retire(live, "switched");
       }
       return { target, changed: true, sessionId: fresh.id };
     },
