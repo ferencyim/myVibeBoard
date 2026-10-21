@@ -41,6 +41,19 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly serverId?: string;
     }) => void;
     readonly openAgent: (input: { readonly agentId: string; readonly serverId?: string }) => void;
+    /**
+     * Fork addition (myVibeBoard): open a screen or a settings page of ANOTHER plugin on the same
+     * host, e.g. a central page that links to each plugin's settings. Absent on older hosts.
+     */
+    readonly openPluginScreen?: (input: {
+      readonly pluginId: string;
+      readonly screenId: string;
+      readonly params?: PluginScreenParams;
+    }) => void;
+    readonly openPluginSettings?: (input: {
+      readonly pluginId: string;
+      readonly screenId: string;
+    }) => void;
     readonly openWorkspace: (input: {
       readonly workspaceId: string;
       readonly serverId?: string;
