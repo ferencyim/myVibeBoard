@@ -9,31 +9,11 @@ import {
 } from "../client/edit";
 import { lastRunText, parseStatus } from "../client/format";
 import { BUILTIN_RULES } from "../server/config";
-import { mergeRuleLayers, type FieldKey, type FieldSource, type RulesConfig } from "../shared/rules";
+import { mergeRuleLayers, resolveGlobalRules, type RulesConfig } from "../shared/rules";
 
 const builtin = BUILTIN_RULES[0]!;
-const allBuiltin = (over: Partial<Record<FieldKey, FieldSource>> = {}) =>
-  ({
-    enabled: "builtin",
-    trigger: "builtin",
-    check: "builtin",
-    agent: "builtin",
-    output: "builtin",
-    priority: "builtin",
-    dedupe_key: "builtin",
-    daily_cap: "builtin",
-    "prompts.review": "builtin",
-    "prompts.fix": "builtin",
-    ...over,
-  }) as Record<FieldKey, FieldSource>;
-const target = (over: Partial<Record<FieldKey, FieldSource>> = {}) => ({
-  projectId: "p1",
-  name: "git-health",
-  origin: "builtin" as const,
-  sources: allBuiltin(over),
-  base: builtin,
-});
-const empty: RulesConfig = { projects: {} };
+const target = { name: "git-health", origin: "builtin" as const, base: builtin };
+const empty: RulesConfig = { rules: {} };
 
 describe("maintenance screen helpers", () => {
   it("reads the loose status record", () => {
@@ -58,6 +38,7 @@ describe("maintenance screen helpers", () => {
           runsToday: 1,
           lastRun: { status: "done", triggeredAt: "2026-10-01T03:00:00.000Z", cardIds: ["c1"], findings: [] },
           blocked: "paused",
+          ymlFields: ["priority", "bogus"],
           projectName: "Demo",
           origin: "builtin",
           sources: { trigger: "ui", priority: "yml" },
@@ -66,13 +47,42 @@ describe("maintenance screen helpers", () => {
           prompts: { review: "R", fix: null },
         },
         { rule: { id: "gone", name: "gone" }, defined: false },
+        {
+          rule: { id: "p1:only", name: "only", projectId: "p1", triggerKind: "time", trigger: { cron: "0 4 * * *" }, check: { type: "git" } },
+          origin: "yml",
+          projectName: "Demo",
+        },
+      ],
+      rulesGlobal: [
+        {
+          name: "git-health",
+          origin: "builtin",
+          def: { ...builtin, prompts: { review: "R" } },
+          sources: { trigger: "ui" },
+          base: builtin,
+          scope: ["p1", "p2"],
+          splitFrom: "git-health",
+        },
+        { name: "idle", origin: "custom", def: { ...builtin, name: "idle" }, sources: {}, scope: [] },
       ],
       configErrors: { p1: ["bad yaml"] },
       projects: [{ id: "p1", name: "Demo" }],
       presets: [{ id: "x", name: "Sonnet", spec: "claude/sonnet" }],
     });
-    expect(view.rules).toHaveLength(1);
-    expect(view.rules[0]).toMatchObject({
+    // global rules come first (also the one that applies nowhere), then each project's yml-only rule
+    expect(view.groups.map((g) => [g.key, g.readOnly, g.rows.length])).toEqual([
+      ["git-health", false, 1],
+      ["idle", false, 0],
+      ["p1:only", true, 1],
+    ]);
+    expect(view.groups[0]).toMatchObject({ scope: ["p1", "p2"], splitFrom: "git-health", origin: "builtin" });
+    expect(view.groups[0]!.def.prompts.review).toBe("R");
+    expect(view.groups[0]!.sources).toMatchObject({ trigger: "ui", priority: "builtin" });
+    expect(view.groups[1]!.scope).toEqual([]);
+    expect(view.groups[2]!.sources.trigger).toBe("yml");
+    const row = view.groups[0]!.rows[0]!;
+    expect(row.ymlFields).toEqual(["priority"]);
+    expect(row).toMatchObject({
       name: "git-health",
       projectName: "Demo",
       origin: "builtin",
@@ -82,14 +92,14 @@ describe("maintenance screen helpers", () => {
       progressText: "已完成卡片 4/10",
       lastRun: { status: "done", cards: 1 },
     });
-    expect(view.rules[0]!.sources).toMatchObject({ trigger: "ui", priority: "yml", agent: "builtin" });
-    expect(view.rules[0]!.def).toMatchObject({
+    expect(row.sources).toMatchObject({ trigger: "ui", priority: "yml", agent: "builtin" });
+    expect(row.def).toMatchObject({
       trigger: { kind: "workload", cards_done: 10 },
       prompts: { review: "R", fix: null },
     });
     expect(view.configErrors).toEqual([{ project: "p1", errors: ["bad yaml"] }]);
     expect(view.projects).toEqual([{ id: "p1", name: "Demo" }]);
-    expect(parseStatus(null)).toEqual({ rules: [], configErrors: [], projects: [], presets: [] });
+    expect(parseStatus(null)).toEqual({ groups: [], configErrors: [], projects: [], presets: [] });
   });
 
   it("words the last run", () => {
@@ -152,56 +162,62 @@ describe("rule editor logic", () => {
       reviewPrompt: "自定义 {{rule}}",
     };
     const { fields } = draftToFields(draft);
-    const config = applyRuleEdit(empty, target(), fields!);
-    expect(config.projects.p1!.overrides["git-health"]).toEqual({
+    const config = applyRuleEdit(empty, target, fields!, "all");
+    expect(config.rules["git-health"]).toEqual({
       trigger: { kind: "workload", cards_done: 3, commits_merged: 30 },
       check: { type: "git", stale_days: 30 },
       agent: "claude/sonnet",
       prompts: { review: "自定义 {{rule}}" },
+      projects: "all",
     });
-    const merged = mergeRuleLayers({ builtin: BUILTIN_RULES, ui: config.projects.p1 });
+    const merged = mergeRuleLayers({ builtin: BUILTIN_RULES, ui: config, projectId: "p1" });
     expect(merged.errors).toEqual([]);
     expect(merged.rules[0]!.def).toMatchObject({
       agent: "claude/sonnet",
       prompts: { review: "自定义 {{rule}}" },
     });
 
-    // restoring the defaults removes the entry again
-    const restored = applyRuleEdit(
-      config,
-      target({ trigger: "ui", check: "ui", agent: "ui", "prompts.review": "ui" }),
-      draftToFields(draftFromDef(builtin)).fields!,
-    );
-    expect(restored.projects.p1!.overrides).toEqual({});
+    // restoring the defaults for all projects removes the entry again
+    const restored = applyRuleEdit(config, target, draftToFields(draftFromDef(builtin)).fields!, "all");
+    expect(restored.rules).toEqual({});
   });
 
-  it("never writes fields that maintenance.yml supplies", () => {
-    const draft = { ...draftFromDef(builtin), priority: "high", dailyCap: "4" };
-    const config = applyRuleEdit(empty, target({ priority: "yml" }), draftToFields(draft).fields!);
-    expect(config.projects.p1!.overrides["git-health"]).toEqual({ daily_cap: 4 });
+  it("keeps a built-in rule's project scope even when every field is the default", () => {
+    const fields = draftToFields(draftFromDef(builtin)).fields!;
+    const config = applyRuleEdit(empty, target, fields, ["p1"]);
+    expect(config.rules["git-health"]).toEqual({ projects: ["p1"] });
+    expect(mergeRuleLayers({ builtin: BUILTIN_RULES, ui: config, projectId: "p2" }).rules).toEqual([]);
+    expect(mergeRuleLayers({ builtin: BUILTIN_RULES, ui: config, projectId: "p1" }).rules).toHaveLength(1);
+  });
+
+  it("keeps the migration marker when a split rule is edited", () => {
+    const start: RulesConfig = { rules: { "git-health": { projects: ["p1"], splitFrom: "git-health" } } };
+    const draft = { ...draftFromDef(builtin), dailyCap: "4" };
+    const config = applyRuleEdit(start, target, draftToFields(draft).fields!, ["p1", "p2"]);
+    expect(config.rules["git-health"]).toEqual({ daily_cap: 4, projects: ["p1", "p2"], splitFrom: "git-health" });
   });
 
   it("creates and removes custom rules without touching others", () => {
     const fields = draftToFields({ ...draftFromDef(emptyDef("x")), cardsDone: "5" }).fields!;
-    expect(addCustomRule(empty, "p1", " ", [], fields).error).toContain("不能为空");
-    expect(addCustomRule(empty, "p1", "git-health", ["git-health"], fields).error).toContain("已有");
-    const added = addCustomRule(empty, "p1", "tidy", ["git-health"], fields);
+    expect(addCustomRule(empty, " ", [], fields, "all").error).toContain("不能为空");
+    expect(addCustomRule(empty, "git-health", ["git-health"], fields, "all").error).toContain("已有");
+    const added = addCustomRule(empty, "tidy", ["git-health"], fields, ["p1"]);
     expect(added.error).toBeUndefined();
-    const merged = mergeRuleLayers({ builtin: BUILTIN_RULES, ui: added.config.projects.p1 });
-    expect(merged.errors).toEqual([]);
-    expect(merged.rules.map((r) => [r.def.name, r.origin])).toEqual([
-      ["git-health", "builtin"],
-      ["tidy", "custom"],
+    const global = resolveGlobalRules(BUILTIN_RULES, added.config);
+    expect(global.errors).toEqual([]);
+    expect(global.rules.map((r) => [r.name, r.origin, r.scope])).toEqual([
+      ["git-health", "builtin", "all"],
+      ["tidy", "custom", ["p1"]],
     ]);
 
     const edited = applyRuleEdit(
       added.config,
-      { projectId: "p1", name: "tidy", origin: "custom", sources: allBuiltin({ trigger: "ui" }), base: null },
-      draftToFields({ ...draftFromDef(merged.rules[1]!.def), dailyCap: "7" }).fields!,
+      { name: "tidy", origin: "custom", base: null },
+      draftToFields({ ...draftFromDef(global.rules[1]!.def), dailyCap: "7" }).fields!,
+      "all",
     );
-    expect(edited.projects.p1!.custom.tidy).toMatchObject({ daily_cap: 7 });
+    expect(edited.rules.tidy).toMatchObject({ daily_cap: 7, projects: "all" });
 
-    const removed = removeCustomRule(edited, "p1", "tidy");
-    expect(removed.projects.p1!.custom).toEqual({});
+    expect(removeCustomRule(edited, "tidy").rules).toEqual({});
   });
 });

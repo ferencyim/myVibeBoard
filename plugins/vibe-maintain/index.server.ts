@@ -8,7 +8,8 @@ import {
   statusRpc,
   type MaintainSettings,
 } from "./shared/rpc";
-import { EMPTY_RULES_CONFIG, type RulesConfig } from "./shared/rules";
+import { EMPTY_RULES_CONFIG, migrateRulesV1, type RulesConfig } from "./shared/rules";
+import { BUILTIN_RULES } from "./server/config";
 import { createMaintenanceEngine } from "./server/engine";
 import { perfSlowCheck } from "./server/checks/perf-slow";
 import { gitCheck } from "./server/git/check";
@@ -28,7 +29,14 @@ export default function contribute(server: PluginServerContext) {
     if (state.status === "ready") current = state.values;
   };
   const stopSettings = settings.subscribe(apply);
-  const rulesStore = server.registerSettings(rulesSettings);
+  // v1 was keyed by project: the host runs this once, when it first reads an old file.
+  const rulesStore = server.registerSettings({
+    ...rulesSettings,
+    migrate: (values, from) =>
+      from === 1
+        ? migrateRulesV1(values, store.projects.list().map((p) => p.id), BUILTIN_RULES)
+        : values,
+  });
   let rulesConfig: RulesConfig = EMPTY_RULES_CONFIG;
   const stopRules = rulesStore.subscribe((state) => {
     if (state.status === "ready") rulesConfig = state.values;
@@ -82,9 +90,18 @@ export default function contribute(server: PluginServerContext) {
       }),
     );
   });
-  server.handle(runRpc, async ({ ruleId }, c) => {
+  server.handle(runRpc, async ({ ruleId, ruleName, projectId }, c) => {
     remember(c.paseo);
     await engine.syncRules();
+    if (ruleName) {
+      const results = (await engine.runRuleNow(ruleName, projectId)).map((r) => ({
+        projectId: r.projectId,
+        status: r.outcome.status,
+        ...(r.outcome.status === "blocked" ? { why: r.outcome.why } : {}),
+      }));
+      return { status: results.some((r) => r.status === "fired") ? "fired" : "blocked", results };
+    }
+    if (!ruleId) throw new Error("ruleId or ruleName is required");
     const outcome = await engine.runNow(ruleId);
     return outcome.status === "fired"
       ? { status: "fired", run: outcome.run }
