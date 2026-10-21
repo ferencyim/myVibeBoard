@@ -1,5 +1,6 @@
 // "需求文档" section of the project edit panel: view (read-only) / edit / save-and-commit.
 
+import * as hostUi from "@getpaseo/plugin/client/react-native";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
@@ -9,6 +10,9 @@ import { queryKey, type BoardApi } from "../common/api";
 import { useHost } from "../common/ctx";
 import { Btn, Field, Muted, TextField } from "../common/ui";
 import { requirementsSaveMessage } from "./logic";
+
+// Hosts older than v0.12.1 have no Markdown component; the document then shows as monospace text.
+const HostMarkdown = (hostUi as { Markdown?: React.ComponentType<{ text: string }> }).Markdown;
 
 export function RequirementsPanel({ api, projectId }: { api: BoardApi; projectId: string }) {
   const { theme } = useHost();
@@ -53,9 +57,13 @@ export function RequirementsPanel({ api, projectId }: { api: BoardApi; projectId
         />
       ) : doc.data?.exists ? (
         <View style={{ padding: 8, borderRadius: 8, backgroundColor: theme.colors.surface1, maxHeight: 280, overflow: "hidden" }}>
-          <Text selectable style={{ color: theme.colors.foreground, fontFamily: "monospace", fontSize: 12 }}>
-            {doc.data.content || "（空文件）"}
-          </Text>
+          {HostMarkdown && doc.data.content ? (
+            <HostMarkdown text={doc.data.content} />
+          ) : (
+            <Text selectable style={{ color: theme.colors.foreground, fontFamily: "monospace", fontSize: 12 }}>
+              {doc.data.content || "（空文件）"}
+            </Text>
+          )}
         </View>
       ) : null}
       {result ? <Muted>{result}</Muted> : null}
