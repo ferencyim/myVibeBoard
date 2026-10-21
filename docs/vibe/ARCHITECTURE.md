@@ -382,6 +382,35 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 
 **推迟（不在 WP 清单）**：固件仿真（QEMU/Renode/Wokwi）与硬件在环（probe-rs/OpenOCD/串口/摄像头/sigrok）。`vibe-shared` 的 `EvidenceCollector`/`Runner` 接口保持通用，日后加采集器即可；`vibe_*` 数据模型里 `evidence_file.simulated` 与 `device` 表为其预留。
 
+### 批次 6（第三轮反馈，2026-10-21；需求见 PRODUCT-REQUIREMENTS.md「第三轮反馈」）
+
+| WP    | 名称                                                        | 拥有                                                                                                                                                                   | 依赖  | 难度 |
+| ----- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ---- |
+| WP-90 | 契约：项目多类型/简介/需求文档、预设多用途、群聊与提案事件  | `plugins/vibe-shared/**` 及生成副本；消费者为通过编译所需的最小改动                                                                                                    | —     | 中   |
+| WP-91 | 看板 UI：项目编辑、需求文档、预设表单、手动触发、输入框光标 | `plugins/vibe-board/client/{presets,board,common}/**`、`plugins/vibe-board/server/requirements/**`                                                                     | 90    | 中   |
+| WP-93 | 总 agent：历史会话、交接、可配置触发与提示词、项目上下文    | `plugins/vibe-master/**`、`skills/vibe-master/**`                                                                                                                      | 90    | 中   |
+| WP-94 | 自动维护规则可配置                                          | `plugins/vibe-maintain/**`                                                                                                                                             | 90    | 中   |
+| WP-95 | [core] vivo 官方推送                                        | `services/vibe-push-gateway/**`、`packages/server/src/server/push/**`、`packages/app/src/push-notifications/**`、App 配置插件                                          | —     | 难   |
+| WP-92 | 卡片群聊                                                    | `plugins/vibe-board/client/{detail,planning}/**`、`plugins/vibe-board/server/{chat,dispatch,finalizer}/**`；vibe-master assess/planning、vibe-verify review 的发言接入 | 91,93 | 难   |
+
+- **WP-90**：`Project.projectTypes`（非空数组）取代单值，`projectType` 保留为 `projectTypes[0]` 的兼容字段（`COMPAT(project-types)`，旧手机端仍可同步）；
+  `Project.description`、`Project.requirementsPath`（默认 `PRODUCT-REQUIREMENTS.md`）；`Preset.roleHints`（数组）取代 `roleHint`，同样保留兼容字段。
+  事件：`chat`（作者 user/master/executor/reviewer/scout/system，可带 sessionId）、`proposal`（总 agent 对标题/描述/验收标准的修改建议，状态 pending/accepted/rejected/superseded）；
+  命令层 `acceptProposal`/`rejectProposal`；总线事件 `card.review_requested`（看板请求总 agent 立即审查）。
+  共享工具 `requirements-doc`：读取、写入并只对该文件 `git commit -- <path>`（仓库处于 merge/rebase 中时拒绝），不推送。
+  验收：迁移含旧数据升级测试；sync-spec 覆盖新字段；`vibe:sync-shared:check` 通过；各消费者 typecheck/test 通过。
+- **WP-91**：项目行可编辑全部字段；类型多选；需求文档查看（Markdown）与编辑保存；预设「用途」多选、「思考强度」按 providers catalog 的模型档位单选（含「默认」）；
+  草稿卡「让总 agent 审查」（发 `card.review_requested`）、待办卡「立即执行」（`vibe.cards.dispatch` force）；`TextField` 获得焦点期间不被外部值覆盖（修光标漂移）。
+- **WP-93**：切换总 agent 不归档旧 agent，界面列出历次总 agent 会话可打开；新总 agent 首轮带交接摘要；
+  设置可改：各触发开关、防抖、补扫数量，规则补充与各唤醒模板（展示默认值、占位符说明、恢复默认）；项目块含简介与需求文档摘录；
+  卡片完成时总 agent 可返回需求文档更新，经共享工具写入提交；消费 `card.review_requested`。
+- **WP-94**：规则在界面按项目查看与编辑（存插件状态；`maintenance.yml` 仍生效并覆盖界面值，界面标出来源）；可编辑提示词模板；生成的草稿卡与提示词用中文说清发现与建议；手动立即运行。
+- **WP-95**：网关增加 vivo 发送器（鉴权签名、发送、测试推送模式，假端点单测）；token 带通道类型（协议新增可选字段）；
+  App 用配置插件接入 vivo 推送 SDK（SDK aar 与 AppID/AppKey 从本机未入库位置读取，缺失时不启用，构建照常）；FCM 路径不变。真机验收待用户提供凭据。
+- **WP-92**：卡片详情「群聊」页合并原讨论页与关键事件；总 agent 审查结论以 chat 发言 + proposal 给出，用户在群聊点「采纳」后写入描述；
+  用户在群聊发言按卡片状态转给规划会话 / 执行 agent；执行 agent 的提问、完成总结与复核结论写入群聊；派发提示词直接用卡片描述与验收标准；
+  卡片详情编辑框修复轮询回写导致的光标漂移。
+
 ### 中继部署（WP-48 仅写脚本与文档，**不连接、不执行**）
 
 目标主机：腾讯云 AlmaLinux 8，已有 Docker 与 nginx，是**共用生产机，还有其他站点**。约束：
