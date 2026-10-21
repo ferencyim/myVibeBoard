@@ -5,7 +5,7 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { SettingsCard, SettingsInput, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import React, { useState, type ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, TextInput, View } from "react-native";
 import { clampNumber, formatMap, parseList, parseMap } from "./field-parse";
 
 export type Field =
@@ -17,6 +17,8 @@ export type Field =
   | { kind: "list"; key: string; label: string }
   /** Comma-separated `key=value` pairs. */
   | { kind: "map"; key: string; label: string; valueType: "string" | "number" }
+  /** Multi-line text with a "restore default" button; needs the `theme` prop of FieldsCard. */
+  | { kind: "textarea"; key: string; label: string; defaultText: string }
   | { kind: "select"; key: string; label: string; options: ReadonlyArray<{ label: string; value: string }> };
 
 /** One card of fields bound to a settings object; `save` receives the whole next value. */
@@ -24,7 +26,9 @@ export function FieldsCard<V extends Record<string, unknown>>({
   fields,
   values,
   save,
+  theme,
 }: {
+  theme?: PluginTheme;
   fields: readonly Field[];
   values: V;
   save(next: V): void;
@@ -63,6 +67,17 @@ export function FieldsCard<V extends Record<string, unknown>>({
                 onValueChange={(v: string) => set(f.key, v)}
               />
             );
+          case "textarea":
+            return (
+              <TextArea
+                key={f.key}
+                theme={theme}
+                label={f.label}
+                value={String(current ?? "")}
+                defaultText={f.defaultText}
+                onChange={(text) => set(f.key, text)}
+              />
+            );
           case "list":
             return (
               <SettingsInput
@@ -99,6 +114,49 @@ export function FieldsCard<V extends Record<string, unknown>>({
         }
       })}
     </SettingsCard>
+  );
+}
+
+function TextArea({
+  theme,
+  label,
+  value,
+  defaultText,
+  onChange,
+}: {
+  theme?: PluginTheme;
+  label: string;
+  value: string;
+  defaultText: string;
+  onChange(text: string): void;
+}) {
+  const [text, setText] = useState(value);
+  const edit = (next: string) => {
+    setText(next);
+    onChange(next);
+  };
+  const color = theme?.colors.foreground;
+  return (
+    <View style={{ gap: 6, padding: 12 }}>
+      <Text style={{ color, fontSize: 14 }}>{label}</Text>
+      <TextInput
+        multiline
+        value={text}
+        onChangeText={edit}
+        style={{
+          color,
+          minHeight: 120,
+          borderWidth: 1,
+          borderColor: theme?.colors.border,
+          borderRadius: 8,
+          padding: 8,
+          fontSize: 13,
+        }}
+      />
+      <Pressable onPress={() => edit(defaultText)} style={{ alignSelf: "flex-start" }}>
+        <Text style={{ color: theme?.colors.foregroundMuted, fontSize: 13 }}>恢复默认</Text>
+      </Pressable>
+    </View>
   );
 }
 

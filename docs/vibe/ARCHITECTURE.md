@@ -416,6 +416,8 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
   手机策略：`prompt_template` 为 down 表只读；`prompt_override` 只能写已注册 key 的 `text`，不能删除。中央页在 vibe-board（`vibe.prompts.list/set/clear`），按注册表自动列出，不写死插件。
   新增提示词的插件：定义 `PromptDef`、启动时 `register(defs, {pruneMissing:true})`、用 `resolve` 取文本。`master.rules` 变化按文本哈希在下一条消息重发。
   卡片详情编辑框修复轮询回写导致的光标漂移。
+  WP-99 接入方：vibe-verify（8 项）、vibe-context（5 项）；它们的新设置页与 vibe-maintain / vibe-scheduler 的「高级」组共用每个插件内一份相同的 `client/settings-kit.tsx`（声明式字段列表）。
+  switch-provider 来自上游、要保持可单独安装，不依赖 vibe.db：文字作插件设置，中央页只放链接（`AUTOMATION_LINKS`）。
 
 ### 中继部署（WP-48 仅写脚本与文档，**不连接、不执行**）
 

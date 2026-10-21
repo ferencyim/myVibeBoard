@@ -6,8 +6,22 @@ type Block = { type: string; [key: string]: unknown };
 export type Message = { role: string; content: string | Block[]; timestamp?: string };
 export type Common = { meta: Record<string, unknown>; messages: Message[] };
 
-const KEEP_TURNS = 10;
-const TRANSCRIPT_BLOCK_CAP = 20_000;
+import {
+  DEFAULT_SUMMARY_ACK,
+  DEFAULT_SUMMARY_HEADER,
+  renderTemplate,
+  switchSettings,
+  textOrDefault,
+  type SwitchSettings,
+} from "../shared/settings";
+
+/** What compaction reads from the settings; the defaults equal the former constants. */
+export type CompactOptions = Pick<
+  SwitchSettings,
+  "keepTurns" | "transcriptBlockCap" | "listCap" | "summaryHeader" | "summaryAck"
+>;
+export const DEFAULT_COMPACT_OPTIONS: CompactOptions = switchSettings.schema.parse({});
+
 // ponytail: characters per token is a rough average for English and code; a real tokenizer would be tighter.
 const tokens = (chars: number) => Math.ceil(chars / 4);
 
@@ -45,7 +59,7 @@ function resultMap(common: Common) {
 }
 
 /** The complete conversation as Markdown, plus the line range each block of each message occupies. */
-function transcript(common: Common) {
+function transcript(common: Common, blockCap: number) {
   const lines: string[] = ["# Detailed transcript (long tool blocks may be cut)", ""];
   const ranges: [number, number][][] = [];
   const results = resultMap(common);
@@ -58,8 +72,8 @@ function transcript(common: Common) {
       else if (b.type === "tool_use") {
         const { name, input } = toolInfo(b);
         const result = results.get(String(b.id));
-        lines.push(`### Tool call: ${name}`, "", ...clip(asText(input), TRANSCRIPT_BLOCK_CAP).split("\n"), "");
-        lines.push(`### Tool result${result?.error ? " (error)" : ""}`, "", ...clip(result?.text ?? "", TRANSCRIPT_BLOCK_CAP).split("\n"), "");
+        lines.push(`### Tool call: ${name}`, "", ...clip(asText(input), blockCap).split("\n"), "");
+        lines.push(`### Tool result${result?.error ? " (error)" : ""}`, "", ...clip(result?.text ?? "", blockCap).split("\n"), "");
       }
       perBlock.push([start, lines.length]);
     }
@@ -72,8 +86,6 @@ function transcript(common: Common) {
 const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "str_replace_based_edit_tool"]);
 const SHELL_TOOLS = new Set(["bash", "shell", "exec_command", "execute", "run_command", "command"]);
 const PATH_KEYS = ["file_path", "filePath", "path", "notebook_path"];
-
-const LIST_CAP = 40;
 
 // A plausible file path. Shell edits are found with regular expressions, which also catch words like "10px" or
 // "node:fs", so require a slash or an extension, and drop /tmp and dot-prefixed scratch scripts.
@@ -117,7 +129,7 @@ function shellCommandLines(command: string): string {
  * Facts that older history would otherwise bury: the goal, files edited, commits made and unfinished tasks.
  * Built only from tool calls and text, so it is deterministic.
  */
-function sections(common: Common, ranges: [number, number][][]) {
+function sections(common: Common, ranges: [number, number][][], listCap: number) {
   const results = resultMap(common);
   const files = new Map<string, { edits: number; pointer: string }>();
   const commits: string[] = [];
@@ -161,12 +173,12 @@ function sections(common: Common, ranges: [number, number][][]) {
   );
   const first = common.messages.find(startsTurn);
   const goal = first ? clip(blocks(first).filter((b) => b.type === "text").map((b) => String(b.text)).join(" ").trim(), 600) : "";
-  const recent = [...files.entries()].slice(-LIST_CAP).reverse();
+  const recent = [...files.entries()].slice(-listCap).reverse();
   const out: string[] = [];
   if (goal) out.push(`Session goal: ${goal}`, "");
   if (recent.length) out.push(`Files edited (${files.size} detected, newest first):`, ...recent.map(([path, f]) => `- ${path} (${f.edits} edit${f.edits === 1 ? "" : "s"}) ${f.pointer}`), "");
-  if (commits.length) out.push(`Commits (${commits.length}):`, ...commits.slice(-LIST_CAP), "");
-  if (todos.length) out.push("Unfinished tasks from the last task list:", ...todos.slice(0, LIST_CAP), "");
+  if (commits.length) out.push(`Commits (${commits.length}):`, ...commits.slice(-listCap), "");
+  if (todos.length) out.push("Unfinished tasks from the last task list:", ...todos.slice(0, listCap), "");
   return out.join("\n");
 }
 
@@ -206,11 +218,15 @@ export type Compaction = { common: Common; transcriptPath: string; beforeTokens:
  * Keeps the last few turns word for word and replaces everything before them with a short, deterministic
  * view that points into a full transcript file. Returns null when the session already fits `budget` tokens.
  */
-export async function compact(common: Common, budget: number): Promise<Compaction | null> {
+export async function compact(
+  common: Common,
+  budget: number,
+  options: CompactOptions = DEFAULT_COMPACT_OPTIONS,
+): Promise<Compaction | null> {
   const beforeTokens = estimateTokens(common);
   if (beforeTokens <= budget) return null;
 
-  const { text, ranges } = transcript(common);
+  const { text, ranges } = transcript(common, options.transcriptBlockCap);
   const dir = join(tmpdir(), "paseo-transcripts");
   await mkdir(dir, { recursive: true });
   const transcriptPath = join(dir, `${String(common.meta.id ?? Date.now())}.md`);
@@ -219,17 +235,12 @@ export async function compact(common: Common, budget: number): Promise<Compactio
   const turnStarts = common.messages.flatMap((m, i) => (startsTurn(m) ? [i] : []));
   // The first line becomes the new agent's title, so name it after the original opening request.
   const opening = oneLine(blocks(common.messages[turnStarts[0] ?? 0] ?? { role: "user", content: "" }).map((b) => String(b.text ?? "")).join(" "));
-  const header = [
-    `${clip(opening, 70) || "Continued session"}`,
-    "",
-    "This session moved to a new provider and its history was too large for the new model's context window.",
-    "Earlier history is compacted below: your messages and the assistant's text are kept, tool calls are one line each, and errors are kept in full.",
-    `The detailed transcript is at ${transcriptPath}. Each entry's [L<first>-L<last>] pointer gives its line range there. Read or search those lines when you need more detail. Long tool blocks may be cut; images and reasoning are omitted.`,
-    "Do not resume, repeat or finish earlier work on your own. Wait for the user's next message and answer only that.",
-    "",
-  ].join("\n");
+  const header = renderTemplate(textOrDefault(options.summaryHeader, DEFAULT_SUMMARY_HEADER), {
+    title: clip(opening, 70) || "Continued session",
+    transcriptPath,
+  });
 
-  const facts = sections(common, ranges);
+  const facts = sections(common, ranges, options.listCap);
   const stamp = common.messages[0]?.timestamp ?? new Date().toISOString();
   const attempt = (turns: number, textCap: number, resultCap: number, dropOldest: number) => {
     const cut = turnStarts.length > turns ? turnStarts[turnStarts.length - turns] : 0;
@@ -238,14 +249,14 @@ export async function compact(common: Common, budget: number): Promise<Compactio
     const summary: Message[] = entries.length
       ? [
           { role: "user", content: [{ type: "text", text: `${header}${facts}\nEarlier history, oldest first:\n${entries.join("\n")}` }], timestamp: stamp },
-          { role: "assistant", content: [{ type: "text", text: "Understood. I will use the compacted history and the full transcript when I need details." }], timestamp: stamp },
+          { role: "assistant", content: [{ type: "text", text: textOrDefault(options.summaryAck, DEFAULT_SUMMARY_ACK) }], timestamp: stamp },
         ]
       : [];
     const next: Common = { meta: common.meta, messages: [...summary, ...tail] };
     return { next, afterTokens: estimateTokens(next) };
   };
 
-  for (const turns of [KEEP_TURNS, 6, 3, 1])
+  for (const turns of [options.keepTurns, 6, 3, 1])
     for (const [textCap, resultCap] of [[2000, 200], [800, 100], [300, 0]] as const) {
       const result = attempt(turns, textCap, resultCap, 0);
       if (result.afterTokens <= budget) return { common: result.next, transcriptPath, beforeTokens, afterTokens: result.afterTokens };

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { publishEvent } from "../server/vibe/db";
 import { effectiveLimit, deviceKindFor } from "../server/scheduler";
+import { schedulerSettings } from "../shared/rpc";
+import { DEFAULT_CONFIG } from "../server/scheduler";
 import { setup, usage } from "./helpers";
 
 const keys = (r: { admitted: Array<{ cardKey: string }> }) => r.admitted.map((a) => a.cardKey);
@@ -200,6 +202,25 @@ describe("dispatch failures", () => {
     await t.runtime.tickOnce();
     t.clock.advance(6 * 60_000);
     expect(keys(await t.runtime.tickOnce())).toEqual([]); // timed out: slot freed, short cooldown
+    t.clock.advance(2000);
+    expect(keys(await t.runtime.tickOnce())).toEqual([a.key]);
+  });
+
+  it("the pending timeout is a setting (default 5 minutes)", async () => {
+    expect(schedulerSettings.schema.parse({})).toMatchObject({
+      pendingTimeoutMinutes: DEFAULT_CONFIG.pendingTimeoutMinutes,
+      retryCooldownSeconds: DEFAULT_CONFIG.retryCooldownSeconds,
+      maxAdmitAttempts: DEFAULT_CONFIG.maxAdmitAttempts,
+    });
+    expect(DEFAULT_CONFIG.pendingTimeoutMinutes).toBe(5);
+    const t = setup({ settings: { globalLimit: 1, retryCooldownSeconds: 1, pendingTimeoutMinutes: 30 } });
+    const a = t.card("a", "high", t.preset("claude").id);
+    await t.runtime.tickOnce();
+    t.clock.advance(20 * 60_000); // past the old 5 minutes, inside the configured 30
+    expect(keys(await t.runtime.tickOnce())).toEqual([]);
+    expect(t.runtime.scheduler.status()).toMatchObject({ pending: [{ cardKey: a.key }] });
+    t.clock.advance(11 * 60_000); // now past 30 minutes: released
+    expect(keys(await t.runtime.tickOnce())).toEqual([]);
     t.clock.advance(2000);
     expect(keys(await t.runtime.tickOnce())).toEqual([a.key]);
   });

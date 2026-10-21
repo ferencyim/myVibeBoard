@@ -16,6 +16,16 @@ export const maintainSettings = defineSettings({
     pauseAfterRejections: z.number().int().min(1).max(20).default(3),
     /** Agent (provider/model) for sub agents and fixes when a rule does not name one. */
     defaultAgent: z.string().default("claude/sonnet"),
+
+    // ---- advanced (WP-99); the defaults are the values that used to be hard-coded ----
+    /** One sub-agent run (a rule's read-only analysis), in minutes. */
+    subAgentTimeoutMinutes: z.number().min(1).max(240).default(10),
+    /** Minimum seconds between `git rev-list` polls per rule (commit-count triggers). */
+    commitPollSeconds: z.number().int().min(5).max(3600).default(60),
+    /** Permission mode of a fix worker that runs unattended, per provider; others use the provider default. */
+    unattendedModes: z.record(z.string(), z.string().min(1)).default({ claude: "acceptEdits", codex: "auto-review" }),
+    /** Permission mode of read-only sub agents, per provider. */
+    readOnlyModes: z.record(z.string(), z.string().min(1)).default({ claude: "plan", codex: "read-only" }),
   }),
 });
 export type MaintainSettings = z.output<typeof maintainSettings.schema>;

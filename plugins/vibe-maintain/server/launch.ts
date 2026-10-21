@@ -9,17 +9,24 @@ type Api = Pick<PaseoApi, "agents" | "projects" | "workspaces">;
 const normalizePath = (p: string) => p.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
 
 /** Read-only-ish modes; the engine additionally compares `git status`/HEAD before and after. */
-const READ_ONLY_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
+export const READ_ONLY_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
+export const DEFAULT_SUBAGENT_TIMEOUT_MS = 10 * 60_000;
 
 export function createSubAgentRunner(
-  deps: AgentResolveDeps & { getPaseo: () => Api | null; timeoutMs?: number },
+  deps: AgentResolveDeps & {
+    getPaseo: () => Api | null;
+    /** Milliseconds, or a getter so a settings change applies to the next run (default 10 minutes). */
+    timeoutMs?: number | (() => number);
+    /** Read-only mode id per provider (setting); defaults to READ_ONLY_MODE. */
+    readOnlyModes?: () => Record<string, string>;
+  },
 ): SubAgentRunner {
   return {
     async run({ rule, project, prompt }) {
       const paseo = deps.getPaseo();
       if (!paseo) throw new Error("No daemon handle yet");
       const { spec, provider } = resolveAgent(rule, project, deps);
-      const modeId = READ_ONLY_MODE[provider];
+      const modeId = (deps.readOnlyModes?.() ?? READ_ONLY_MODE)[provider];
       const agent = await paseo.agents.create({
         cwd: project.repoPath,
         title: `Maintenance: ${rule.name}`,
@@ -28,7 +35,7 @@ export function createSubAgentRunner(
         config: { provider: spec, ...(modeId ? { modeId } : {}) },
       });
       try {
-        const result = await agent.run(prompt, { timeoutMs: deps.timeoutMs ?? 10 * 60_000 });
+        const result = await agent.run(prompt, { timeoutMs: (typeof deps.timeoutMs === "function" ? deps.timeoutMs() : deps.timeoutMs) ?? DEFAULT_SUBAGENT_TIMEOUT_MS });
         if (result.status !== "idle") {
           throw new Error(result.error ?? `sub agent ended with status ${result.status}`);
         }

@@ -38,6 +38,13 @@ export const schedulerSettings = defineSettings({
     conflictAvoidance: z.boolean().default(true),
     /** Capability table entries; same id replaces the built-in entry. */
     agentProfiles: z.array(AgentProfileSchema).default([]),
+
+    // ---- advanced (WP-99); the defaults are the values that used to be hard-coded ----
+    /** An admitted card nobody dispatched within this many minutes is released and backed off. */
+    pendingTimeoutMinutes: z.number().min(1).max(240).default(5),
+    /** After a failed dispatch a card waits this long before it is admitted again, up to maxAdmitAttempts times. */
+    retryCooldownSeconds: z.number().int().min(0).max(86_400).default(120),
+    maxAdmitAttempts: z.number().int().min(1).max(20).default(3),
   }),
 });
 

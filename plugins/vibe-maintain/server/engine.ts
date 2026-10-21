@@ -72,7 +72,7 @@ export interface EngineOptions {
   fixLauncher?: FixLauncher;
   newId?: () => string;
   /** Minimum seconds between `git rev-list` polls per rule (commit-count triggers). */
-  commitPollSeconds?: number;
+  commitPollSeconds?: number | (() => number);
   pollIntervalMs?: number;
   log?: (message: string, error?: unknown) => void;
 }
@@ -100,7 +100,10 @@ export function createMaintenanceEngine(options: EngineOptions) {
   const settings = options.settings ?? (() => DEFAULT_ENGINE_SETTINGS);
   const newId = options.newId ?? randomUUID;
   const log = options.log ?? (() => undefined);
-  const commitPollMs = (options.commitPollSeconds ?? 60) * 1000;
+  const commitPollMs = () => {
+    const seconds = options.commitPollSeconds;
+    return ((typeof seconds === "function" ? seconds() : seconds) ?? 60) * 1000;
+  };
 
   const uiRules = options.uiRules ?? (() => EMPTY_RULES_CONFIG);
   const configCache = new Map<
@@ -375,7 +378,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
     if (t.commits_merged) {
       const c = getCounter(project.id, ruleKey(rule, "commits"));
       const last = lastCommitPoll.get(rule.id) ?? 0;
-      if (c && now().getTime() - last >= commitPollMs) {
+      if (c && now().getTime() - last >= commitPollMs()) {
         lastCommitPoll.set(rule.id, now().getTime());
         const n = await commitsSince(project, c.since);
         setCounter(project.id, ruleKey(rule, "commits"), n);
