@@ -34,13 +34,42 @@ export const CARD_EVENT_TYPES = [
   "reject",
   "note",
   "maintenance",
+  // Group chat message (body: ChatEventBody) and the master's edit suggestion (ProposalEventBody).
+  "chat",
+  "proposal",
 ] as const;
 export type CardEventType = (typeof CARD_EVENT_TYPES)[number];
 export const CardEventTypeSchema = z.enum(CARD_EVENT_TYPES);
 
-export const AUTHOR_KINDS = ["user", "agent", "system"] as const;
+// `agent` is the legacy generic agent author (old rows); chat/proposal use the role-specific kinds.
+export const AUTHOR_KINDS = [
+  "user",
+  "agent",
+  "master",
+  "executor",
+  "reviewer",
+  "scout",
+  "system",
+] as const;
 export type AuthorKind = (typeof AUTHOR_KINDS)[number];
 export const AuthorKindSchema = z.enum(AUTHOR_KINDS);
+
+/** Purpose of a preset: which jobs the selector may use it for. */
+export const ROLE_HINTS = ["worker", "scout", "reviewer"] as const;
+export type RoleHint = (typeof ROLE_HINTS)[number];
+export const RoleHintSchema = z.enum(ROLE_HINTS);
+
+/** `chat` card event: what kind of message it is (UI styling / filtering). */
+export const CHAT_KINDS = ["question", "summary", "verdict", "info"] as const;
+export type ChatKind = (typeof CHAT_KINDS)[number];
+export const ChatKindSchema = z.enum(CHAT_KINDS);
+
+export const PROPOSAL_STATUSES = ["pending", "accepted", "rejected", "superseded"] as const;
+export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+export const ProposalStatusSchema = z.enum(PROPOSAL_STATUSES);
+
+/** Project requirements file default: relative to the repository root. */
+export const DEFAULT_REQUIREMENTS_PATH = "PRODUCT-REQUIREMENTS.md";
 
 // --- presets (field values kept compatible with the Tasks plugin) ------------------------
 export const PRESET_ENVIRONMENT_KINDS = ["project-default", "new-worktree"] as const;
