@@ -28,6 +28,7 @@ export default defineConfig({
           include: [
             "src/**/*.{test,spec}.{ts,tsx}",
             "native-release-version.test.ts",
+            "plugins/**/*.test.ts",
             "app.config.test.ts",
             "vitest-environment.test.ts",
           ],

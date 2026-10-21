@@ -2147,10 +2147,11 @@ export class DaemonClient {
     });
   }
 
-  registerPushToken(token: string): void {
+  registerPushToken(token: string, channel?: "fcm" | "vivo"): void {
     this.sendSessionMessage({
       type: "register_push_token",
       token,
+      ...(channel && channel !== "fcm" ? { channel } : {}),
     });
   }
 

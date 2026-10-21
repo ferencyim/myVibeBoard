@@ -1,5 +1,7 @@
 import type pino from "pino";
 
+import type { PushChannel } from "./token-store.js";
+
 export interface PushPayload {
   title: string;
   body: string;
@@ -52,7 +54,11 @@ export class PushService {
     this.gateway = gateway;
   }
 
-  async sendPush(tokens: string[], payload: PushPayload): Promise<void> {
+  async sendPush(
+    tokens: string[],
+    payload: PushPayload,
+    channels?: ReadonlyMap<string, PushChannel>,
+  ): Promise<void> {
     if (tokens.length === 0) {
       return;
     }
@@ -62,7 +68,9 @@ export class PushService {
     tokens = tokens.filter(isExpoToken);
     if (nativeTokens.length > 0) {
       if (this.gateway) {
-        await Promise.all(nativeTokens.map((token) => this.sendViaGateway(token, payload)));
+        await Promise.all(
+          nativeTokens.map((token) => this.sendViaGateway(token, payload, channels?.get(token))),
+        );
       } else {
         this.logger.debug(
           { count: nativeTokens.length },
@@ -88,7 +96,11 @@ export class PushService {
     await Promise.all(batches.map((batch) => this.sendBatch(batch)));
   }
 
-  private async sendViaGateway(token: string, payload: PushPayload): Promise<void> {
+  private async sendViaGateway(
+    token: string,
+    payload: PushPayload,
+    channel?: PushChannel,
+  ): Promise<void> {
     const gateway = this.gateway;
     if (!gateway) return;
     try {
@@ -103,10 +115,12 @@ export class PushService {
           title: payload.title,
           body: payload.body,
           data: payload.data,
+          // Omitted for fcm so the request is identical to what older daemons send.
+          ...(channel && channel !== "fcm" ? { channel } : {}),
         }),
       });
       if (response.status === 404) {
-        // Gateway reports the FCM token as unregistered.
+        // Gateway reports the token as unregistered.
         this.revokeToken(token);
         return;
       }

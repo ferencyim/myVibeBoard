@@ -126,4 +126,26 @@ describe("PushService gateway delivery", () => {
     expect(seen[0].body).toEqual({ token: "fcm-1", title: "P", body: "Finished", data: { a: 1 } });
     expect(revoked).toEqual(["gone"]);
   });
+
+  test("vivo tokens carry channel=vivo; fcm requests keep the exact old body", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const server = createServer(async (req, res) => {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      bodies.push(JSON.parse(raw) as Record<string, unknown>);
+      res.end("{}");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const service = new PushService(logger, () => undefined, { url });
+    const payload = { title: "P", body: "Finished" };
+
+    await service.sendPush(["fcm-1"], payload);
+    await service.sendPush(["viv-1", "fcm-2"], payload, new Map([["viv-1", "vivo" as const]]));
+    server.close();
+
+    expect(bodies[0]).not.toHaveProperty("channel");
+    expect(bodies.find((b) => b.token === "viv-1")?.channel).toBe("vivo");
+    expect(bodies.find((b) => b.token === "fcm-2")).not.toHaveProperty("channel");
+  });
 });

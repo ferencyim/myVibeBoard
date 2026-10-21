@@ -191,7 +191,7 @@ import type { HubRelationshipManagement } from "./hub/relationship-controller.js
 import { HubExecutionController } from "./hub/execution-controller.js";
 import type { HubExecutionAgents } from "./hub/daemon-executions.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
-import type { PushNotifications } from "./push/index.js";
+import type { PushChannel, PushNotifications } from "./push/index.js";
 import {
   archivePersistedWorkspaceRecord,
   archiveWorkspaceContents,
@@ -758,6 +758,7 @@ export class Session {
       appVersion: string | null;
       activity: ClientActivity | null;
       pushToken: string | null;
+      pushChannel: PushChannel;
     }
   >();
   private unsubscribeTerminalWorkspaceContributionEvents: (() => void) | null = null;
@@ -1251,6 +1252,7 @@ export class Session {
         appVersion,
         activity: this.clientSources.get(source)?.activity ?? null,
         pushToken: this.clientSources.get(source)?.pushToken ?? null,
+        pushChannel: this.clientSources.get(source)?.pushChannel ?? "fcm",
       });
       this.refreshObservationProducers();
       // COMPAT(ownedSubscriptions): added in v0.8.0, remove capability-driven legacy host registration after 2027-03-09.
@@ -1510,6 +1512,7 @@ export class Session {
         appVersion: this.appVersion,
         activity: null,
         pushToken: null,
+        pushChannel: "fcm",
       };
       this.clientSources.set(source, metadata);
     }
@@ -3099,7 +3102,7 @@ export class Session {
         await this.handleListCommandsRequest(msg);
         return;
       case "register_push_token":
-        this.handleRegisterPushToken(msg.token);
+        this.handleRegisterPushToken(msg.token, msg.channel);
         return;
       case "push.unregister.request":
         this.pushNotifications.revoke(msg.token);
@@ -4966,7 +4969,7 @@ export class Session {
       void this.clearFocusedTerminalAttention(focusedTerminalId);
     }
     if (metadata.pushToken) {
-      this.pushNotifications.renew(metadata.pushToken);
+      this.pushNotifications.renew(metadata.pushToken, metadata.pushChannel);
     }
   }
 
@@ -4985,9 +4988,11 @@ export class Session {
   /**
    * Handle push token registration
    */
-  private handleRegisterPushToken(token: string): void {
-    this.currentClientMetadata().pushToken = token;
-    this.pushNotifications.renew(token);
+  private handleRegisterPushToken(token: string, channel: PushChannel = "fcm"): void {
+    const metadata = this.currentClientMetadata();
+    metadata.pushToken = token;
+    metadata.pushChannel = channel;
+    this.pushNotifications.renew(token, channel);
     this.sessionLogger.info("Registered push token");
   }
 

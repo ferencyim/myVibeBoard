@@ -2914,6 +2914,8 @@ export const ListCommandsRequestSchema = z.object({
 export const RegisterPushTokenMessageSchema = z.object({
   type: z.literal("register_push_token"),
   token: z.string(),
+  // COMPAT(pushChannels): added in v0.13.0, absent means "fcm"; gate sends on features.pushChannels.
+  channel: z.enum(["fcm", "vivo"]).optional(),
 });
 
 export const PushUnregisterRequestSchema = z.object({
@@ -3579,9 +3581,9 @@ export const ServerInfoStatusPayloadSchema = z
         creationLifecycle: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
-        // COMPAT(internalAgents): added in v0.9.0; remove gate after 2027-03-17.
+        // COMPAT(internalAgents): added in v0.13.0; remove gate after 2027-03-17.
         internalAgents: z.boolean().optional(),
-        // COMPAT(internalWorkspaces): added in v0.9.0; remove gate after 2027-03-17.
+        // COMPAT(internalWorkspaces): added in v0.13.0; remove gate after 2027-03-17.
         internalWorkspaces: z.boolean().optional(),
         backgroundWorkspaces: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
@@ -3624,6 +3626,8 @@ export const ServerInfoStatusPayloadSchema = z
         relayConfig: z.boolean().optional(),
         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
         pushTokenRevocation: z.boolean().optional(),
+        // COMPAT(pushChannels): added in v0.13.0, remove gate after 2027-06-30.
+        pushChannels: z.boolean().optional(),
         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
         plugins: z.boolean().optional(),
         // COMPAT(pluginManagement): added in v0.4.0, remove gate after 2027-08-14.
@@ -4671,7 +4675,7 @@ export const AgentTimelineSearchResponseMessageSchema = z.object({
         seq: z.number().int().nonnegative(),
         role: z.enum(["user", "assistant"]),
         // Estimated occurrences in the message; the client verifies against rendered text.
-        // COMPAT(timelineSearchCount): added in v0.9.0, remove optional after 2027-09-22.
+        // COMPAT(timelineSearchCount): added in v0.13.0, remove optional after 2027-09-22.
         count: z.number().int().positive().optional(),
       }),
     ),
