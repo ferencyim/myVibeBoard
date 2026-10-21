@@ -54,6 +54,16 @@ import {
   type Project,
   type Tag,
 } from "../contract/model";
+import {
+  PROMPT_OVERRIDE_MAX_CHARS,
+  PromptDefSchema,
+  composePrompt,
+  promptOverrideId,
+  renderPromptTemplate,
+  type PromptDef,
+  type PromptInfo,
+  type PromptSource,
+} from "../contract/prompts";
 import { sortKeyAfter } from "../contract/sort-key";
 import {
   type MoveActor,
@@ -1718,5 +1728,196 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
   };
 
-  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, deviceId, db };
+  // ---- prompt registry (WP-98) ----
+
+  interface TemplateRow {
+    key: string;
+    plugin: string;
+    role: string;
+    title: string;
+    description: string;
+    when_sent: string;
+    audience: string;
+    default_text: string;
+    placeholders_json: string;
+    fixed_suffix: string;
+    sort_order: number;
+  }
+
+  const mustTemplate = (key: string): TemplateRow => {
+    const row = db.prepare<TemplateRow>("SELECT * FROM prompt_template WHERE key = ?").get(key);
+    if (!row) throw new CommandError("not_found", `Prompt not registered: ${key}`);
+    return row;
+  };
+
+  const overrideText = (key: string, projectId: string | null): string | null => {
+    const row = db
+      .prepare<{ text: string }>(
+        "SELECT text FROM prompt_override WHERE key = ? AND COALESCE(project_id, '') = ?",
+      )
+      .get(key, projectId ?? "");
+    return row && row.text.trim() ? row.text : null;
+  };
+
+  const prompts = {
+    /**
+     * Upsert defaults and metadata of the calling plugin's prompts. Overrides are never touched.
+     * `pruneMissing` drops templates of the same plugin that are no longer in `defs` (renamed or
+     * removed keys); their overrides stay in the table, harmless.
+     */
+    register(defs: readonly PromptDef[], options: { pruneMissing?: boolean } = {}): void {
+      const parsed = defs.map((d) => PromptDefSchema.parse(d));
+      write(() => {
+        for (const d of parsed) {
+          const have = db.prepare<TemplateRow>("SELECT * FROM prompt_template WHERE key = ?").get(d.key);
+          const next = [
+            d.plugin,
+            d.role,
+            d.title,
+            d.description,
+            d.whenSent,
+            d.audience,
+            d.defaultText,
+            JSON.stringify(d.placeholders),
+            d.fixedSuffix,
+            d.order,
+          ];
+          if (
+            have &&
+            JSON.stringify([
+              have.plugin,
+              have.role,
+              have.title,
+              have.description,
+              have.when_sent,
+              have.audience,
+              have.default_text,
+              have.placeholders_json,
+              have.fixed_suffix,
+              have.sort_order,
+            ]) === JSON.stringify(next)
+          )
+            continue;
+          db.prepare(
+            `INSERT INTO prompt_template (key, plugin, role, title, description, when_sent, audience,
+               default_text, placeholders_json, fixed_suffix, sort_order, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET plugin = excluded.plugin, role = excluded.role,
+               title = excluded.title, description = excluded.description, when_sent = excluded.when_sent,
+               audience = excluded.audience, default_text = excluded.default_text,
+               placeholders_json = excluded.placeholders_json, fixed_suffix = excluded.fixed_suffix,
+               sort_order = excluded.sort_order, updated_at = excluded.updated_at`,
+          ).run(d.key, ...(next as SqlParam[]), iso());
+        }
+        if (options.pruneMissing && parsed.length > 0) {
+          const keep = new Set(parsed.map((d) => d.key));
+          for (const plugin of new Set(parsed.map((d) => d.plugin))) {
+            for (const row of db
+              .prepare<{ key: string }>("SELECT key FROM prompt_template WHERE plugin = ?")
+              .all(plugin)) {
+              if (!keep.has(row.key)) db.prepare("DELETE FROM prompt_template WHERE key = ?").run(row.key);
+            }
+          }
+        }
+      });
+    },
+
+    /** The raw body in effect (project override > global override > default), not rendered. */
+    body(
+      key: string,
+      options: { projectId?: string | null } = {},
+    ): { text: string; source: PromptSource } {
+      const t = mustTemplate(key);
+      const project = options.projectId ? overrideText(key, options.projectId) : null;
+      if (project !== null) return { text: project, source: "project" };
+      const global = overrideText(key, null);
+      if (global !== null) return { text: global, source: "global" };
+      return { text: t.default_text, source: "default" };
+    },
+
+    /** Body in effect, `{{placeholders}}` rendered once, then the fixed suffix appended. */
+    resolve(
+      key: string,
+      options: { projectId?: string | null; vars?: Record<string, string> } = {},
+    ): string {
+      const t = mustTemplate(key);
+      const { text } = prompts.body(key, options);
+      return composePrompt(renderPromptTemplate(text, options.vars ?? {}), t.fixed_suffix);
+    },
+
+    /** Set (or with blank text, clear) an override. `projectId` null/omitted = global. */
+    setOverride(key: string, text: string, options: { projectId?: string | null } = {}): void {
+      write((hlc) => {
+        mustTemplate(key);
+        const projectId = options.projectId ?? null;
+        if (
+          projectId !== null &&
+          !db.prepare("SELECT 1 AS x FROM project WHERE id = ?").get(projectId)
+        )
+          throw new CommandError("not_found", `Project not found: ${projectId}`);
+        if (text.length > PROMPT_OVERRIDE_MAX_CHARS)
+          throw new CommandError(
+            "invalid",
+            `Prompt override too long (max ${PROMPT_OVERRIDE_MAX_CHARS} characters)`,
+          );
+        const value = text.trim() ? text : "";
+        const id = promptOverrideId(key, projectId);
+        const row = db.prepare<{ text: string }>("SELECT text FROM prompt_override WHERE id = ?").get(id);
+        if (row ? row.text === value : !value) return;
+        db.prepare(
+          `INSERT INTO prompt_override (id, key, project_id, text, created_at, updated_at, updated_hlc)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at,
+             updated_hlc = excluded.updated_hlc`,
+        ).run(id, key, projectId, value, iso(), iso(), hlc);
+        stampFields("prompt_override", id, ["text"], hlc);
+      });
+    },
+
+    /** Back to the default (for a project override: to the global one). */
+    clearOverride(key: string, options: { projectId?: string | null } = {}): void {
+      prompts.setOverride(key, "", options);
+    },
+
+    /** Every registered prompt, with overrides and the source of the text in effect. */
+    list(options: { projectId?: string | null } = {}): PromptInfo[] {
+      const rows = db.prepare<TemplateRow>("SELECT * FROM prompt_template").all();
+      const overrides = db
+        .prepare<{ key: string; project_id: string | null; text: string }>(
+          "SELECT key, project_id, text FROM prompt_override WHERE text <> ''",
+        )
+        .all();
+      return rows
+        .map((r): PromptInfo => {
+          const mine = overrides.filter((o) => o.key === r.key);
+          const globalOverride = mine.find((o) => o.project_id === null)?.text ?? null;
+          const projectOverride = options.projectId
+            ? (mine.find((o) => o.project_id === options.projectId)?.text ?? null)
+            : null;
+          const source: PromptSource =
+            projectOverride !== null ? "project" : globalOverride !== null ? "global" : "default";
+          return {
+            key: r.key,
+            plugin: r.plugin,
+            role: r.role as PromptInfo["role"],
+            title: r.title,
+            description: r.description,
+            whenSent: r.when_sent,
+            audience: r.audience,
+            defaultText: r.default_text,
+            placeholders: JSON.parse(r.placeholders_json),
+            fixedSuffix: r.fixed_suffix,
+            order: r.sort_order,
+            globalOverride,
+            projectOverride,
+            source,
+            effectiveText: projectOverride ?? globalOverride ?? r.default_text,
+            overriddenProjects: mine.filter((o) => o.project_id !== null).map((o) => o.project_id!),
+          };
+        })
+        .sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+    },
+  };
+
+  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, deviceId, db };
 }

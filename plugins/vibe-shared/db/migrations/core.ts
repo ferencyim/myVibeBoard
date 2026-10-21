@@ -313,4 +313,38 @@ ALTER TABLE card_event_new RENAME TO card_event;
 CREATE INDEX idx_card_event_card ON card_event(card_id, created_at, id);
 `,
   },
+  {
+    version: 5,
+    name: "prompt_registry",
+    sql: `
+-- Prompt registry (WP-98). prompt_template: defaults and metadata, written only by the plugin
+-- that owns the prompt (register on start-up). prompt_override: the owner's text, global
+-- (project_id NULL) or per project; text '' = no override. id = '<key>@<project id or *>' (stable
+-- across devices so the phone can create/edit overrides offline).
+CREATE TABLE prompt_template (
+  key TEXT PRIMARY KEY,
+  plugin TEXT NOT NULL,
+  role TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  when_sent TEXT NOT NULL DEFAULT '',
+  audience TEXT NOT NULL DEFAULT '',
+  default_text TEXT NOT NULL,
+  placeholders_json TEXT NOT NULL DEFAULT '[]',
+  fixed_suffix TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE prompt_override (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL,
+  project_id TEXT,
+  text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_hlc TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX idx_prompt_override_scope ON prompt_override(key, COALESCE(project_id, ''));
+`,
+  },
 ];
