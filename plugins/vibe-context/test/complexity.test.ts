@@ -426,7 +426,7 @@ describe("agent.create injection budget", () => {
     expect(normal?.systemPrompt).toContain("harbor module is half done");
     const tight = await injectContext(request, { userHome: home, budgetFor: () => 0 });
     expect(tight?.systemPrompt).not.toContain("harbor module is half done");
-    expect(tight?.systemPrompt).toContain("too large to inline");
+    expect(tight?.systemPrompt).toContain("太长无法内联");
     const none = await injectContext(request, { userHome: home, budgetFor: () => undefined });
     expect(none?.systemPrompt).toContain("harbor module is half done");
   });

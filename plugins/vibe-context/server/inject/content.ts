@@ -38,11 +38,11 @@ export function buildContextBlock(store: MemoryStore, options: ContextOptions = 
   parts.push(prompts.resolve("context.scout_guidance"));
 
   const directives = store.readUserDirectives()?.trim();
-  if (directives) parts.push("## User directives", directives);
+  if (directives) parts.push("## 主人的指令", directives);
 
   const instructions = store.readInstructions().filter((f) => f.text.trim());
   if (instructions.length) {
-    parts.push("## Project instructions");
+    parts.push("## 项目指令");
     for (const f of instructions) parts.push(`### ${f.name}`, f.text.trim());
   }
 
@@ -53,7 +53,7 @@ export function buildContextBlock(store: MemoryStore, options: ContextOptions = 
     const body = entries.map((e) => e.body).join("\n\n");
     const cost = estimateTokens(body);
     if (cost > remaining) {
-      memory.push(`### ${file}`, `(${entries.length} entries, too large to inline: read \`.vibe/${file}\`)`);
+      memory.push(`### ${file}`, `（共 ${entries.length} 条，太长无法内联：请读 \`.vibe/${file}\`）`);
     } else {
       remaining -= cost;
       memory.push(`### ${file}`, body);
@@ -61,8 +61,8 @@ export function buildContextBlock(store: MemoryStore, options: ContextOptions = 
   }
   if (memory.length) {
     parts.push(
-      "## Project memory",
-      "Demoted older entries are in `.vibe/*_ARCHIVE.md`; read them only when needed.",
+      "## 项目记忆",
+      "已降级的旧条目在 `.vibe/*_ARCHIVE.md`，需要时再读。",
       ...memory,
     );
   }

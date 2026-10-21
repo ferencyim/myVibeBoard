@@ -199,7 +199,7 @@ function buildPrompt(
       kind: task.kind,
       how,
       goal: task.goal,
-      restrict: task.paths.length ? `Restrict to: ${task.paths.join(", ")}
+      restrict: task.paths.length ? `限定范围：${task.paths.join(", ")}
 ` : "",
       maxLines: String(maxLines),
     },

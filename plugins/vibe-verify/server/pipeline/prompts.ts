@@ -14,7 +14,7 @@ export interface PromptSource {
 }
 
 const numbered = (checks: readonly CheckSpec[]) =>
-  checks.map((c, i) => `${i + 1}. ${c.text}${c.method ? `  (how: ${c.method})` : ""}`).join("\n");
+  checks.map((c, i) => `${i + 1}. ${c.text}${c.method ? `  （做法：${c.method}）` : ""}`).join("\n");
 
 export interface SetupPromptInput extends PromptSource {
   card: CardView;
@@ -37,16 +37,16 @@ export function buildSetupPrompt(i: SetupPromptInput): string {
       worktree: i.worktree,
       commitHash: i.commitHash,
       baselineLine: i.baselinePath
-        ? `Baseline worktree (the code before the change, commit ${i.baselineCommit}): ${i.baselinePath}`
-        : "No baseline worktree is available.",
+        ? `基线工作树（改动前的代码，提交 ${i.baselineCommit}）：${i.baselinePath}`
+        : "没有可用的基线工作树。",
       "card.title": i.card.title,
       description: i.card.description || "",
       checks: numbered(i.checks),
       baselineHint: i.baselinePath
-        ? "Put the baseline path above in web.baseline.path when the project is a web app."
+        ? "如果项目是 web 应用，请把上面的基线路径写进 web.baseline.path。"
         : "",
       existingConfigNote: i.existingConfig
-        ? "The repository already contains .vibe/verify.json; read it, and write a corrected copy if it needs changes, otherwise write it unchanged."
+        ? "仓库里已有 .vibe/verify.json：请先读它；需要修改时在回复的 JSON 里给出修正后的内容，不需要时原样给出。"
         : "",
     },
   });
@@ -84,8 +84,8 @@ export function buildJudgePrompt(i: JudgePromptInput): string {
       commitHash: i.commitHash,
       outputDir: i.outputDir,
       checks: numbered(i.checks),
-      evidence: i.evidence.length ? i.evidence.map(evidenceLine).join("\n") : "- none",
-      notes: i.notes.length ? i.notes.map((n) => `- ${n}`).join("\n") : "- none",
+      evidence: i.evidence.length ? i.evidence.map(evidenceLine).join("\n") : "- 无",
+      notes: i.notes.length ? i.notes.map((n) => `- ${n}`).join("\n") : "- 无",
     },
   });
 }
@@ -115,8 +115,8 @@ export function buildFailurePrompt(
   const failed = input.failed
     .map(
       (f) =>
-        `- ${f.text}\n  Finding: ${f.note || "(no note)"}${
-          f.evidenceFiles.length ? `\n  Evidence: ${f.evidenceFiles.join(", ")}` : ""
+        `- ${f.text}\n  发现：${f.note || "（无说明）"}${
+          f.evidenceFiles.length ? `\n  证据：${f.evidenceFiles.join(", ")}` : ""
         }`,
     )
     .join("\n");
@@ -125,8 +125,8 @@ export function buildFailurePrompt(
     vars: {
       "card.key": input.card.key,
       commitHash: input.commitHash,
-      comment: input.comment ? `User comment: ${input.comment}\n\n` : "",
-      failed: failed ? `Failed checks:\n${failed}\n\n` : "",
+      comment: input.comment ? `主人评论：${input.comment}\n\n` : "",
+      failed: failed ? `未通过的检查：\n${failed}\n\n` : "",
     },
   });
 }

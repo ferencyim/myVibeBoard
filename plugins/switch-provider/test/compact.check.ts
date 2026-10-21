@@ -32,7 +32,7 @@ assert.ok(result, "a session over budget is compacted");
 assert.ok(result.afterTokens <= 20_000 && result.afterTokens < before, `fits the budget (${result.afterTokens} of ${before})`);
 const first = JSON.stringify(result.common.messages[0]).split("Earlier history, oldest first")[0];
 assert.match(first, /Session goal: Build the widget/);
-assert.match(first, /Do not resume, repeat or finish earlier work/, "the new agent is told not to resume on its own");
+assert.match(first, /不要自行恢复、重复或完成之前的工作/, "the new agent is told not to resume on its own");
 assert.match(first, /\/p\/a\.ts \(2 edits\)/);
 assert.doesNotMatch(first, /failed\.ts/, "failed edits are not listed");
 assert.match(first, /feat: widget/);

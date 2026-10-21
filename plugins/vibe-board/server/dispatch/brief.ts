@@ -43,7 +43,7 @@ export function providerSpec(preset: Pick<Preset, "provider" | "model">): string
 
 /** A self-contained brief segment: heading, body and the trailing blank line. */
 function section(title: string, body: string): string {
-  return `## ${title}\n${body.trim() || "None."}\n\n`;
+  return `## ${title}\n${body.trim() || "无。"}\n\n`;
 }
 
 /** Limits of the brief; the defaults equal the board settings defaults. */
@@ -97,7 +97,7 @@ function chatLines(events: readonly CardEvent[], limit: number): string {
     .map((e) => {
       const text = (e.body as { text?: unknown } | null)?.text;
       return typeof text === "string" && text.trim()
-        ? `- [${e.authorKind === "user" ? "owner" : "master"}] ${clip(text.trim(), CHAT_CLIP)}`
+        ? `- [${e.authorKind === "user" ? "主人" : "主控"}] ${clip(text.trim(), CHAT_CLIP)}`
         : "";
     })
     .filter(Boolean)
@@ -144,37 +144,37 @@ export function buildDispatchBrief(input: BriefInput): string {
   const vars: Record<string, string> = {
     "card.key": card.key,
     "card.title": card.title,
-    description: section("Description", card.description || "No description provided."),
-    acceptance: section("Acceptance criteria", card.acceptance),
-    referenceImages: section("Reference images", card.refImages.map((id) => `- attachment ${id}`).join("\n")),
+    description: section("描述", card.description || "未提供描述。"),
+    acceptance: section("验收标准", card.acceptance),
+    referenceImages: section("参考图片", card.refImages.map((id) => `- 附件 ${id}`).join("\n")),
     handoff: input.handoff
       ? section(
-          "Planning hand-off (start here)",
+          "规划交接（从这里开始）",
           [
-            "The owner and the planning session agreed on the approach below; follow it and report deviations in a card comment." +
-              (input.handoff.path ? ` Full file: ${input.handoff.path}` : ""),
+            "主人和规划会话已就下面的方案达成一致；请按此执行，有偏差时在卡片评论里说明。" +
+              (input.handoff.path ? ` 完整文件：${input.handoff.path}` : ""),
             input.handoff.text.length > limits.handoffMaxChars
-              ? `${input.handoff.text.slice(0, limits.handoffMaxChars)}\n…(truncated, see the file)`
+              ? `${input.handoff.text.slice(0, limits.handoffMaxChars)}\n…（已截断，见文件）`
               : input.handoff.text,
           ].join("\n\n"),
         )
       : "",
-    adopted: adopted ? section("Adopted suggestions (already applied to the card)", adopted) : "",
-    chat: chat ? section("Group chat (recent)", chat) : "",
+    adopted: adopted ? section("已采纳的建议（已应用到卡片）", adopted) : "",
+    chat: chat ? section("群聊（最近）", chat) : "",
     plan: plan
       ? section(
-          "Plan",
+          "计划",
           [plan.description, ...plan.checks.map((c) => `- [ ] ${c.text}`), plan.notes ?? ""]
             .filter(Boolean)
             .join("\n"),
         )
       : "",
-    notes: section("Recent notes", notes),
-    project: section("Project", `- Name: ${project.name}\n- Type: ${project.projectTypes.join(", ")}`),
-    contract: section("Report-back contract", contract),
-    runtimeEnv: preset.runtimeEnv ? section("Runtime environment", preset.runtimeEnv) : "",
-    presetInstructions: section("Preset instructions", preset.instructions),
-    extra: input.extraInstructions?.trim() ? section("Additional instructions", input.extraInstructions) : "",
+    notes: section("最近备注", notes),
+    project: section("项目", `- 名称：${project.name}\n- 类型：${project.projectTypes.join(", ")}`),
+    contract: section("回报约定", contract),
+    runtimeEnv: preset.runtimeEnv ? section("运行环境", preset.runtimeEnv) : "",
+    presetInstructions: section("预设指令", preset.instructions),
+    extra: input.extraInstructions?.trim() ? section("附加指令", input.extraInstructions) : "",
   };
   return `${prompts.resolve("board.brief", { projectId: card.projectId, vars }).trimEnd()}\n`;
 }

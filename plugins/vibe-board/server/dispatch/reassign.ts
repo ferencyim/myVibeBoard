@@ -206,8 +206,8 @@ export function createReassigner(deps: ReassignDeps) {
         category: failure.category,
         message: failure.message,
         transcriptPath: transcriptPath
-          ? `The previous agent's transcript is in ${transcriptPath} (read it before you act).`
-          : "The previous agent's transcript is not available; rely on the worktree, the card notes and `.vibe/sessions/` notes.",
+          ? `上一个 agent 的转录文件在 ${transcriptPath}（行动前先读）。`
+          : "上一个 agent 的转录文件不可用；请依据工作树、卡片备注和 `.vibe/sessions/` 里的笔记继续。",
       },
     });
     const prompt = buildDispatchBrief({

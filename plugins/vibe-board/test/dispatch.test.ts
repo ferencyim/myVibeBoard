@@ -105,7 +105,7 @@ describe("brief helpers", () => {
     expect(brief).toContain("web-dev-server");
     expect(brief).toContain("Be careful.");
     expect(brief).toContain(".vibe/PROJECT_STATE.md");
-    expect(brief).toContain("read-only");
+    expect(brief).toContain("对你只读");
   });
 });
 
@@ -124,13 +124,13 @@ describe("planning hand-off (WP-33)", () => {
       events,
       handoff: { path: "/repo/.vibe/sessions/DEMO-1-plan.md", text: "Do A, then B." },
     });
-    expect(brief).toContain("## Planning hand-off (start here)");
+    expect(brief).toContain("## 规划交接（从这里开始）");
     expect(brief).toContain("Do A, then B.");
     expect(brief).toContain("/repo/.vibe/sessions/DEMO-1-plan.md");
     expect(brief).toContain("plain owner note");
     expect(brief).not.toContain("DISCUSSION CHATTER");
     expect(buildDispatchBrief({ card: t.card, project: t.project, preset: t.preset, events })).not.toContain(
-      "Planning hand-off",
+      "规划交接",
     );
   });
 

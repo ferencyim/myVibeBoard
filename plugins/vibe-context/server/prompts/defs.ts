@@ -1,40 +1,39 @@
-// Every prompt text vibe-context sends to an agent or injects into its context, registered with its
-// default (WP-99). Code resolves through ./index.ts; the owner may override a text globally or per
-// project on the Agent behaviour page. Nothing here is parsed from a reply, so there are no fixed suffixes.
+// vibe-context 发给 agent 或注入其上下文的全部提示词及其默认值（WP-99）。默认文本一律用中文写；
+// 命令（如 /compact）、MCP 工具名、{{占位符}}、文件路径保持原样。代码通过 ./index.ts 解析，
+// 主人可在“Agent 行为”页全局或按项目覆盖。这里的文本都不从回复里解析，所以没有 fixedSuffix。
 
 import type { PromptDef } from "../vibe/contract";
 
 const PLUGIN = "vibe-context";
 
 const COMPACT_NOTES =
-  "Your context is about to be compacted. Before that, save your progress notes: the goal, " +
-  "what is done, what is in progress, next steps, key files and decisions, open questions. " +
-  "Use the `vibe_session_note` tool of the `vibe-board` MCP server{{keyClause}} (it overwrites " +
-  "`{{mdPath}}` and needs no approval); only if that tool does not exist, write that file " +
-  'yourself (create or overwrite it). Do nothing else. Reply "saved" when done.';
+  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、" +
+  "关键文件与决策、未解决的问题。" +
+  "使用 `vibe-board` MCP 服务的 `vibe_session_note` 工具{{keyClause}}（它会覆盖写入 " +
+  "`{{mdPath}}`，无需批准）；只有该工具不存在时，才自己写这个文件" +
+  '（创建或覆盖）。除此之外什么都不要做。完成后回复“saved”。';
 
 const COMPACT_RESTORE =
-  "Context was compacted. The project context below is authoritative; continue from your " +
-  'session notes. Reply "ok" only.\n\n{{block}}';
+  "上下文已压缩。下面的项目上下文是权威依据；请根据你的会话笔记继续。" +
+  '只回复“ok”。\n\n{{block}}';
 
 const COLD_START =
-  "You continue session {{oldSessionId}}, handed over because its context grew long or its cache expires. " +
-  "Read `{{mdPath}}` for its progress and the files under `.vibe/` for project memory, " +
-  "then carry on with the task.{{block}}";
+  "你接续会话 {{oldSessionId}}：它因为上下文变长或缓存即将过期而被交接。" +
+  "先读 `{{mdPath}}` 了解它的进度，再读 `.vibe/` 下的文件了解项目记忆，" +
+  "然后继续完成任务。{{block}}";
 
 const INJECT_FRAME =
-  "# Project context (myVibeBoard)\n\n" +
-  "Generated from the files under `.vibe/` when this session started. It is authoritative and " +
-  "read-only for you: never edit these files; report needed corrections to the master agent " +
-  "(for a board task, in a card comment).";
+  "# 项目上下文（myVibeBoard）\n\n" +
+  "以下内容在本会话启动时由 `.vibe/` 下的文件生成，是权威依据，对你只读：" +
+  "不要编辑这些文件；需要更正时告知总 agent（看板任务则写在卡片评论里）。";
 
 const SCOUT_GUIDANCE =
-  "## Scouting (if the `vibe_scout` tool is available)\n" +
-  "Before editing in a large repo, call `vibe_scout` once with several independent questions " +
-  "(`kind`: locate / inventory / research) so cheap read-only sub-agents search in parallel; you get back " +
-  "short findings with path:line anchors instead of reading everything yourself. Good for: locating code " +
-  "in an unfamiliar repo, counting/listing usages in bulk, gathering facts from several sources. " +
-  "Skip it for a small change in one or two known files. Verify anchors you rely on before editing.";
+  "## 探路（`vibe_scout` 工具可用时）\n" +
+  "在大型仓库里动手修改前，先用几个互相独立的问题调用一次 `vibe_scout`" +
+  "（`kind`：locate / inventory / research），让便宜的只读子 agent 并行搜索；你拿到的是" +
+  "带 path:line 定位的简短结论，不必自己通读一遍。适合：在陌生仓库里定位代码、" +
+  "批量统计/列出用法、从多处收集事实。" +
+  "只改一两个已知文件的小改动不必使用。依赖某个定位之前，先核对它，再动手修改。";
 
 export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
   {
@@ -48,7 +47,7 @@ export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
     audience: "被压缩的 agent",
     defaultText: COMPACT_NOTES,
     placeholders: [
-      { name: "keyClause", description: "有卡片时为 ` with key \"ABC-1\"`，否则为空" },
+      { name: "keyClause", description: "有卡片时为 `，key 为 \"ABC-1\"`，否则为空" },
       { name: "mdPath", description: "会话笔记文件路径" },
     ],
     order: 10,
@@ -62,7 +61,7 @@ export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
     whenSent: "压缩命令完成后",
     audience: "刚被压缩的 agent",
     defaultText: COMPACT_RESTORE,
-    placeholders: [{ name: "block", description: "项目上下文块（项目目标与状态）；没有时为“(no project context)”" }],
+    placeholders: [{ name: "block", description: "项目上下文块（项目目标与状态）；没有时为“（无项目上下文）”" }],
     order: 20,
   },
   {

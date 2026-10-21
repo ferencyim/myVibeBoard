@@ -115,9 +115,9 @@ describe("reassigner", () => {
     expect(created.config.provider).toBe("codex/gpt-5");
     expect(created.env.VIBE_CARD_KEY).toBe(t.card.key);
     expect(created.prompt).toContain("usage limit");
-    expect(created.prompt).toContain("SAME worktree");
+    expect(created.prompt).toContain("同一个工作树");
     // transcript file inside the worktree's .vibe/sessions
-    const path = /transcript is in (.+\.md)/.exec(created.prompt)![1]!;
+    const path = /转录文件在 (.+\.md)（/.exec(created.prompt)![1]!;
     expect(path.startsWith(join(t.worktree, ".vibe", "sessions"))).toBe(true);
     expect(existsSync(path)).toBe(true);
     expect(readFileSync(path, "utf8")).toContain("working on it");

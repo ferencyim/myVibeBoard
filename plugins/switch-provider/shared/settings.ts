@@ -6,19 +6,19 @@ import { z } from "zod";
 export const DEFAULT_SUMMARY_HEADER = [
   "{{title}}",
   "",
-  "This session moved to a new provider and its history was too large for the new model's context window.",
-  "Earlier history is compacted below: your messages and the assistant's text are kept, tool calls are one line each, and errors are kept in full.",
-  "The detailed transcript is at {{transcriptPath}}. Each entry's [L<first>-L<last>] pointer gives its line range there. Read or search those lines when you need more detail. Long tool blocks may be cut; images and reasoning are omitted.",
-  "Do not resume, repeat or finish earlier work on your own. Wait for the user's next message and answer only that.",
+  "本会话已切换到新的 provider，而它的历史记录超出了新模型的上下文窗口。",
+  "较早的历史已压缩在下面：保留了你的消息和助手的文字，每个工具调用压成一行，错误完整保留。",
+  "详细记录在 {{transcriptPath}}。每条记录的 [L<first>-L<last>] 指针标明它在该文件中的行范围；需要更多细节时，读取或搜索这些行。过长的工具块可能被截断；图片和推理过程已省略。",
+  "不要自行恢复、重复或完成之前的工作。等待用户的下一条消息，只回答那一条。",
   "",
 ].join("\n");
 
 export const DEFAULT_SUMMARY_ACK =
-  "Understood. I will use the compacted history and the full transcript when I need details.";
+  "明白。我会使用压缩后的历史；需要细节时再查看完整记录。";
 
 export const DEFAULT_TRANSCRIPT_PROMPT = [
-  `You are continuing the session of agent {{agentId}} ("{{title}}"), which ran on {{provider}}.`,
-  "Its full transcript, including tool calls and results, is in {{path}}. Read the whole file before you act, then continue where that agent stopped.",
+  `你正在接续 agent {{agentId}}（“{{title}}”）的会话，它之前运行在 {{provider}} 上。`,
+  "它的完整记录（含工具调用和结果）在 {{path}}。行动之前先读完整个文件，然后从该 agent 停下的地方继续。",
 ].join("\n");
 
 export const switchSettings = defineSettings({
