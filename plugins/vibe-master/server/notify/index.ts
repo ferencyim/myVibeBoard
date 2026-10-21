@@ -32,6 +32,7 @@ const MASTER_ALERT_LABELS: Record<string, string> = {
   quota_error: "Master: quota error",
   maintenance_paused: "Maintenance rule paused",
   permission_wait: "Master: waiting for permission",
+  requirements_failed: "Master: requirements document not updated",
   review_loop: "Review: repeated severe issues",
 };
 

@@ -134,7 +134,7 @@ describe("subscription switching", () => {
 
     expect(result).toMatchObject({ changed: true, target: { provider: "codex", model: "gpt-5-codex", thinking: "xhigh" } });
     expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude", "codex"]);
-    expect(t.fake.agents[0]!.archived).toBe(true);
+    expect(t.fake.agents[0]!.archived).toBe(false); // WP-93: the old conversation stays openable
     expect(t.fake.agents[1]!.options.config.thinkingOptionId).toBe("xhigh");
 
     // card 1 finished on claude, cards 2 and 3 on codex: nothing lost, nothing assessed twice

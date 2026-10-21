@@ -26,6 +26,9 @@ export interface AssessDeps {
   master: MasterAsk;
   quota: QuotaReader;
   selector?: AgentSelector;
+  /** Owner override of the wake template and the requirements excerpt size (settings). */
+  template?(): string | undefined;
+  requirementsChars?(): number;
   /** Provider/model label stored with the assessment. */
   masterLabel?: () => string | null;
   log?: (message: string, error?: unknown) => void;
@@ -203,7 +206,8 @@ export function createAssessor(deps: AssessDeps) {
       history: workerHistory(project, presets),
     });
     const message = buildAssessMessage({
-      projectBlock: buildProjectBlock({ project, tags, presets, openCards }),
+      projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.requirementsChars?.() }),
+      template: deps.template?.(),
       card,
       tagNames: names,
       quota,

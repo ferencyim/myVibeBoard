@@ -6,7 +6,7 @@ import { publishEvent, type VibeDb } from "../vibe/db";
 import type { Clock } from "../clock";
 import type { MasterStateFile } from "./state";
 
-export type AlertKind = "quota_low" | "quota_error" | "maintenance_paused" | "permission_wait";
+export type AlertKind = "quota_low" | "quota_error" | "maintenance_paused" | "permission_wait" | "requirements_failed";
 
 export interface Alerts {
   /** `subject` is the provider for quota alerts and the rule name for maintenance alerts. */
@@ -18,6 +18,7 @@ const COOLDOWN_MS: Record<AlertKind, number> = {
   quota_error: 10 * 60_000,
   maintenance_paused: 60 * 60_000,
   permission_wait: 10 * 60_000,
+  requirements_failed: 60 * 60_000,
 };
 
 export function createAlerts(options: {

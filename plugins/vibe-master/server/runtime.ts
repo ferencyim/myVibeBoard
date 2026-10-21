@@ -7,6 +7,7 @@ import type { MasterSettings, MasterStatus, ProviderInfo } from "../shared/rpc";
 import { createAssessor } from "./assess/assess";
 import { systemClock, type Clock } from "./clock";
 import { MASTER_RULES } from "./master/rules.generated";
+import { composeRules } from "./master/templates";
 import { createMasterSession } from "./master/session";
 import { createConsolidator } from "./memory/consolidate";
 import { createFileMemoryPort, type MemoryPort } from "./memory/files";
@@ -18,7 +19,7 @@ import { createQuotaReader } from "./subscription/quota";
 import { createStateFile } from "./subscription/state";
 import { providerSpec, type TargetRequest } from "./subscription/target";
 import { MasterError, type MasterPaseo, type WakeJob } from "./types";
-import type { VibeDb, VibeStore } from "./vibe/db";
+import type { GitRunner, VibeDb, VibeStore } from "./vibe/db";
 import { createWakeQueue } from "./wake/queue";
 import { createTriggers } from "./wake/triggers";
 
@@ -33,6 +34,8 @@ export interface RuntimeDeps {
   memory?: MemoryPort;
   selector?: AgentSelector;
   rules?: string;
+  /** Injectable git for requirements commits (tests use a real temp repo by default). */
+  git?: GitRunner;
   pollIntervalMs?: number;
   log?: (message: string, error?: unknown) => void;
 }
@@ -64,6 +67,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     state,
     permission: createPermissionResolver(deps.getPaseo),
     rules: deps.rules ?? MASTER_RULES,
+    supplement: () => deps.settings().rulesSupplement,
     workspace: () => deps.settings().workspaceDir || join(deps.dataDir, "workspace"),
     alerts,
     log,
@@ -79,6 +83,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       const t = state.read().agent?.target;
       return t ? providerSpec(t) : null;
     },
+    template: () => deps.settings().templateAssessDraft,
+    requirementsChars: () => deps.settings().requirementsExcerptChars,
     log,
   });
   const memory = deps.memory ?? createFileMemoryPort();
@@ -88,6 +94,14 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     master: session,
     assessor,
     memory,
+    options: {
+      templateDone: () => deps.settings().templateCardDone,
+      templateHelp: () => deps.settings().templateSessionHelp,
+      requirementsChars: () => deps.settings().requirementsExcerptChars,
+      maintainRequirements: () => deps.settings().maintainRequirements,
+    },
+    onRequirementsFailure: (cardKey, message) => alerts.raise("requirements_failed", cardKey, message),
+    git: deps.git,
     log,
   });
   // Per-card planning sessions (WP-33): separate agents, same model and rules as the master.
@@ -96,7 +110,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     store,
     getPaseo: deps.getPaseo,
     master: session,
-    rules: deps.rules ?? MASTER_RULES,
+    rules: () => composeRules(deps.rules ?? MASTER_RULES, deps.settings().rulesSupplement),
+    requirementsChars: () => deps.settings().requirementsExcerptChars,
     dataDir: deps.dataDir,
     clock,
     memory,
@@ -169,6 +184,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     queue,
     enabled: () => deps.settings().enabled,
     debounceMs: () => deps.settings().debounceSeconds * 1000,
+    flags: () => deps.settings(),
     pollIntervalMs: deps.pollIntervalMs,
     log,
   });
@@ -328,6 +344,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
     /** Startup catch-up (drafts without a current assessment, recently done cards). */
     sweep: () => (deps.settings().sweepOnStart ? triggers.sweep() : 0),
+
+    /** All master sessions, newest first (the history list of the screen). */
+    sessions: (limit?: number) => session.sessions(limit),
 
     /** Manual switch of the master subscription; parked jobs continue on the new agent. */
     async switchTo(request: TargetRequest, reason?: string) {

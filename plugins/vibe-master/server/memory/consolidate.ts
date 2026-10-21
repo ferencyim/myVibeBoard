@@ -2,11 +2,11 @@
 // write back" flows like the draft assessment.
 
 import { existsSync } from "node:fs";
+import { buildDoneMessage, buildHelpMessage, buildProjectBlock, buildRepairMessage, requirementsExcerpt, DEFAULT_REQUIREMENTS_CHARS } from "../master/prompts";
 import { MemoryUpdateSchema, HelpSchema, type Help, type MemoryUpdate } from "../assess/schema";
 import { parseReply } from "../assess/parse";
 import type { Assessor } from "../assess/assess";
-import { buildDoneMessage, buildHelpMessage, buildProjectBlock, buildRepairMessage } from "../master/prompts";
-import type { VibeDb, VibeStore } from "../vibe/db";
+import { writeRequirementsDoc, type GitRunner, type VibeDb, type VibeStore } from "../vibe/db";
 import type { MasterAsk } from "../types";
 import type { ApplyResult, MemoryPort } from "./files";
 
@@ -16,6 +16,17 @@ export interface ConsolidateDeps {
   master: MasterAsk;
   assessor: Assessor;
   memory: MemoryPort;
+  /** Owner settings (read on every use). All optional: defaults = built-in templates, 6000 chars, no requirements writes. */
+  options?: {
+    templateDone?(): string | undefined;
+    templateHelp?(): string | undefined;
+    requirementsChars?(): number;
+    maintainRequirements?(): boolean;
+  };
+  /** A requirements update failed: remind the owner (once per cooldown). */
+  onRequirementsFailure?(cardKey: string, message: string): void;
+  /** Injectable git for the requirements commit. */
+  git?: GitRunner;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -62,6 +73,55 @@ export function createConsolidator(deps: ConsolidateDeps) {
   const { store } = deps;
   const log = deps.log ?? (() => undefined);
 
+  /**
+   * Write the master's requirementsUpdate to the project's document and commit only that file.
+   * Never throws: a failure becomes a note on the card plus a reminder, and is not retried.
+   */
+  async function applyRequirements(
+    card: { id: string; key: string },
+    project: Parameters<typeof requirementsExcerpt>[0] & { repoPath: string },
+    update: NonNullable<MemoryUpdate["requirementsUpdate"]>,
+  ): Promise<void> {
+    const note = (kind: string, text: string, extra: Record<string, unknown> = {}) =>
+      store.events.add({
+        cardId: card.id,
+        type: "note",
+        authorKind: "agent",
+        author: "master",
+        body: { kind, text, ...extra },
+      });
+    const maxChars = deps.options?.requirementsChars?.() ?? DEFAULT_REQUIREMENTS_CHARS;
+    // The master only saw an excerpt: rewriting from a truncated view would delete the rest.
+    if (requirementsExcerpt(project, maxChars)?.truncated) {
+      const text = `需求文档超过摘录上限 (${maxChars} 字符)，总 agent 只看到了一部分，未自动更新。请调大「需求文档摘录上限」或手动修改。`;
+      note("requirements_update_failed", text);
+      deps.onRequirementsFailure?.(card.key, text);
+      return;
+    }
+    try {
+      const result = await writeRequirementsDoc(
+        project.repoPath,
+        project.requirementsPath,
+        update.content.endsWith("\n") ? update.content : `${update.content}\n`,
+        `docs(requirements): ${update.summary.replace(/\s+/g, " ").trim()} [${card.key}]`,
+        deps.git,
+      );
+      note(
+        "requirements_update",
+        result.committed
+          ? `总 agent 更新了需求文档 ${result.path} (提交 ${result.commit?.slice(0, 8)}): ${update.summary}`
+          : `总 agent 建议的需求文档内容与现有一致，未产生提交 (${result.path})`,
+        { path: result.path, commit: result.commit },
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const text = `需求文档未能更新: ${reason}。不会自动重试；仓库空闲后可手动让总 agent 重跑该卡的完成整理。`;
+      note("requirements_update_failed", text);
+      deps.onRequirementsFailure?.(card.key, text);
+      log(`requirements update for ${card.key} failed`, error);
+    }
+  }
+
   async function consolidate(ref: string, options: { force?: boolean } = {}): Promise<ConsolidateOutcome> {
     const card = store.cards.get(ref);
     if (!card) return { status: "skipped", reason: "not_found" };
@@ -75,11 +135,13 @@ export function createConsolidator(deps: ConsolidateDeps) {
     if (!project.repoPath || !existsSync(project.repoPath)) return { status: "skipped", reason: "no_repo" };
 
     const message = buildDoneMessage({
-      projectBlock: buildProjectBlock({ project, tags, presets, openCards }),
+      projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.options?.requirementsChars?.() }),
       card,
       events,
       verification: verificationSummary(deps.db, card.id),
       memory: formatMemory(deps.memory.snapshot(project.repoPath)),
+      template: deps.options?.templateDone?.(),
+      maintainRequirements: deps.options?.maintainRequirements?.() ?? false,
     });
     let parsed = parseReply(await deps.master.ask(message), MemoryUpdateSchema);
     if (!parsed.ok) {
@@ -110,6 +172,13 @@ export function createConsolidator(deps: ConsolidateDeps) {
         applied,
       },
     });
+    if (update.requirementsUpdate) {
+      if (deps.options?.maintainRequirements?.()) {
+        await applyRequirements(card, { ...project, repoPath: project.repoPath }, update.requirementsUpdate);
+      } else {
+        log(`requirementsUpdate for ${card.key} ignored: requirements maintenance is off`);
+      }
+    }
     return { status: "updated", summary: update.summary, applied };
   }
 
@@ -129,7 +198,8 @@ export function createConsolidator(deps: ConsolidateDeps) {
     const { project, tags, presets, openCards } = deps.assessor.context(card);
     const plan = store.plans.list(card.id).at(-1)?.snapshot;
     const message = buildHelpMessage({
-      projectBlock: buildProjectBlock({ project, tags, presets, openCards }),
+      projectBlock: buildProjectBlock({ project, tags, presets, openCards, requirementsChars: deps.options?.requirementsChars?.() }),
+      template: deps.options?.templateHelp?.(),
       card,
       question,
       plan: plan ? [plan.description, ...plan.checks.map((c) => `- ${c.text}`)].filter(Boolean).join("\n") : "",
