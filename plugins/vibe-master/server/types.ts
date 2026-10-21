@@ -14,6 +14,8 @@ export interface MasterAgentHandle {
   run(text: string, options?: { timeoutMs?: number }): Promise<RunResult>;
   refresh(): Promise<unknown>;
   archive(): Promise<unknown>;
+  /** Hosts older than v0.12.1 do not have it. */
+  setTitle?(title: string): Promise<unknown>;
 }
 
 export interface ModelInfoLike {

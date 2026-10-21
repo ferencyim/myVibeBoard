@@ -1,4 +1,5 @@
 import { Icon } from "../icons";
+import { Markdown } from "./markdown";
 import { Modal } from "./modal";
 import { ScrollView, FlatList } from "./scroll-view";
 import { TextInput } from "./text-input";
@@ -8,6 +9,7 @@ import { useRevealedText } from "@/hooks/use-revealed-text";
 
 export const pluginReactNativeRuntime = {
   Icon,
+  Markdown,
   Modal,
   ScrollView,
   FlatList,
