@@ -18,6 +18,7 @@ import { createMasterRuntime } from "../server/runtime";
 import {
   ManualClock,
   askMaster,
+  choosePreset,
   defaultSettings,
   fakePaseo,
   setupBoard,
@@ -171,16 +172,15 @@ describe("project context", () => {
 describe("kept history and hand-off", () => {
   it("does not archive the replaced master, lists both sessions and hands the new one a board summary", async () => {
     const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, () => "ok");
+    const { runtime, fake, settings } = runtimeFor(board, () => "ok");
     const done = board.store.cards.create({ projectId: board.project.id, title: "Shipped feature" }, "user");
     board.store.cards.move(done.id, { to: "todo", actor: "user" });
     board.store.cards.dispatch({ cardId: done.id, agentId: "w1", provider: "claude", worktree: null });
     board.store.cards.move(done.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(done.id, { to: "done", actor: "user" });
-    const draft = board.draft("Untouched draft");
     await askMaster(runtime, "first");
 
-    await runtime.switchTo({ provider: "codex", thinking: "max" }, "owner picked Codex");
+    await choosePreset({ settings, runtime }, board.presets.codex.id);
     expect(fake.agents).toHaveLength(2);
     expect(fake.agents[0]!.archived).toBe(false);
 
@@ -188,10 +188,9 @@ describe("kept history and hand-off", () => {
     const first = fake.agents[1]!.prompts[0]!;
     expect(first).toContain("[handoff]");
     expect(first.indexOf("[handoff]")).toBeLessThan(first.indexOf("after the switch"));
-    expect(first).toContain(draft.key);
     expect(first).toContain("Shipped feature");
-    expect(first).toContain("尚未审查");
-    expect(first).toContain("owner picked Codex");
+    expect(first).toContain("切换总 agent 预设");
+    expect(first).not.toContain("草稿与审查状态");
     // delivered once only
     await askMaster(runtime, "another");
     expect(fake.agents[1]!.prompts[1]).not.toContain("[handoff]");
@@ -232,7 +231,7 @@ describe("kept history and hand-off", () => {
 
   it("sends a changed rule supplement to a running agent once", async () => {
     const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, () => "ok");
+    const { runtime, fake, settings } = runtimeFor(board, () => "ok");
     await askMaster(runtime);
     board.store.prompts.setOverride("master.rules_supplement", "Always answer in Chinese.");
     await askMaster(runtime);
@@ -242,21 +241,28 @@ describe("kept history and hand-off", () => {
     expect(prompts[2]).not.toContain("Always answer in Chinese.");
 
     // and a newly started agent has it in the system prompt
-    await runtime.switchTo({ provider: "claude", model: "sonnet-x" }, "again");
+    const sonnet = board.store.presets.create({ name: "Claude Sonnet", provider: "claude", model: "sonnet-x" });
+    await choosePreset({ settings, runtime }, sonnet.id);
     expect(String(fake.agents[1]!.options.config.systemPrompt)).toContain("Always answer in Chinese.");
     await runtime.dispose();
   });
 
   it("builds a capped summary from the board alone", () => {
     const board = setupBoard();
-    for (let i = 0; i < 40; i++) board.draft(`Draft number ${i} ${"x".repeat(80)}`);
+    for (let i = 0; i < 40; i++) {
+      const card = board.draft(`Done number ${i} ${"x".repeat(80)}`);
+      board.store.cards.move(card.id, { to: "todo", actor: "user" });
+      board.store.cards.dispatch({ cardId: card.id, agentId: `w${i}`, provider: "claude", worktree: null });
+      board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
+      board.store.cards.move(card.id, { to: "done", actor: "user" });
+    }
     const text = buildHandoff({
       store: board.store,
       nowMs: Date.now(),
       switches: Array.from({ length: 30 }, (_, i) => ({ at: `2026-10-${String(i + 1).padStart(2, "0")}T10:00:00Z`, text: "claude -> codex ".repeat(30) + i })),
     });
     expect(text.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
-    expect(text).toContain("## 草稿与审查状态");
+    expect(text).toContain("## 近期完成的卡片");
     expect(text.match(/- DEMO-\d+/g)!.length).toBeLessThanOrEqual(8);
   });
 });

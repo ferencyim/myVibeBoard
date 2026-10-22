@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { publishEvent } from "../server/vibe/db";
 import { MASTER_RULES } from "../server/master/rules.generated";
 import { createMasterRuntime } from "../server/runtime";
-import { pickModel, pickThinking, resolveTarget } from "../server/subscription/target";
+import { pickModel, resolveTarget } from "../server/subscription/target";
 import {
   ManualClock,
   askMaster,
+  choosePreset,
   MODELS,
   defaultSettings,
   deferred,
@@ -33,7 +34,7 @@ function build(script: Script, over: { usage?: ReturnType<typeof usageOf>[]; fai
     pollIntervalMs: 3_600_000,
     log: () => undefined,
   });
-  return { board, clock, fake, runtime, dataDir };
+  return { board, clock, fake, runtime, dataDir, settings };
 }
 
 /** A finished card: waking the master for it asks for a memory consolidation. */
@@ -57,17 +58,15 @@ const alerts = (board: ReturnType<typeof setupBoard>) =>
     .map((p) => `[master:${p.kind}] ${p.provider}: ${p.message}`);
 
 describe("target resolution", () => {
-  it("prefers Opus for Claude, the default elsewhere, and the highest thinking level on request", async () => {
+  it("prefers Opus for Claude and the default model elsewhere", async () => {
     const paseo = fakePaseo(() => "").paseo;
     expect(await resolveTarget(paseo, { provider: "claude" })).toEqual({ provider: "claude", model: "opus-x", thinking: null });
     expect(await resolveTarget(paseo, { provider: "claude", model: "sonnet-x" })).toMatchObject({ model: "sonnet-x" });
-    expect(await resolveTarget(paseo, { provider: "codex", thinking: "max" })).toEqual({
+    expect(await resolveTarget(paseo, { provider: "codex" })).toEqual({
       provider: "codex",
       model: "gpt-5-codex",
-      thinking: "xhigh",
+      thinking: null,
     });
-    expect(pickThinking(MODELS.claude![1]!, "high")).toBe("high");
-    expect(() => pickThinking(MODELS.claude![1]!, "ultra")).toThrow(/not available/);
     expect(() => pickModel(MODELS.claude!, "claude", "gpt")).toThrow(/not available/);
   });
 });
@@ -118,15 +117,14 @@ describe("master session", () => {
   });
 });
 
-describe("subscription switching", () => {
-  it("switches to Codex at its highest level and carries on with the new agent", async () => {
+describe("preset switching", () => {
+  it("moves to another preset and carries on with the new agent", async () => {
     const t = build(({ provider }) => `answered by ${provider}`);
     await askMaster(t.runtime, "one");
     expect(t.fake.agents).toHaveLength(1);
 
-    const result = await t.runtime.switchTo({ provider: "codex", thinking: "max" }, "owner picked Codex");
+    await choosePreset(t, t.board.presets.codex.id);
 
-    expect(result).toMatchObject({ changed: true, target: { provider: "codex", model: "gpt-5-codex", thinking: "xhigh" } });
     expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude", "codex"]);
     expect(t.fake.agents[0]!.archived).toBe(false); // WP-93: the old conversation stays openable
     expect(t.fake.agents[1]!.options.config.thinkingOptionId).toBe("xhigh");
@@ -140,27 +138,53 @@ describe("subscription switching", () => {
       ["codex", "ended"],
       ["codex", "idle"],
     ]);
-    const status = await t.runtime.status(false);
-    expect(status.targetSource).toBe("switched");
+    const status = await t.runtime.status();
+    expect(status.preset).toMatchObject({ id: t.board.presets.codex.id, migrated: false });
     expect(status.session?.provider).toBe("codex");
-    expect(status.switchHistory).toMatchObject([{ from: "claude", to: "codex", reason: "owner picked Codex" }]);
+    expect(status.switchHistory).toMatchObject([{ from: "claude", to: "codex", reason: "切换总 agent 预设" }]);
     expect(t.board.eventTypes()).toContain("session.switched");
 
-    // the choice survives a restart; switching to the same target is a no-op
-    expect((await t.runtime.switchTo({ provider: "codex", thinking: "max" })).changed).toBe(false);
+    // applying the same preset again changes nothing
+    await t.runtime.onSettingsChanged();
     expect(t.fake.agents).toHaveLength(2);
     await t.runtime.dispose();
   });
 
-  it("keeps the old master when the new provider cannot start", async () => {
+  it("keeps the old master running when the new preset's provider cannot start", async () => {
     const t = build(() => "ok", { failCreate: (p) => (p === "codex" ? "codex is not logged in" : null) });
     await askMaster(t.runtime);
-    await expect(t.runtime.switchTo({ provider: "codex" })).rejects.toThrow(/not logged in/);
+    await choosePreset(t, t.board.presets.codex.id); // logged, not thrown
+    expect(t.fake.agents).toHaveLength(1);
     expect(t.fake.agents[0]!.archived).toBe(false);
-    expect(t.runtime.state.read().target).toBeUndefined();
+    expect(t.board.store.sessions.list({ role: "master", states: ["idle"] })).toHaveLength(1);
+    await expect(askMaster(t.runtime)).rejects.toThrow(/not logged in/);
+    await choosePreset(t, t.board.presets.claude.id);
     await askMaster(t.runtime);
     expect(t.fake.agents[0]!.prompts).toHaveLength(2);
     await t.runtime.dispose();
+  });
+
+  it("migrates the pre-preset provider/model/thinking settings to the matching preset, and asks for a choice when none matches", async () => {
+    const old = build(() => "ok", { settings: { provider: "codex", model: "gpt-5-codex", thinking: "xhigh" } });
+    await askMaster(old.runtime);
+    expect(old.fake.agents[0]!.provider).toBe("codex");
+    expect(await old.runtime.status()).toMatchObject({
+      preset: { id: old.board.presets.codex.id, migrated: true },
+      target: { provider: "codex", model: "gpt-5-codex", thinking: "xhigh" },
+    });
+    // a model no preset has: nothing is guessed
+    const lost = build(() => "ok", { settings: { provider: "codex", model: "gpt-9" } });
+    expect((await lost.runtime.status()).preset).toBeNull();
+    await expect(askMaster(lost.runtime)).rejects.toThrow(/预设/);
+    expect(lost.fake.agents).toHaveLength(0);
+    // no legacy fields and no preset: same
+    const fresh = build(() => "ok", { settings: { provider: "" } });
+    expect((await fresh.runtime.status()).preset).toBeNull();
+    // an explicit choice wins over the legacy fields
+    const chosen = build(() => "ok", { settings: { provider: "codex", presetId: "" } });
+    await choosePreset(chosen, chosen.board.presets.claude.id);
+    expect((await chosen.runtime.status()).preset).toMatchObject({ migrated: false });
+    for (const t of [old, lost, fresh, chosen]) await t.runtime.dispose();
   });
 });
 
@@ -180,15 +204,15 @@ describe("quota", () => {
     expect(memoryUpdated(t.board, card.id)).toBe(false);
     expect(alerts(t.board).some((m) => m.startsWith("[master:quota_error] claude:"))).toBe(true);
     expect(t.board.store.sessions.list({ role: "master" })[0]!.state).toBe("error");
-    const status = await t.runtime.status(false);
+    const status = await t.runtime.status();
     expect(status.queue.blocked).toBe(1);
     expect(status.lastAlert?.kind).toBe("quota_error");
 
     limited = false;
-    await t.runtime.switchTo({ provider: "codex" });
+    await choosePreset(t, t.board.presets.codex.id);
     await t.runtime.queue.idle();
     expect(memoryUpdated(t.board, card.id)).toBe(true);
-    expect((await t.runtime.status(false)).queue.blocked).toBe(0);
+    expect((await t.runtime.status()).queue.blocked).toBe(0);
     await t.runtime.dispose();
   });
 
@@ -198,7 +222,7 @@ describe("quota", () => {
     t.runtime.wake(card.key, "card_done", true);
     await t.runtime.queue.idle();
     expect(alerts(t.board)).toEqual([]);
-    expect((await t.runtime.status(false)).queue.blocked).toBe(0);
+    expect((await t.runtime.status()).queue.blocked).toBe(0);
     await t.runtime.dispose();
   });
 
@@ -222,17 +246,14 @@ describe("quota", () => {
 });
 
 describe("status", () => {
-  it("lists providers with models, thinking options and quota for the switch UI", async () => {
+  it("lists the presets with their provider's quota for the settings page", async () => {
     const t = build(() => "ok", { usage: [usageOf("claude", 60), usageOf("codex", 15)] });
-    const status = await t.runtime.status(true);
+    const status = await t.runtime.status();
     expect(status.paseoReady).toBe(true);
-    const claude = status.providers.find((p) => p.id === "claude")!;
-    expect(claude).toMatchObject({ remainingPct: 60, level: "ok" });
-    const codex = status.providers.find((p) => p.id === "codex")!;
-    expect(codex.level).toBe("tight");
-    expect(codex.models[0]!.thinking.map((o) => o.id)).toContain("xhigh");
-    expect(status.target).toEqual({ provider: "claude", model: "opus-x", thinking: null });
-    expect(status.targetSource).toBe("settings");
+    const claude = status.presets.find((p) => p.id === t.board.presets.claude.id)!;
+    expect(claude).toMatchObject({ name: "Claude Opus", provider: "claude", remainingPct: 60, level: "ok" });
+    expect(status.presets.find((p) => p.id === t.board.presets.codex.id)!.level).toBe("tight");
+    expect(status.target).toEqual({ provider: "claude", model: "opus-x", thinking: "high" });
     await t.runtime.dispose();
   });
 });
@@ -246,13 +267,13 @@ describe("scheduler signals", () => {
     publishEvent(t.board.db, { type: "scheduler.paused", payload: { reason: "memory", mem: 0.95, top: [] } });
     await t.runtime.triggers.consumer.poll();
     expect(alerts(t.board)).toEqual([]); // not the master's provider
-    expect((await t.runtime.status(false)).schedulerPaused).toBe(true);
+    expect((await t.runtime.status()).schedulerPaused).toBe(true);
 
     publishEvent(t.board.db, { type: "scheduler.quota_low", payload: { provider: "claude", level: "exhausted", remainingPct: 0 } });
     publishEvent(t.board.db, { type: "scheduler.resumed", payload: { reason: "memory" } });
     await t.runtime.triggers.consumer.poll();
     expect(alerts(t.board).filter((m) => m.startsWith("[master:quota_low] claude"))).toHaveLength(1);
-    expect((await t.runtime.status(false)).schedulerPaused).toBe(false);
+    expect((await t.runtime.status()).schedulerPaused).toBe(false);
     await t.runtime.dispose();
   });
 

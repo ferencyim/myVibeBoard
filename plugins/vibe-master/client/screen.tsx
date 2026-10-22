@@ -10,15 +10,9 @@ import { SettingsCard, SettingsInput, SettingsSection, SettingsSelect, SettingsS
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import {
-  masterSettings,
-  permissionRpc,
-  sessionsRpc,
-  statusRpc,
-  switchRpc,
-} from "../shared/rpc";
+import { masterSettings, permissionRpc, sessionsRpc, statusRpc, type PresetChoice } from "../shared/rpc";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
-import { sessionDetail, sessionTitle, switchChoices, targetLabel, thinkingChips, type SwitchChoice } from "./format";
+import { dispatchLabel, presetChoices, quotaLabel, sessionDetail, sessionTitle, targetLabel } from "./format";
 
 /** Modes a provider may offer; one the provider lacks falls back to auto. */
 const PERMISSION_CHOICES = [
@@ -52,7 +46,7 @@ const Muted = ({ theme, children }: { theme: PluginTheme; children: ReactNode })
   <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{children}</Text>
 );
 
-function levelColor(theme: PluginTheme, level: SwitchChoice["level"]): string {
+function levelColor(theme: PluginTheme, level: PresetChoice["level"]): string {
   if (level === "exhausted") return theme.colors.statusDanger;
   if (level === "tight") return theme.colors.statusWarning;
   return theme.colors.foregroundMuted;
@@ -61,7 +55,6 @@ function levelColor(theme: PluginTheme, level: SwitchChoice["level"]): string {
 export function MasterScreen({ theme, navigation }: PluginScreenProps) {
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
-  const switchCall = useRpc(switchRpc);
   const permissionCall = useRpc(permissionRpc);
   const sessionsCall = useRpc(sessionsRpc);
   const [busy, setBusy] = useState<string | null>(null);
@@ -69,7 +62,7 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
 
   const status = useQuery({
     queryKey: ["vibe-master", "status"],
-    queryFn: () => statusCall({ includeProviders: true }),
+    queryFn: () => statusCall({}),
     refetchInterval: 5_000,
   });
   const sessions = useQuery({
@@ -78,19 +71,6 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
     refetchInterval: 10_000,
   });
   const s = status.data;
-
-  const choose = async (choice: SwitchChoice) => {
-    setBusy(choice.key);
-    setError(null);
-    try {
-      await switchCall({ ...choice.request, reason: "在总 agent 页面切换" });
-      await queryClient.invalidateQueries({ queryKey: ["vibe-master"] });
-    } catch (e) {
-      setError(formatRpcError(e));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const choosePermission = async (mode: string) => {
     setBusy(`permission:${mode}`);
@@ -110,16 +90,20 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
       {status.error ? (
         <Text style={{ color: theme.colors.statusDanger }}>无法加载总 agent：{formatRpcError(status.error)}</Text>
       ) : null}
+      {error ? <Text style={{ color: theme.colors.statusDanger }}>{error}</Text> : null}
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
       {s ? (
         <>
           <Section theme={theme} title="总 agent">
-            <Text style={{ color: theme.colors.foreground }}>{targetLabel(s.target)}</Text>
+            <Text style={{ color: theme.colors.foreground }}>
+              {s.preset ? `${s.preset.name}（${targetLabel(s.target)}）` : "尚未选择预设"}
+            </Text>
             <Muted theme={theme}>
-              {s.targetSource === "switched" ? "你手动切换的订阅" : "设置里的默认订阅"}
+              {s.preset ? (s.preset.migrated ? "沿用旧设置匹配到的预设，请在设置里确认" : "设置里选的预设") : "请在总 agent 设置里选一个预设"}
               {s.session ? ` - 会话${s.session.state}` : " - 尚无会话"}
               {s.paseoReady ? "" : " - 等待 daemon"}
             </Muted>
+            <Muted theme={theme}>{dispatchLabel(s.dispatch)}</Muted>
             {!s.enabled ? <Muted theme={theme}>总 agent 已在设置中停用。</Muted> : null}
             {s.lastAlert ? (
               <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
@@ -130,7 +114,7 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
 
           <Section theme={theme} title="历次会话">
             <Muted theme={theme}>
-              切换订阅或权限模式后，旧会话不会被归档，可随时打开查看当时的对话。新会话的第一条消息带有插件按看板生成的交接摘要。
+              更换预设或权限模式后，旧会话不会被归档，可随时打开查看当时的对话。新会话的第一条消息带有插件按看板生成的交接摘要。
             </Muted>
             {(sessions.data?.sessions ?? []).map((row) => (
               <View
@@ -221,34 +205,6 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
             </Section>
           ) : null}
 
-          <Section theme={theme} title="切换订阅">
-            <Muted theme={theme}>卡片、评估和记忆都在看板上，切换后用同一批卡片继续。</Muted>
-            {error ? <Text style={{ color: theme.colors.statusDanger }}>{error}</Text> : null}
-            {switchChoices(s.providers, s.target).map((choice) => (
-              <Pressable
-                key={choice.key}
-                disabled={busy !== null || choice.active}
-                onPress={() => void choose(choice)}
-                style={{
-                  borderRadius: 8,
-                  borderWidth: 1,
-                  borderColor: choice.active ? theme.colors.accent : theme.colors.border,
-                  backgroundColor: theme.colors.surface2,
-                  padding: 10,
-                  opacity: busy !== null && busy !== choice.key ? 0.5 : 1,
-                }}
-              >
-                <Text style={{ color: theme.colors.foreground }}>
-                  {choice.active ? "当前：" : ""}
-                  {choice.label}
-                  {busy === choice.key ? " ..." : ""}
-                </Text>
-                <Text style={{ color: levelColor(theme, choice.level), fontSize: 12 }}>{choice.detail}</Text>
-              </Pressable>
-            ))}
-            {s.providers.length === 0 ? <Muted theme={theme}>还没有 provider 信息。</Muted> : null}
-          </Section>
-
           {s.switchHistory.length ? (
             <Section theme={theme} title="切换记录">
               {s.switchHistory.slice(-5).map((h, i) => (
@@ -302,46 +258,69 @@ function Group({
   );
 }
 
-/** Single-choice chips (same look as the preset form's thinking picker). */
-function ChipChoice({
+/** Agent preset picker for the master: same rows as the card's selectors (name, provider / model, quota). */
+function PresetPicker({
   theme,
-  label,
-  chips,
-  value,
+  presets,
+  selectedId,
+  migrated,
+  loaded,
   onChange,
 }: {
   theme: PluginTheme;
-  label: string;
-  chips: ReadonlyArray<{ id: string; label: string }>;
-  value: string;
-  onChange(id: string): void;
+  presets: readonly PresetChoice[];
+  selectedId: string;
+  migrated: boolean;
+  loaded: boolean;
+  onChange(presetId: string): void;
 }) {
+  const choices = presetChoices(presets, selectedId);
   return (
     <View style={{ gap: 6, padding: 12 }}>
-      <Text style={{ color: theme.colors.foreground, fontSize: 14 }}>{label}</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-        {chips.map((chip) => {
-          const selected = chip.id === value;
-          return (
-            <Pressable
-              key={chip.id || "default"}
-              accessibilityRole="button"
-              accessibilityState={{ selected }}
-              onPress={() => onChange(chip.id)}
-              style={{
-                paddingHorizontal: 10,
-                paddingVertical: 5,
-                borderRadius: 999,
-                borderWidth: 1,
-                borderColor: selected ? theme.colors.accent : theme.colors.border,
-                backgroundColor: selected ? theme.colors.surface2 : theme.colors.surface1,
-              }}
-            >
-              <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{chip.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <Text style={{ color: theme.colors.foreground, fontSize: 14 }}>模型（预设）</Text>
+      <Muted theme={theme}>总 agent 用这个预设的 provider、模型和思考档位；换预设后旧会话保留可看，新会话带交接摘要。</Muted>
+      {loaded && !selectedId ? (
+        <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+          还没有选预设：选之前总 agent 不工作，派发会回落到调度器规则。
+        </Text>
+      ) : null}
+      {migrated ? (
+        <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+          当前沿用旧设置匹配到的预设，点一下确认即可保存。
+        </Text>
+      ) : null}
+      {choices.map((p) => {
+        const selected = p.id === selectedId;
+        return (
+          <Pressable
+            key={p.id}
+            accessibilityRole="radio"
+            accessibilityState={{ selected }}
+            onPress={() => onChange(p.id)}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              padding: 10,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: selected ? theme.colors.accent : theme.colors.border,
+              backgroundColor: selected ? theme.colors.surface2 : theme.colors.surface1,
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: theme.colors.foreground, fontSize: 14 }} numberOfLines={1}>
+                {p.name}
+              </Text>
+              <Muted theme={theme}>
+                {p.provider} / {p.model || "默认模型"}
+              </Muted>
+            </View>
+            <Text style={{ color: levelColor(theme, p.level), fontSize: 12 }}>{quotaLabel(p)}</Text>
+          </Pressable>
+        );
+      })}
+      {loaded && choices.length === 0 ? <Muted theme={theme}>还没有预设，请先在看板的「管理」里添加。</Muted> : null}
     </View>
   );
 }
@@ -371,11 +350,11 @@ type CrossPluginNavigation = {
 export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) {
   const settings = useSettings(masterSettings);
   const statusCall = useRpc(statusRpc);
-  // Same query as the main screen, so the provider catalog is shared and cached.
-  const catalog = useQuery({
-    queryKey: ["vibe-master", "status-providers"],
-    queryFn: () => statusCall({ includeProviders: true }),
-    staleTime: 30_000,
+  const queryClient = useQueryClient();
+  const status = useQuery({
+    queryKey: ["vibe-master", "status-presets"],
+    queryFn: () => statusCall({}),
+    staleTime: 10_000,
     retry: false,
   });
   if (settings.status !== "ready") {
@@ -397,22 +376,27 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
     Math.round(Math.min(max, Math.max(min, num(text, fallback))));
 
   return (
-    <SettingsSection title="总 agent 设置（手动切换会覆盖默认的 provider 和模型）">
+    <SettingsSection title="总 agent 设置">
       <Group theme={theme} title="基础" initiallyOpen>
         <SettingsCard>
           <SettingsSwitch label="启用总 agent" value={values.enabled} onValueChange={(enabled: boolean) => save({ ...values, enabled })} />
-          <SettingsInput label="Provider" initialValue={values.provider} onChangeText={(provider) => save({ ...values, provider: provider.trim() || "claude" })} />
-          <SettingsInput
-            label="模型 id（留空：Claude 用 Opus，其它用默认模型）"
-            initialValue={values.model}
-            onChangeText={(model) => save({ ...values, model: model.trim() })}
-          />
-          <ChipChoice
+          <PresetPicker
             theme={theme}
-            label="思考档位（选项随上面的 provider 和模型变化）"
-            chips={thinkingChips(catalog.data?.providers ?? [], values.provider, values.model, values.thinking)}
-            value={values.thinking}
-            onChange={(thinking) => save({ ...values, thinking })}
+            presets={status.data?.presets ?? []}
+            selectedId={values.presetId || status.data?.preset?.id || ""}
+            migrated={!values.presetId && !!status.data?.preset?.migrated}
+            loaded={!!status.data}
+            onChange={(presetId) => {
+              void settings
+                .save({ ...values, presetId, provider: "", model: "", thinking: "" }, revision)
+                .then(() => queryClient.invalidateQueries({ queryKey: ["vibe-master"] }));
+            }}
+          />
+          <SettingsSwitch
+            label="由总 agent 决定先派发哪些待办卡"
+            hint="调度器有空位时，总 agent 在可开始的待办卡里选先开始的（考虑优先级、依赖、涉及文件冲突和项目并发上限），仍由调度器检查并放行。关闭，或总 agent 不可用（没选预设、额度用完、出错、超时）时，调度器按自己的规则派发，并在卡片时间线写明原因。"
+            value={values.dispatch}
+            onValueChange={(dispatch: boolean) => save({ ...values, dispatch })}
           />
           <SettingsSelect
             label="总 agent 与规划会话的权限模式（自动 = provider 的自动审批模式）"
@@ -431,7 +415,7 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
       <Group theme={theme} title="触发：什么时候唤醒总 agent">
         <SettingsCard>
           <Muted theme={theme}>
-            总 agent 不再参与卡片的方案、执行和验收：这些由卡片上选的模型完成。它只在卡片完成后整理项目记忆。
+            总 agent 不参与卡片的方案、执行和验收：这些由卡片上选的模型完成。它只做两件事：决定先派发哪些待办卡（上面的派发开关），以及卡片完成后整理项目记忆。
           </Muted>
           <SettingsSwitch
             label="启动时补扫未整理的完成卡"
@@ -487,6 +471,11 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
 
       <Group theme={theme} title="高级：自动化参数">
         <SettingsCard>
+          <SettingsInput
+            label="总 agent 选择派发的超时（秒，10-600）"
+            initialValue={String(values.dispatchTimeoutSeconds)}
+            onChangeText={(text) => save({ ...values, dispatchTimeoutSeconds: integer(text, 120, 10, 600) })}
+          />
           <SettingsInput
             label="向总 agent 提问的超时（分钟，1-120）"
             initialValue={String(values.askTimeoutMinutes)}

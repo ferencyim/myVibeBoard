@@ -4,7 +4,8 @@
 //   scheduler.quota_low / paused / resumed     -> reminders only
 //   maintenance.paused                         -> master.alert (maintenance_paused); .triggered is only logged
 // WP-105: the master no longer takes part in the card flow (no draft review, no advice on worker
-// questions, no dispatch or acceptance): planning and execution run on the models picked on the card.
+// questions, no acceptance): planning and execution run on the models picked on the card.
+// WP-109: the one card-flow job the master has is the dispatch pick (`scheduler.dispatch_wanted`).
 
 import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } from "../vibe/db";
 import { isEvent } from "../vibe/contract";
@@ -34,6 +35,8 @@ export interface TriggersOptions {
   onScheduler?(event: SchedulerSignal): void;
   /** vibe-maintain: a rule was paused after repeated rejections (the owner is reminded). */
   onMaintenancePaused?(event: { ruleName: string; rejections: number }): void;
+  /** vibe-scheduler has free slots and asks which waiting card goes first (never awaited: it takes a model call). */
+  onDispatchWanted?(request: { requestId: string; slots: number; cardIds: string[] }): void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -61,6 +64,7 @@ export function createTriggers(options: TriggersOptions): Triggers {
       "scheduler.quota_low",
       "scheduler.paused",
       "scheduler.resumed",
+      "scheduler.dispatch_wanted",
       "maintenance.paused",
       "maintenance.triggered",
     ],
@@ -73,6 +77,7 @@ export function createTriggers(options: TriggersOptions): Triggers {
         options.onScheduler?.({ kind: "quota_low", provider, level, remainingPct });
         return;
       }
+      if (isEvent(event, "scheduler.dispatch_wanted")) return options.onDispatchWanted?.(event.payload);
       if (isEvent(event, "scheduler.paused")) return options.onScheduler?.({ kind: "paused" });
       if (isEvent(event, "scheduler.resumed")) return options.onScheduler?.({ kind: "resumed" });
       if (isEvent(event, "maintenance.paused")) {

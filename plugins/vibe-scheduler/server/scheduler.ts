@@ -7,7 +7,7 @@
 // Gates: memory pressure pauses all admissions; a tight provider only admits high priority cards;
 // an exhausted provider admits nothing.
 
-import type { CardView, DeviceKind } from "./vibe/contract";
+import type { CardView, DeviceKind, Preset, Project } from "./vibe/contract";
 import { publishEvent, type DeviceLeases, type VibeDb, type createVibeStore } from "./vibe/db";
 import { quotaFor } from "./quota";
 import { topSessions, type ResourceSnapshot } from "./resources";
@@ -71,6 +71,11 @@ export interface TickResult {
   paused: boolean;
 }
 
+/** Rules dispatch for this long after the master failed or timed out. */
+const FALLBACK_MS = 5 * 60_000;
+/** ...and for this long after a pick that no card could follow. */
+const RETRY_AFTER_EMPTY_MS = 60_000;
+
 const ACTIVE_STATES = ["starting", "working", "waiting", "idle"] as const;
 
 /** Device kind a runtime environment needs, or null when it needs no exclusive device. */
@@ -102,6 +107,14 @@ export function createScheduler(deps: SchedulerDeps) {
   let paused = false;
   let lastDeferred: Record<string, string> = {};
   const announcedQuota = new Map<string, string>();
+  // WP-109 master dispatch: at most one question to the master at a time, and a back-off window in
+  // which the scheduler's own rules dispatch because the master could not answer.
+  type Round =
+    | { kind: "asking"; requestId: string; since: number }
+    | { kind: "chosen"; requestId: string; cardIds: string[]; reason: string };
+  let round: Round | null = null;
+  let fallback: { until: number; reason: string } | null = null;
+  let requestSeq = 0;
 
   const leaseOwner = (cardId: string) => `scheduler:${cardId}`;
 
@@ -189,6 +202,65 @@ export function createScheduler(deps: SchedulerDeps) {
     return null;
   }
 
+  type Verdict =
+    | { ok: true; project: Project; preset: Preset; provider: string }
+    | { ok: false; reason: string };
+
+  /** Every admission rule that has no side effect (devices and ports are taken only on admission). */
+  function check(
+    card: CardView,
+    config: SchedulerConfig,
+    counts: ReturnType<typeof runningCounts>,
+    quota: Record<string, ProviderQuota>,
+  ): Verdict {
+    const no = (reason: string): Verdict => ({ ok: false, reason });
+    if (counts.total >= config.globalLimit) return no(`已达全局并发上限 ${config.globalLimit}`);
+    const failure = failures.get(card.id);
+    if (failure && (failure.count >= config.maxAdmitAttempts || failure.until > now().getTime())) {
+      return no(failure.count >= config.maxAdmitAttempts ? "多次派发失败，已放弃" : "派发失败后冷却中，稍后重试");
+    }
+    const project = store.projects.get(card.projectId);
+    // Same order as vibe-board's dispatcher: card, master recommendation, project default, global default.
+    const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id), store.modelDefaults.global());
+    const preset = presetId ? store.presets.get(presetId) : undefined;
+    if (!project || !preset) return no("没有主代理模型（请在卡片上选择，或在项目/全局设置默认模型）");
+    const provider = preset.provider;
+    const providerLimit = effectiveLimit(config, provider, null);
+    if ((counts.byProvider[provider] ?? 0) >= providerLimit) return no(`${provider} 已达并发上限 ${providerLimit}`);
+    if (project.concurrencyLimit != null && (counts.byProject[project.id] ?? 0) >= project.concurrencyLimit) {
+      return no(`项目已达并发上限 ${project.concurrencyLimit}`);
+    }
+    if (config.conflictAvoidance) {
+      const files = plannedFiles(card.id);
+      const other = files.length ? conflictWith(card.projectId, card.id, files) : null;
+      if (other) return no(`与 ${other} 改动相同的文件，等它结束`);
+    }
+    const q = quotaFor(quota, provider);
+    if (q.level === "exhausted") return no(`${provider} 额度已用完${q.resetsAt ? `，${q.resetsAt} 恢复` : ""}`);
+    if (q.level === "tight" && PRIORITY_RANK[card.priority] > PRIORITY_RANK[config.tightMinPriority]) {
+      return no(`${provider} 额度紧张，仅留给 ${config.tightMinPriority} 及以上优先级`);
+    }
+    return { ok: true, project, preset, provider };
+  }
+
+  /** The card timeline says who decided the dispatch (the owner reads why a card started). */
+  function noteDispatch(cardId: string, via: { kind: "master" | "fallback"; reason: string }) {
+    try {
+      store.events.add({
+        cardId,
+        type: "note",
+        authorKind: via.kind === "master" ? "master" : "system",
+        author: via.kind === "master" ? "master" : "scheduler",
+        body:
+          via.kind === "master"
+            ? { kind: "dispatch_by_master", text: `总 agent 选择现在派发这张卡${via.reason ? `：${via.reason}` : ""}` }
+            : { kind: "dispatch_fallback", text: `总 agent 派发不可用（${via.reason}），已按调度器规则派发。` },
+      });
+    } catch {
+      // The note is informational; a card that vanished meanwhile must not stop the admission.
+    }
+  }
+
   function updateMemoryGate(config: SchedulerConfig) {
     const snap = deps.resources();
     if (!snap) return;
@@ -261,54 +333,67 @@ export function createScheduler(deps: SchedulerDeps) {
     }
 
     const counts = runningCounts();
-    const minRank = PRIORITY_RANK[config.tightMinPriority];
 
-    for (const { card } of waiting) {
-      if (counts.total >= config.globalLimit) {
-        deferred[card.key] = `已达全局并发上限 ${config.globalLimit}`;
+    // ---- who decides the order: the scheduler's rules, or (WP-109) the master agent ----
+    const mode = store.masterDispatch.get();
+    let order = waiting;
+    let via: { kind: "master" | "fallback"; reason: string } | null = null;
+    if (!mode.enabled) {
+      round = null;
+      fallback = null;
+    } else if (!mode.available) {
+      via = { kind: "fallback", reason: mode.reason || "总 agent 不可用" };
+    } else if (round?.kind === "chosen") {
+      const chosen = round;
+      round = null;
+      const byId = new Map(waiting.map((w) => [w.card.id, w]));
+      order = chosen.cardIds.map((id) => byId.get(id)).filter((w): w is (typeof waiting)[number] => !!w);
+      for (const w of waiting) {
+        if (!chosen.cardIds.includes(w.card.id)) deferred[w.card.key] = "总 agent 本轮没有选这张卡";
+      }
+      via = { kind: "master", reason: chosen.reason };
+    } else if (round?.kind === "asking") {
+      const limitMs = (mode.timeoutSeconds + 30) * 1000;
+      if (now().getTime() - round.since <= limitMs) {
+        for (const w of waiting) deferred[w.card.key] = "等待总 agent 选择派发";
+        return result();
+      }
+      round = null;
+      fallback = { until: now().getTime() + FALLBACK_MS, reason: `总 agent 超过 ${mode.timeoutSeconds} 秒没有回应` };
+      via = { kind: "fallback", reason: fallback.reason };
+    } else if (fallback && fallback.until > now().getTime()) {
+      via = { kind: "fallback", reason: fallback.reason };
+    } else {
+      fallback = null;
+      const candidates = waiting.filter((w) => check(w.card, config, counts, quota).ok);
+      if (candidates.length > 0) {
+        const requestId = `${now().getTime()}-${++requestSeq}`;
+        round = { kind: "asking", requestId, since: now().getTime() };
+        publishEvent(
+          db,
+          {
+            type: "scheduler.dispatch_wanted",
+            payload: {
+              requestId,
+              slots: Math.max(0, config.globalLimit - counts.total),
+              cardIds: candidates.map((w) => w.card.id),
+            },
+            dedupeKey: `dispatch_wanted:${requestId}`,
+          },
+          now,
+        );
+        for (const w of waiting) deferred[w.card.key] = "等待总 agent 选择派发";
+        return result();
+      }
+    }
+
+    for (const { card } of order) {
+      const verdict = check(card, config, counts, quota);
+      if (!verdict.ok) {
+        deferred[card.key] = verdict.reason;
         continue;
       }
-      const failure = failures.get(card.id);
-      if (failure && (failure.count >= config.maxAdmitAttempts || failure.until > now().getTime())) {
-        deferred[card.key] =
-          failure.count >= config.maxAdmitAttempts ? "多次派发失败，已放弃" : "派发失败后冷却中，稍后重试";
-        continue;
-      }
-      const project = store.projects.get(card.projectId);
-      // Same order as vibe-board's dispatcher: card, master recommendation, project default, global default.
-      const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id), store.modelDefaults.global());
-      const preset = presetId ? store.presets.get(presetId) : undefined;
-      if (!project || !preset) {
-        deferred[card.key] = "没有主代理模型（请在卡片上选择，或在项目/全局设置默认模型）";
-        continue;
-      }
-      const provider = preset.provider;
-      const providerLimit = effectiveLimit(config, provider, null);
-      if ((counts.byProvider[provider] ?? 0) >= providerLimit) {
-        deferred[card.key] = `${provider} 已达并发上限 ${providerLimit}`;
-        continue;
-      }
-      if (project.concurrencyLimit != null && (counts.byProject[project.id] ?? 0) >= project.concurrencyLimit) {
-        deferred[card.key] = `项目已达并发上限 ${project.concurrencyLimit}`;
-        continue;
-      }
-      if (config.conflictAvoidance) {
-        const files = plannedFiles(card.id);
-        const other = files.length ? conflictWith(card.projectId, card.id, files) : null;
-        if (other) {
-          deferred[card.key] = `与 ${other} 改动相同的文件，等它结束`;
-          continue;
-        }
-      }
-      const q = quotaFor(quota, provider);
-      if (q.level === "exhausted") {
-        deferred[card.key] = `${provider} 额度已用完${q.resetsAt ? `，${q.resetsAt} 恢复` : ""}`;
-        continue;
-      }
-      if (q.level === "tight" && PRIORITY_RANK[card.priority] > minRank) {
-        deferred[card.key] = `${provider} 额度紧张，仅留给 ${config.tightMinPriority} 及以上优先级`;
-        continue;
-      }
+      const { project, preset, provider } = verdict;
 
       const deviceIds: string[] = [];
       const kind = deviceKindFor(preset.runtimeEnv);
@@ -375,7 +460,12 @@ export function createScheduler(deps: SchedulerDeps) {
         },
         now,
       );
+      if (via) noteDispatch(card.id, via);
       admitted.push(admission);
+    }
+    // The master's pick got nothing through the checks: rules dispatch for a while instead of asking again at once.
+    if (via?.kind === "master" && admitted.length === 0) {
+      fallback = { until: now().getTime() + RETRY_AFTER_EMPTY_MS, reason: "总 agent 所选的卡片没有通过调度器检查" };
     }
     return result();
   }
@@ -389,9 +479,26 @@ export function createScheduler(deps: SchedulerDeps) {
     failures.set(cardId, { count, until: now().getTime() + config.retryCooldownSeconds * 1000 * count });
   }
 
+  /** The master answered a request (events.ts `master.dispatch_chosen`). Stale ids are ignored. */
+  function handleMasterChosen(payload: { requestId: string; cardIds: string[]; reason: string }) {
+    if (round?.kind === "asking" && round.requestId === payload.requestId) {
+      round = { kind: "chosen", requestId: payload.requestId, cardIds: payload.cardIds, reason: payload.reason };
+    }
+  }
+
+  /** The master could not answer (`master.dispatch_failed`): rules dispatch for a while. */
+  function handleMasterFailed(payload: { requestId: string; reason: string }) {
+    if (round?.kind === "asking" && round.requestId === payload.requestId) {
+      round = null;
+      fallback = { until: now().getTime() + FALLBACK_MS, reason: payload.reason };
+    }
+  }
+
   return {
     tick,
     handleDispatchFailed,
+    handleMasterChosen,
+    handleMasterFailed,
     /** Forget failure history (a card the user touched may be retried). */
     resetFailures: (cardId: string) => void failures.delete(cardId),
     isPaused: () => paused,
@@ -403,6 +510,7 @@ export function createScheduler(deps: SchedulerDeps) {
       deferred: lastDeferred,
       running: runningCounts(),
       failures: Object.fromEntries([...failures].map(([k, v]) => [k, v.count])),
+      masterDispatch: { ...store.masterDispatch.get(), round: round?.kind ?? null, fallbackReason: fallback?.reason ?? null },
     }),
   };
 }

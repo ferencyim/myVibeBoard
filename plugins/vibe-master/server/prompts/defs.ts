@@ -106,6 +106,43 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       order: 11,
     },
     {
+      key: "master.dispatch",
+      plugin: PLUGIN,
+      role: "master",
+      title: "派发：选择先开始的待办卡",
+      description:
+        "调度器有空位、有待办卡可以开始时，让总 agent 决定先派发哪几张、什么顺序的消息。总 agent 只能在调度器给出的空位和候选卡里选，调度器仍会再做一遍并发、额度和文件冲突检查；总 agent 不可用时调度器按自己的规则派发。可在总 agent 设置里关闭。",
+      whenSent: "派发开关开启，调度器发现有空位且有可开始的待办卡时。",
+      audience: "总 agent",
+      defaultText: `[dispatch]
+调度器现在有 {{slots}} 个空位。下面的待办卡都已通过调度器的并发、额度和文件冲突检查，现在就可以开始。请决定派发哪几张、先后顺序。
+
+选择时考虑：
+- 优先级：紧急、重要的先做。
+- 依赖：描述或方案里写明要等另一张卡先完成的，这次不要选依赖方；被依赖的先派发。
+- 涉及的文件：方案涉及的文件相互重叠的卡片不要同时派发，挑一张先做。
+- 项目并发上限：不要超过各项目剩余的并发。
+- 数量不能超过空位数；可以少选，但至少选一张。
+
+## 空位与并发
+{{limits}}
+
+## 候选待办卡（调度器的默认顺序）
+{{candidates}}
+
+## 正在进行的卡片
+{{running}}`,
+      placeholders: [
+        { name: "slots", description: "调度器给出的空位数" },
+        { name: "limits", description: "各项目的进行中数量与并发上限" },
+        { name: "candidates", description: "候选待办卡：编号、优先级、标题、描述、涉及的文件" },
+        { name: "running", description: "同项目正在进行或验证中的卡片及其涉及的文件" },
+      ],
+      fixedSuffix:
+        '只回复一个放在 ```json 围栏里的 JSON 对象：{"order": ["卡片编号，先派发的在前"], "reason": "一句话说明为什么这样选"}。编号必须来自候选待办卡。',
+      order: 12,
+    },
+    {
       key: "master.repair_json",
       plugin: PLUGIN,
       role: "master",
@@ -353,26 +390,18 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       role: "handoff",
       title: "总 agent 交接摘要",
       description: "更换总 agent 后，新总 agent 首条消息附带的摘要框架；各段内容由插件根据看板生成。",
-      whenSent: "切换订阅、更换权限模式等导致新总 agent 启动，并在它收到第一条消息时。",
+      whenSent: "更换总 agent 预设、更换权限模式等导致新总 agent 启动，并在它收到第一条消息时。",
       audience: "新的总 agent",
       defaultText: `[handoff] 你接替上一任总 agent。以下摘要由插件根据看板生成，不依赖旧会话；细节用 vibe_show / vibe_list 查，不要凭记忆。
 
 ## 最近的切换
 {{switches}}
 
-## 最近审查结论（{{days}} 天内）
-{{reviews}}
-
-## 草稿与审查状态
-{{drafts}}
-
-## 近期完成的卡片
+## 近期完成的卡片（{{days}} 天内）
 {{done}}`,
       placeholders: [
         { name: "switches", description: "最近的切换记录（每行一条）" },
         { name: "days", description: "「最近」的天数" },
-        { name: "reviews", description: "最近审查结论" },
-        { name: "drafts", description: "草稿与审查状态" },
         { name: "done", description: "近期完成的卡片" },
       ],
       order: 50,
@@ -385,6 +414,7 @@ export type MasterPromptKey =
   | "master.rules_supplement"
   | "master.rules_updated"
   | "master.wake.card_done"
+  | "master.dispatch"
   | "master.repair_json"
   | "master.plan.system"
   | "master.plan.start"

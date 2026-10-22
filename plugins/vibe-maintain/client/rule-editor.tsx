@@ -253,7 +253,8 @@ export function RuleEditor({
   /** Creating a custom rule: the check type is chosen here (an existing rule keeps its type). */
   creating?: boolean;
   saving: boolean;
-  onSave: (fields: Fields, scope: RuleScope) => void;
+  /** `keepOpen`: an instant save of one switch; the editor stays open. */
+  onSave: (fields: Fields, scope: RuleScope, keepOpen?: boolean) => void;
   onCancel: () => void;
 }) {
   const [d, setD] = useState<RuleDraft>(initial);
@@ -267,6 +268,14 @@ export function RuleEditor({
     </Field>
   );
 
+  // The switches persist at once for an existing rule (only that switch, on top of the saved
+  // values): collapsing the editor drops the other, unsaved edits of the form.
+  const instant = (enabled: boolean, nextScope: RuleScope) => {
+    if (readOnly || creating) return;
+    const r = draftToFields({ ...initial, enabled });
+    if (r.fields) onSave(r.fields, nextScope, true);
+  };
+
   const save = () => {
     const result = draftToFields(d);
     setProblems(result.errors);
@@ -275,11 +284,27 @@ export function RuleEditor({
 
   return (
     <View style={{ gap: 12, borderTopWidth: 1, borderTopColor: theme.colors.border, paddingTop: 10 }}>
-      {readOnly ? null : <ScopePicker theme={theme} scope={scope} projects={projects} onChange={setScope} />}
+      {readOnly ? null : (
+        <ScopePicker
+          theme={theme}
+          scope={scope}
+          projects={projects}
+          onChange={(v) => {
+            setScope(v);
+            instant(initial.enabled, v);
+          }}
+        />
+      )}
       {f(
         "启用",
         ["enabled"],
-        <Switch value={d.enabled} onValueChange={(v) => set("enabled", v)} />,
+        <Switch
+          value={d.enabled}
+          onValueChange={(v) => {
+            set("enabled", v);
+            instant(v, scope);
+          }}
+        />,
         "关闭后不会自动触发，也不能手动运行。",
       )}
 

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import contribute from "../index.server";
-import { permissionRpc, sessionsRpc, statusRpc, switchRpc, wakeRpc } from "../shared/rpc";
+import { permissionRpc, sessionsRpc, statusRpc, wakeRpc } from "../shared/rpc";
 import { fakePaseo, setupBoard, tempDir, tick } from "./helpers";
 import { createVibeStore, migrateOwner, openVibeDb, publishEvent } from "../server/vibe/db";
 
@@ -26,6 +26,7 @@ describe("rules", () => {
     ).replace(/\r\n/g, "\n");
     expect(skill).toMatch(/^---\nname: vibe-master\n/);
     expect(skill).toContain("card_done");
+    expect(skill).toContain("### dispatch");
     for (const removed of ["assess_draft", "session_help", "plan_discussion"]) expect(skill).not.toContain(removed);
     expect(skill).toContain("绝不自行在列之间移动卡片");
     expect(existsSync(join(pluginDir, "server/master/rules.generated.ts"))).toBe(true);
@@ -82,7 +83,7 @@ describe("plugin entry", () => {
     const fake = fakePaseo(() => CONSOLIDATED);
     const { server, handlers, hooks } = fakeServer();
     const cleanup = contribute(server);
-    expect([...handlers.keys()].sort()).toEqual([permissionRpc.name, sessionsRpc.name, statusRpc.name, switchRpc.name, wakeRpc.name].sort());
+    expect([...handlers.keys()].sort()).toEqual([permissionRpc.name, sessionsRpc.name, statusRpc.name, wakeRpc.name].sort());
     expect(hooks.has("agent.created")).toBe(true);
 
     // seed a project and a draft in the same vibe.db the plugin opened
@@ -95,17 +96,15 @@ describe("plugin entry", () => {
 
     // before any hook/RPC the plugin has no daemon handle
     const context = { paseo: fake.paseo };
-    const first = (await handlers.get("master.status")!({ includeProviders: false }, context)) as { paseoReady: boolean };
+    const first = (await handlers.get("master.status")!({}, context)) as { paseoReady: boolean; preset: { name: string } | null };
     expect(first.paseoReady).toBe(true);
+    expect(first.preset?.name).toBe("Claude Opus"); // the legacy provider setting still finds its preset
 
     const woken = (await handlers.get("master.wake")!({ card: card.key.toLowerCase(), reason: "card_done", force: true }, context)) as { queued: boolean };
     expect(woken.queued).toBe(true);
     for (let i = 0; i < 100 && !memoryUpdated(store, card.id); i++) await tick(20);
     expect(memoryUpdated(store, card.id)).toBe(true);
     expect(store.cards.get(card.id)!.column).toBe("done");
-
-    const switched = (await handlers.get("master.switch")!({ provider: "claude", model: "sonnet-x" }, context)) as { changed: boolean; target: { model: string } };
-    expect(switched).toMatchObject({ changed: true, target: { model: "sonnet-x" } });
 
     const missing = (await handlers.get("master.wake")!({ card: "DEMO-99", reason: "card_done", force: true }, context)) as { queued: boolean };
     expect(missing.queued).toBe(false);

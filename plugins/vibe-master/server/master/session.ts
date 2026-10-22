@@ -18,12 +18,8 @@ import { FOLLOW_SETTINGS, type PermissionResolver, type ResolvedPermission } fro
 import { isQuotaError } from "../subscription/quota";
 import type { Alerts } from "../subscription/alerts";
 import type { MasterSessionNote, MasterStateFile } from "../subscription/state";
-import {
-  providerSpec,
-  resolveTarget,
-  sameTarget,
-  type TargetRequest,
-} from "../subscription/target";
+import { resolveMasterPreset, targetOfPreset } from "../subscription/preset";
+import { providerSpec, sameTarget } from "../subscription/target";
 import { MasterError, type MasterAgentHandle, type MasterAsk, type MasterPaseo } from "../types";
 
 export interface MasterSessionDeps {
@@ -45,7 +41,7 @@ export interface MasterSessionDeps {
 const LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
 
 export interface MasterSession extends MasterAsk {
-  /** The subscription the master runs (or will run) on: manual switch, else settings. */
+  /** The provider/model/thinking of the preset chosen in the settings (throws "unavailable" without one). */
   currentTarget(): Promise<MasterTarget>;
   /** Provider of the live master, if any. */
   activeProvider(): string | null;
@@ -59,10 +55,12 @@ export interface MasterSession extends MasterAsk {
   setPermission(mode: string): Promise<{ changed: boolean; sessionId: string | null }>;
   /** Every master session, newest first (the current one flagged). */
   sessions(limit?: number): MasterSessionRow[];
-  switchTo(
-    request: TargetRequest,
-    reason?: string,
-  ): Promise<{ target: MasterTarget; changed: boolean; sessionId: string | null }>;
+  /**
+   * The chosen preset changed: a running master is replaced by a fresh agent on the new one (the
+   * old conversation stays openable, the new agent gets the hand-off summary). Without a running
+   * master nothing happens; the next question starts it on the current preset.
+   */
+  applyPreset(reason?: string): Promise<{ changed: boolean; sessionId: string | null }>;
 }
 
 export function createMasterSession(deps: MasterSessionDeps): MasterSession {
@@ -70,7 +68,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   let handle: MasterAgentHandle | null = null;
   /** The rules were delivered in the conversation (providers that ignore systemPrompt need this). */
   let rulesSent = false;
-  let settingsTarget: { key: string; value: MasterTarget } | null = null;
+  let presetTarget: { key: string; value: MasterTarget } | null = null;
   /** Hash of the rules text the agent has seen (system prompt or conversation). */
   let deliveredRules = "";
   /** Hand-off summary for the first message to a freshly started agent. */
@@ -103,19 +101,13 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   }
 
   async function currentTarget(): Promise<MasterTarget> {
-    const switched = deps.state.read().target;
-    if (switched) return switched;
-    const paseo = deps.getPaseo();
-    if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
-    const s = deps.settings();
-    const key = JSON.stringify([s.provider, s.model, s.thinking]);
-    if (settingsTarget?.key === key) return settingsTarget.value;
-    const value = await resolveTarget(paseo, {
-      provider: s.provider,
-      model: s.model || undefined,
-      thinking: s.thinking || undefined,
-    });
-    settingsTarget = { key, value };
+    const { preset } = resolveMasterPreset(deps.settings(), store.presets.list());
+    if (!preset) throw new MasterError("unavailable", "没有为总 agent 选择预设（请在总 agent 设置页选择）");
+    const key = JSON.stringify([preset.id, preset.provider, preset.model, preset.thinking]);
+    if (presetTarget?.key === key) return presetTarget.value;
+    // A preset with a model needs no catalog; an empty model is resolved through the daemon.
+    const value = await targetOfPreset(deps.getPaseo(), preset);
+    presetTarget = { key, value };
     return value;
   }
 
@@ -355,20 +347,19 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
         }));
     },
 
-    async switchTo(request, reason) {
+    async applyPreset(reason) {
+      const live = liveSession();
+      if (!live) return { changed: false, sessionId: null };
       const paseo = deps.getPaseo();
       if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
-      const target = await resolveTarget(paseo, request);
+      const target = await currentTarget();
       const record = deps.state.read().agent;
-      const live = liveSession();
-      if (live && record?.agentId === live.agentId && sameTarget(record.target, target)) {
-        deps.state.update((s) => ({ ...s, target }));
-        return { target, changed: false, sessionId: live.id };
+      if (record?.agentId === live.agentId && sameTarget(record.target, target)) {
+        return { changed: false, sessionId: live.id };
       }
       // Start the new agent first: if the provider is unavailable the old one keeps working.
       const fresh = await spawn(paseo, target, reason ?? "switch");
-      deps.state.update((s) => ({ ...s, target }));
-      if (live && live.id !== fresh.id) {
+      if (live.id !== fresh.id) {
         if (live.currentProvider !== target.provider) {
           try {
             store.sessions.switchProvider(live.id, target.provider, reason);
@@ -378,7 +369,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
         }
         await retire(live, "switched");
       }
-      return { target, changed: true, sessionId: fresh.id };
+      return { changed: true, sessionId: fresh.id };
     },
   };
 }
