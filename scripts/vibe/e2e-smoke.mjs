@@ -22,7 +22,7 @@ const need = (name) => {
   return value;
 };
 const clientPath = need("VIBE_E2E_CLIENT");
-const home = need("VIBE_E2E_HOME");
+need("VIBE_E2E_HOME");
 const port = process.env.VIBE_E2E_PORT || "16767";
 const provider = process.env.VIBE_E2E_PROVIDER || "codex";
 const stepTimeout = Number(process.env.SMOKE_STEP_TIMEOUT_MIN || 10) * 60_000;
@@ -229,7 +229,7 @@ try {
   }
 
   // 7. verifying + evidence
-  const verifying = await waitFor(
+  await waitFor(
     "card in verifying",
     async () => {
       const d = await detail();

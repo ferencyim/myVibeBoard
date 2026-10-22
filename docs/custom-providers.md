@@ -346,6 +346,12 @@ You can also combine profiles with model overrides to pin specific models per pr
 
 Override the command used to launch any provider with the `command` field. This is an array where the first element is the binary and the rest are arguments.
 
+On Windows, OpenCode Desktop keeps its CLI outside PATH under
+`%APPDATA%/ai.opencode.desktop/cli/<version>-<arch>/opencode-cli.exe`.
+Paseo searches this location after PATH and WinGet, choosing the newest runnable
+version for the host architecture. An explicit `command` takes precedence. Use
+the CLI executable when overriding the path; `OpenCode.exe` launches the desktop UI.
+
 ### Override a built-in provider's binary
 
 ```json
