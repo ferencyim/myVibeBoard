@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { CARD_PRIORITIES, type CardColumn, type CardPriority, type CardView } from "../../shared/vibe/contract";
 import { useBoardData, useRefresh } from "../common/api";
+import { PRIORITY_COLORS, tagColor } from "../common/colors";
 import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Chip, Muted, TextField } from "../common/ui";
 import { CardDetail } from "../detail/CardDetail";
@@ -189,11 +190,25 @@ function BoardContent({ initialProject, initialCard }: { initialProject?: string
         ) : null}
         <Muted>优先级</Muted>
         {CARD_PRIORITIES.filter((p) => p !== "none").map((p) => (
-          <Chip key={p} label={PRIORITY_LABELS[p]} selected={priority === p} onPress={() => setPriority(priority === p ? null : p)} />
+          <Chip
+            key={p}
+            variant="flag"
+            color={PRIORITY_COLORS[p]}
+            label={PRIORITY_LABELS[p]}
+            selected={priority === p}
+            onPress={() => setPriority(priority === p ? null : p)}
+          />
         ))}
         <Muted>标签</Muted>
         {tags.map((t) => (
-          <Chip key={t.id} label={t.name} selected={tagId === t.id} onPress={() => setTagId(tagId === t.id ? null : t.id)} />
+          <Chip
+            key={t.id}
+            variant="tag"
+            color={tagColor(t)}
+            label={t.name}
+            selected={tagId === t.id}
+            onPress={() => setTagId(tagId === t.id ? null : t.id)}
+          />
         ))}
       </ScrollView>
 

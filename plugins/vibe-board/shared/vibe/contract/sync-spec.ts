@@ -98,7 +98,7 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
       "role_hints_json",
     ],
   ),
-  both("tag", ["id"], ["name", "evidence"]),
+  both("tag", ["id"], ["name", "evidence", "color"]),
   both("card_tag", ["card_id", "tag_id"], []),
   both(
     "maintenance_rule",

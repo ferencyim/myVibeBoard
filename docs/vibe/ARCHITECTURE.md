@@ -394,6 +394,7 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 | WP-98  | Agent 行为中心（第一部分）                                  | `plugins/vibe-shared/{contract/prompts.ts,db}` 提示词注册表（`prompt_template`/`prompt_override`，core 迁移 5，手机可同步覆盖）；vibe-master 与 vibe-board 的全部提示词接入、高级自动化参数设置项；`plugins/vibe-board/client/behaviour/**` 中央「Agent 行为」页；[core] 插件导航 `openPluginScreen/openPluginSettings` | 90,93  | 中   |
 | WP-99  | Agent 行为中心（第二部分）                                  | vibe-verify、vibe-context、switch-provider 的提示词注册与设置界面，以及其余硬编码自动化参数转成设置                                                                                                                                                                                                                     | 98     | 中   |
 | WP-92  | 卡片群聊                                                    | `plugins/vibe-board/client/{detail,planning}/**`、`plugins/vibe-board/server/{chat,dispatch,finalizer}/**`；vibe-master assess/planning、vibe-verify review 的发言接入                                                                                                                                                  | 91,93  | 难   |
+| WP-104 | 标签编辑与配色、选择器即时响应、项目自动关联 Paseo 项目     | `plugins/vibe-shared`（core 迁移 6 `tag.color`、`tags.update`）、`plugins/vibe-board/client/{common/colors.ts,detail/optimistic.ts,presets,board}`、`server/dispatch/link-project.ts`；[core] 手机端 `toTag`                                                                                                            | 90     | 中   |
 | WP-105 | 卡片五 tab：方案/执行对话、未读、总 agent 退出卡片流程      | `plugins/vibe-board/{client,server}/**`、`plugins/vibe-master/server/{planning,wake,assess}/**`、`plugins/vibe-shared/**`（core 迁移、命令层）、vibe-verify 复核顺序；[core] App 离线映射                                                                                                                               | 92,104 | 难   |
 
 - **WP-90**：`Project.projectTypes`（非空数组）取代单值，`projectType` 保留为 `projectTypes[0]` 的兼容字段（`COMPAT(project-types)`，旧手机端仍可同步）；
@@ -411,6 +412,9 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 - **WP-95**：网关增加 vivo 发送器（鉴权签名、发送、测试推送模式，假端点单测）；token 带通道类型（协议新增可选字段）；
   App 用配置插件接入 vivo 推送 SDK（SDK aar 与 AppID/AppKey 从本机未入库位置读取，缺失时不启用，构建照常）；FCM 路径不变。真机验收待用户提供凭据。
 - **WP-92**（已由 WP-105 取代）：卡片群聊。`chat` / `proposal` 事件、关键消息原则和「查看完整会话」入口沿用到 WP-105 的方案对话与执行对话；总 agent 审查和按列路由已删除。
+- **WP-104**：标签带 `color`（空串 = 按 id 稳定取色，迁移 6，同步字段）；`tags.update` 就地改名/颜色/证据默认，卡片按 tag id 关联因此自动跟随；管理页「标签」可逐条改。优先级（冷→暖，旗标描边）与标签（紫青粉色板，淡底填充）用两组互不重叠的色，见 `client/common/colors.ts`。
+  卡片详情的优先级/标签/预设/复核选择改为乐观更新（`detail/optimistic.ts`）：点选立即显示，写入与重取在后台按序进行，失败回滚；此前要等 RPC 加整板失效重取才变，是卡顿根因。
+  `dispatch/link-project.ts`：按仓库路径找 Paseo 项目，找不到则 `workspaces.open(路径)` 让 Paseo 建项目并写回 `paseoProjectId`；创建/改路径时与派发前都执行，仅路径为空或不存在才报错。
 - **WP-105**（取代 WP-92 的群聊与 WP-91/93 的「总 agent 审查/派发」）：卡片详情五个 tab——详情、方案、执行、验证、时间线。
   - **数据（core 迁移 7 `card_tabs`）**：`card` 新增 `scout_preset_id`、`planner_preset_id`（与 `preset_id`=执行模型、`reviewer_preset_id`=复核模型并列，双向同步）；
     `plan_json`（唯一一版方案，`PlanSnapshot` 结构，覆盖写；迁移时由最新 `plan_version` 回填，`plan_version` 只读保留历史）；

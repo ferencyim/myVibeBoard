@@ -217,7 +217,7 @@ describe("dispatch", () => {
 
     t.board.cards.update(t.card.id, { presetId: t.preset.id });
     t.board.projects.update("DEMO", { repoPath: "/elsewhere" });
-    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/还没有关联到 Paseo 项目/);
+    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/仓库路径不存在或不是目录：\/elsewhere/);
     expect(column(t)).toBe("todo");
     expect(t.fake.calls.workspace).toHaveLength(0);
   });

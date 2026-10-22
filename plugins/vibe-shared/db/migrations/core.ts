@@ -349,6 +349,14 @@ CREATE UNIQUE INDEX idx_prompt_override_scope ON prompt_override(key, COALESCE(p
   },
   {
     version: 6,
+    name: "tag_color",
+    sql: `
+-- Tags get a user-chosen color (hex; '' = the client derives one from the tag id).
+ALTER TABLE tag ADD COLUMN color TEXT NOT NULL DEFAULT '';
+`,
+  },
+  {
+    version: 7,
     name: "card_tabs",
     sql: `
 -- WP-105: card tabs. Planning/scouting models next to the executor (preset_id) and reviewer;

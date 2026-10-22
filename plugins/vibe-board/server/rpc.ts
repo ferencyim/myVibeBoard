@@ -6,6 +6,7 @@ import * as rpc from "../shared/rpc";
 import type { ChatService } from "./chat";
 import type { FlowService } from "./flow";
 import type { Dispatcher } from "./dispatch";
+import { linkPaseoProject } from "./dispatch/link-project";
 import type { RequirementsService } from "./requirements";
 import type { Lifecycle } from "./lifecycle";
 import type { ReplyService, SyncService } from "./sync";
@@ -86,8 +87,22 @@ export function registerBoardRpcs(
   extras: BoardRpcExtras = {},
 ): void {
   server.handle(rpc.projectsListRpc, (input) => board.projects.list(input.includeArchived));
-  server.handle(rpc.projectsCreateRpc, (input) => board.projects.create(input));
-  server.handle(rpc.projectsUpdateRpc, ({ project, ...patch }) => board.projects.update(project, patch));
+  server.handle(rpc.projectsCreateRpc, async (input, { paseo }) => {
+    const created = board.projects.create(input);
+    // Best effort: a failure leaves it unlinked and dispatch retries with a precise message.
+    await linkPaseoProject(board, paseo, created.project).catch(() => undefined);
+    return { project: board.projects.resolve(created.project.id) };
+  });
+  server.handle(rpc.projectsUpdateRpc, async ({ project, ...patch }, { paseo }) => {
+    const before = board.projects.resolve(project);
+    const updated = board.projects.update(project, patch);
+    // A changed repository path makes the old link stale unless the caller set a new one.
+    if (patch.repoPath !== undefined && patch.paseoProjectId === undefined && patch.repoPath !== before.repoPath) {
+      await linkPaseoProject(board, paseo, { ...updated.project, paseoProjectId: null }).catch(() => undefined);
+      return { project: board.projects.resolve(project) };
+    }
+    return updated;
+  });
   server.handle(rpc.paseoProjectsListRpc, (_input, { paseo }) => listPaseoProjects(paseo));
 
   server.handle(rpc.boardSummaryRpc, () => board.cards.summary());
@@ -106,7 +121,8 @@ export function registerBoardRpcs(
   server.handle(rpc.plansSaveRpc, (input) => board.plans.save(input.card, input.snapshot));
 
   server.handle(rpc.tagsListRpc, () => board.tags.list());
-  server.handle(rpc.tagsCreateRpc, (input) => board.tags.create(input.name, input.evidence));
+  server.handle(rpc.tagsCreateRpc, (input) => board.tags.create(input.name, input.evidence, input.color));
+  server.handle(rpc.tagsUpdateRpc, ({ tagId, ...patch }) => board.tags.update(tagId, patch));
   server.handle(rpc.tagsDeleteRpc, (input) => board.tags.delete(input.tagId));
   server.handle(rpc.presetsListRpc, () => board.presets.list());
   server.handle(rpc.presetsCreateRpc, (input) => board.presets.create(input));

@@ -850,19 +850,61 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
   const tags = {
     list: (): Tag[] =>
       decodeRows(TagSchema, db.prepare("SELECT * FROM tag ORDER BY builtin DESC, rowid").all()),
-    create(name: string, evidence = false, tagId?: string): Tag {
+    create(name: string, evidence = false, tagId?: string, color = ""): Tag {
       return write((hlc) => {
         const id = tagId ?? newId(now().getTime());
         try {
           db.prepare(
-            "INSERT INTO tag (id, name, evidence, builtin, updated_hlc) VALUES (?, ?, ?, 0, ?)",
-          ).run(id, name, evidence ? 1 : 0, hlc);
+            "INSERT INTO tag (id, name, evidence, color, builtin, updated_hlc) VALUES (?, ?, ?, ?, 0, ?)",
+          ).run(id, name, evidence ? 1 : 0, color, hlc);
         } catch (error) {
           if (String(error).includes("UNIQUE"))
             throw new CommandError("conflict", `Tag "${name}" already exists`);
           throw error;
         }
-        stampFields("tag", id, ["name", "evidence"], hlc);
+        stampFields("tag", id, ["name", "evidence", "color"], hlc);
+        return decodeRow(TagSchema, db.prepare("SELECT * FROM tag WHERE id = ?").get(id)!);
+      });
+    },
+    /** Rename / recolor / toggle the evidence default. Cards keep the same tag id, so they follow. */
+    update(id: string, patch: { name?: string; evidence?: boolean; color?: string }): Tag {
+      return write((hlc) => {
+        if (!db.prepare("SELECT 1 AS x FROM tag WHERE id = ?").get(id))
+          throw new CommandError("not_found", `Tag not found: ${id}`);
+        const name = patch.name?.trim();
+        if (patch.name !== undefined && !name) throw new CommandError("invalid", "Tag name is empty");
+        const sets: string[] = [];
+        const params: (string | number)[] = [];
+        const changed: string[] = [];
+        if (name !== undefined) {
+          sets.push("name = ?");
+          params.push(name);
+          changed.push("name");
+        }
+        if (patch.evidence !== undefined) {
+          sets.push("evidence = ?");
+          params.push(patch.evidence ? 1 : 0);
+          changed.push("evidence");
+        }
+        if (patch.color !== undefined) {
+          sets.push("color = ?");
+          params.push(patch.color.trim());
+          changed.push("color");
+        }
+        if (changed.length) {
+          try {
+            db.prepare(`UPDATE tag SET ${sets.join(", ")}, updated_hlc = ? WHERE id = ?`).run(
+              ...params,
+              hlc,
+              id,
+            );
+          } catch (error) {
+            if (String(error).includes("UNIQUE"))
+              throw new CommandError("conflict", `Tag "${name}" already exists`);
+            throw error;
+          }
+          stampFields("tag", id, changed, hlc);
+        }
         return decodeRow(TagSchema, db.prepare("SELECT * FROM tag WHERE id = ?").get(id)!);
       });
     },

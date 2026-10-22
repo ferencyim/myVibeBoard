@@ -11,6 +11,7 @@ import { useLocalStatus, type BoardApi } from "../common/api";
 import { useHost } from "../common/ctx";
 import { Btn, Chip, Field, Muted, TextField } from "../common/ui";
 import { discard, edit, initialDraft, isDirty, reconcileField } from "../detail/draft";
+import { useOptimisticCard } from "../detail/optimistic";
 import { Conversation } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
 import { chatItemsOf, plannerSessionOf, plannerStatusLabel, waitingForReply } from "./logic";
@@ -24,10 +25,10 @@ export interface PlanTabProps {
   events: readonly CardEvent[];
   sessions: readonly AgentSession[];
   presets: readonly Preset[];
-  reload: () => void;
+  reload: () => Promise<unknown>;
 }
 
-export function PlanTab({ api, card, events, sessions, presets, reload }: PlanTabProps) {
+export function PlanTab({ api, card: serverCard, events, sessions, presets, reload }: PlanTabProps) {
   const { theme } = useHost();
   const toast = useToast();
   const { offline } = useLocalStatus();
@@ -36,20 +37,21 @@ export function PlanTab({ api, card, events, sessions, presets, reload }: PlanTa
   const session = plannerSessionOf(sessions);
   const working = session?.state === "starting" || session?.state === "working" || waitingForReply(items);
 
-  const update = async (patch: Omit<Parameters<BoardApi["cardsUpdate"]>[0], "card">) => {
-    try {
-      await api.cardsUpdate({ card: card.id, ...patch });
-      reload();
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  };
+  // Model picks show at once; the write and refetch run in the background (WP-104 optimistic.ts).
+  const { card, update: updateCard } = useOptimisticCard(
+    serverCard,
+    (patch) => api.cardsUpdate({ card: serverCard.id, ...patch }),
+    reload,
+    (e) => toast.error(errorMessage(e)),
+  );
+  const update = (patch: { scoutPresetId?: string | null; plannerPresetId?: string | null }) =>
+    void updateCard(patch);
 
   const makePlan = async () => {
     setStarting(true);
     try {
       await api.planStart({ card: card.id });
-      reload();
+      void reload();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -132,7 +134,7 @@ export function PlanTab({ api, card, events, sessions, presets, reload }: PlanTa
 }
 
 /** The acceptance criteria: drafted by the planning model, edited here by the owner. */
-function AcceptanceEditor({ api, card, reload }: { api: BoardApi; card: CardView; reload: () => void }) {
+function AcceptanceEditor({ api, card, reload }: { api: BoardApi; card: CardView; reload: () => Promise<unknown> }) {
   const toast = useToast();
   // The card is polled; the user's unsaved text wins over the server value (no cursor jump).
   const [draft, setDraft] = useState(initialDraft(card.acceptance));
@@ -143,7 +145,7 @@ function AcceptanceEditor({ api, card, reload }: { api: BoardApi; card: CardView
   const save = async () => {
     try {
       await api.cardsUpdate({ card: card.id, acceptance: synced.local });
-      reload();
+      void reload();
     } catch (e) {
       toast.error(errorMessage(e));
     }

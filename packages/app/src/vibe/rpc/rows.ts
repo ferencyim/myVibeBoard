@@ -201,6 +201,7 @@ export function toTag(r: RawRow): Tag {
     id: r.id,
     name: str(r.v.name),
     evidence: flag(r.v.evidence),
+    color: str(r.v.color),
     builtin: flag(r.v.builtin),
     updatedHlc: "",
   };

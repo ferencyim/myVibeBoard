@@ -32,6 +32,7 @@ export function useBoardApi() {
     proposalsReject: useRpc(rpc.proposalsRejectRpc),
     tagsList: useRpc(rpc.tagsListRpc),
     tagsCreate: useRpc(rpc.tagsCreateRpc),
+    tagsUpdate: useRpc(rpc.tagsUpdateRpc),
     tagsDelete: useRpc(rpc.tagsDeleteRpc),
     presetsList: useRpc(rpc.presetsListRpc),
     presetsCreate: useRpc(rpc.presetsCreateRpc),

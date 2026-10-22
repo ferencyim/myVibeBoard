@@ -10,6 +10,7 @@ import { errorMessage } from "../board/logic";
 import { useLocalStatus, type BoardApi } from "../common/api";
 import { useHost } from "../common/ctx";
 import { Btn, Muted } from "../common/ui";
+import { useOptimisticCard } from "../detail/optimistic";
 import { Conversation } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
 import { canExecute, chatItemsOf, executingLabel, runningWorkerOf } from "./logic";
@@ -20,13 +21,20 @@ export interface ExecTabProps {
   events: readonly CardEvent[];
   sessions: readonly AgentSession[];
   presets: readonly Preset[];
-  reload: () => void;
+  reload: () => Promise<unknown>;
   onOpenVerification: () => void;
 }
 
-export function ExecTab({ api, card, events, sessions, presets, reload, onOpenVerification }: ExecTabProps) {
+export function ExecTab({ api, card: serverCard, events, sessions, presets, reload, onOpenVerification }: ExecTabProps) {
   const { theme } = useHost();
   const toast = useToast();
+  // Picks show at once (WP-104 optimistic.ts); handing a running card to another model is not optimistic.
+  const { card, update: updateCard } = useOptimisticCard(
+    serverCard,
+    (patch) => api.cardsUpdate({ card: serverCard.id, ...patch }),
+    reload,
+    (e) => toast.error(errorMessage(e)),
+  );
   const { offline } = useLocalStatus();
   const [busy, setBusy] = useState(false);
   const items = chatItemsOf(events, "exec");
@@ -38,7 +46,7 @@ export function ExecTab({ api, card, events, sessions, presets, reload, onOpenVe
     try {
       await fn();
       if (done) toast.show(done, { variant: "success" });
-      reload();
+      void reload();
     } catch (e) {
       toast.error(errorMessage(e));
     } finally {
@@ -47,10 +55,9 @@ export function ExecTab({ api, card, events, sessions, presets, reload, onOpenVe
   };
 
   const pickExecutor = (presetId: string | null) =>
-    act(
-      () => api.execSwitch({ card: card.id, presetId }),
-      running && presetId ? "已切换执行模型，新模型会带着执行对话和方案接着做" : undefined,
-    );
+    running && presetId
+      ? act(() => api.execSwitch({ card: card.id, presetId }), "已切换执行模型，新模型会带着执行对话和方案接着做")
+      : void updateCard({ presetId });
 
   return (
     <View style={{ gap: 14 }}>
@@ -70,7 +77,7 @@ export function ExecTab({ api, card, events, sessions, presets, reload, onOpenVe
         value={card.reviewerPresetId}
         noneLabel="不复核"
         hint="执行完成后先由它 review 代码改动；发现严重问题会自动退回执行模型修改，然后再做证据验证。"
-        onChange={(reviewerPresetId) => act(() => api.cardsUpdate({ card: card.id, reviewerPresetId }))}
+        onChange={(reviewerPresetId) => void updateCard({ reviewerPresetId })}
       />
       <View
         style={{

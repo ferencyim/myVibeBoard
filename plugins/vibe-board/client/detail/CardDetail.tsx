@@ -31,6 +31,7 @@ import type { ProviderUsageLike } from "../presets/logic";
 import { VerificationPanel } from "../verification/VerificationPanel";
 import { discard, edit, initialDraft, isDirty, reconcileField } from "./draft";
 import { EVENT_TYPE_LABELS, describeEvent } from "./events";
+import { useOptimisticCard } from "./optimistic";
 
 type Tab = "details" | UnreadTab | "timeline";
 const TABS: readonly Tab[] = ["details", "plan", "exec", "verify", "timeline"];
@@ -69,7 +70,7 @@ export function CardDetail(props: CardDetailProps) {
   const data = detail.data;
   const reload = () => {
     refresh();
-    void detail.refetch();
+    return detail.refetch();
   };
   const card = data?.card;
 
@@ -82,7 +83,7 @@ export function CardDetail(props: CardDetailProps) {
     marking.current = readKey;
     api
       .cardsUpdate({ card: card.id, ...readPatch })
-      .then(() => reload())
+      .then(() => void reload())
       .catch(() => {
         marking.current = null;
       });
@@ -228,7 +229,7 @@ function VerifyTab({
 }
 
 function Details({
-  card,
+  card: serverCard,
   api,
   tags,
   reload,
@@ -238,13 +239,24 @@ function Details({
   onClose,
 }: CardDetailProps & {
   card: CardView;
-  reload: () => void;
+  reload: () => Promise<unknown>;
   move: (to: CardView["column"]) => void;
   attachments: { id: string; filename: string; mimeType: string }[];
   sessions: { id: string; agentId: string; role: string; state: string; currentProvider: string }[];
 }) {
   const { openAgent } = useHost();
   const toast = useToast();
+  // Picks show at once; the write and the refetch happen in the background (see optimistic.ts).
+  const { card, update: updateCard } = useOptimisticCard(
+    serverCard,
+    (patch) => api.cardsUpdate({ card: serverCard.id, ...patch }),
+    reload,
+    (e) => toast.error(errorMessage(e)),
+  );
+  const update = (patch: Omit<Parameters<BoardApi["cardsUpdate"]>[0], "card">) => {
+    void updateCard(patch);
+  };
+
   // The card is polled; edited fields keep the user's text, untouched ones follow the server.
   const [drafts, setDrafts] = useState({
     title: initialDraft(card.title),
@@ -267,15 +279,6 @@ function Details({
       title: discard(card.title),
       description: discard(card.description),
     });
-
-  const update = async (patch: Parameters<BoardApi["cardsUpdate"]>[0]) => {
-    try {
-      await api.cardsUpdate(patch);
-      reload();
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  };
 
   const addImage = async () => {
     const file = await pickImage();
@@ -306,7 +309,7 @@ function Details({
           <Btn
             variant="primary"
             label="保存修改"
-            onPress={() => update({ card: card.id, title, description })}
+            onPress={() => update({ title, description })}
           />
           <Btn label="放弃修改" onPress={discardEdits} />
         </View>
@@ -322,7 +325,7 @@ function Details({
       </Field>
 
       <Field label="优先级">
-        <PrioritySelector value={card.priority} onChange={(priority) => update({ card: card.id, priority })} />
+        <PrioritySelector value={card.priority} onChange={(priority) => update({ priority })} />
       </Field>
       <Field label="标签">
         <TagSelector
@@ -334,7 +337,6 @@ function Details({
             // Tag changes reset the evidence default only when it was still at the old default.
             const wasDefault = card.needsEvidence === evidenceDefault(card.tags, tags);
             update({
-              card: card.id,
               tagIds,
               ...(wasDefault ? { needsEvidence: evidenceDefault(tagIds, tags) } : {}),
             });
@@ -344,7 +346,7 @@ function Details({
       <Check
         label="需要验证证据（截图/录屏）"
         value={card.needsEvidence}
-        onChange={(needsEvidence) => update({ card: card.id, needsEvidence })}
+        onChange={(needsEvidence) => update({ needsEvidence })}
       />
 
       <Field label="参考图">

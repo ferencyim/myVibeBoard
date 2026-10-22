@@ -388,7 +388,10 @@ export function createBoardService(runtime: BoardRuntime) {
       }),
     tags: {
       list: () => ({ tags: store.tags.list() }),
-      create: (name: string, evidence?: boolean) => guard(() => ({ tag: store.tags.create(name, evidence) })),
+      create: (name: string, evidence?: boolean, color?: string) =>
+        guard(() => ({ tag: store.tags.create(name, evidence, undefined, color) })),
+      update: (tagId: string, patch: { name?: string; evidence?: boolean; color?: string }) =>
+        guard(() => ({ tag: store.tags.update(tagId, patch) })),
       delete: (tagId: string) =>
         guard(() => {
           store.tags.delete(tagId);

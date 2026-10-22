@@ -3,7 +3,7 @@
 import { Modal, useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import {
   PRESET_ENVIRONMENT_KINDS,
   PRESET_PERMISSION_MODES,
@@ -15,6 +15,7 @@ import {
 } from "../../shared/vibe/contract";
 import { errorMessage, projectColor } from "../board/logic";
 import { queryKey, type BoardApi } from "../common/api";
+import { TAG_PALETTE, tagColor } from "../common/colors";
 import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
 import {
@@ -418,10 +419,47 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
   );
 }
 
-function TagsTab({ api, tags, refresh }: ManageProps) {
+/** Palette swatches for a tag; the first (empty) one means "automatic" (derived from the tag id). */
+function TagColorPicker({ id, value, onChange }: { id: string; value: string; onChange: (color: string) => void }) {
+  const { theme } = useHost();
+  const auto = tagColor({ id, color: "" });
+  const swatches = [{ key: "auto", value: "", shown: auto }, ...TAG_PALETTE.map((c) => ({ key: c, value: c, shown: c }))];
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+      {swatches.map((sw) => {
+        const selected = value.toLowerCase() === sw.value;
+        return (
+          <Pressable
+            key={sw.key}
+            accessibilityRole="radio"
+            accessibilityLabel={sw.value ? `颜色 ${sw.value}` : "自动颜色"}
+            accessibilityState={{ selected }}
+            onPress={() => onChange(sw.value)}
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 12,
+              backgroundColor: sw.shown,
+              borderWidth: selected ? 3 : 1,
+              borderColor: selected ? theme.colors.foreground : theme.colors.border,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {!sw.value ? <Text style={{ color: "#fff", fontSize: 9 }}>自动</Text> : null}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function TagRow({ tag, api, refresh }: { tag: Tag; api: BoardApi; refresh: () => void }) {
   const toast = useToast();
-  const [name, setName] = useState("");
-  const [evidence, setEvidence] = useState(false);
+  const [name, setName] = useState(tag.name);
+  const [evidence, setEvidence] = useState(tag.evidence);
+  const [color, setColor] = useState(tag.color);
+  const dirty = name.trim() !== tag.name || evidence !== tag.evidence || color !== tag.color;
   const run = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
@@ -431,33 +469,70 @@ function TagsTab({ api, tags, refresh }: ManageProps) {
     }
   };
   return (
+    <View style={{ gap: 8, paddingBottom: 10 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Dot color={tagColor({ id: tag.id, color })} size={12} />
+        <TextField style={{ flex: 1 }} value={name} onChangeText={setName} />
+        {!tag.builtin ? (
+          <Btn small variant="danger" icon="Trash2" onPress={() => run(() => api.tagsDelete({ tagId: tag.id }))} />
+        ) : null}
+      </View>
+      <TagColorPicker id={tag.id} value={color} onChange={setColor} />
+      <Check label="默认需要验证证据" value={evidence} onChange={setEvidence} />
+      {dirty ? (
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Btn
+            small
+            variant="primary"
+            label="保存"
+            disabled={!name.trim()}
+            onPress={() => run(() => api.tagsUpdate({ tagId: tag.id, name: name.trim(), evidence, color }))}
+          />
+          <Btn
+            small
+            label="还原"
+            onPress={() => {
+              setName(tag.name);
+              setEvidence(tag.evidence);
+              setColor(tag.color);
+            }}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function TagsTab({ api, tags, refresh }: ManageProps) {
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const [evidence, setEvidence] = useState(false);
+  const [color, setColor] = useState("");
+  return (
     <View style={{ gap: 10 }}>
       {tags.map((t) => (
-        <View key={t.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Text style={{ flex: 1 }}>
-            {t.name}
-            {t.evidence ? "（默认需要验证证据）" : ""}
-          </Text>
-          {!t.builtin ? (
-            <Btn small variant="danger" icon="Trash2" onPress={() => run(() => api.tagsDelete({ tagId: t.id }))} />
-          ) : null}
-        </View>
+        <TagRow key={`${t.id}:${t.name}:${t.color}:${t.evidence}`} tag={t} api={api} refresh={refresh} />
       ))}
       <Field label="新标签">
         <TextField value={name} onChangeText={setName} />
       </Field>
+      <TagColorPicker id="new" value={color} onChange={setColor} />
       <Check label="默认需要验证证据" value={evidence} onChange={setEvidence} />
       <Btn
         variant="primary"
         icon="Plus"
         label="添加标签"
         disabled={!name.trim()}
-        onPress={() =>
-          run(async () => {
-            await api.tagsCreate({ name, evidence });
+        onPress={async () => {
+          try {
+            await api.tagsCreate({ name, evidence, color });
             setName("");
-          })
-        }
+            setColor("");
+            refresh();
+          } catch (e) {
+            toast.error(errorMessage(e));
+          }
+        }}
       />
     </View>
   );
