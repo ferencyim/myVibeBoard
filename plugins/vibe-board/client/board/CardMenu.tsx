@@ -13,7 +13,6 @@ export type MenuAction =
   | { type: "move"; to: CardColumn }
   | { type: "step"; step: "up" | "down" | "top" | "bottom" }
   | { type: "archive" }
-  | { type: "review" }
   | { type: "dispatch" };
 
 export function CardMenu({
@@ -64,12 +63,8 @@ export function CardMenu({
             </Field>
           ) : null}
           {card.column === "draft" || card.column === "todo" ? (
-            <Field label="手动触发">
-              {card.column === "draft" ? (
-                <Btn icon="MessageSquare" label="让总 agent 审查" onPress={() => act({ type: "review" })} />
-              ) : (
-                <Btn icon="Play" label="立即执行" onPress={() => act({ type: "dispatch" })} />
-              )}
+            <Field label="执行" hint="用卡片上选的执行模型立即开始；方案和模型在卡片的「方案」「执行」页里设置。">
+              <Btn icon="Play" label="立即执行" onPress={() => act({ type: "dispatch" })} />
             </Field>
           ) : null}
           <View style={{ flexDirection: "row", gap: 8 }}>

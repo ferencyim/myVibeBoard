@@ -64,7 +64,6 @@ export function createWakeQueue(options: WakeQueueOptions): WakeQueue {
       const same = pending.find((p) => jobKey(p) === jobKey(job));
       if (same) {
         same.force = same.force || job.force;
-        if (job.question !== undefined) same.question = job.question;
       } else {
         pending.push({ ...job });
       }

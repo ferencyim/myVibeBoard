@@ -262,11 +262,14 @@ describe("rpc contract", () => {
       replies: {} as never,
       chat: {} as never,
       requirements: {} as never,
+      flow: {} as never,
     });
     const names = Object.values(rpc.VIBE_BOARD_RPCS).map((r) => r.name);
     expect(new Set(names).size).toBe(names.length);
     expect(handled.sort()).toEqual([...names].sort());
     expect(names.every((n) => n.startsWith("vibe."))).toBe(true);
+    for (const n of ["vibe.plan.start", "vibe.exec.start", "vibe.exec.switch"]) expect(names).toContain(n);
+    expect(names).not.toContain("vibe.cards.request_review");
   });
 
   it("serves handlers that satisfy their output schemas", async () => {
@@ -333,7 +336,6 @@ describe("MCP tools", () => {
       "vibe_comment",
       "vibe_attach",
       "vibe_session_note",
-      "vibe_scout",
     ]);
     expect(toolsForRole("verifier").map((t) => t.name)).toEqual([
       "vibe_projects",
@@ -537,5 +539,39 @@ describe("preset model is mandatory", () => {
     const { preset } = board.presets.create({ name: "A", provider: "claude", model: "sonnet" });
     expect(() => board.presets.update(preset.id, { model: "" })).toThrow(/必须填写模型/);
     expect(board.presets.update(preset.id, { name: "B" }).preset.name).toBe("B");
+  });
+});
+
+describe("unread markers (WP-105)", () => {
+  it("events stamp the tab activity of the card; the owner's own messages do not", () => {
+    const { board, project } = withProject();
+    const { card } = board.cards.create({ project: project.prefix, title: "c" });
+    const { store } = board;
+    const add = (authorKind: string, thread: string, type = "chat") =>
+      store.events.add({ cardId: card.id, type: type as never, authorKind: authorKind as never, author: authorKind, body: { text: "x", thread } });
+    const get = () => store.cards.get(card.id)!;
+    expect(get()).toMatchObject({ planActivityAt: null, execActivityAt: null, verifyActivityAt: null });
+    add("user", "plan");
+    add("user", "exec");
+    expect(get()).toMatchObject({ planActivityAt: null, execActivityAt: null });
+    add("master", "plan");
+    expect(get().planActivityAt).toBeTruthy();
+    expect(get().execActivityAt).toBeNull();
+    add("executor", "exec");
+    expect(get().execActivityAt).toBeTruthy();
+    add("reviewer", "exec");
+    expect(get().verifyActivityAt).toBeTruthy();
+  });
+
+  it("updating only the seen positions does not bump updatedAt", () => {
+    const { board, project } = withProject();
+    const { card } = board.cards.create({ project: project.prefix, title: "c" });
+    const before = board.store.cards.get(card.id)!;
+    const seen = new Date().toISOString();
+    const after = board.store.cards.update(card.id, { planSeenAt: seen, execSeenAt: seen, verifySeenAt: seen });
+    expect(after).toMatchObject({ planSeenAt: seen, execSeenAt: seen, verifySeenAt: seen });
+    expect(after.updatedAt).toBe(before.updatedAt);
+    const edited = board.store.cards.update(card.id, { title: "d" });
+    expect(edited.title).toBe("d");
   });
 });

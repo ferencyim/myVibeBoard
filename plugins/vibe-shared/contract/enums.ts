@@ -53,8 +53,8 @@ export const AUTHOR_KINDS = [
 export type AuthorKind = (typeof AUTHOR_KINDS)[number];
 export const AuthorKindSchema = z.enum(AUTHOR_KINDS);
 
-/** Purpose of a preset: which jobs the selector may use it for. */
-export const ROLE_HINTS = ["worker", "scout", "reviewer"] as const;
+/** Purpose of a preset: which jobs the selector may use it for ("planner" added by WP-105). */
+export const ROLE_HINTS = ["worker", "scout", "reviewer", "planner"] as const;
 export type RoleHint = (typeof ROLE_HINTS)[number];
 export const RoleHintSchema = z.enum(ROLE_HINTS);
 
@@ -62,6 +62,15 @@ export const RoleHintSchema = z.enum(ROLE_HINTS);
 export const CHAT_KINDS = ["question", "summary", "verdict", "info"] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 export const ChatKindSchema = z.enum(CHAT_KINDS);
+
+/** Which card conversation a `chat` event belongs to (WP-105): the plan tab or the execution tab. */
+export const CHAT_THREADS = ["plan", "exec"] as const;
+export type ChatThread = (typeof CHAT_THREADS)[number];
+export const ChatThreadSchema = z.enum(CHAT_THREADS);
+
+/** Card detail tabs that carry an unread marker (WP-105). */
+export const UNREAD_TABS = ["plan", "exec", "verify"] as const;
+export type UnreadTab = (typeof UNREAD_TABS)[number];
 
 export const PROPOSAL_STATUSES = ["pending", "accepted", "rejected", "superseded"] as const;
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];

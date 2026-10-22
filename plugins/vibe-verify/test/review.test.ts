@@ -99,7 +99,7 @@ function setup(options: {
     (db.prepare("SELECT payload_json FROM vibe_event WHERE type = ? ORDER BY seq").all(type) as Array<{ payload_json: string }>).map(
       (r) => JSON.parse(r.payload_json) as Record<string, unknown>,
     );
-  return { board, verify, pipeline, cardId: card.id, launched, prompts, sent, reenter, events, preset };
+  return { board, verify, pipeline, cardId: card.id, launched, prompts, sent, reenter, events, preset, runner };
 }
 
 describe("model review", () => {
@@ -125,6 +125,26 @@ describe("model review", () => {
     expect(h.board.events.list(h.cardId).some((e) => e.type === "reject" && e.author === "verifier")).toBe(true);
     expect(h.events("review.started")).toHaveLength(1);
     expect(h.events("review.finished")[0]).toMatchObject({ verdict: "severe", issues: ["[severe] src/a.ts:12 user may be undefined"] });
+  });
+
+  it("WP-105 order: the review runs before the checks; a severe review skips them this round", async () => {
+    const npm = (h: ReturnType<typeof setup>) => h.runner.calls.filter((c) => c.command === "npm").length;
+    const bad = setup({ replies: [severe] });
+    await bad.pipeline.run(bad.cardId);
+    expect(npm(bad)).toBe(0);
+    const ok = setup({ replies: [clean] });
+    const result = await ok.pipeline.run(ok.cardId);
+    expect(npm(ok)).toBeGreaterThan(0);
+    const items = ok.verify.items(result!.verificationId);
+    expect(items.findIndex((i) => i.kind === "review")).toBeLessThan(items.findIndex((i) => i.method.startsWith("auto")));
+  });
+
+  it("the reviewer's conclusion belongs to the execution conversation", async () => {
+    const h = setup({ replies: [clean] });
+    await h.pipeline.run(h.cardId);
+    const chat = h.board.events.list(h.cardId).find((e) => e.type === "chat" && e.authorKind === "reviewer")!;
+    expect(chat.body).toMatchObject({ thread: "exec" });
+    expect(h.board.cards.get(h.cardId)!.verifyActivityAt).not.toBeNull();
   });
 
   it("major/minor issues only make the verification doubtful and stay with the user", async () => {

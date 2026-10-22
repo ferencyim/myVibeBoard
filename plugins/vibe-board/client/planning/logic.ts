@@ -1,32 +1,36 @@
-// Pure helpers of the card group chat (WP-92). The chat is made of `chat` and `proposal` card
-// events plus a whitelist of status/reject events shown as small system rows. Who receives a user
-// message is decided server-side by the card's column (see the routing rules in the WP-92 notes);
-// routeHint/masterBusy mirror that rule for display only.
+// Pure helpers of the card conversations (WP-92, split by WP-105 into the plan conversation and the
+// execution conversation). Each is made of `chat` events of its thread, the planner's `proposal`
+// events (plan) and a whitelist of status / reject events shown as small system rows (execution).
+// Tool calls and other details stay in the full agent session and the timeline tab.
 
-import type {
-  AgentSession,
-  AuthorKind,
-  CardEvent,
-  CardView,
-  ChatKind,
-  ProposalChanges,
-  ProposalStatus,
+import {
+  chatThreadOf,
+  type AgentSession,
+  type AuthorKind,
+  type CardEvent,
+  type CardView,
+  type ChatKind,
+  type ChatThread,
+  type Preset,
+  type ProposalChanges,
+  type ProposalStatus,
+  type RoleHint,
 } from "../../shared/vibe/contract";
 import { COLUMN_LABELS } from "../board/logic";
 
 export const AUTHOR_LABELS: Record<AuthorKind, string> = {
   user: "你",
-  master: "总 agent",
+  master: "规划模型",
   agent: "总 agent",
-  executor: "执行 agent",
-  reviewer: "复核",
-  scout: "探路兵",
+  executor: "执行模型",
+  reviewer: "复核模型",
+  scout: "探路模型",
   system: "系统",
 };
 
 const CHAT_KIND_LABELS: Record<ChatKind, string> = {
   question: "提问",
-  summary: "总结",
+  summary: "小结",
   verdict: "结论",
   info: "说明",
 };
@@ -56,13 +60,9 @@ export interface MessageItem {
   msgKindLabel?: string;
   agentId?: string;
   detail?: string;
-  ready?: boolean;
   error?: boolean;
-  planVersion?: number;
   /** User messages only: some chat message answers it. */
   answered: boolean;
-  /** User messages only: the router could not forward it, so the master handles it. */
-  fallback: boolean;
 }
 export interface ProposalItem {
   kind: "proposal";
@@ -91,29 +91,20 @@ interface Body {
   from?: string;
   to?: string;
   answers?: unknown;
-  fallback?: unknown;
   [key: string]: unknown;
 }
 
 const bodyOf = (e: CardEvent): Body =>
   e.body && typeof e.body === "object" && !Array.isArray(e.body) ? (e.body as Body) : {};
 
-export const HANDOFF_REQUEST_BODY = { kind: "handoff_request" } as const;
-
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
 
-const SYSTEM_STATUS_KINDS = new Set([
-  "failover",
-  "failover_failed",
-  "dispatch_failed",
-  "worker_unreachable",
-  "finalized",
-  "assessment_failed",
-]);
+const SYSTEM_STATUS_KINDS = new Set(["failover", "failover_failed", "dispatch_failed", "worker_unreachable", "finalized"]);
 const col = (v: unknown) => COLUMN_LABELS[v as keyof typeof COLUMN_LABELS] ?? String(v);
 
+/** Status lines worth a row in the execution conversation. */
 function systemRow(e: CardEvent): SystemItem | null {
   const b = bodyOf(e);
   const base = { kind: "system" as const, id: e.id, at: e.createdAt };
@@ -136,20 +127,21 @@ function systemRow(e: CardEvent): SystemItem | null {
   return null;
 }
 
-/** The chat in time order: messages, proposals and a few derived system rows. */
-export function chatItemsOf(events: readonly CardEvent[]): ChatItem[] {
+/** One conversation of the card in time order. */
+export function chatItemsOf(events: readonly CardEvent[], thread: ChatThread): ChatItem[] {
   const answered = new Set<string>();
-  const fallback = new Set<string>();
   for (const e of events) {
-    if (e.type !== "chat") continue;
-    const b = bodyOf(e);
-    for (const id of strings(b.answers)) answered.add(id);
-    for (const id of strings(b.fallback)) fallback.add(id);
+    if (e.type === "chat") for (const id of strings(bodyOf(e).answers)) answered.add(id);
   }
   const items: ChatItem[] = [];
   for (const e of events) {
     const b = bodyOf(e);
     if (e.type === "chat") {
+      if (chatThreadOf(e) !== thread) continue;
+      if (e.authorKind === "system") {
+        items.push({ kind: "system", id: e.id, text: typeof b.text === "string" ? b.text : "", at: e.createdAt });
+        continue;
+      }
       const msgKind = b.kind as ChatKind | undefined;
       items.push({
         kind: "message",
@@ -162,13 +154,11 @@ export function chatItemsOf(events: readonly CardEvent[]): ChatItem[] {
         msgKindLabel: msgKind ? CHAT_KIND_LABELS[msgKind] : undefined,
         agentId: str(b.agentId),
         detail: str(b.detail),
-        ready: b.ready === true ? true : undefined,
         error: b.error === true ? true : undefined,
-        planVersion: typeof b.planVersion === "number" ? b.planVersion : undefined,
         answered: e.authorKind === "user" ? answered.has(e.id) : true,
-        fallback: fallback.has(e.id),
       });
     } else if (e.type === "proposal") {
+      if (thread !== "plan") continue;
       const status = (b.status as ProposalStatus | undefined) ?? "pending";
       items.push({
         kind: "proposal",
@@ -180,12 +170,19 @@ export function chatItemsOf(events: readonly CardEvent[]): ChatItem[] {
         rationale: typeof b.rationale === "string" ? b.rationale : "",
         at: e.createdAt,
       });
-    } else {
+    } else if (thread === "exec") {
       const row = systemRow(e);
       if (row) items.push(row);
     }
   }
   return items;
+}
+
+/** The reviewer's conclusions (newest last), shown on the verification tab too. */
+export function reviewItemsOf(events: readonly CardEvent[]): MessageItem[] {
+  return chatItemsOf(events, "exec").filter(
+    (i): i is MessageItem => i.kind === "message" && i.author === "reviewer",
+  );
 }
 
 export interface FieldDiff {
@@ -215,93 +212,28 @@ export function proposalDiff(
   return diffs;
 }
 
-const WORKER_ONLINE = new Set(["starting", "working", "waiting", "idle"]);
-const hasOnlineWorker = (sessions: readonly AgentSession[]) =>
-  sessions.some((s) => s.role === "worker" && WORKER_ONLINE.has(s.state));
-
-/** Who receives what the owner says now (display only; the server routes). */
-export function routeHint(
-  card: Pick<CardView, "column">,
-  sessions: readonly AgentSession[],
-): string {
-  switch (card.column) {
-    case "draft":
-    case "todo":
-      return "消息将发给总 agent（规划会话）";
-    case "in_progress":
-    case "verifying":
-      return hasOnlineWorker(sessions)
-        ? "消息将发给执行 agent"
-        : "执行 agent 已不在，消息将发给总 agent";
-    case "done":
-      return "卡片已完成，发言只作记录";
-    default:
-      return "";
-  }
+/** An owner message the other side has not answered yet: show "thinking". */
+export function waitingForReply(items: readonly ChatItem[]): boolean {
+  return items.some((i) => i.kind === "message" && i.author === "user" && !i.answered);
 }
 
-/** An owner message the master still has to answer. */
-export function masterBusy(
-  items: readonly ChatItem[],
-  card: Pick<CardView, "column">,
-  sessions: readonly AgentSession[],
-): boolean {
-  const forMaster = (m: MessageItem) => {
-    switch (card.column) {
-      case "draft":
-      case "todo":
-        return true;
-      case "in_progress":
-      case "verifying":
-        return m.fallback || !hasOnlineWorker(sessions);
-      default:
-        return false;
-    }
-  };
-  return items.some(
-    (i) => i.kind === "message" && i.author === "user" && !i.answered && forMaster(i),
-  );
+/** Presets offered for a job: those whose purposes include it, or that have no purpose set. */
+export function presetsFor(presets: readonly Preset[], role: RoleHint): Preset[] {
+  return presets.filter((p) => p.roleHints.length === 0 || p.roleHints.includes(role));
 }
 
-/** The newest master message says the plan can be executed and the owner said nothing since. */
-export function planReady(items: readonly ChatItem[]): boolean {
-  const last = items.findLast(
-    (i): i is MessageItem =>
-      i.kind === "message" &&
-      (i.author === "user" || i.author === "master" || i.author === "agent"),
-  );
-  return !!last && last.author !== "user" && !!last.ready && !last.error;
-}
+const RUNNING = new Set(["starting", "working", "waiting", "idle"]);
 
-export interface HeaderAction {
-  key: "review" | "dispatch";
-  label: string;
-}
-export function headerActions(card: Pick<CardView, "column">): HeaderAction[] {
-  if (card.column === "draft") return [{ key: "review", label: "让总 agent 审查" }];
-  if (card.column === "todo") return [{ key: "dispatch", label: "立即执行" }];
-  return [];
-}
-
-/** The hand-off event that answers a given hand-off request, if the planner wrote it. */
-export function handoffAnswering(
-  events: readonly CardEvent[],
-  requestId: string,
-): CardEvent | undefined {
-  return events.find(
-    (e) =>
-      e.type === "note" &&
-      (e.authorKind === "agent" || e.authorKind === "master") &&
-      bodyOf(e).kind === "handoff" &&
-      strings(bodyOf(e).answers).includes(requestId),
-  );
+/** The worker session executing the card now, if any. */
+export function runningWorkerOf(sessions: readonly AgentSession[]): AgentSession | undefined {
+  return sessions.filter((s) => s.role === "worker" && RUNNING.has(s.state)).at(-1);
 }
 
 export function plannerSessionOf(sessions: readonly AgentSession[]): AgentSession | undefined {
   return sessions.filter((s) => s.role === "planner").at(-1);
 }
 
-export function sessionStatusLabel(session: AgentSession | undefined): string {
+export function plannerStatusLabel(session: AgentSession | undefined): string {
   if (!session) return "尚未开始";
   switch (session.state) {
     case "starting":
@@ -313,6 +245,27 @@ export function sessionStatusLabel(session: AgentSession | undefined): string {
     case "error":
       return "出错（再发一条消息重试）";
     default:
-      return "已归档";
+      return "已结束";
   }
+}
+
+const WORKER_STATE_LABELS: Record<string, string> = {
+  starting: "启动中",
+  working: "执行中",
+  waiting: "等待你的回复",
+  idle: "本轮已结束",
+};
+
+/** "正在执行：<preset> · <provider> · <state>", or null when no worker runs. */
+export function executingLabel(sessions: readonly AgentSession[], presets: readonly Preset[], card: Pick<CardView, "presetId">) {
+  const worker = runningWorkerOf(sessions);
+  if (!worker) return null;
+  const preset = presets.find((p) => p.id === card.presetId);
+  const model = preset && preset.provider === worker.currentProvider ? `${preset.name}（${preset.provider}/${preset.model}）` : worker.currentProvider;
+  return `${model} · ${WORKER_STATE_LABELS[worker.state] ?? worker.state}`;
+}
+
+/** Can 立即执行 start the card now? */
+export function canExecute(card: Pick<CardView, "column">): boolean {
+  return card.column === "draft" || card.column === "todo";
 }

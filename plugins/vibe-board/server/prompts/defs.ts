@@ -7,7 +7,7 @@ import type { PromptDef } from "../vibe/contract";
 const PLUGIN = "vibe-board";
 
 const AUTHORITY =
-  "下面的标题、描述和验收标准是卡片的当前内容，已包含用户采纳的全部改动，以它们为准：后文的计划或交接内容与之不一致时，按卡片执行。";
+  "下面的标题、描述、方案和验收标准是卡片的当前内容（方案由规划模型与用户在方案对话里商定），以它们为准。";
 
 // 只放指引，不放内容：正文由 vibe-context 注入（WP-31）。
 const MEMORY_POINTER =
@@ -20,7 +20,7 @@ const BRIEF = [
   "",
   AUTHORITY,
   "",
-  "{{description}}{{acceptance}}{{referenceImages}}{{handoff}}{{adopted}}{{chat}}{{plan}}{{notes}}{{project}}## 项目记忆",
+  "{{description}}{{plan}}{{acceptance}}{{referenceImages}}{{adopted}}{{chat}}{{notes}}{{project}}## 项目记忆",
   MEMORY_POINTER,
   "",
   "{{contract}}{{runtimeEnv}}{{presetInstructions}}{{extra}}",
@@ -31,7 +31,8 @@ const CONTRACT =
   '用 `vibe-board comment {{card.key}} --body "..."` 汇报进展或提问。' +
   "用 `vibe-board attachment add {{card.key}} --file <path>` 上传结果文件。" +
   "本轮结束前，把完成的工作提交到工作树分支（批准后看板会合并该分支，不会处理未提交的改动）。" +
-  "你不能移动卡片：本轮结束时若没有未解决的提问，看板会把卡片移到“验证中”（verifying）。";
+  "执行中需要用户决定时直接在回复里提问并停下等待，用户会在卡片的执行对话里回复你。" +
+  "你不能移动卡片：本轮结束时若没有未解决的提问，看板会把卡片移到“验证中”（verifying），先复核（如果选了复核模型）再做证据验证。";
 
 const INSTRUCTIONS = `# Vibe Board
 卡片分五列：draft（草稿）、todo（待办）、in_progress（进行中）、verifying（验证中）、done（完成）。通过 PATH 上的 \`vibe-board\` 命令行或 \`vibe-board\` MCP 工具操作卡片。
@@ -57,16 +58,10 @@ const WATCHDOG =
   "看板发现你已有一段时间没有输出。请从停下的地方继续任务；" +
   "如果被卡住了，请用卡片评论说明卡在哪里。";
 
-const SCOUT_SYSTEM = `[vibe-scout]
-你是为另一个编码 agent 服务的只读探路兵。只回答关于你工作目录中仓库的一个问题。
-- 不要修改文件，不要运行会改变状态的命令，不要调用 vibe_scout 或任何 vibe_* 工具。
-- 动作要快：只搜索、阅读问题需要的内容。
-- 回复为纯文本，最多 {{maxLines}} 行，不要开场白。每条发现占一行，格式为“path:line - 说明”（用相对路径）。没找到的内容要明确说没找到。`;
-
-const SCOUT_TASK =
-  "类型：{{kind}}。{{how}}\n" +
-  "目标：{{goal}}\n" +
-  "{{restrict}}回复最多 {{maxLines}} 行，并带 path:line 定位。";
+const SWITCH_MODEL =
+  "用户把这张卡片的执行模型从 {{from}} 换成了你（{{to}}）。你在同一个工作树里接着做同一张卡片：" +
+  "先运行 `git status` 和 `git log` 看已完成的内容，再结合下面的执行对话和方案继续，不要从头开始。\n" +
+  "{{transcriptPath}}";
 
 const CARD_KEY = { name: "card.key", description: "卡片编号，如 ABC-12" };
 const SEGMENT = (name: string, description: string) => ({
@@ -81,8 +76,8 @@ export const BOARD_PROMPT_DEFS: readonly PromptDef[] = [
     role: "executor",
     title: "派发任务简报",
     description:
-      "派发或改派卡片时交给执行 agent 的第一条消息的骨架。各段内容（卡片描述、验收标准、计划、备注等）由看板按卡片生成并填入占位符；删掉某个占位符即不再向 agent 发送那一段。",
-    whenSent: "卡片从“待办”派发给执行 agent 时；故障改派接手时也复用该骨架",
+      "点「立即执行」时交给执行模型的第一条消息的骨架。各段内容（卡片描述、方案、验收标准、执行对话、备注等）由看板按卡片生成并填入占位符；删掉某个占位符即不再向 agent 发送那一段。",
+    whenSent: "卡片派发给执行模型时（「立即执行」或调度器派发）；故障改派、手动换执行模型接手时也复用该骨架",
     audience: "执行（worker）agent",
     defaultText: BRIEF,
     placeholders: [
@@ -91,10 +86,9 @@ export const BOARD_PROMPT_DEFS: readonly PromptDef[] = [
       SEGMENT("description", "卡片描述"),
       SEGMENT("acceptance", "验收标准"),
       SEGMENT("referenceImages", "参考图片列表"),
-      SEGMENT("handoff", "规划会话的交接摘要"),
-      SEGMENT("adopted", "已采纳的总 agent建议"),
-      SEGMENT("chat", "群聊中最近的用户/总 agent消息"),
-      SEGMENT("plan", "最新计划与检查项"),
+      SEGMENT("adopted", "用户采纳的修改建议"),
+      SEGMENT("chat", "执行对话里最近的关键消息"),
+      SEGMENT("plan", "卡片上的方案"),
       SEGMENT("notes", "最近的备注、驳回与评估"),
       SEGMENT("project", "项目名称与类型"),
       SEGMENT("contract", "回报约定（来自“回报约定”提示词）"),
@@ -190,67 +184,23 @@ export const BOARD_PROMPT_DEFS: readonly PromptDef[] = [
     order: 10,
   },
   {
-    key: "board.scout_system",
+    key: "board.switch_model",
     plugin: PLUGIN,
-    role: "scout",
-    title: "探路兵系统提示词",
-    description: "探路兵（只读子 agent）的系统提示词。",
-    whenSent: "执行 agent 调用 vibe_scout 并创建探路兵时",
-    audience: "探路兵 agent",
-    defaultText: SCOUT_SYSTEM,
-    placeholders: [{ name: "maxLines", description: "回复的最大行数（来自设置）" }],
-    order: 10,
-  },
-  {
-    key: "board.scout_task",
-    plugin: PLUGIN,
-    role: "scout",
-    title: "探路兵任务提示",
-    description: "发给每个探路兵的任务消息骨架。",
-    whenSent: "执行 agent 调用 vibe_scout 时，每个子任务一条",
-    audience: "探路兵 agent",
-    defaultText: SCOUT_TASK,
+    role: "handoff",
+    title: "换执行模型接续说明",
+    description:
+      "执行中途用户在执行页换了执行模型时，追加在简报末尾的接续说明（无法原生转换会话时）。简报本身已带上方案、验收标准和执行对话。",
+    whenSent: "用户在执行页把正在执行的卡片换成另一个执行模型时",
+    audience: "接手的新执行 agent",
+    defaultText: SWITCH_MODEL,
     placeholders: [
-      { name: "kind", description: "任务类型（locate / inventory / research）" },
-      { name: "how", description: "按任务类型取的做法说明" },
-      { name: "goal", description: "任务目标" },
-      { name: "restrict", description: "限定路径整行（“限定范围：…”并带换行）；未限定时为空" },
-      { name: "maxLines", description: "回复的最大行数（来自设置）" },
+      { name: "from", description: "原执行模型（预设名与 provider/model）" },
+      { name: "to", description: "新执行模型（预设名与 provider/model）" },
+      {
+        name: "transcriptPath",
+        description: "关于上一个 agent 转录文件的整句说明（含路径；不可用时为一句固定说明）",
+      },
     ],
-    order: 20,
-  },
-  {
-    key: "board.scout_how.locate",
-    plugin: PLUGIN,
-    role: "scout",
-    title: "探路做法：定位",
-    description: "任务类型为 locate 时的做法说明。",
-    whenSent: "探路任务类型为 locate 时",
-    audience: "探路兵 agent",
-    defaultText: "定位能回答目标的文件、符号或代码行。",
-    order: 30,
-  },
-  {
-    key: "board.scout_how.inventory",
-    plugin: PLUGIN,
-    role: "scout",
-    title: "探路做法：清点",
-    description: "任务类型为 inventory 时的做法说明。",
-    whenSent: "探路任务类型为 inventory 时",
-    audience: "探路兵 agent",
-    defaultText: "针对目标做精确清点（数量、清单），给出准确数字。",
-    order: 31,
-  },
-  {
-    key: "board.scout_how.research",
-    plugin: PLUGIN,
-    role: "scout",
-    title: "探路做法：调研",
-    description: "任务类型为 research 时的做法说明。",
-    whenSent: "探路任务类型为 research 时",
-    audience: "探路兵 agent",
-    defaultText:
-      "从仓库文档、注释和源码调研目标（如果有搜索工具，也可以查网络）。",
-    order: 32,
+    order: 15,
   },
 ];

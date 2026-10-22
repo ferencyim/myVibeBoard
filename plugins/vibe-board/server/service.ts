@@ -116,6 +116,11 @@ export interface CardUpdateInput {
   needsEvidence?: boolean;
   presetId?: string | null;
   reviewerPresetId?: string | null;
+  scoutPresetId?: string | null;
+  plannerPresetId?: string | null;
+  planSeenAt?: string | null;
+  execSeenAt?: string | null;
+  verifySeenAt?: string | null;
   parentCardId?: string | null;
   tagIds?: string[];
 }

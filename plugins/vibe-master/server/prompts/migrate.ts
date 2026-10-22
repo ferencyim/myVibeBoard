@@ -13,9 +13,7 @@ const MARKER = "prompt_migrated:vibe-master";
 /** legacy setting -> prompt key */
 export const LEGACY_PROMPT_KEYS = {
   rulesSupplement: "master.rules_supplement",
-  templateAssessDraft: "master.wake.assess_draft",
   templateCardDone: "master.wake.card_done",
-  templateSessionHelp: "master.wake.session_help",
 } as const;
 
 /**

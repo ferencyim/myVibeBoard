@@ -27,13 +27,6 @@ const INJECT_FRAME =
   "以下内容在本会话启动时由 `.vibe/` 下的文件生成，是权威依据，对你只读：" +
   "不要编辑这些文件；需要更正时告知总 agent（看板任务则写在卡片评论里）。";
 
-const SCOUT_GUIDANCE =
-  "## 探路（`vibe_scout` 工具可用时）\n" +
-  "在大型仓库里动手修改前，先用几个互相独立的问题调用一次 `vibe_scout`" +
-  "（`kind`：locate / inventory / research），让便宜的只读子 agent 并行搜索；你拿到的是" +
-  "带 path:line 定位的简短结论，不必自己通读一遍。适合：在陌生仓库里定位代码、" +
-  "批量统计/列出用法、从多处收集事实。" +
-  "只改一两个已知文件的小改动不必使用。依赖某个定位之前，先核对它，再动手修改。";
 
 export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
   {
@@ -92,16 +85,5 @@ export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
     audience: "所有在项目中工作的 agent",
     defaultText: INJECT_FRAME,
     order: 30,
-  },
-  {
-    key: "context.scout_guidance",
-    plugin: PLUGIN,
-    role: "context",
-    title: "注入上下文块：探路兵使用建议",
-    description: "注入块里关于何时使用 vibe_scout 并行探路的建议（仅在该工具可用时有意义）。",
-    whenSent: "与上下文块一起注入",
-    audience: "所有在项目中工作的 agent",
-    defaultText: SCOUT_GUIDANCE,
-    order: 40,
   },
 ];

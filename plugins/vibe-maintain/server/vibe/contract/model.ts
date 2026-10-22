@@ -13,6 +13,7 @@ import {
   CardOriginSchema,
   CardPrioritySchema,
   ChatKindSchema,
+  ChatThreadSchema,
   DeviceKindSchema,
   EvidenceKindSchema,
   JudgementSchema,
@@ -83,8 +84,22 @@ export const CardSchema = z.object({
   needsEvidence: z.boolean(),
   presetId: z.string().nullable(),
   suggestedPresetId: z.string().nullable(),
-  /** Preset used to review this card's result; null = default. Phone-writable. */
+  /** Preset used to review this card's result; null = no review. Phone-writable. */
   reviewerPresetId: z.string().nullable(),
+  /** WP-105: preset of the scout run before planning (null = no scouting) and of the planning session. */
+  scoutPresetId: z.string().nullable(),
+  plannerPresetId: z.string().nullable(),
+  /** WP-105: the card's single plan (overwritten on re-planning); null = no plan yet. Daemon-written. */
+  plan: z.lazy(() => PlanSnapshotSchema).nullable(),
+  /** Acceptance criteria as last written by the planning model; differs from `acceptance` after a user edit. */
+  modelAcceptance: z.string(),
+  /** WP-105 unread markers: newest content per tab (daemon-written) and what the owner has seen. */
+  planActivityAt: Iso.nullable(),
+  execActivityAt: Iso.nullable(),
+  verifyActivityAt: Iso.nullable(),
+  planSeenAt: Iso.nullable(),
+  execSeenAt: Iso.nullable(),
+  verifySeenAt: Iso.nullable(),
   worktree: z.string().nullable(),
   origin: CardOriginSchema,
   /** For origin=maintenance: the maintenance_rule id that produced the card. */
@@ -136,6 +151,10 @@ export const ChatEventBodySchema = z.object({
   ready: z.boolean().optional(),
   /** The message reports a failure (for example a planning turn that failed). */
   error: z.boolean().optional(),
+  /** WP-105: the conversation it belongs to; absent on old rows (see chatThreadOf). */
+  thread: ChatThreadSchema.optional(),
+  /** WP-105: a user message that asks for something beyond text ("make_plan": the 制定方案 button). */
+  action: z.literal("make_plan").optional(),
 });
 export type ChatEventBody = z.infer<typeof ChatEventBodySchema>;
 

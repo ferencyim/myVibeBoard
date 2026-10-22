@@ -32,8 +32,8 @@ function withWorker(t: ReturnType<typeof setup>, column: "in_progress" | "verify
   if (column === "verifying") t.store.cards.move(t.card.id, { to: "verifying", actor: "lifecycle" });
 }
 
-const user = (t: ReturnType<typeof setup>, text: string) =>
-  t.store.cards.addChat({ cardId: t.card.id, authorKind: "user", author: "user", text });
+const user = (t: ReturnType<typeof setup>, text: string, thread: "plan" | "exec" | null = "exec") =>
+  t.store.cards.addChat({ cardId: t.card.id, authorKind: "user", author: "user", text, ...(thread ? { thread } : {}) });
 
 describe("chat service and proposal RPCs", () => {
   it("stores the owner's message and applies / rejects proposals through the command layer", () => {
@@ -41,6 +41,7 @@ describe("chat service and proposal RPCs", () => {
     const chat = createChatService(t.board, t.runtime.db);
     const sent = chat.send(t.card.key, "hello", "phone");
     expect(sent.event).toMatchObject({ type: "chat", authorKind: "user", author: "phone", body: { text: "hello" } });
+    expect(chat.send(t.card.key, "to the executor", "user", "exec").event.body).toMatchObject({ thread: "exec" });
 
     const p1 = t.store.cards.propose({ cardId: t.card.id, changes: { title: "New title", acceptance: "A" }, rationale: "clearer" });
     const accepted = chat.accept(p1.id, "user");
@@ -73,30 +74,37 @@ describe("chat service and proposal RPCs", () => {
   });
 });
 
-describe("chat router: who gets a user message", () => {
-  it("routes by column and executor presence", () => {
+describe("chat router: who gets a user message (exec thread only)", () => {
+  it("routes by column and worker presence", () => {
     const live = { id: "s" } as never;
-    expect(routeOf("draft", live)).toBe("master");
-    expect(routeOf("todo", undefined)).toBe("master");
-    expect(routeOf("in_progress", live)).toBe("executor");
-    expect(routeOf("verifying", live)).toBe("executor");
-    expect(routeOf("in_progress", undefined)).toBe("master");
-    expect(routeOf("done", live)).toBe("none");
+    const ended = { id: "e" } as never;
+    expect(routeOf("in_progress", live, live)).toBe("executor");
+    expect(routeOf("verifying", live, live)).toBe("executor");
+    expect(routeOf("todo", undefined, ended)).toBe("resume");
+    expect(routeOf("verifying", undefined, ended)).toBe("resume");
+    expect(routeOf("todo", undefined, undefined)).toBe("none");
+    expect(routeOf("draft", undefined, undefined)).toBe("none");
+    expect(routeOf("done", live, live)).toBe("none");
   });
 
-  function routerFor(t: ReturnType<typeof setup>, over: { send?: (text: string) => Promise<unknown>; paseo?: boolean; replies?: any } = {}) {
+  function routerFor(
+    t: ReturnType<typeof setup>,
+    over: { send?: (text: string) => Promise<unknown>; paseo?: boolean; replies?: any } = {},
+  ) {
     const send = vi.fn(over.send ?? (async () => undefined));
+    const resume = vi.fn(async () => undefined);
     const replies = over.replies ?? { send: vi.fn(async () => ({ sent: true, duplicate: false })) };
     const router = createChatRouter({
       db: t.runtime.db,
       board: t.board,
-      getPaseo: () => (over.paseo === false ? null : ({ agents: { ref: () => ({ send }) } } as never)),
+      getPaseo: () => (over.paseo === false ? null : ({ agents: { ref: () => ({ send, resume }) } } as never)),
       replies,
       log: () => {},
     });
     router.start(); // pins the cursor at the current end
-    return { router, send, replies, stop: () => router.stop() };
+    return { router, send, resume, replies, stop: () => router.stop() };
   }
+  const systemNotes = (t: ReturnType<typeof setup>) => t.chats().filter((e) => e.authorKind === "system");
 
   it("forwards to the live executor once and marks the message as answered", async () => {
     const t = setup();
@@ -107,8 +115,8 @@ describe("chat router: who gets a user message", () => {
     await r.router.poll();
     expect(r.send).toHaveBeenCalledTimes(1);
     expect(r.send).toHaveBeenCalledWith("please use sqlite");
-    const mark = t.chats().find((e) => e.authorKind === "system")!;
-    expect(mark.body).toMatchObject({ answers: [m.id], key: `forward:${m.id}`, agentId: "a1" });
+    expect(r.resume).not.toHaveBeenCalled();
+    expect(systemNotes(t)[0]!.body).toMatchObject({ answers: [m.id], key: `forward:${m.id}`, agentId: "a1", thread: "exec" });
     await r.stop();
   });
 
@@ -132,39 +140,73 @@ describe("chat router: who gets a user message", () => {
     await r.router.poll();
     expect(r.replies.send).toHaveBeenCalledWith({ id: m.id, cardId: t.card.id, questionId: "q1", text: "use postgres" });
     expect(r.send).not.toHaveBeenCalled();
-    expect(t.chats().find((e) => e.authorKind === "system")!.body).toMatchObject({ answers: [m.id] });
+    expect(systemNotes(t)[0]!.body).toMatchObject({ answers: [m.id], thread: "exec" });
     await r.stop();
   });
 
-  it("falls back to the master when the executor cannot be reached", async () => {
+  it("ignores plan-thread messages, including legacy rows without a thread", async () => {
+    const t = setup();
+    withWorker(t);
+    const r = routerFor(t);
+    user(t, "plan talk", "plan");
+    user(t, "legacy owner message", null);
+    await r.router.poll();
+    expect(r.send).not.toHaveBeenCalled();
+    expect(r.resume).not.toHaveBeenCalled();
+    expect(systemNotes(t)).toHaveLength(0);
+    await r.stop();
+  });
+
+  it("resumes the finished executor agent and then sends the message", async () => {
+    const t = setup();
+    withWorker(t);
+    t.store.sessions.setState(t.store.sessions.getByAgent("a1")!.id, "ended", { outcome: "closed" });
+    const r = routerFor(t);
+    const m = user(t, "one more round please");
+    await r.router.poll();
+    expect(r.resume).toHaveBeenCalledTimes(1);
+    expect(r.send).toHaveBeenCalledWith("one more round please");
+    expect(r.resume.mock.invocationCallOrder[0]).toBeLessThan(r.send.mock.invocationCallOrder[0]!);
+    expect(systemNotes(t)[0]!.body).toMatchObject({ text: "已唤回执行 agent 并转给它。", answers: [m.id], thread: "exec" });
+    await r.stop();
+  });
+
+  it("tells the owner when there is no executor yet", async () => {
+    const t = setup(); // todo, never dispatched
+    const r = routerFor(t);
+    const m = user(t, "start by reading the docs");
+    await r.router.poll();
+    expect(r.send).not.toHaveBeenCalled();
+    expect(r.resume).not.toHaveBeenCalled();
+    const mark = systemNotes(t)[0]!;
+    expect((mark.body as { text: string }).text).toContain("还没有执行 agent：点「立即执行」");
+    expect(mark.body).toMatchObject({ answers: [m.id], thread: "exec" });
+    await r.stop();
+  });
+
+  it("records a message on a done card without sending it", async () => {
+    const t = setup();
+    withWorker(t, "verifying");
+    t.store.cards.move(t.card.id, { to: "done", actor: "user" });
+    const r = routerFor(t);
+    user(t, "thanks");
+    await r.router.poll();
+    expect(r.send).not.toHaveBeenCalled();
+    expect((systemNotes(t)[0]!.body as { text: string }).text).toBe("卡片已完成，这条消息只作记录。");
+    await r.stop();
+  });
+
+  it("reports a send failure in the exec thread and never involves the master", async () => {
     const t = setup();
     withWorker(t);
     const r = routerFor(t, { send: async () => Promise.reject(new Error("agent is gone")) });
     const m = user(t, "hello?");
     await r.router.poll();
-    const mark = t.chats().find((e) => e.authorKind === "system")!;
-    expect(mark.body).toMatchObject({ fallback: [m.id] });
-    expect((mark.body as { text: string }).text).toContain("agent is gone");
-    expect((mark.body as { answers?: string[] }).answers).toBeUndefined();
-    await r.stop();
-  });
-
-  it("leaves draft, todo, done and executor-less cards to the master or to nobody", async () => {
-    const t = setup(); // todo
-    const r = routerFor(t);
-    user(t, "in todo");
-    t.store.cards.move(t.card.id, { to: "draft", actor: "user" });
-    user(t, "in draft");
-    await r.router.poll();
-    expect(r.send).not.toHaveBeenCalled();
-    expect(t.chats().filter((e) => e.authorKind === "system")).toHaveLength(0);
-
-    t.store.cards.move(t.card.id, { to: "todo", actor: "user" });
-    withWorker(t);
-    t.store.sessions.setState(t.store.sessions.getByAgent("a1")!.id, "ended", { outcome: "closed" });
-    user(t, "executor is gone");
-    await r.router.poll();
-    expect(r.send).not.toHaveBeenCalled();
+    const body = systemNotes(t)[0]!.body as { text: string; answers?: string[]; fallback?: unknown; thread?: string };
+    expect(body.text).toContain("agent is gone");
+    expect(body.thread).toBe("exec");
+    expect(body.answers).toEqual([m.id]);
+    expect(body.fallback).toBeUndefined();
     await r.stop();
   });
 
@@ -174,7 +216,7 @@ describe("chat router: who gets a user message", () => {
     const first = routerFor(t, { paseo: false });
     user(t, "early message");
     await first.router.poll();
-    expect(t.chats().filter((e) => e.authorKind === "system")).toHaveLength(0);
+    expect(systemNotes(t)).toHaveLength(0);
     await first.stop();
     const second = routerFor(t); // a new process: same cursor, handle available now
     await second.router.poll();
@@ -211,7 +253,7 @@ describe("lifecycle write-backs", () => {
     await ask();
     const question = t.chats().filter((e) => e.authorKind === "executor");
     expect(question).toHaveLength(1);
-    expect(question[0]!.body).toMatchObject({ kind: "question", agentId: "a1" });
+    expect(question[0]!.body).toMatchObject({ kind: "question", agentId: "a1", thread: "exec" });
     expect((question[0]!.body as { text: string }).text).toContain("Which database?");
 
     await l.emit("agent.permission_resolved", { agent: l.agent, requestId: "r1" });
@@ -224,7 +266,7 @@ describe("lifecycle write-backs", () => {
     await end();
     const summaries = t.chats().filter((e) => (e.body as { kind?: string }).kind === "summary");
     expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toMatchObject({ authorKind: "executor", body: { text: "All done: added the table.", key: expect.stringContaining("summary:") } });
+    expect(summaries[0]).toMatchObject({ authorKind: "executor", body: { text: "All done: added the table.", thread: "exec", key: expect.stringContaining("summary:") } });
     expect(t.store.cards.get(t.card.id)!.column).toBe("verifying");
   });
 
@@ -250,13 +292,13 @@ describe("dispatch writes back to the chat and the brief follows the card", () =
         }),
       },
     } as never;
-    t.store.cards.addChat({ cardId: t.card.id, authorKind: "user", text: "remember the offline case" });
+    t.store.cards.addChat({ cardId: t.card.id, authorKind: "user", text: "remember the offline case", thread: "exec" });
     const proposal = t.store.cards.propose({ cardId: t.card.id, changes: { title: "Accepted title", acceptance: "must work offline" }, rationale: "be precise" });
     t.store.cards.acceptProposal(proposal.id, "user");
     const dispatcher = createDispatcher({ board: t.board, getPaseo: () => paseo, newAgentId: () => "agent-1" });
     const result = await dispatcher.dispatch(t.card.key);
     const info = t.chats().find((e) => e.authorKind === "system")!;
-    expect(info.body).toMatchObject({ kind: "info", agentId: "agent-1", sessionId: result.session.id, key: `dispatch:${result.session.id}` });
+    expect(info.body).toMatchObject({ kind: "info", agentId: "agent-1", sessionId: result.session.id, key: `dispatch:${result.session.id}`, thread: "exec" });
     expect((info.body as { text: string }).text).toContain("codex-high");
     // the prompt shown in the chat is the prompt the agent received, built from the card as it is now
     expect((info.body as { detail: string }).detail).toBe(prompts[0]);
@@ -323,7 +365,10 @@ describe("phone sync refuses forged proposals and chat", () => {
       authorKind: "user",
       body: { text: "offline hello", kind: "question" },
     });
-    for (const forged of [{ text: "x", answers: ["e1"] }, { text: "x", fallback: ["e1"] }, { text: "x", key: "k" }, { kind: "info" }, { text: 3 }]) {
+    const withThread = await send({ text: "exec talk", thread: "exec" });
+    expect(withThread.rejected).toBe(0);
+    expect(t.chats().find((e) => e.id === withThread.id)?.body).toMatchObject({ thread: "exec" });
+    for (const forged of [{ text: "x", answers: ["e1"] }, { text: "x", fallback: ["e1"] }, { text: "x", key: "k" }, { text: "x", thread: "master" }, { kind: "info" }, { text: 3 }]) {
       const bad = await send(forged);
       expect(bad.rejected).toBeGreaterThan(0);
       expect(t.chats().some((e) => e.id === bad.id)).toBe(false);
@@ -353,7 +398,7 @@ describe("phone sync refuses forged proposals and chat", () => {
       author_kind: "user",
       author: "phone",
       created_at: new Date().toISOString(),
-      body_json: JSON.stringify({ text: "use sqlite" }),
+      body_json: JSON.stringify({ text: "use sqlite", thread: "exec" }),
     });
     expect(await router.poll()).toBe(0); // nothing reached the computer yet
     await client.sync(transport);

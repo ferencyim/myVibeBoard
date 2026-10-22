@@ -1,10 +1,10 @@
-// Wires the master together: wake triggers -> serial queue -> assessor / consolidator -> master
-// session, plus the quota monitor and the status/switch/wake operations behind the RPCs.
-// Everything external (daemon handle, clock, memory writer, selector) is injected.
+// Wires the master together: wake triggers -> serial queue -> consolidator -> master session, the
+// per-card planning sessions (on the card's planning model, WP-105), the quota monitor and the
+// status/switch/wake operations behind the RPCs. Everything external (daemon handle, clock, memory
+// writer) is injected.
 
 import { join } from "node:path";
 import type { MasterSettings, MasterStatus, ProviderInfo } from "../shared/rpc";
-import { createAssessor } from "./assess/assess";
 import { systemClock, type Clock } from "./clock";
 import { MASTER_RULES } from "./master/rules.generated";
 import { createMasterSession } from "./master/session";
@@ -14,7 +14,6 @@ import { createPlanning } from "./planning/planner";
 import { createPromptPort, rulesFor } from "./prompts/port";
 import { migrateLegacyPromptSettings } from "./prompts/migrate";
 import { tuningOf } from "./tuning";
-import { defaultSelector, type AgentSelector } from "./select";
 import { createAlerts } from "./subscription/alerts";
 import { createPermissionResolver, isBoardMcpCall } from "./subscription/permission";
 import { createQuotaReader } from "./subscription/quota";
@@ -34,15 +33,12 @@ export interface RuntimeDeps {
   dataDir: string;
   clock?: Clock;
   memory?: MemoryPort;
-  selector?: AgentSelector;
   rules?: string;
   /** Injectable git for requirements commits (tests use a real temp repo by default). */
   git?: GitRunner;
   pollIntervalMs?: number;
   log?: (message: string, error?: unknown) => void;
 }
-
-const PLANNER_LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
 
 export function createMasterRuntime(deps: RuntimeDeps) {
   const clock = deps.clock ?? systemClock;
@@ -83,28 +79,11 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     alerts,
     log,
   });
-  const selector = deps.selector ?? defaultSelector;
-  const assessor = createAssessor({
-    db,
-    store,
-    master: session,
-    quota,
-    selector,
-    masterLabel: () => {
-      const t = state.read().agent?.target;
-      return t ? providerSpec(t) : null;
-    },
-    prompts,
-    tuning,
-    requirementsChars: () => deps.settings().requirementsExcerptChars,
-    log,
-  });
   const memory = deps.memory ?? createFileMemoryPort();
   const consolidator = createConsolidator({
     db,
     store,
     master: session,
-    assessor,
     memory,
     prompts,
     options: {
@@ -116,13 +95,11 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     git: deps.git,
     log,
   });
-  // Per-card planning sessions (WP-33): separate agents, same model and rules as the master.
+  // Per-card planning sessions (WP-33 / WP-105): separate agents on the card's planning model.
   const planning = createPlanning({
     db,
     store,
     getPaseo: deps.getPaseo,
-    master: session,
-    rules: (projectId) => rulesFor(prompts, projectId),
     prompts,
     tuning,
     requirementsChars: () => deps.settings().requirementsExcerptChars,
@@ -137,32 +114,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   async function run(job: WakeJob): Promise<void> {
     if (!deps.settings().enabled) return;
-    if (job.kind === "assess_draft") {
-      // A live planning session owns the plan of its card: its plan versions must not be overwritten.
-      if (store.sessions.list({ cardId: job.cardId, role: "planner", states: PLANNER_LIVE }).length > 0) {
-        log(`assess ${job.cardId}: skipped (planning session active)`);
-        // A manual review request must not look like a dead button: say where to ask instead.
-        if (job.force) {
-          store.cards.addChat({
-            cardId: job.cardId,
-            authorKind: "system",
-            author: "master",
-            kind: "info",
-            text: "规划会话进行中，请直接在群聊里向总 agent 提问。",
-            key: `assess-skipped:${job.cardId}:${Math.floor(clock.now() / 60_000)}`,
-          });
-        }
-        return;
-      }
-      const outcome = await assessor.assess(job.cardId, { force: job.force });
-      log(`assess ${job.cardId}: ${outcome.status}${"reason" in outcome ? ` (${outcome.reason})` : ""}`);
-    } else if (job.kind === "card_done") {
-      const outcome = await consolidator.consolidate(job.cardId, { force: job.force });
-      log(`memory ${job.cardId}: ${outcome.status}`);
-    } else {
-      const outcome = await consolidator.advise(job.cardId, job.question);
-      log(`help ${job.cardId}: ${outcome.status}`);
-    }
+    const outcome = await consolidator.consolidate(job.cardId, { force: job.force });
+    log(`memory ${job.cardId}: ${outcome.status}`);
   }
 
   const queue = createWakeQueue({
@@ -208,7 +161,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     clock,
     queue,
     enabled: () => deps.settings().enabled,
-    debounceMs: () => deps.settings().debounceSeconds * 1000,
     tuning,
     flags: () => deps.settings(),
     pollIntervalMs: deps.pollIntervalMs,
@@ -244,7 +196,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   async function status(includeProviders: boolean): Promise<MasterStatus> {
     const snap = queue.snapshot();
-    const due = new Map(triggers.debouncer.pending().map((p) => [p.key, p.dueAt]));
     const keyOf = (cardId: string) => store.cards.get(cardId)?.key ?? null;
     const record = state.read();
     const switched = record.target;
@@ -331,14 +282,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
         running: snap.running
           ? { kind: snap.running.kind, cardKey: keyOf(snap.running.cardId) }
           : null,
-        pending: [
-          ...snap.pending.map((j) => ({ kind: j.kind, cardKey: keyOf(j.cardId), dueInSeconds: 0 })),
-          ...[...due].map(([cardId, dueAt]) => ({
-            kind: "assess_draft",
-            cardKey: keyOf(cardId),
-            dueInSeconds: Math.max(0, Math.ceil((dueAt - clock.now()) / 1000)),
-          })),
-        ],
+        pending: snap.pending.map((j) => ({ kind: j.kind, cardKey: keyOf(j.cardId), dueInSeconds: 0 })),
         blocked: snap.blocked.length,
       },
       schedulerPaused,
@@ -356,7 +300,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     session,
     queue,
     triggers,
-    assessor,
     consolidator,
     planning,
     quota,
@@ -365,13 +308,13 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     startQuotaMonitor,
     checkQuota,
 
-    /** A daemon handle became available: retry parked jobs and catch up on unassessed drafts. */
+    /** A daemon handle became available: retry parked jobs and planning turns. */
     onPaseoAvailable(): void {
       queue.resume();
       planning.resume();
     },
 
-    /** Startup catch-up (drafts without a current assessment, recently done cards). */
+    /** Startup catch-up (recently done cards without a memory update). */
     sweep: () => (deps.settings().sweepOnStart ? triggers.sweep() : 0),
 
     /** All master sessions, newest first (the history list of the screen). */
@@ -415,17 +358,10 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       return "alerted";
     },
 
-    wake(cardRef: string, reason: "assess_draft" | "card_done", force: boolean) {
+    wake(cardRef: string, reason: "card_done", force: boolean) {
       const card = store.cards.get(cardRef);
       if (!card) return { queued: false, message: `Card not found: ${cardRef}` };
-      if (reason === "assess_draft") {
-        if (card.column !== "draft") {
-          return { queued: false, message: `${card.key} is in ${card.column}; only drafts are assessed` };
-        }
-        triggers.assessNow(card.id, force);
-      } else {
-        queue.enqueue({ kind: "card_done", cardId: card.id, force });
-      }
+      queue.enqueue({ kind: "card_done", cardId: card.id, force });
       return { queued: true, message: `Queued ${reason} for ${card.key}` };
     },
 

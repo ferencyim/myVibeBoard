@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   type CardView,
+  type PlanVersion,
   type Project,
   type CollectorContext,
   type CollectorRegistry,
@@ -133,10 +134,17 @@ export function createPipeline(deps: PipelineDeps) {
     return n;
   };
 
+  /** The card's single plan (WP-105), as the plan version shape the prompts read; old cards: newest version. */
+  const planOf = (card: CardView): PlanVersion | undefined =>
+    card.plan
+      ? { id: "", cardId: card.id, version: 0, snapshot: card.plan, createdAt: card.updatedAt }
+      : board.plans.list(card.id).at(-1);
+
   /**
-   * Model review of the change by the card's reviewer preset. Runs after the checks (on a stable,
-   * already verified tree, so the read-only snapshot guard is unambiguous; findings of both end up
-   * in one return to the worker). Findings become verification items of kind "review".
+   * Model review of the change by the card's reviewer preset. WP-105 order: execution -> review ->
+   * evidence verification. The review runs first; severe findings return the card to the executor
+   * at once (the evidence round is skipped, it would verify code that is about to change). Findings
+   * become verification items of kind "review".
    */
   async function runReview(input: {
     card: CardView;
@@ -184,6 +192,7 @@ export function createPipeline(deps: PipelineDeps) {
           authorKind: "reviewer",
           author: preset?.name ?? "reviewer",
           kind: "verdict",
+          thread: "exec",
           text: reviewChatText(verdict, summary, issues, failure),
           agentId: reviewerAgentId,
           sessionId,
@@ -235,7 +244,7 @@ export function createPipeline(deps: PipelineDeps) {
       const result = await agent.run(
         buildReviewPrompt({
           card,
-          plan: board.plans.list(card.id).at(-1),
+          plan: planOf(card),
           worktree: input.worktree,
           commitHash: input.commitHash,
           baseCommit: change.base,
@@ -355,8 +364,7 @@ export function createPipeline(deps: PipelineDeps) {
     const worktree = card.worktree ?? project.repoPath;
     const commitHash = await headCommit(runner, worktree);
     const mode = card.needsEvidence ? "evidence" : "tests_only";
-    const plan = board.plans.list(card.id).at(-1);
-    const checks = mode === "evidence" ? splitChecks(card, plan) : [];
+    const checks = mode === "evidence" ? splitChecks(card, planOf(card)) : [];
     const { verification, items } = verify.create({
       cardId: card.id,
       projectId: project.id,
@@ -397,8 +405,22 @@ export function createPipeline(deps: PipelineDeps) {
     let verifierSessionId: string | undefined;
     const names = new Map<string, string>(); // evidence file name -> evidence id
 
+    // ---- model review first (optional, card.reviewerPresetId) ----------------------------
+    let reviewReturns = false;
+    if (card.reviewerPresetId) {
+      const allowReturn = reviewReturnsInARow(card.id) < tuning().maxReviewReturns;
+      await runReview({ card, project, worktree, commitHash, vid, outputDir, notes, allowReturn });
+      reviewReturns =
+        allowReturn &&
+        tuning().autoReturnOnFail &&
+        verify.items(vid).some((i) => i.kind === "review" && i.judgement === "fail");
+      if (reviewReturns) notes.push("复核发现严重问题：退回执行模型修改，本轮跳过证据验证。");
+    }
+
     try {
-      if (mode === "evidence") {
+      if (reviewReturns) {
+        // nothing more to collect this round
+      } else if (mode === "evidence") {
         // ---- verifier agent -------------------------------------------------------------
         const worker = workerSession(card.id);
         const choice = pick({
@@ -612,20 +634,6 @@ export function createPipeline(deps: PipelineDeps) {
         const problem = await removeWorktree(runner, worktree, baseline.path);
         if (problem) notes.push(`Baseline worktree ${baseline.path} was kept: ${problem}`);
       }
-    }
-
-    // ---- model review (optional, card.reviewerPresetId) ----------------------------------
-    if (card.reviewerPresetId && !voided) {
-      await runReview({
-        card,
-        project,
-        worktree,
-        commitHash,
-        vid,
-        outputDir,
-        notes,
-        allowReturn: reviewReturnsInARow(card.id) < tuning().maxReviewReturns,
-      });
     }
 
     // ---- conclude -----------------------------------------------------------------------

@@ -53,13 +53,6 @@ const ORIGINAL_FRAME =
   "# 项目上下文（myVibeBoard）\n\n" +
   "以下内容在本会话启动时由 `.vibe/` 下的文件生成，是权威依据，对你只读：" +
   "不要编辑这些文件；需要更正时告知总 agent（看板任务则写在卡片评论里）。";
-const ORIGINAL_SCOUT =
-  "## 探路（`vibe_scout` 工具可用时）\n" +
-  "在大型仓库里动手修改前，先用几个互相独立的问题调用一次 `vibe_scout`" +
-  "（`kind`：locate / inventory / research），让便宜的只读子 agent 并行搜索；你拿到的是" +
-  "带 path:line 定位的简短结论，不必自己通读一遍。适合：在陌生仓库里定位代码、" +
-  "批量统计/列出用法、从多处收集事实。" +
-  "只改一两个已知文件的小改动不必使用。依赖某个定位之前，先核对它，再动手修改。";
 
 describe("prompt registry", () => {
   it("registers every context prompt with its metadata", () => {
@@ -72,14 +65,13 @@ describe("prompt registry", () => {
         "context.compact_notes",
         "context.compact_restore",
         "context.inject_frame",
-        "context.scout_guidance",
       ].sort(),
     );
     for (const p of listed) {
       expect(p.plugin).toBe("vibe-context");
       expect(p.title && p.description && p.whenSent && p.audience).toBeTruthy();
     }
-    expect(CONTEXT_PROMPT_DEFS).toHaveLength(5);
+    expect(CONTEXT_PROMPT_DEFS).toHaveLength(4);
   });
 
   it("the defaults resolve to the old hard-coded texts, registry or not", () => {
@@ -94,7 +86,6 @@ describe("prompt registry", () => {
       expect(coldStartPrompt("s1", "/wt/x.md", "BLOCK", prompts)).toBe(ORIGINAL_COLD("s1", "/wt/x.md", "BLOCK"));
       expect(coldStartPrompt("s1", "/wt/x.md", null, prompts)).toBe(ORIGINAL_COLD("s1", "/wt/x.md", null));
       expect(prompts.resolve("context.inject_frame")).toBe(ORIGINAL_FRAME);
-      expect(prompts.resolve("context.scout_guidance")).toBe(ORIGINAL_SCOUT);
     }
   });
 
@@ -103,14 +94,12 @@ describe("prompt registry", () => {
     const prompts = createContextPrompts(board);
     prompts.register();
     board.prompts.setOverride("context.inject_frame", "# My frame");
-    board.prompts.setOverride("context.scout_guidance", "## My scouting");
     board.prompts.setOverride("context.compact_notes", "Save notes to {{mdPath}}{{keyClause}}.");
 
     const root = mkdtempSync(join(tmpdir(), "vibe-ctx-"));
     mkdirSync(join(root, ".vibe"));
     const block = buildContextBlock(createMemoryStore({ projectRoot: root, userHome: root, contextWindowTokens: 100_000 }), { prompts })!;
     expect(block).toContain("# My frame");
-    expect(block).toContain("## My scouting");
     expect(block).not.toContain("由 `.vibe/` 下的文件生成");
     expect(block.startsWith("<!-- vibe:context:start -->")).toBe(true); // the markers stay code
     expect(block.endsWith("<!-- vibe:context:end -->")).toBe(true);
@@ -118,7 +107,7 @@ describe("prompt registry", () => {
     // the default block is unchanged without overrides
     const plain = buildContextBlock(createMemoryStore({ projectRoot: root, userHome: root, contextWindowTokens: 100_000 }))!;
     expect(plain).toContain(ORIGINAL_FRAME);
-    expect(plain).toContain(ORIGINAL_SCOUT);
+    expect(plain).not.toContain("vibe_scout");
   });
 
   it("the memory budget defaults to the setting's default", () => {

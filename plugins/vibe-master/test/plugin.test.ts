@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import contribute from "../index.server";
 import { permissionRpc, sessionsRpc, statusRpc, switchRpc, wakeRpc } from "../shared/rpc";
-import { assessmentJson, fakePaseo, setupBoard, tempDir, tick } from "./helpers";
+import { fakePaseo, setupBoard, tempDir, tick } from "./helpers";
 import { createVibeStore, migrateOwner, openVibeDb, publishEvent } from "../server/vibe/db";
 
 const pluginDir = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,11 +25,25 @@ describe("rules", () => {
       "utf8",
     ).replace(/\r\n/g, "\n");
     expect(skill).toMatch(/^---\nname: vibe-master\n/);
-    for (const reason of ["assess_draft", "card_done", "session_help"]) expect(skill).toContain(reason);
+    expect(skill).toContain("card_done");
+    for (const removed of ["assess_draft", "session_help", "plan_discussion"]) expect(skill).not.toContain(removed);
     expect(skill).toContain("绝不自行在列之间移动卡片");
     expect(existsSync(join(pluginDir, "server/master/rules.generated.ts"))).toBe(true);
   });
 });
+
+const CONSOLIDATED = JSON.stringify({ summary: "Recorded." });
+
+function doneCard(store: ReturnType<typeof createVibeStore>, projectId: string, title: string) {
+  const card = store.cards.create({ projectId, title, description: "d" }, "user");
+  store.cards.move(card.id, { to: "todo", actor: "user" });
+  store.cards.dispatch({ cardId: card.id, agentId: `w-${title}`, provider: "claude", worktree: null });
+  store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
+  store.cards.move(card.id, { to: "done", actor: "user" });
+  return card;
+}
+const memoryUpdated = (store: ReturnType<typeof createVibeStore>, cardId: string) =>
+  store.events.list(cardId).some((e) => (e.body as { kind?: string } | null)?.kind === "memory_update");
 
 type Handler = (input: any, context: any) => unknown;
 
@@ -39,7 +53,7 @@ function fakeServer(host: Record<string, unknown> = {}) {
   const hooks = new Map<string, Array<(e: unknown, c: unknown) => void>>();
   const server = {
     registerSettings: () => ({
-      read: async () => ({ status: "ready", revision: "1", values: { enabled: true, provider: "claude", model: "", thinking: "", debounceSeconds: 1, workspaceDir: "", quotaLowPct: 20, quotaCheckSeconds: 3600, sweepOnStart: false } }),
+      read: async () => ({ status: "ready", revision: "1", values: { enabled: true, provider: "claude", model: "", thinking: "", workspaceDir: "", quotaLowPct: 20, quotaCheckSeconds: 3600, sweepOnStart: true } }),
       subscribe: () => () => undefined,
     }),
     handle: (contract: { name: string }, handler: Handler) => void handlers.set(contract.name, handler),
@@ -65,7 +79,7 @@ describe("plugin entry", () => {
   it("registers the RPCs and hooks, learns the daemon handle from them and works end to end", async () => {
     const home = tempDir("vibe-master-home-");
     process.env.VIBE_HOME = home;
-    const fake = fakePaseo(() => assessmentJson());
+    const fake = fakePaseo(() => CONSOLIDATED);
     const { server, handlers, hooks } = fakeServer();
     const cleanup = contribute(server);
     expect([...handlers.keys()].sort()).toEqual([permissionRpc.name, sessionsRpc.name, statusRpc.name, switchRpc.name, wakeRpc.name].sort());
@@ -77,30 +91,30 @@ describe("plugin entry", () => {
     const store = createVibeStore(db);
     const project = store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: home, projectType: "web" });
     store.presets.create({ name: "Claude Opus", provider: "claude", model: "opus" });
-    const card = store.cards.create({ projectId: project.id, title: "Entry test", description: "d" });
+    const card = doneCard(store, project.id, "Entry test");
 
     // before any hook/RPC the plugin has no daemon handle
     const context = { paseo: fake.paseo };
     const first = (await handlers.get("master.status")!({ includeProviders: false }, context)) as { paseoReady: boolean };
     expect(first.paseoReady).toBe(true);
 
-    const woken = (await handlers.get("master.wake")!({ card: card.key.toLowerCase(), reason: "assess_draft", force: true }, context)) as { queued: boolean };
+    const woken = (await handlers.get("master.wake")!({ card: card.key.toLowerCase(), reason: "card_done", force: true }, context)) as { queued: boolean };
     expect(woken.queued).toBe(true);
-    for (let i = 0; i < 100 && store.events.list(card.id).every((e) => e.type !== "evaluation"); i++) await tick(20);
-    expect(store.events.list(card.id).some((e) => e.type === "evaluation")).toBe(true);
-    expect(store.cards.get(card.id)!.column).toBe("draft");
+    for (let i = 0; i < 100 && !memoryUpdated(store, card.id); i++) await tick(20);
+    expect(memoryUpdated(store, card.id)).toBe(true);
+    expect(store.cards.get(card.id)!.column).toBe("done");
 
     const switched = (await handlers.get("master.switch")!({ provider: "claude", model: "sonnet-x" }, context)) as { changed: boolean; target: { model: string } };
     expect(switched).toMatchObject({ changed: true, target: { model: "sonnet-x" } });
 
-    const missing = (await handlers.get("master.wake")!({ card: "DEMO-99", reason: "assess_draft", force: true }, context)) as { queued: boolean };
+    const missing = (await handlers.get("master.wake")!({ card: "DEMO-99", reason: "card_done", force: true }, context)) as { queued: boolean };
     expect(missing.queued).toBe(false);
 
     await cleanup();
     db.close();
   });
 
-  it("works from the start-up handle: sweeps drafts and pushes bus events with no hook or RPC", async () => {
+  it("works from the start-up handle: sweeps done cards and pushes bus events with no hook or RPC", async () => {
     const home = tempDir("vibe-master-home-");
     process.env.VIBE_HOME = home;
     const db = openVibeDb();
@@ -108,14 +122,14 @@ describe("plugin entry", () => {
     const store = createVibeStore(db);
     const project = store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: home, projectType: "web" });
     store.presets.create({ name: "Claude Opus", provider: "claude", model: "opus" });
-    const card = store.cards.create({ projectId: project.id, title: "Startup test", description: "d" });
+    const card = doneCard(store, project.id, "Startup test");
 
-    const fake = fakePaseo(() => assessmentJson());
+    const fake = fakePaseo(() => CONSOLIDATED);
     const pushed: unknown[] = [];
     const { server } = fakeServer({ paseo: fake.paseo, notify: (n: unknown) => pushed.push(n) });
     const cleanup = contribute(server);
-    for (let i = 0; i < 100 && store.events.list(card.id).every((e) => e.type !== "evaluation"); i++) await tick(20);
-    expect(store.events.list(card.id).some((e) => e.type === "evaluation")).toBe(true);
+    for (let i = 0; i < 100 && !memoryUpdated(store, card.id); i++) await tick(20);
+    expect(memoryUpdated(store, card.id)).toBe(true);
 
     publishEvent(db, { type: "master.alert", payload: { kind: "quota_error", message: "x" } });
     for (let i = 0; i < 100 && pushed.length === 0; i++) await tick(20);

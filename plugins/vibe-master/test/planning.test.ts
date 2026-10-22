@@ -1,19 +1,22 @@
-import { existsSync, readFileSync } from "node:fs";
+// WP-105: the plan tab. 制定方案 runs the card's scout model (when picked) and then the card's
+// planning model; the planner asks questions, takes change requests, overwrites the card's only
+// plan and drafts the acceptance criteria (as a proposal once the owner edited them). Switching the
+// planning model hands the conversation over. The master agent takes no part.
+
 import { describe, expect, it } from "vitest";
-import { MASTER_RULES } from "../server/master/rules.generated";
-import { createPlanning, handoffPath } from "../server/planning/planner";
+import { createPlanning } from "../server/planning/planner";
 import { PlanTurnSchema } from "../server/planning/schema";
 import { messagesOf, threadState } from "../server/planning/thread";
 import { createMasterRuntime } from "../server/runtime";
-import { MasterError, type MasterPaseo } from "../server/types";
+import type { MasterPaseo } from "../server/types";
 import type { MemoryPort } from "../server/memory/files";
-import { ManualClock, defaultSettings, fakeMaster, fakePaseo, setupBoard, tempDir, type Script } from "./helpers";
+import { ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir, type Script } from "./helpers";
 
 const fence = (value: unknown) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
 const memory: MemoryPort = {
   snapshot: () => ({
     "PROJECT_STATE.md": [{ id: "m_1", tag: "", body: "State: login screen exists", touched: "" }],
-    "DECISIONS.md": [{ id: "m_2", tag: "ui", body: "Use the shared button component", touched: "" }],
+    "DECISIONS.md": [],
     "LESSONS.md": [],
     "INDEX.md": [],
   }),
@@ -24,13 +27,10 @@ function setup(script: Script, options: { noPaseo?: boolean } = {}) {
   const board = setupBoard();
   const fake = fakePaseo(script);
   let paseo: MasterPaseo | null = options.noPaseo ? null : fake.paseo;
-  let mode = "auto";
   const planning = createPlanning({
     db: board.db,
     store: board.store,
     getPaseo: () => paseo,
-    master: fakeMaster(fake, () => mode),
-    rules: () => MASTER_RULES,
     dataDir: tempDir("vibe-master-data-"),
     clock: new ManualClock(),
     memory,
@@ -38,373 +38,272 @@ function setup(script: Script, options: { noPaseo?: boolean } = {}) {
     log: () => undefined,
   });
   const say = (cardId: string, text: string) =>
-    board.store.cards.addChat({ cardId, authorKind: "user", author: "user", text });
-  const requestHandoff = (cardId: string) =>
-    board.store.events.add({
+    board.store.cards.addChat({ cardId, authorKind: "user", author: "user", text, thread: "plan" });
+  const makePlan = (cardId: string) =>
+    board.store.cards.addChat({
       cardId,
-      type: "note",
       authorKind: "user",
       author: "user",
-      body: { kind: "handoff_request" },
+      text: "请制定方案",
+      thread: "plan",
+      action: "make_plan",
     });
-  const discussion = (cardId: string) => messagesOf(board.store.events.list(cardId));
+  const card = (title: string) => {
+    const c = board.draft(title);
+    return board.store.cards.update(c.id, { plannerPresetId: board.presets.claude.id });
+  };
+  const chats = (cardId: string) =>
+    board.store.events.list(cardId).filter((e) => e.type === "chat").map((e) => ({
+      author: e.authorKind,
+      ...(e.body as { text: string; thread?: string; answers?: string[]; error?: boolean }),
+    }));
   return {
     ...board,
     fake,
     planning,
     say,
-    requestHandoff,
-    discussion,
+    makePlan,
+    card,
+    chats,
     setPaseo(next: MasterPaseo | null) {
       paseo = next;
-    },
-    setMode(next: string) {
-      mode = next;
     },
   };
 }
 
-const planA = {
-  description: "Add a dark mode toggle to settings; persist in local storage.",
-  checks: [{ text: "Toggle switches theme", method: "screenshot" }, { text: "npm test passes" }],
-  subCards: [],
-  tags: ["feature", "unknown-tag"],
-  recommendedPreset: "Codex Max",
-  notes: "Risk: charts hard-code colors.",
-  files: ["src/settings/**", "src/theme.ts"],
-};
-
-describe("thread state", () => {
-  it("derives unanswered messages from the events alone", () => {
+describe("plan thread", () => {
+  it("only plan-thread owner messages are pending for the planner", () => {
     const t = setup(() => "");
-    const draft = t.draft("Thread");
-    const first = t.say(draft.id, "hello");
+    const c = t.card("Thread");
+    const first = t.say(c.id, "hello");
     t.store.cards.addChat({
-      cardId: draft.id,
+      cardId: c.id,
       authorKind: "master",
       author: "planner",
       text: "hi",
+      thread: "plan",
       answers: [first.id],
     });
-    const second = t.say(draft.id, "more");
-    t.requestHandoff(draft.id);
-    const state = threadState(t.store.events.list(draft.id), { column: "draft", executorOnline: false });
+    const second = t.say(c.id, "more");
+    t.store.cards.addChat({ cardId: c.id, authorKind: "user", text: "to the executor", thread: "exec" });
+    const state = threadState(t.store.events.list(c.id));
     expect(state.pending.map((m) => m.id)).toEqual([second.id]);
-    expect(state.handoffRequests).toHaveLength(1);
-    expect(state.hasDiscussion).toBe(true);
+    expect(messagesOf(t.store.events.list(c.id))).toHaveLength(3);
   });
 
   it("validates planner replies", () => {
     expect(PlanTurnSchema.safeParse({ reply: "ok" }).success).toBe(true);
     expect(PlanTurnSchema.safeParse({ reply: "" }).success).toBe(false);
-    expect(
-      PlanTurnSchema.safeParse({ reply: "x", research: Array(4).fill({ question: "q" }) }).success,
-    ).toBe(false);
+    expect(PlanTurnSchema.safeParse({ reply: "x", research: Array(4).fill({ question: "q" }) }).success).toBe(
+      false,
+    );
+    expect(PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p" }, acceptance: "a" }).success).toBe(true);
   });
 });
 
-describe("planning session", () => {
-  it("runs a 3-round discussion in its own agent, writes plan versions and hands off on request", async () => {
-    let round = 0;
-    const t = setup(({ prompt, agentId }) => {
-      if (prompt.startsWith("[plan:handoff]")) {
-        return fence({ summary: "# Hand-off\nDark mode toggle, see plan v2." });
-      }
-      round++;
-      if (round === 1) return fence({ reply: "Which screens? Is OS theme in scope?" });
-      if (round === 2) return fence({ reply: "Draft plan written.", plan: planA });
+describe("制定方案", () => {
+  it("scouts on the scout model first, then plans on the planning model in the repository, read-only", async () => {
+    const t = setup(({ provider, prompt }) => {
+      if (provider === "kimi") return "src/settings.ts holds the toggles";
+      expect(prompt).toContain("[plan:start]");
+      expect(prompt).toContain("## 探路结果");
+      expect(prompt).toContain("src/settings.ts holds the toggles");
       return fence({
-        reply: "Plan is final.",
-        plan: { ...planA, description: `${planA.description} Respect OS theme by default.` },
-        ready: true,
+        reply: "方案已定，有一个问题：要不要跟随系统主题？",
+        plan: { text: "在设置页加深色开关", files: ["src/settings/**"] },
+        acceptance: "1. 开关切换主题\n2. 重启后保持",
       });
     });
-    const card = t.draft("Dark mode", { description: "Users want dark mode" });
-    t.say(card.id, "Let's plan dark mode");
+    const c = t.card("Dark mode");
+    t.store.cards.update(c.id, { scoutPresetId: t.presets.kimi.id });
+    t.makePlan(c.id);
     await t.planning.tick();
 
-    // round 1: separate agent with role planner, card context in the first message
-    expect(t.fake.agents).toHaveLength(1);
-    const agent = t.fake.agents[0]!;
-    expect(agent.options.labels).toMatchObject({ role: "planner" });
-    expect(agent.options.config.systemPrompt).toBe(MASTER_RULES);
-    expect(agent.prompts[0]).toContain("[plan:start]");
-    expect(agent.prompts[0]).toContain("Dark mode");
-    expect(agent.prompts[0]).toContain("Use the shared button component");
-    const live = t.planning.liveOf(card.id)!;
-    expect(live.role).toBe("planner");
-    expect(live.state).toBe("idle");
-    expect(t.store.cards.get(card.id)!.planSessionId).toBe(live.id);
-    expect(t.discussion(card.id).map((m) => m.role)).toEqual(["user", "planner"]);
-    expect(t.store.plans.list(card.id)).toHaveLength(0);
+    const scout = t.fake.agents.find((a) => a.provider === "kimi");
+    const planner = t.fake.agents.find((a) => a.provider === "claude");
+    // The scout answered before the planner got its first message.
+    expect(scout!.prompts).toHaveLength(1);
+    expect(scout!.provider).toBe("kimi");
+    expect(scout!.options.labels).toMatchObject({ role: "scout" });
+    expect(scout!.archived).toBe(true);
+    expect(planner!.provider).toBe("claude");
+    expect(planner!.options.cwd).toBe(t.repoPath);
+    expect(planner!.options.config.modeId).toBe("plan");
+    expect(String(planner!.options.config.provider)).toBe("claude/opus");
+    expect(planner!.options.config.thinkingOptionId).toBe("high");
+    expect(String(planner!.options.config.systemPrompt)).toContain("规划会话");
 
-    // round 2: same agent, plan written back as version 1 with preset + tag filtering
-    t.say(card.id, "Settings screen only; OS theme out of scope");
-    await t.planning.tick();
-    expect(t.fake.agents).toHaveLength(1);
-    expect(agent.prompts[1]).toContain("[plan:turn]");
-    const v1 = t.store.plans.list(card.id);
-    expect(v1).toHaveLength(1);
-    expect(v1[0]!.snapshot.tags).toEqual(["feature"]);
-    expect(v1[0]!.snapshot.files).toEqual(["src/settings/**", "src/theme.ts"]);
-    expect(v1[0]!.snapshot.recommendedPresetId).toBe(t.presets.codex.id);
-    expect(t.store.cards.get(card.id)!.suggestedPresetId).toBe(t.presets.codex.id);
-
-    // round 3: consensus changes -> version 2, ready hint, card not moved
-    t.say(card.id, "Actually follow the OS theme by default");
-    await t.planning.tick();
-    expect(t.store.plans.list(card.id).map((p) => p.version)).toEqual([1, 2]);
-    const last = t.store.events
-      .list(card.id)
-      .filter((e) => e.type === "chat" && e.authorKind === "master")
-      .at(-1)!;
-    expect(last.body).toMatchObject({ ready: true, planVersion: 2, agentId: agent.id, sessionId: live.id });
-    expect(t.store.cards.get(card.id)!.column).toBe("draft");
-    expect(t.discussion(card.id).filter((m) => m.role === "planner")).toHaveLength(3);
-    expect(t.eventTypes()).toContain("plan.updated");
-
-    // hand-off: summary into .vibe/sessions/<KEY>-plan.md, session archived, card still draft
-    t.requestHandoff(card.id);
-    await t.planning.tick();
-    const file = handoffPath(t.repoPath, card.key);
-    expect(existsSync(file)).toBe(true);
-    expect(readFileSync(file, "utf8")).toContain("Dark mode toggle, see plan v2.");
-    expect(file.replaceAll("\\", "/")).toMatch(/\.vibe\/sessions\/DEMO-1-plan\.md$/);
-    expect(t.planning.liveOf(card.id)).toBeUndefined();
-    expect(t.store.sessions.get(live.id)!.state).toBe("ended");
-    expect(agent.archived).toBe(true);
-    expect(t.store.cards.get(card.id)!.column).toBe("draft");
-    const handoff = t.store.events.list(card.id).find((e) => (e.body as { kind?: string }).kind === "handoff")!;
-    expect(handoff.body).toMatchObject({ path: file });
-    expect(
-      threadState(t.store.events.list(card.id), { column: "draft", executorOnline: false }).handoffRequests,
-    ).toHaveLength(0);
+    const now = t.store.cards.get(c.id)!;
+    expect(now.plan?.description).toBe("在设置页加深色开关");
+    expect(now.plan?.files).toEqual(["src/settings/**"]);
+    expect(now.acceptance).toBe("1. 开关切换主题\n2. 重启后保持");
+    const chats = t.chats(c.id);
+    expect(chats.map((m) => m.author)).toEqual(["user", "scout", "master"]);
+    expect(chats.every((m) => m.thread === "plan")).toBe(true);
+    expect(chats[2]!.text).toContain("要不要跟随系统主题");
+    // The owner sees the new content as unread in the plan tab.
+    expect(now.planActivityAt).not.toBeNull();
   });
 
-  it("runs read-only scouts, shows their findings and feeds them back", async () => {
-    const t = setup(({ prompt, agentId }) => {
-      if (prompt.includes("只读探路兵")) return "settings.ts holds the theme; about 2 files, small change.";
-      if (prompt.startsWith("[plan:research_results]")) {
-        return fence({ reply: "Scout says: small change in settings.ts." });
+  it("without a scout model it plans directly; without a planning model it says so", async () => {
+    const t = setup(() => fence({ reply: "ok", plan: { text: "p" } }));
+    const c = t.card("No scout");
+    t.makePlan(c.id);
+    await t.planning.tick();
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude"]);
+
+    const bare = t.draft("No planner");
+    t.makePlan(bare.id);
+    await t.planning.tick();
+    const reply = t.chats(bare.id).at(-1)!;
+    expect(reply.author).toBe("master");
+    expect(reply.error).toBe(true);
+    expect(reply.text).toContain("还没有选择规划模型");
+    expect(t.fake.agents).toHaveLength(1);
+  });
+
+  it("answers, change requests and re-planning overwrite the single plan", async () => {
+    let n = 0;
+    const t = setup(({ prompt }) => {
+      n++;
+      if (n === 1) return fence({ reply: "跟随系统吗？", plan: { text: "v1" }, acceptance: "1. 能切换" });
+      if (n === 2) {
+        expect(prompt).toContain("[plan:turn]");
+        expect(prompt).toContain("要跟随系统");
+        return fence({ reply: "已改", plan: { text: "v2 跟随系统" }, acceptance: "1. 能切换\n2. 跟随系统" });
       }
-      return fence({ reply: "Let me check.", research: [{ question: "Where is the theme set?", scope: "src/" }] });
+      expect(prompt).toContain("[plan:start]"); // 制定方案 again: full context
+      expect(prompt).toContain("v2 跟随系统");
+      return fence({ reply: "重新制定", plan: { text: "v3" } });
     });
-    const card = t.draft("Scouted");
-    t.say(card.id, "How big is this?");
+    const c = t.card("Answers");
+    t.makePlan(c.id);
     await t.planning.tick();
-
-    const scouts = t.fake.agents.filter((a) => (a.options.labels as Record<string, string>).role === "scout");
-    expect(scouts).toHaveLength(1);
-    expect(scouts[0]!.options.cwd).toBe(t.repoPath);
-    expect(scouts[0]!.options.config.modeId).toBe("plan");
-    expect(scouts[0]!.archived).toBe(true);
-    const planner = t.fake.agents.find((a) => (a.options.labels as Record<string, string>).role === "planner")!;
-    expect(planner.prompts[1]).toContain("settings.ts holds the theme");
-    const events = t.store.events.list(card.id);
-    const findings = events.find((e) => e.type === "chat" && e.authorKind === "scout")!;
-    expect(findings.body).toMatchObject({ kind: "summary", key: `research:${events.find((e) => e.type === "chat" && e.authorKind === "user")!.id}:1` });
-    expect((findings.body as { text: string }).text).toContain("settings.ts holds the theme");
-    expect(t.discussion(card.id).at(-1)!.text).toContain("small change in settings.ts");
-    // scouts are not board sessions
-    expect(t.store.sessions.list({ cardId: card.id }).map((s) => s.role)).toEqual(["planner"]);
+    t.say(c.id, "要跟随系统");
+    await t.planning.tick();
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("v2 跟随系统");
+    expect(t.store.cards.get(c.id)!.acceptance).toBe("1. 能切换\n2. 跟随系统");
+    t.makePlan(c.id);
+    await t.planning.tick();
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("v3");
+    expect(t.store.plans.list(c.id)).toEqual([]);
+    expect(t.fake.agents).toHaveLength(1); // same planning session throughout
+    const updates = t.store.events
+      .list(c.id)
+      .filter((e) => e.type === "note" && (e.body as { kind?: string }).kind === "plan_updated");
+    expect(updates).toHaveLength(3);
   });
 
-  it("hands off and archives when the card is moved to todo by the owner", async () => {
-    const t = setup(({ prompt }) => {
-      if (prompt.startsWith("[plan:handoff]")) return fence({ summary: "Late summary" });
-      return fence({ reply: "ok", plan: planA });
-    });
-    const card = t.draft("Late move");
-    t.say(card.id, "go");
+  it("criteria the owner edited are proposed in the plan chat, not overwritten", async () => {
+    let n = 0;
+    const t = setup(() =>
+      ++n === 1
+        ? fence({ reply: "初稿", plan: { text: "p" }, acceptance: "1. 模型写的" })
+        : fence({ reply: "补了一条", acceptance: "1. 模型写的\n2. 新增" }),
+    );
+    const c = t.card("Owner edits");
+    t.makePlan(c.id);
     await t.planning.tick();
-    t.store.cards.move(card.id, { to: "todo", actor: "user" });
+    t.store.cards.update(c.id, { acceptance: "1. 我改过的" });
+    t.say(c.id, "再补充一下验收标准");
     await t.planning.tick();
-    expect(readFileSync(handoffPath(t.repoPath, card.key), "utf8")).toContain("Late summary");
-    expect(t.planning.liveOf(card.id)).toBeUndefined();
-    expect(t.fake.agents[0]!.archived).toBe(true);
-    // the discussion may go on in todo: a fresh planner answers
-    t.say(card.id, "still there?");
-    await t.planning.tick();
-    expect(t.fake.agents).toHaveLength(2);
-    expect(t.discussion(card.id).at(-1)!.role).toBe("planner");
+    expect(t.store.cards.get(c.id)!.acceptance).toBe("1. 我改过的");
+    const proposal = t.store.events.list(c.id).find((e) => e.type === "proposal")!;
+    expect(proposal.body).toMatchObject({ status: "pending", changes: { acceptance: "1. 模型写的\n2. 新增" } });
+    expect(t.chats(c.id).at(-1)!.text).toContain("作为建议");
   });
 
-  it("falls back to a deterministic summary when the planner cannot write one", async () => {
-    const t = setup(({ prompt }) => {
-      if (prompt.startsWith("[plan:handoff]")) return "not json at all";
-      return fence({ reply: "ok", plan: planA });
+  it("switching the planning model starts a new session that gets the conversation and the plan", async () => {
+    const t = setup(({ provider, prompt }) => {
+      if (provider === "claude") return fence({ reply: "第一版", plan: { text: "旧方案 A" }, acceptance: "1. a" });
+      expect(prompt).toContain("[plan:start]");
+      expect(prompt).toContain("旧方案 A");
+      expect(prompt).toContain("1. a");
+      expect(prompt).toContain("## 至今的方案对话");
+      expect(prompt).toContain("第一版");
+      expect(prompt).toContain("换个思路");
+      return fence({ reply: "接着做", plan: { text: "新方案 B" } });
     });
-    const card = t.draft("Fallback");
-    t.say(card.id, "go");
+    const c = t.card("Switch");
+    t.makePlan(c.id);
     await t.planning.tick();
-    t.requestHandoff(card.id);
+    t.store.cards.update(c.id, { plannerPresetId: t.presets.codex.id });
+    t.say(c.id, "换个思路");
     await t.planning.tick();
-    const text = readFileSync(handoffPath(t.repoPath, card.key), "utf8");
-    expect(text).toContain("# 交接：DEMO-1 Fallback");
-    expect(text).toContain(planA.description);
+    const [first, second] = t.fake.agents;
+    expect(first!.archived).toBe(true);
+    expect(second!.provider).toBe("codex");
+    expect(t.store.sessions.list({ cardId: c.id, role: "planner" }).map((s) => s.state)).toEqual(["ended", "idle"]);
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("新方案 B");
   });
 
-  it("keeps an answer when the reply is not JSON, and reports failures to the owner", async () => {
-    let fail = false;
-    const t = setup(() => {
-      if (fail) return { status: "error" as const, lastMessage: null, error: "boom" };
-      return "Just prose, no JSON.";
+  it("the planner asks the scout model for research during a turn", async () => {
+    let n = 0;
+    const t = setup(({ provider, prompt }) => {
+      if (provider === "kimi") return "found it in src/x.ts";
+      n++;
+      if (n === 1) return fence({ reply: "先查一下", research: [{ question: "where is x?" }] });
+      expect(prompt).toContain("[plan:research_results]");
+      expect(prompt).toContain("found it in src/x.ts");
+      return fence({ reply: "查到了", plan: { text: "改 src/x.ts" } });
     });
-    const card = t.draft("Prose");
-    t.say(card.id, "hello");
+    const c = t.card("Research");
+    t.store.cards.update(c.id, { scoutPresetId: t.presets.kimi.id });
+    t.say(c.id, "怎么做？");
     await t.planning.tick();
-    expect(t.discussion(card.id).at(-1)!.text).toBe("Just prose, no JSON.");
-
-    fail = true;
-    const msg = t.say(card.id, "again");
-    await t.planning.tick();
-    const failure = t.store.events.list(card.id).at(-1)!;
-    expect(failure.type).toBe("chat");
-    expect(failure.body).toMatchObject({ error: true, answers: [msg.id] });
-    expect(t.planning.liveOf(card.id)!.state).toBe("error");
-    // the session recovers on the next message
-    fail = false;
-    t.say(card.id, "retry");
-    await t.planning.tick();
-    expect(t.discussion(card.id).at(-1)!.text).toBe("Just prose, no JSON.");
-    expect(t.planning.liveOf(card.id)!.state).toBe("idle");
+    expect(t.chats(c.id).map((m) => m.author)).toEqual(["user", "scout", "master"]);
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("改 src/x.ts");
   });
 
-  it("waits for the daemon handle and resumes; a restart reuses the live agent", async () => {
-    const t = setup(() => fence({ reply: "answer" }), { noPaseo: true });
-    const card = t.draft("Parked");
-    t.say(card.id, "first");
+  it("parks a turn without a daemon handle and finishes it later; archives the planner when the card is done", async () => {
+    const t = setup(() => fence({ reply: "ok", plan: { text: "p" } }), { noPaseo: true });
+    const c = t.card("Later");
+    t.makePlan(c.id);
     await t.planning.tick();
-    expect(t.discussion(card.id)).toHaveLength(1);
-
+    expect(t.chats(c.id)).toHaveLength(1);
     t.setPaseo(t.fake.paseo);
     await t.planning.resume();
-    expect(t.discussion(card.id).map((m) => m.role)).toEqual(["user", "planner"]);
-    expect(t.fake.agents).toHaveLength(1);
+    expect(t.chats(c.id).at(-1)!.text).toBe("ok");
 
-    // a second planning instance on the same db (daemon restart) attaches to the same agent
-    const again = createPlanning({
-      db: t.db,
-      store: t.store,
-      getPaseo: () => t.fake.paseo,
-      master: fakeMaster(t.fake),
-      rules: () => MASTER_RULES,
-      dataDir: tempDir("vibe-master-data-"),
-      clock: new ManualClock(),
-      memory,
-      enabled: () => true,
-      log: () => undefined,
-    });
-    t.say(card.id, "second");
-    await again.tick();
-    expect(t.fake.agents).toHaveLength(1);
-    expect(t.fake.agents[0]!.prompts).toHaveLength(2);
-    expect(t.discussion(card.id).map((m) => m.role)).toEqual(["user", "planner", "user", "planner"]);
-  });
-
-  it("resumes a planner the daemon closed instead of starting a new one", async () => {
-    const t = setup(() => fence({ reply: "fine" }));
-    const card = t.draft("Closed");
-    t.say(card.id, "one");
+    t.db.prepare(`UPDATE card SET "column" = 'done' WHERE id = ?`).run(c.id);
     await t.planning.tick();
-    t.fake.agents[0]!.closed = true; // the daemon stopped
-    t.say(card.id, "two");
-    const restarted = createPlanning({
-      db: t.db,
-      store: t.store,
-      getPaseo: () => t.fake.paseo,
-      master: fakeMaster(t.fake),
-      rules: () => MASTER_RULES,
-      dataDir: tempDir("vibe-master-data-"),
-      clock: new ManualClock(),
-      memory,
-      enabled: () => true,
-      log: () => undefined,
-    });
-    await restarted.tick();
-    expect(t.fake.agents).toHaveLength(1);
-    expect(t.fake.agents[0]).toMatchObject({ closed: false, resumes: 1 });
-    expect(t.fake.agents[0]!.prompts).toHaveLength(2);
-  });
-
-  it("starts a fresh session seeded with the earlier discussion after the old agent is gone", async () => {
-    const t = setup(() => fence({ reply: "fine" }));
-    const card = t.draft("Reseed");
-    t.say(card.id, "one");
-    await t.planning.tick();
-    t.fake.agents[0]!.archived = true; // refresh() now reports the agent as gone
-    t.say(card.id, "two");
-    const restarted = createPlanning({
-      db: t.db,
-      store: t.store,
-      getPaseo: () => t.fake.paseo,
-      master: fakeMaster(t.fake),
-      rules: () => MASTER_RULES,
-      dataDir: tempDir("vibe-master-data-"),
-      clock: new ManualClock(),
-      memory,
-      enabled: () => true,
-      log: () => undefined,
-    });
-    await restarted.tick();
-    expect(t.fake.agents).toHaveLength(2);
-    expect(t.fake.agents[1]!.prompts[0]).toContain("至今的讨论");
-    expect(t.fake.agents[1]!.prompts[0]).toContain("OWNER: one");
-    expect(t.store.sessions.list({ cardId: card.id }).map((s) => s.state)).toEqual(["ended", "idle"]);
-  });
-
-  it("starts planners in the automatic permission mode and restarts one seeded when the mode changes", async () => {
-    const t = setup(() => fence({ reply: "fine" }));
-    const card = t.draft("Mode switch");
-    t.say(card.id, "one");
-    await t.planning.tick();
-    expect(t.fake.agents[0]!.options.config.modeId).toBe("auto");
-
-    t.say(card.id, "two");
-    await t.planning.tick();
-    expect(t.fake.agents).toHaveLength(1); // same mode: the planner is reused
-
-    t.setMode("acceptEdits");
-    t.say(card.id, "three");
-    await t.planning.tick();
-    expect(t.fake.agents).toHaveLength(2);
     expect(t.fake.agents[0]!.archived).toBe(true);
-    expect(t.fake.agents[1]!.options.config.modeId).toBe("acceptEdits");
-    expect(t.fake.agents[1]!.prompts[0]).toContain("OWNER: one");
-    expect(t.discussion(card.id).map((m) => m.role)).toEqual(["user", "planner", "user", "planner", "user", "planner"]);
-  });
-
-  it("MasterError kinds stay distinguishable", () => {
-    expect(new MasterError("unavailable", "x").kind).toBe("unavailable");
+    expect(t.store.sessions.list({ cardId: c.id, role: "planner" })[0]!.state).toBe("ended");
   });
 });
 
-describe("planning inside the master runtime", () => {
-  it("uses its own agents (not the master's), and assessment steps aside while a planner is live", async () => {
+describe("the master is out of the card flow", () => {
+  it("creating, editing, planning and finishing cards never wakes the master agent", async () => {
     const board = setupBoard();
-    const fake = fakePaseo(({ prompt }) =>
-      prompt.startsWith("[wake:assess_draft]") ? "{}" : fence({ reply: "planner answer" }),
-    );
+    const fake = fakePaseo(({ prompt }) => {
+      if (prompt.includes("[plan:")) return fence({ reply: "ok", plan: { text: "p" } });
+      return fence({ summary: "nothing new" });
+    });
     const runtime = createMasterRuntime({
       db: board.db,
       store: board.store,
       getPaseo: () => fake.paseo,
       settings: () => defaultSettings(),
-      dataDir: tempDir(),
+      dataDir: tempDir("vibe-master-data-"),
       clock: new ManualClock(),
-      pollIntervalMs: 3_600_000,
+      memory,
+      pollIntervalMs: 5,
       log: () => undefined,
     });
-    const card = board.draft("Runtime planning");
-    board.store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text: "let us plan" });
-    await runtime.planning.tick();
-    expect(fake.agents.map((a) => (a.options.labels as Record<string, string>).role)).toEqual(["planner"]);
-    expect(board.store.sessions.list({ role: "master" })).toHaveLength(0);
-
-    runtime.wake(card.key, "assess_draft", true);
-    await runtime.queue.idle();
-    expect(fake.agents).toHaveLength(1);
-    expect(board.store.events.list(card.id).some((e) => e.type === "evaluation")).toBe(false);
-    await runtime.dispose();
+    try {
+      const c = board.draft("Flow");
+      board.store.cards.update(c.id, { description: "edited", plannerPresetId: board.presets.codex.id });
+      board.store.cards.addChat({ cardId: c.id, authorKind: "user", text: "制定", thread: "plan", action: "make_plan" });
+      board.store.cards.move(c.id, { to: "todo", actor: "user" });
+      await runtime.planning.tick();
+      await new Promise((r) => setTimeout(r, 100));
+      // Only the planner ran (on codex); no master agent, no evaluation, no suggested preset.
+      expect(fake.agents.map((a) => a.options.labels?.role)).toEqual(["planner"]);
+      expect(board.store.sessions.list({ role: "master" })).toHaveLength(0);
+      expect(board.store.events.list(c.id).some((e) => e.type === "evaluation")).toBe(false);
+      expect(board.store.cards.get(c.id)!.suggestedPresetId).toBeNull();
+    } finally {
+      await runtime.dispose();
+    }
   });
 });

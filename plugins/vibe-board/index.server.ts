@@ -7,6 +7,7 @@ import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
 import { injectBoard } from "./server/mcp/inject";
 import { createChatService } from "./server/chat";
 import { createChatRouter } from "./server/chat/router";
+import { createFlowService } from "./server/flow";
 import { createDispatcher } from "./server/dispatch";
 import { convertNative } from "./server/dispatch/convert";
 import { createReassigner } from "./server/dispatch/reassign";
@@ -19,7 +20,6 @@ import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
 import { createReplyService, createSyncService } from "./server/sync";
 import { createRequirementsService } from "./server/requirements";
-import { createScoutService } from "./server/scout";
 import { createVerifyService } from "./server/verify";
 import { buildBoardInstructions } from "./server/mcp/instructions";
 import { createBoardPrompts } from "./server/prompts";
@@ -42,35 +42,15 @@ export default function contribute(server: PluginServerContext) {
       ? {
           recentEvents: current.values.briefRecentEvents,
           chatLimit: current.values.briefChatLimit,
-          handoffMaxChars: current.values.briefHandoffMaxChars,
         }
       : {};
   };
 
-  // The SDK handle arrives later through hooks/RPCs (see below); scouts read it lazily.
+  // The SDK handle arrives later through hooks/RPCs (see below) and is read lazily.
   let paseo: PaseoApi | null = (server as { paseo?: PaseoApi }).paseo ?? null;
-  const scout = createScoutService({
-    board,
-    getPaseo: () => paseo,
-    getConfig: async () => {
-      const current = await settings.read();
-      const values = current.status === "ready" ? current.values : null;
-      return {
-        preset: values?.scoutPreset ?? "",
-        maxParallel: values?.scoutMaxParallel ?? 4,
-        timeoutMs: (values?.scoutTimeoutSec ?? 300) * 1000,
-        summaryMaxLines: values?.scoutSummaryMaxLines,
-        cacheTtlMs: values ? values.scoutCacheTtlMinutes * 60_000 : undefined,
-        maxTasksPerCall: values?.scoutMaxTasksPerCall,
-      };
-    },
-    prompts,
-    publish: (type, cardId, projectId, payload) =>
-      void publishEvent(runtime.db, { type, cardId, projectId, payload } as never),
-  });
 
   let bridge: BoardBridgeHandle | null = null;
-  const bridgeReady = startBoardBridge(board, dataDir, scout)
+  const bridgeReady = startBoardBridge(board, dataDir)
     .then((handle) => (bridge = handle))
     .catch((error) => {
       console.error("Failed to start the vibe-board local bridge:", error);
@@ -182,7 +162,8 @@ export default function contribute(server: PluginServerContext) {
   const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, prompts, onError: (e) => console.error("vibe-board admission:", e) });
   const sync = createSyncService({ db: runtime.db, store: runtime.store });
   const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
-  // Group chat: user messages go to the executor while it works (router), the rest is the master's.
+  // Card conversations: execution-thread messages go to the executor (router); plan-thread ones
+  // are answered by the planning session (vibe-master).
   const chatRouter = createChatRouter({ db: runtime.db, board, getPaseo: () => paseo, replies });
   chatRouter.start();
   const chat = createChatService(board, runtime.db, () => void chatRouter.poll());
@@ -218,6 +199,7 @@ export default function contribute(server: PluginServerContext) {
     sync,
     replies,
     chat,
+    flow: createFlowService({ board, dispatcher, reassigner: reassigner!, onMessage: () => void chatRouter.poll() }),
     requirements: createRequirementsService({ board, db: runtime.db }),
     verify: createVerifyService({ db: runtime.db, board }),
   });

@@ -10,3 +10,4 @@ export * from "./sync-spec";
 export * from "./select";
 export * from "./paths";
 export * from "./prompts";
+export * from "./card-tabs";

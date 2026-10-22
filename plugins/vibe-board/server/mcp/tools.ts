@@ -11,7 +11,6 @@ import {
   type CardPriority,
 } from "../vibe/contract";
 import { agentActor, toBoardError, type BoardService } from "../service";
-import { SCOUT_KINDS, SCOUT_MAX_TASKS_LIMIT, type ScoutService, type ScoutTask } from "../scout";
 
 export interface McpCaller {
   agentId?: string;
@@ -129,45 +128,14 @@ export const MCP_TOOLS = [
       additionalProperties: false,
     },
   },
-  {
-    name: "vibe_scout",
-    description:
-      "Fan out cheap, read-only sub-agents in parallel to locate files, take inventories or research, and get back only short findings with path:line anchors (at most 20 lines each). Use before editing in a large repo; skip for a single small file. Blocks until all scouts finish or time out (partial results are returned).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        key: str("Card key such as PROD-12 (the scouts run in its worktree)"),
-        tasks: {
-          type: "array",
-          maxItems: SCOUT_MAX_TASKS_LIMIT,
-          description: "Independent questions, one scout each",
-          items: {
-            type: "object",
-            properties: {
-              goal: str("One concrete question, e.g. 'where is the session timeout enforced?'"),
-              paths: { type: "array", items: { type: "string" }, description: "Optional directories/globs to restrict to" },
-              kind: { type: "string", enum: [...SCOUT_KINDS] },
-            },
-            required: ["goal"],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ["key", "tasks"],
-      additionalProperties: false,
-    },
-  },
 ] as const;
 
 const READ_ONLY_TOOLS = new Set(["vibe_projects", "vibe_list", "vibe_show", "vibe_comment"]);
 
-/** Roles that must not spawn scouts (no recursion; checking sessions stay read-only). */
-const NO_SCOUT_ROLES = new Set(["verifier", "reviewer", "scout", "maintenance"]);
-
 /** Tools visible to a role. Verifiers are read-only (they may only comment). */
 export function toolsForRole(role: string | undefined) {
   if (role === "verifier") return MCP_TOOLS.filter((t) => READ_ONLY_TOOLS.has(t.name));
-  return role && NO_SCOUT_ROLES.has(role) ? MCP_TOOLS.filter((t) => t.name !== "vibe_scout") : MCP_TOOLS;
+  return MCP_TOOLS;
 }
 
 const text = (value: unknown) => (typeof value === "string" ? value : undefined);
@@ -187,7 +155,6 @@ export async function callMcpTool(
   args: Record<string, unknown>,
   board: BoardService,
   caller: McpCaller,
-  scout?: ScoutService,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
   const result = (data: unknown) => ({
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -261,10 +228,6 @@ export async function callMcpTool(
         await mkdir(join(card.worktree, ".vibe", "sessions"), { recursive: true });
         await writeFile(file, String(args.text ?? ""), "utf8");
         return result({ saved: file });
-      }
-      case "vibe_scout": {
-        if (!scout) throw new Error("Scouting is not available");
-        return result(await scout.run(key, (Array.isArray(args.tasks) ? args.tasks : []) as ScoutTask[]));
       }
       default:
         throw new Error(`Unknown tool: ${name}`);

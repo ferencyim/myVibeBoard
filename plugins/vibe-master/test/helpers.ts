@@ -12,7 +12,6 @@ import type {
   RunResult,
   UsageProviderLike,
 } from "../server/types";
-import { createPermissionResolver } from "../server/subscription/permission";
 import { createVibeStore, migrateOwner, openVibeDb } from "../server/vibe/db";
 
 export function tempDir(prefix = "vibe-master-"): string {
@@ -67,21 +66,9 @@ export function setupBoard() {
 }
 export type Board = ReturnType<typeof setupBoard>;
 
-export function assessmentJson(overrides: Record<string, unknown> = {}): string {
-  const base = {
-    clarity: { status: "clear", summary: "The request is clear.", questions: [] },
-    related: [],
-    split: { suggested: false, reason: "", subCards: [] },
-    tags: ["feature"],
-    estimate: { size: "M", rationale: "Touches two screens." },
-    recommendation: { agent: "claude", preset: "Claude Opus", reason: "Needs strong reasoning." },
-    risks: ["Layout may regress on small screens."],
-    checks: [
-      { text: "The new button is visible on the home screen", method: "screenshot" },
-      { text: "Unit tests pass", method: "npm test" },
-    ],
-  };
-  return `\`\`\`json\n${JSON.stringify({ ...base, ...overrides }, null, 2)}\n\`\`\``;
+/** Gets the master agent going (creates or reuses it) with a plain question. */
+export async function askMaster(runtime: { session: { ask(prompt: string): Promise<string> } }, prompt = "ping"): Promise<string> {
+  return runtime.session.ask(prompt);
 }
 
 export const MODELS: Record<string, ModelInfoLike[]> = {
@@ -222,19 +209,6 @@ export function fakePaseo(
     setUsage(next: UsageProviderLike[]) {
       usage = next;
     },
-  };
-}
-
-/** The slice of the master session that planners use, with the permission mode of `fake`. */
-export function fakeMaster(fake: ReturnType<typeof fakePaseo>, setting: () => string = () => "auto", provider = "claude") {
-  const resolver = createPermissionResolver(() => fake.paseo);
-  return {
-    currentTarget: async () => ({ provider, model: "opus-x", thinking: null }),
-    permission: async () => ({
-      setting: setting(),
-      source: "settings" as const,
-      resolved: await resolver.resolve(provider, setting()),
-    }),
   };
 }
 

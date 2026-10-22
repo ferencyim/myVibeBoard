@@ -10,6 +10,10 @@
 // The swap itself is `sessions.recordReassign` (one transaction: old session ended "reassigned",
 // replacement started, card.preset_id switched, switch_agent card event, session.reassigned event,
 // which the phone push listens to). No candidate left -> the caller keeps the session in `error`.
+//
+// WP-105: the owner can also switch the executing model by hand (`switchTo`, the executor picker of
+// the execution tab). Same mechanics; the new agent's brief carries the plan, the acceptance
+// criteria and the execution conversation, plus the `board.switch_model` note.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +26,6 @@ import type { AgentTracker } from "./index";
 import { ensurePresetModel } from "./model";
 import { buildDispatchBrief, modeIdFor, providerSpec, type BriefLimits } from "./brief";
 import { defaultPrompts, type PromptResolver } from "../prompts";
-import { loadHandoff } from "./handoff";
 import type { FailureCategory } from "../lifecycle/error-class";
 
 export type ReassignPaseo = Pick<PaseoApi, "agents" | "workspaces"> &
@@ -168,12 +171,20 @@ export function createReassigner(deps: ReassignDeps) {
     return "";
   }
 
+  /** Note appended to the brief of the new agent; gets the transcript sentence. */
+  type TakeoverNote = (transcriptPath: string) => string;
+
+  const transcriptSentence = (path: string) =>
+    path
+      ? `上一个 agent 的转录文件在 ${path}（行动前先读）。`
+      : "上一个 agent 的转录文件不可用；请依据工作树、卡片备注和 `.vibe/sessions/` 里的笔记继续。";
+
   async function start(
     paseo: ReassignPaseo,
     old: AgentSession,
     card: CardView,
     preset: Preset,
-    failure: Failure,
+    takeoverNote: TakeoverNote,
   ): Promise<{ agentId: string; method: "converted" | "transcript" }> {
     const project = store.projects.get(card.projectId);
     if (!project) throw new Error(`Project not found: ${card.projectId}`);
@@ -199,17 +210,6 @@ export function createReassigner(deps: ReassignDeps) {
     } catch (error) {
       log("could not read the previous agent's timeline", error);
     }
-    const takeover = prompts.resolve("board.takeover", {
-      projectId: card.projectId,
-      vars: {
-        provider: old.currentProvider,
-        category: failure.category,
-        message: failure.message,
-        transcriptPath: transcriptPath
-          ? `上一个 agent 的转录文件在 ${transcriptPath}（行动前先读）。`
-          : "上一个 agent 的转录文件不可用；请依据工作树、卡片备注和 `.vibe/sessions/` 里的笔记继续。",
-      },
-    });
     const prompt = buildDispatchBrief({
       prompts,
       limits: await deps.getLimits?.(),
@@ -217,9 +217,7 @@ export function createReassigner(deps: ReassignDeps) {
       project,
       preset,
       events,
-      handoff: loadHandoff(project, card, events),
-      latestPlan: store.plans.list(card.id).at(-1),
-      extraInstructions: takeover,
+      extraInstructions: takeoverNote(transcriptSentence(transcriptPath)),
     });
     const agentId = (deps.newAgentId ?? randomUUID)();
     tracker?.expect(agentId);
@@ -297,7 +295,17 @@ export function createReassigner(deps: ReassignDeps) {
         }
         let started: Awaited<ReturnType<typeof start>>;
         try {
-          started = await start(paseo, old, card, preset, failure);
+          started = await start(paseo, old, card, preset, (transcriptPath) =>
+            prompts.resolve("board.takeover", {
+              projectId: card.projectId,
+              vars: {
+                provider: old.currentProvider,
+                category: failure.category,
+                message: failure.message,
+                transcriptPath,
+              },
+            }),
+          );
         } catch (error) {
           attempts.push(`${preset.name}: ${error instanceof Error ? error.message : String(error)}`);
           log(`fallback ${preset.name} could not start`, error);
@@ -347,7 +355,69 @@ export function createReassigner(deps: ReassignDeps) {
     }
   }
 
-  return { reassign, candidatesFor };
+  /**
+   * The owner picked another executing model while the card runs (WP-105). The new agent continues
+   * in the same worktree with the card's plan, criteria and execution conversation; the old one is
+   * archived.
+   */
+  async function switchTo(
+    sessionId: string,
+    presetId: string,
+  ): Promise<{ session: AgentSession; preset: Preset; method: "converted" | "transcript" }> {
+    const old = store.sessions.get(sessionId);
+    if (!old || old.state === "ended" || old.role !== "worker" || !old.cardId) {
+      throw new Error("没有正在执行的执行 agent 可以切换");
+    }
+    if (inflight.has(old.id)) throw new Error("正在切换执行模型，请稍候");
+    const card = store.cards.get(old.cardId);
+    const paseo = deps.getPaseo();
+    if (!card || !paseo) throw new Error("需要先连上 Paseo 守护进程");
+    const target = presetById(presetId);
+    if (!target) throw new Error(`找不到预设：${presetId}`);
+    const from = presetById(card.presetId ?? "");
+    inflight.add(old.id);
+    try {
+      const resolved = await ensurePresetModel(paseo, target);
+      const preset = resolved.preset;
+      const label = (p: Preset | undefined, provider: string) =>
+        p ? `「${p.name}」（${p.provider}/${p.model}）` : provider;
+      const started = await start(paseo, old, card, preset, (transcriptPath) =>
+        prompts.resolve("board.switch_model", {
+          projectId: card.projectId,
+          vars: { from: label(from, old.currentProvider), to: label(preset, preset.provider), transcriptPath },
+        }),
+      );
+      const { to } = store.sessions.recordReassign({
+        fromSessionId: old.id,
+        agentId: started.agentId,
+        workspaceId: old.workspaceId,
+        provider: preset.provider,
+        reason: "switched by the owner",
+        presetId: preset.id,
+      });
+      await tracker?.bind(started.agentId);
+      if (started.method === "converted") {
+        await paseo.agents
+          .ref(started.agentId)
+          .send(
+            prompts.resolve("board.switch_model", {
+              projectId: card.projectId,
+              vars: { from: label(from, old.currentProvider), to: label(preset, preset.provider), transcriptPath: "" },
+            }),
+          )
+          .catch((error) => log("could not prompt the converted agent", error));
+      }
+      await paseo.agents
+        .ref(old.agentId)
+        .archive()
+        .catch((error) => log(`could not archive the previous executor ${old.agentId}`, error));
+      return { session: to, preset, method: started.method };
+    } finally {
+      inflight.delete(old.id);
+    }
+  }
+
+  return { reassign, switchTo, candidatesFor };
 }
 
 export type Reassigner = ReturnType<typeof createReassigner>;

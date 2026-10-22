@@ -79,6 +79,7 @@ export const ENVIRONMENT_LABELS: Record<PresetEnvironmentKind, string> = {
 export const ROLE_HINT_LABELS: Record<RoleHint, string> = {
   worker: "执行",
   scout: "探路",
+  planner: "规划",
   reviewer: "复核",
 };
 

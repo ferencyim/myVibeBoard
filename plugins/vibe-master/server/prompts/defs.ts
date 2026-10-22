@@ -33,10 +33,10 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       role: "master",
       title: "系统规则",
       description:
-        "总 agent 与每个规划会话的系统提示正文（默认来自 skills/vibe-master/SKILL.md）。可整篇覆盖，恢复默认即回到 SKILL 生成的规则。覆盖后，运行中的会话会在下一条消息里收到完整新规则。",
+        "总 agent 的系统提示正文（默认来自 skills/vibe-master/SKILL.md）。可整篇覆盖，恢复默认即回到 SKILL 生成的规则。覆盖后，运行中的总 agent 会在下一条消息里收到完整新规则。",
       whenSent:
-        "总 agent / 规划会话创建时作为系统提示；provider 不支持系统提示时随首条消息发送；规则文本变化后在下一条消息重发。",
-      audience: "总 agent、规划会话",
+        "总 agent 创建时作为系统提示；provider 不支持系统提示时随首条消息发送；规则文本变化后在下一条消息重发。",
+      audience: "总 agent",
       defaultText: options.rules ?? MASTER_RULES,
       placeholders: [],
       order: 0,
@@ -48,7 +48,7 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       title: "规则补充",
       description: "追加在系统规则之后的补充规则，与系统规则正文分开维护。留空表示没有补充。",
       whenSent: "与系统规则一起发送（附在其后）。",
-      audience: "总 agent、规划会话",
+      audience: "总 agent",
       defaultText: "",
       placeholders: [],
       order: 1,
@@ -58,54 +58,13 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       plugin: PLUGIN,
       role: "master",
       title: "规则更新通知",
-      description: "系统规则或补充变化后，下一条消息开头附带的通知文字。",
-      whenSent: "运行中的总 agent / 规划会话已收到旧规则，而当前规则文本哈希已变化时。",
+      description: "系统规则（或规划会话的系统提示）变化后，下一条消息开头附带的通知文字。",
+      whenSent: "运行中的总 agent / 规划会话已收到旧文本，而当前文本哈希已变化时。",
       audience: "总 agent、规划会话",
       defaultText:
         "[总 agent 规则已更新：以下规则取代此前所有规则和补充]\n\n{{rules}}",
       placeholders: [{ name: "rules", description: "完整的当前规则（正文 + 补充）" }],
       order: 2,
-    },
-    {
-      key: "master.wake.assess_draft",
-      plugin: PLUGIN,
-      role: "master",
-      title: "审查草稿",
-      description: "草稿创建、修改、移回草稿或手动请求审查时发给总 agent 的消息。",
-      whenSent: "草稿卡创建/修改后防抖结束、卡片移回草稿、用户点「让总 agent 审查」。",
-      audience: "总 agent",
-      defaultText: `[wake:assess_draft]
-{{project}}
-
-## 待审查的卡片（动态）
-编号：{{card.key}}
-标题：{{card.title}}
-优先级：{{card.priority}}
-标签：{{card.tags}}
-已预选的预设：{{card.preset}}
-参考图：{{card.refImages}}
-描述：
-{{card.description}}
-验收标准：
-{{card.acceptance}}
-
-Provider 额度：{{quota}}
-调度器提示：{{hint}}`,
-      placeholders: [
-        PROJECT,
-        ...CARD,
-        { name: "card.priority", description: "优先级" },
-        { name: "card.tags", description: "标签（逗号分隔）" },
-        { name: "card.preset", description: "已预选的执行预设" },
-        { name: "card.refImages", description: "参考图数量" },
-        { name: "card.description", description: "卡片描述" },
-        { name: "card.acceptance", description: "验收标准" },
-        { name: "quota", description: "各 provider 剩余额度" },
-        { name: "hint", description: "调度器对执行 agent 的提示" },
-      ],
-      fixedSuffix:
-        'JSON 对象的可选补充项："verdict" 是负责人在卡片聊天里阅读的评估（markdown，2 到 6 句：是否可行、哪里不清楚或有风险、你的建议；用卡片的语言书写）。"proposal" 为 {"title"?, "description"?, "acceptance"?, "rationale"}，给出这些卡片字段的替换文本，只写确实值得修改的字段。你绝不自己修改卡片字段；负责人在聊天里接受提案。\n\n只回复 assess_draft JSON 对象。',
-      order: 10,
     },
     {
       key: "master.wake.card_done",
@@ -147,35 +106,6 @@ Provider 额度：{{quota}}
       order: 11,
     },
     {
-      key: "master.wake.session_help",
-      plugin: PLUGIN,
-      role: "master",
-      title: "执行会话求助",
-      description: "执行 agent 等待回答时，让总 agent 给你提建议的消息。",
-      whenSent: "执行 agent 进入等待回答（提问）状态时。",
-      audience: "总 agent",
-      defaultText: `[wake:session_help]
-{{project}}
-
-## 执行 agent 的提问（动态）
-卡片：{{card.key}} {{card.title}}
-验收标准：
-{{card.acceptance}}
-计划：
-{{plan}}
-问题：
-{{question}}`,
-      placeholders: [
-        PROJECT,
-        ...CARD,
-        { name: "card.acceptance", description: "验收标准（截断）" },
-        { name: "plan", description: "卡片当前计划" },
-        { name: "question", description: "执行 agent 的提问（JSON）" },
-      ],
-      fixedSuffix: "只回复 session_help JSON 对象。",
-      order: 12,
-    },
-    {
       key: "master.repair_json",
       plugin: PLUGIN,
       role: "master",
@@ -187,20 +117,62 @@ Provider 额度：{{quota}}
         "你的回复被拒绝：{{error}}\n请只重新回复修正后的 {{kind}} JSON 对象，放在 ```json 围栏里。",
       placeholders: [
         { name: "error", description: "解析失败的原因" },
-        { name: "kind", description: "期望的 JSON 类型，如 assess_draft、card_done、plan_discussion" },
+        { name: "kind", description: "期望的 JSON 类型，如 card_done、plan" },
       ],
       order: 20,
+    },
+    {
+      key: "master.plan.system",
+      plugin: PLUGIN,
+      role: "planner",
+      title: "规划会话：系统提示",
+      description:
+        "卡片「方案」页规划会话的系统提示：它的角色和工作方式。规划会话用卡片上选的规划模型，在项目仓库里以只读模式运行。",
+      whenSent:
+        "规划会话创建时作为系统提示；provider 不支持系统提示时随首条消息发送；文本变化后在下一条消息重发。",
+      audience: "规划会话",
+      defaultText: `你是一张卡片的规划会话：负责人点了「制定方案」或在方案对话里给你发消息。你的任务是和负责人一起把这张卡片的方案和验收标准定下来，让执行模型拿到后能直接动手。
+
+- 你在项目仓库里以只读模式运行：可以阅读代码、文档和日志，不要修改、创建或删除任何文件，不要运行会写入的命令。
+- 方案只有一版，存在卡片上。每次方案有变化就给出**完整的**新方案（不是增量），它会直接覆盖旧方案。
+- 方案写清楚：目标、做法与步骤、涉及的模块和文件、约束与风险、不在范围内的事。具体到执行模型不用再猜。
+- 验收标准由你起草：每行一条，可观察、可验证（命令结果、页面表现、截图等）。负责人可能直接改过验收标准；你再改时照常给出完整新版本，插件会以建议的形式交给负责人决定，不会覆盖负责人的修改。
+- 有不清楚、互相冲突或需要负责人决定的地方，就在回复里直接提问，等负责人回答后再定稿。一次只问最关键的几个问题。
+- 负责人在对话里发来修改要求时，按要求更新方案并说明改了什么。
+- 需要大范围查找代码时，可以请探路模型去查（research），它只读、便宜；卡片没选探路模型时自己读代码。
+- 卡片的标题或描述本身需要改时，用 proposal 提建议，负责人采纳后才会写入；你从不直接改它们。
+- 用卡片的语言（通常是中文）回复。`,
+      placeholders: [],
+      fixedSuffix: `## 回复格式（插件解析，必须遵守）
+
+每次只回复一个放在 \`\`\`json 围栏里的 JSON 对象：
+
+\`\`\`json
+{
+  "reply": "对负责人说的话（markdown）：结论、问题、改了什么",
+  "research": [{ "question": "要探路模型查清的问题", "scope": "查哪里，可选" }],
+  "plan": { "text": "完整方案（markdown）", "files": ["src/feature/**"] },
+  "acceptance": "完整的验收标准，每行一条",
+  "proposal": { "title": "新标题，可选", "description": "新描述，可选", "rationale": "理由" }
+}
+\`\`\`
+
+- "reply" 必填；其它字段可选，没有变化就省略。
+- "plan" 与 "acceptance" 一旦给出就是完整的新版本，会覆盖卡片上的旧内容（负责人改过的验收标准除外，见上文）。
+- "plan.files" 列出方案会改动的文件、目录或通配符（调度器据此避免并行冲突），不知道就写 []。
+- "research" 最多 3 个问题；插件跑完后把结果以 [plan:research_results] 发回给你。`,
+      order: 29,
     },
     {
       key: "master.plan.start",
       plugin: PLUGIN,
       role: "planner",
       title: "规划会话：开场",
-      description: "为一张卡片新开规划会话时的首条消息：卡片、项目块、项目记忆、最新计划与至今的讨论。",
-      whenSent: "规划会话（新建或重建）收到用户第一批消息时。",
+      description:
+        "「制定方案」或新规划会话的首条消息：项目块、项目记忆、卡片、当前方案与验收标准、探路结果、至今的方案对话。中途换了规划模型时，新模型靠这条消息接着做。",
+      whenSent: "点「制定方案」时；规划会话新建（含换规划模型、守护进程重启后会话丢失）后的第一条消息。",
       audience: "规划会话",
       defaultText: `[plan:start]
-你是卡片 {{card.key}} 的规划会话。与负责人讨论计划，直到它可以执行。
 {{project}}
 
 ## 项目记忆（只读）
@@ -212,13 +184,14 @@ Provider 额度：{{quota}}
 标签：{{card.tags}}
 描述：
 {{card.description}}
-验收标准：
-{{card.acceptance}}
 
-## 最新计划版本
+## 当前方案
 {{plan}}
 
-{{discussion}}## 现在需要回答的负责人消息
+## 当前验收标准
+{{card.acceptance}}
+
+{{findings}}{{discussion}}## 现在需要处理的负责人消息
 {{pending}}`,
       placeholders: [
         PROJECT,
@@ -227,12 +200,13 @@ Provider 额度：{{quota}}
         { name: "card.priority", description: "优先级" },
         { name: "card.tags", description: "标签（逗号分隔）" },
         { name: "card.description", description: "卡片描述" },
-        { name: "card.acceptance", description: "验收标准" },
-        { name: "plan", description: "最新计划版本" },
-        { name: "discussion", description: "至今的讨论整段（含标题与结尾空行），没有则为空" },
-        { name: "pending", description: "待回答的用户消息" },
+        { name: "card.acceptance", description: "当前验收标准" },
+        { name: "plan", description: "卡片上的当前方案" },
+        { name: "findings", description: "制定方案前探路的结果整段（含标题与结尾空行），没有则为空" },
+        { name: "discussion", description: "至今的方案对话整段（含标题与结尾空行），没有则为空" },
+        { name: "pending", description: "待处理的负责人消息" },
       ],
-      fixedSuffix: "只回复 plan_discussion JSON 对象。",
+      fixedSuffix: "只回复规划 JSON 对象（格式见系统提示）。",
       order: 30,
     },
     {
@@ -240,12 +214,12 @@ Provider 额度：{{quota}}
       plugin: PLUGIN,
       role: "planner",
       title: "规划会话：后续回合",
-      description: "规划会话继续讨论时，用户新消息的包装。",
-      whenSent: "已有规划会话收到用户新消息时。",
+      description: "规划会话继续时，负责人新消息（回答问题或修改要求）的包装。",
+      whenSent: "已有规划会话收到负责人在方案对话里的新消息时。",
       audience: "规划会话",
       defaultText: "[plan:turn]\n{{pending}}",
-      placeholders: [{ name: "pending", description: "待回答的用户消息" }],
-      fixedSuffix: "只回复 plan_discussion JSON 对象。",
+      placeholders: [{ name: "pending", description: "待处理的负责人消息" }],
+      fixedSuffix: "只回复规划 JSON 对象（格式见系统提示）。",
       order: 31,
     },
     {
@@ -253,38 +227,38 @@ Provider 额度：{{quota}}
       plugin: PLUGIN,
       role: "planner",
       title: "规划会话：探路结果",
-      description: "规划会话派出探路兵后，把结果回给规划会话的消息。",
-      whenSent: "规划会话请求调研、探路兵返回之后。",
+      description: "规划会话请探路模型调查后，把结果回给规划会话的消息。",
+      whenSent: "规划会话请求调研、探路模型返回之后。",
       audience: "规划会话",
       defaultText: "[plan:research_results]\n\n{{results}}",
       placeholders: [{ name: "results", description: "各调研项的问题与结果（含失败说明）" }],
-      fixedSuffix:
-        "只用 plan_discussion JSON 对象继续讨论（除非必不可少，不要再发起调研）。",
+      fixedSuffix: "继续，只回复规划 JSON 对象（除非必不可少，不要再发起调研）。",
       order: 32,
     },
     {
-      key: "master.plan.handoff",
+      key: "master.plan.explore",
       plugin: PLUGIN,
-      role: "planner",
-      title: "规划会话：写交接摘要",
-      description: "用户把卡片移向待办时，让规划会话写交接摘要的消息。",
-      whenSent: "用户把有规划会话的卡片移出草稿时。",
-      audience: "规划会话",
-      defaultText:
-        "[plan:handoff]\n负责人正要把这张卡片移到 todo。请为执行 agent 写交接摘要。",
-      placeholders: [],
-      fixedSuffix: '只回复 `{ "summary": "<markdown>" }`，放在 ```json 围栏里。',
-      order: 33,
+      role: "scout",
+      title: "制定方案前的探路问题",
+      description: "点「制定方案」且卡片选了探路模型时，先让探路模型调查的问题；结果交给规划模型。",
+      whenSent: "「制定方案」开始时（选了探路模型才发）。",
+      audience: "探路模型（只读）",
+      defaultText: `为卡片 {{card.key}}「{{card.title}}」制定方案做准备：找出与它相关的代码、文档和配置，说明现有实现是怎样的、需要改哪些地方、有哪些约束和风险。
+
+卡片描述：
+{{card.description}}`,
+      placeholders: [...CARD, { name: "card.description", description: "卡片描述（截断）" }],
+      order: 39,
     },
     {
       key: "master.plan.scout",
       plugin: PLUGIN,
       role: "scout",
       title: "规划探路兵任务",
-      description: "规划会话派出的只读探路兵收到的任务消息。",
-      whenSent: "规划会话请求调研时，每个调研项各发一条给一个新的只读探路兵。",
-      audience: "规划探路兵（只读）",
-      defaultText: `你是卡片 {{card.key}}（{{card.title}}）的只读探路兵。
+      description: "探路模型（卡片上选的）收到的任务消息：制定方案前的探路，以及规划会话请求的调研。",
+      whenSent: "「制定方案」开始时与规划会话请求调研时，每个问题各发给一个新的只读探路会话。",
+      audience: "探路模型（只读）",
+      defaultText: `你是卡片 {{card.key}}（{{card.title}}）的只读探路模型。
 通过阅读本仓库的代码、日志或文档来回答下面的问题。
 不要修改、创建或删除任何文件，不要运行构建或安装任何东西，不要使用会写入的 git 命令。
 回答不超过 20 行：先写带文件路径的发现；如果问题要求估算，再写工作量和风险。
@@ -326,29 +300,6 @@ Provider 额度：{{quota}}
       ],
       order: 50,
     },
-    {
-      key: "master.plan.fallback_handoff",
-      plugin: PLUGIN,
-      role: "handoff",
-      title: "规划交接兜底",
-      description: "规划会话无法写出交接摘要（会话丢失或回复无效）时，由插件直接生成的交接文件框架。",
-      whenSent: "用户移动卡片、规划会话写不出摘要时，写入 .vibe/sessions/<KEY>-plan.md 并交给执行 agent。",
-      audience: "执行 agent（经派发 brief）",
-      defaultText: `# 交接：{{card.key}} {{card.title}}
-
-## 目标
-{{goal}}
-
-## 已商定的计划（最新计划版本）
-{{plan}}{{lastWord}}`,
-      placeholders: [
-        ...CARD,
-        { name: "goal", description: "卡片描述（无则标题）" },
-        { name: "plan", description: "最新计划版本" },
-        { name: "lastWord", description: "规划讨论最后一条回复整段（含标题），没有则为空" },
-      ],
-      order: 51,
-    },
   ];
 }
 
@@ -356,14 +307,12 @@ export type MasterPromptKey =
   | "master.rules"
   | "master.rules_supplement"
   | "master.rules_updated"
-  | "master.wake.assess_draft"
   | "master.wake.card_done"
-  | "master.wake.session_help"
   | "master.repair_json"
+  | "master.plan.system"
   | "master.plan.start"
   | "master.plan.turn"
   | "master.plan.research_results"
-  | "master.plan.handoff"
+  | "master.plan.explore"
   | "master.plan.scout"
-  | "master.handoff_summary"
-  | "master.plan.fallback_handoff";
+  | "master.handoff_summary";

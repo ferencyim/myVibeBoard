@@ -3,11 +3,11 @@
 
 import { describe, expect, it } from "vitest";
 import { createMasterRuntime } from "../server/runtime";
-import { ManualClock, assessmentJson, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
+import { askMaster, ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
 
 function build(fakeOptions: Parameters<typeof fakePaseo>[1] = {}) {
   const board = setupBoard();
-  const fake = fakePaseo(() => assessmentJson(), fakeOptions);
+  const fake = fakePaseo(() => "ok", fakeOptions);
   const settings = defaultSettings({ provider: "claude" });
   const dataDir = tempDir();
   const clock = new ManualClock();
@@ -26,7 +26,7 @@ function build(fakeOptions: Parameters<typeof fakePaseo>[1] = {}) {
 }
 
 async function wake(t: ReturnType<typeof build>, runtime: ReturnType<typeof build>["start"] extends () => infer R ? R : never, title: string) {
-  runtime.triggers.assessNow(t.board.draft(title).id);
+  await askMaster(runtime);
   await runtime.queue.idle();
 }
 

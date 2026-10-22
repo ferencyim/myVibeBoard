@@ -1,7 +1,7 @@
 // Chat service behind the RPCs: owner messages and the accept / reject of the master's proposals.
 // Writes go through the command layer; routing of a message is the router's job (router.ts).
 
-import type { MoveActor } from "../vibe/contract";
+import type { ChatThread, MoveActor } from "../vibe/contract";
 import type { VibeDb } from "../vibe/db";
 import { BoardError, type BoardService, toBoardError } from "../service";
 
@@ -18,11 +18,11 @@ const guard = <T>(fn: () => T): T => {
 export function createChatService(board: BoardService, db: VibeDb, onMessage?: () => void) {
   const { store } = board;
 
-  /** The owner (or the phone, online) says something on a card. */
-  function send(ref: string, text: string, actor: UiActor = "user") {
+  /** The owner (or the phone, online) says something in the card's plan or execution conversation. */
+  function send(ref: string, text: string, actor: UiActor = "user", thread: ChatThread = "plan") {
     return guard(() => {
       const card = board.cards.get(ref);
-      const event = store.cards.addChat({ cardId: card.id, authorKind: "user", author: actor, text });
+      const event = store.cards.addChat({ cardId: card.id, authorKind: "user", author: actor, text, thread });
       onMessage?.();
       return { event };
     });

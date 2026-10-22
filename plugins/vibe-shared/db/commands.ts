@@ -18,6 +18,7 @@ import {
   type CardEventType,
   type CardOrigin,
   type CardPriority,
+  type ChatThread,
   type PresetEnvironmentKind,
   type ChatKind,
   type PresetPermissionMode,
@@ -74,6 +75,7 @@ import {
 } from "../contract/state-machine";
 import { isSafeRepoRelativePath } from "../contract/paths";
 import { syncSpec } from "../contract/sync-spec";
+import { ACTIVITY_COLUMN, activityTabsOf } from "../contract/card-tabs";
 import { publishEvent } from "./events";
 import { decodeRow, decodeRows } from "./rows";
 import type { Row, SqlParam, VibeDb } from "./sqlite";
@@ -156,6 +158,8 @@ export interface CreateCardInput {
   presetId?: string | null;
   suggestedPresetId?: string | null;
   reviewerPresetId?: string | null;
+  scoutPresetId?: string | null;
+  plannerPresetId?: string | null;
   origin?: CardOrigin;
   originRef?: string | null;
   dedupeKey?: string | null;
@@ -177,9 +181,37 @@ export interface UpdateCardInput {
   presetId?: string | null;
   suggestedPresetId?: string | null;
   reviewerPresetId?: string | null;
+  scoutPresetId?: string | null;
+  plannerPresetId?: string | null;
+  /** Read positions of the card tabs (WP-105); see contract/card-tabs.ts markReadPatch. */
+  planSeenAt?: string | null;
+  execSeenAt?: string | null;
+  verifySeenAt?: string | null;
   parentCardId?: string | null;
   planSessionId?: string | null;
   worktree?: string | null;
+}
+
+/** Card fields that only move a read position (no edit of the card). */
+const READ_POSITION_FIELDS = new Set(["planSeenAt", "execSeenAt", "verifySeenAt"]);
+
+/** WP-105: the planning model's result for a card (cards.setPlan). */
+export interface SetPlanInput {
+  /** The complete new plan; omitted = plan unchanged (only the criteria changed). */
+  plan?: PlanSnapshot;
+  /** New acceptance criteria; omitted or blank = unchanged. */
+  acceptance?: string;
+  /** Who wrote it (event author), e.g. "planner". */
+  author?: string;
+  /** Shown with an acceptance proposal when the owner had edited the criteria. */
+  rationale?: string;
+}
+
+export interface SetPlanResult {
+  card: CardView;
+  planChanged: boolean;
+  /** applied: written to the card; proposed: the owner edited it, so a proposal waits in the plan chat. */
+  acceptance: "applied" | "proposed" | "unchanged" | "none";
 }
 
 export interface AddChatInput {
@@ -201,6 +233,8 @@ export interface AddChatInput {
   planVersion?: number;
   ready?: boolean;
   error?: boolean;
+  thread?: ChatThread;
+  action?: "make_plan";
 }
 
 export interface ProposeInput {
@@ -328,6 +362,11 @@ const CARD_FIELDS: FieldMap = {
   presetId: ["preset_id", asIs],
   suggestedPresetId: ["suggested_preset_id", asIs],
   reviewerPresetId: ["reviewer_preset_id", asIs],
+  scoutPresetId: ["scout_preset_id", asIs],
+  plannerPresetId: ["planner_preset_id", asIs],
+  planSeenAt: ["plan_seen_at", asIs],
+  execSeenAt: ["exec_seen_at", asIs],
+  verifySeenAt: ["verify_seen_at", asIs],
   parentCardId: ["parent_card_id", asIs],
   planSessionId: ["plan_session_id", asIs],
   worktree: ["worktree", asIs],
@@ -494,7 +533,19 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       hlc,
     );
     stampFields("card_event", id, syncSpec("card_event")!.fields, hlc);
-    return decodeRow(CardEventSchema, db.prepare("SELECT * FROM card_event WHERE id = ?").get(id)!);
+    const created = decodeRow(
+      CardEventSchema,
+      db.prepare("SELECT * FROM card_event WHERE id = ?").get(id)!,
+    );
+    // Unread markers (WP-105): the tabs this event gives new content. Daemon-owned display
+    // columns: no sync stamp, no card.updated.
+    for (const tab of activityTabsOf(created)) {
+      const column = ACTIVITY_COLUMN[tab];
+      db.prepare(
+        `UPDATE card SET ${column} = ? WHERE id = ? AND (${column} IS NULL OR ${column} < ?)`,
+      ).run(created.createdAt, created.cardId, created.createdAt);
+    }
+    return created;
   }
 
   function rawCard(id: string): Row {
@@ -770,6 +821,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           id,
         );
         db.prepare("UPDATE card SET reviewer_preset_id = NULL WHERE reviewer_preset_id = ?").run(id);
+        db.prepare("UPDATE card SET scout_preset_id = NULL WHERE scout_preset_id = ?").run(id);
+        db.prepare("UPDATE card SET planner_preset_id = NULL WHERE planner_preset_id = ?").run(id);
         db.prepare("DELETE FROM preset WHERE id = ?").run(id);
         tombstone("preset", id, hlc);
         // Drop the deleted id from other presets' fallback chains.
@@ -884,9 +937,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare("UPDATE project SET next_number = next_number + 1 WHERE id = ?").run(project.id);
         db.prepare(
           `INSERT INTO card (id, project_id, number, key, title, description, "column", sort_key, priority, acceptance,
-             ref_images_json, needs_evidence, preset_id, suggested_preset_id, reviewer_preset_id, worktree, origin, origin_ref,
-             dedupe_key, plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             ref_images_json, needs_evidence, preset_id, suggested_preset_id, reviewer_preset_id, scout_preset_id, planner_preset_id,
+             worktree, origin, origin_ref, dedupe_key, plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           id,
           project.id,
@@ -903,6 +956,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           input.presetId ?? null,
           input.suggestedPresetId ?? null,
           input.reviewerPresetId ?? null,
+          input.scoutPresetId ?? null,
+          input.plannerPresetId ?? null,
           input.worktree ?? null,
           origin,
           input.originRef ?? null,
@@ -939,8 +994,19 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         const before = rawCard(id);
         if (patch.title !== undefined && !patch.title.trim())
           throw new CommandError("invalid", "Card title is required");
-        const { keys } = patchRow("card", id, CARD_FIELDS, patch as Record<string, unknown>, hlc);
-        if (keys.length > 0)
+        // Marking a tab read is not an edit of the card: no updated_at bump, no card.updated.
+        const readOnly = Object.entries(patch).every(
+          ([k, v]) => v === undefined || READ_POSITION_FIELDS.has(k),
+        );
+        const { keys } = patchRow(
+          "card",
+          id,
+          CARD_FIELDS,
+          patch as Record<string, unknown>,
+          hlc,
+          !readOnly,
+        );
+        if (keys.length > 0 && !readOnly)
           emit(
             "card.updated",
             { fields: keys },
@@ -972,6 +1038,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       if (input.planVersion !== undefined) body.planVersion = input.planVersion;
       if (input.ready !== undefined) body.ready = input.ready;
       if (input.error !== undefined) body.error = input.error;
+      if (input.thread !== undefined) body.thread = input.thread;
+      if (input.action !== undefined) body.action = input.action;
       return events.add({
         id: input.id,
         createdAt: input.createdAt,
@@ -1023,6 +1091,12 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         if (body.changes.description !== undefined) changes.description = body.changes.description;
         if (body.changes.acceptance !== undefined) changes.acceptance = body.changes.acceptance;
         cards.update(event.cardId, changes);
+        // The criteria are the model's text again: its next revision may overwrite them.
+        if (changes.acceptance !== undefined)
+          db.prepare("UPDATE card SET model_acceptance = ? WHERE id = ?").run(
+            changes.acceptance,
+            event.cardId,
+          );
         return setProposalStatus(eventId, body, "accepted", hlc, actor);
       });
     },
@@ -1031,6 +1105,63 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       return write((hlc) => {
         const { body } = mustPendingProposal(eventId);
         return setProposalStatus(eventId, body, "rejected", hlc, actor);
+      });
+    },
+
+    /**
+     * WP-105: store the planning model's plan as the card's only plan (overwrite) and its acceptance
+     * criteria. Criteria the owner edited since the model last wrote them are never overwritten: the
+     * new text becomes a pending proposal in the plan chat instead.
+     */
+    setPlan(id: string, input: SetPlanInput): SetPlanResult {
+      const plan = input.plan === undefined ? undefined : PlanSnapshotSchema.parse(input.plan);
+      return write((hlc) => {
+        const before = rawCard(id);
+        const projectId = before.project_id as string;
+        const json = plan === undefined ? null : JSON.stringify(plan);
+        const planChanged = json !== null && json !== before.plan_json;
+        if (planChanged) {
+          db.prepare(
+            "UPDATE card SET plan_json = ?, updated_at = ?, updated_hlc = ? WHERE id = ?",
+          ).run(json, iso(), hlc, id);
+          insertCardEvent(
+            {
+              cardId: id,
+              type: "note",
+              authorKind: "agent",
+              author: input.author ?? "planner",
+              body: { kind: "plan_updated", text: "方案已更新" },
+            },
+            hlc,
+          );
+          emit("card.updated", { fields: ["plan"] }, { cardId: id, projectId });
+        }
+        let acceptance: SetPlanResult["acceptance"] = "none";
+        const next = input.acceptance?.trim();
+        if (next) {
+          const current = before.acceptance as string;
+          const model = before.model_acceptance as string;
+          if (next === current.trim()) {
+            acceptance = "unchanged";
+            db.prepare("UPDATE card SET model_acceptance = ? WHERE id = ?").run(current, id);
+          } else if (!current.trim() || current === model) {
+            cards.update(id, { acceptance: next });
+            db.prepare("UPDATE card SET model_acceptance = ? WHERE id = ?").run(next, id);
+            acceptance = "applied";
+          } else {
+            if (!pendingProposals(id).some((pp) => pp.body.changes.acceptance?.trim() === next)) {
+              cards.propose({
+                cardId: id,
+                changes: { acceptance: next },
+                rationale: input.rationale ?? "你改过验收标准，所以这次的修改先作为建议提出，由你决定是否采纳。",
+                authorKind: "master",
+                author: input.author ?? "planner",
+              });
+            }
+            acceptance = "proposed";
+          }
+        }
+        return { card: viewOf(rawCard(id)), planChanged, acceptance };
       });
     },
 

@@ -45,10 +45,10 @@ describe("conflict avoidance in the scheduler", () => {
     const t = setup({ settings });
     const p = t.preset("claude");
     const a = t.card("a", "medium", p.id);
-    t.store.plans.save(a.id, plan(aFiles));
+    t.store.cards.setPlan(a.id, { plan: plan(aFiles) });
     t.store.cards.dispatch({ cardId: a.id, agentId: "ag1", provider: "claude", worktree: null, presetId: p.id });
     const b = t.card("b", "medium", p.id);
-    t.store.plans.save(b.id, plan(bFiles));
+    t.store.cards.setPlan(b.id, { plan: plan(bFiles) });
     return { t, a, b, r: await t.runtime.tickOnce() };
   }
 
@@ -75,22 +75,22 @@ describe("conflict avoidance in the scheduler", () => {
     const p = t.preset("claude");
     for (const title of ["a", "b"]) {
       const c = t.card(title, "medium", p.id);
-      t.store.plans.save(c.id, plan(["src/**"]));
+      t.store.cards.setPlan(c.id, { plan: plan(["src/**"]) });
     }
     const r = await t.runtime.tickOnce();
     expect(r.admitted.map((x) => x.cardKey)).toEqual(["DEMO-1"]);
     expect(r.deferred["DEMO-2"]).toMatch(/与 DEMO-1 改动相同的文件/);
   });
 
-  it("uses the latest plan version only", async () => {
+  it("uses the card's current plan only (re-planning replaces the files)", async () => {
     const t = setup();
     const p = t.preset("claude");
     const a = t.card("a", "medium", p.id);
-    t.store.plans.save(a.id, plan(["src/**"]));
-    t.store.plans.save(a.id, plan(["docs/**"]));
+    t.store.cards.setPlan(a.id, { plan: plan(["src/**"]) });
+    t.store.cards.setPlan(a.id, { plan: plan(["docs/**"]) });
     t.store.cards.dispatch({ cardId: a.id, agentId: "ag1", provider: "claude", worktree: null, presetId: p.id });
     const b = t.card("b", "medium", p.id);
-    t.store.plans.save(b.id, plan(["src/x.ts"]));
+    t.store.cards.setPlan(b.id, { plan: plan(["src/x.ts"]) });
     expect((await t.runtime.tickOnce()).admitted).toHaveLength(1);
   });
 
@@ -98,10 +98,10 @@ describe("conflict avoidance in the scheduler", () => {
     const t = setup();
     const p = t.preset("claude");
     const a = t.card("a", "medium", p.id);
-    t.store.plans.save(a.id, plan(["src/**"]));
+    t.store.cards.setPlan(a.id, { plan: plan(["src/**"]) });
     t.store.cards.dispatch({ cardId: a.id, agentId: "ag1", provider: "claude", worktree: null, presetId: p.id });
     const b = t.card("b", "medium", p.id);
-    t.store.plans.save(b.id, plan(["src/**"]));
+    t.store.cards.setPlan(b.id, { plan: plan(["src/**"]) });
     // The user's "dispatch" button calls the store directly; no tick, no conflict check.
     expect(() =>
       t.store.cards.dispatch({ cardId: b.id, agentId: "ag2", provider: "claude", worktree: null, presetId: p.id }),

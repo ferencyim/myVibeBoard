@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDispatcher, type DispatchPaseo } from "../server/dispatch";
 import { buildDispatchBrief, modeIdFor, worktreeSlug } from "../server/dispatch/brief";
-import { handoffFile, loadHandoff } from "../server/dispatch/handoff";
+import { createFlowService } from "../server/flow";
 import { registerLifecycle } from "../server/lifecycle";
 import { startFinalizer } from "../server/lifecycle/finalize";
 import { eventTypes, setupBoard } from "./helpers";
@@ -109,65 +109,46 @@ describe("brief helpers", () => {
   });
 });
 
-describe("planning hand-off (WP-33)", () => {
-  it("puts the hand-off summary in the brief and keeps discussion notes out of the recent notes", () => {
+describe("brief: plan, acceptance and execution conversation (WP-105)", () => {
+  it("carries the card plan, acceptance and exec chat, but not the plan conversation", () => {
     const t = setup();
-    const note = (body: unknown) =>
-      t.store.events.add({ cardId: t.card.id, type: "note", authorKind: "agent", author: "planner", body });
-    note({ kind: "discussion", role: "planner", text: "DISCUSSION CHATTER" });
-    note({ text: "plain owner note" });
-    const events = t.store.events.list(t.card.id);
-    const brief = buildDispatchBrief({
-      card: t.card,
-      project: t.project,
-      preset: t.preset,
-      events,
-      handoff: { path: "/repo/.vibe/sessions/DEMO-1-plan.md", text: "Do A, then B." },
-    });
-    expect(brief).toContain("## 规划交接（从这里开始）");
-    expect(brief).toContain("Do A, then B.");
-    expect(brief).toContain("/repo/.vibe/sessions/DEMO-1-plan.md");
-    expect(brief).toContain("plain owner note");
-    expect(brief).not.toContain("DISCUSSION CHATTER");
-    expect(buildDispatchBrief({ card: t.card, project: t.project, preset: t.preset, events })).not.toContain(
-      "规划交接",
-    );
+    t.store.cards.setPlan(t.card.id, { plan: {
+      description: "PLAN: do A, then B.",
+      checks: [{ text: "check-one" }],
+      files: ["src/a.ts"], subCards: [], tags: [], recommendedPresetId: null,
+    } as any });
+    const chat = (authorKind: any, text: string, thread?: string) =>
+      t.store.events.add({
+        cardId: t.card.id,
+        type: "chat",
+        authorKind,
+        author: authorKind,
+        body: { text, ...(thread ? { thread } : {}) },
+      });
+    chat("user", "PLAN-THREAD-CHATTER", "plan");
+    chat("agent", "PLANNER-REPLY", "plan");
+    chat("user", "EXEC-USER-MSG", "exec");
+    chat("executor", "EXEC-EXECUTOR-MSG", "exec");
+    chat("reviewer", "EXEC-REVIEWER-MSG", "exec");
+    chat("system", "EXEC-SYSTEM-NOTE", "exec");
+    const card = t.store.cards.get(t.card.id)!;
+    const brief = buildDispatchBrief({ card, project: t.project, preset: t.preset, events: t.store.events.list(t.card.id) });
+    expect(brief).toContain("PLAN: do A, then B.");
+    expect(brief).toContain("check-one");
+    expect(brief).toContain("login works");
+    expect(brief).toContain("EXEC-USER-MSG");
+    expect(brief).toContain("EXEC-EXECUTOR-MSG");
+    expect(brief).toContain("EXEC-REVIEWER-MSG");
+    expect(brief).not.toContain("PLAN-THREAD-CHATTER");
+    expect(brief).not.toContain("PLANNER-REPLY");
+    expect(brief).not.toContain("EXEC-SYSTEM-NOTE");
+    expect(brief).not.toContain("规划交接");
   });
 
-  it("finds the summary by file convention first, then by the hand-off event", () => {
-    const repo = mkdtempSync(join(tmpdir(), "vibe-board-handoff-"));
-    const card = { key: "DEMO-1" };
-    const event = {
-      id: "e1",
-      cardId: "c1",
-      type: "note" as const,
-      authorKind: "agent" as const,
-      author: "planner",
-      body: { kind: "handoff", text: "from event" },
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedHlc: "",
-    };
-    expect(loadHandoff({ repoPath: repo }, card, [])).toBeNull();
-    expect(loadHandoff({ repoPath: repo }, card, [event])).toEqual({ path: null, text: "from event" });
-    mkdirSync(join(repo, ".vibe", "sessions"), { recursive: true });
-    writeFileSync(handoffFile(repo, "DEMO-1"), "from file");
-    expect(loadHandoff({ repoPath: repo }, card, [event])).toEqual({
-      path: handoffFile(repo, "DEMO-1"),
-      text: "from file",
-    });
-  });
-
-  it("dispatch hands the summary to the worker's first message", async () => {
+  it("omits the plan section when the card has no plan", () => {
     const t = setup();
-    t.store.events.add({
-      cardId: t.card.id,
-      type: "note",
-      authorKind: "agent",
-      author: "planner",
-      body: { kind: "handoff", text: "FINAL PLAN: do it in two steps", path: null },
-    });
-    await t.dispatcher.dispatch("DEMO-1");
-    expect(t.fake.calls.agent[0].prompt).toContain("FINAL PLAN: do it in two steps");
+    const brief = buildDispatchBrief({ card: t.card, project: t.project, preset: t.preset, events: [] });
+    expect(brief).not.toContain("## 方案");
   });
 });
 
@@ -513,5 +494,75 @@ describe("agent.closed", () => {
     expect(t.store.sessions.get(master.id)!.state).not.toBe("ended");
     expect(t.store.sessions.get(planner.id)!.state).not.toBe("ended");
     expect(t.store.sessions.get(worker.id)!.state).toBe("ended");
+  });
+});
+
+describe("flow service (WP-105)", () => {
+  function flowSetup() {
+    const t = setup();
+    const switchTo = vi.fn(async (_sessionId: string, presetId: string) => {
+      t.store.cards.update(t.card.id, { presetId });
+      return {} as never;
+    });
+    const flow = createFlowService({ board: t.board, dispatcher: t.dispatcher, reassigner: { switchTo } as never });
+    const chats = (id = t.card.id) => t.store.events.list(id).filter((e) => e.type === "chat");
+    return { ...t, flow, switchTo, chats };
+  }
+
+  it("planStart needs a planning model and writes a plan-thread make_plan message", () => {
+    const t = flowSetup();
+    expect(() => t.flow.planStart(t.card.key)).toThrow(/规划模型/);
+    expect(t.chats()).toHaveLength(0);
+    const planner = t.board.presets.create({ name: "planner", provider: "claude", model: "opus", roleHints: ["planner"] }).preset;
+    t.store.cards.update(t.card.id, { plannerPresetId: planner.id });
+    const { event } = t.flow.planStart(t.card.key, "phone");
+    expect(event).toMatchObject({ type: "chat", authorKind: "user", author: "phone" });
+    expect(event.body).toMatchObject({ thread: "plan", action: "make_plan" });
+    expect(t.chats()).toHaveLength(1);
+  });
+
+  it("execStart moves a draft card to todo and dispatches it at once", async () => {
+    const t = flowSetup();
+    const { card: draft } = t.board.cards.create({ project: t.project.prefix, title: "Idea", presetId: t.preset.id });
+    expect(draft.column).toBe("draft");
+    const result = await t.flow.execStart(draft.key);
+    expect(result.card.column).toBe("in_progress");
+    expect(result.session.cardId).toBe(draft.id);
+    expect(t.fake.calls.agent).toHaveLength(1);
+    const moves = t.store.events.list(draft.id).filter((e) => (e.body as any)?.kind === "moved");
+    expect(moves.map((e) => (e.body as any).to)).toContain("todo");
+  });
+
+  it("execStart dispatches a todo card, and refuses a card that is already running", async () => {
+    const t = flowSetup();
+    const result = await t.flow.execStart(t.card.key);
+    expect(result.card.column).toBe("in_progress");
+    expect(t.fake.calls.agent).toHaveLength(1);
+    await expect(t.flow.execStart(t.card.key)).rejects.toThrow(/已经在执行|illegal/);
+    expect(t.fake.calls.agent).toHaveLength(1);
+  });
+
+  it("execSwitch only stores the choice while nothing runs", async () => {
+    const t = flowSetup();
+    const other = t.board.presets.create({ name: "other", provider: "claude", model: "opus" }).preset;
+    const out = await t.flow.execSwitch(t.card.key, other.id);
+    expect(out.switched).toBe(false);
+    expect(out.card.presetId).toBe(other.id);
+    expect(t.switchTo).not.toHaveBeenCalled();
+    expect((await t.flow.execSwitch(t.card.key, null)).card.presetId).toBeNull();
+  });
+
+  it("execSwitch hands a running worker over through the reassigner", async () => {
+    const t = flowSetup();
+    const { session } = await t.flow.execStart(t.card.key);
+    const other = t.board.presets.create({ name: "other", provider: "claude", model: "opus" }).preset;
+    const out = await t.flow.execSwitch(t.card.key, other.id);
+    expect(t.switchTo).toHaveBeenCalledWith(session.id, other.id);
+    expect(out).toMatchObject({ switched: true });
+    expect(out.card.presetId).toBe(other.id);
+    // picking the model that already runs is not a switch
+    t.switchTo.mockClear();
+    expect((await t.flow.execSwitch(t.card.key, other.id)).switched).toBe(false);
+    expect(t.switchTo).not.toHaveBeenCalled();
   });
 });

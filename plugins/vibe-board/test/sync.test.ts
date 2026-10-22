@@ -490,3 +490,47 @@ describe("round 3 fields over sync", () => {
     expect(t.store.presets.get(preset.id)).toMatchObject({ roleHint: "scout", roleHints: ["scout"] });
   });
 });
+
+describe("WP-105 card fields over sync", () => {
+  it("maps phone writes of model picks and read positions, and publishes plan / unread columns", async () => {
+    const t = setup();
+    const preset = t.store.presets.create({ name: "pl", provider: "claude", model: "m", roleHints: ["planner"] });
+    const card = t.store.cards.create({ projectId: t.project.id, title: "c", column: "draft" });
+    t.store.cards.setPlan(card.id, {
+      plan: { description: "Do A", checks: [{ text: "c1" }], subCards: [], tags: [], recommendedPresetId: null },
+      acceptance: "model criteria",
+    });
+    t.store.events.add({ cardId: card.id, type: "chat", authorKind: "master", author: "planner", body: { text: "hi", thread: "plan" } });
+    t.store.events.add({ cardId: card.id, type: "chat", authorKind: "executor", author: "executor", body: { text: "go", thread: "exec" } });
+    const p = t.phone();
+    await p.syncNow();
+    const row = p.row("card", card.id)!;
+    expect(JSON.parse(String(row.plan_json))).toMatchObject({ description: "Do A" });
+    expect(row.model_acceptance).toBe("model criteria");
+    expect(row.plan_activity_at).toBeTruthy();
+    expect(row.exec_activity_at).toBeTruthy();
+
+    t.clock.ms += 5_000;
+    const seen = new Date(t.clock.ms).toISOString();
+    p.client.write("card", card.id, {
+      scout_preset_id: preset.id,
+      planner_preset_id: preset.id,
+      plan_seen_at: seen,
+      exec_seen_at: seen,
+      verify_seen_at: seen,
+    });
+    t.clock.ms += 5_000;
+    await p.syncNow();
+    expect(t.store.cards.get(card.id)).toMatchObject({
+      scoutPresetId: preset.id,
+      plannerPresetId: preset.id,
+      planSeenAt: seen,
+      execSeenAt: seen,
+      verifySeenAt: seen,
+    });
+
+    // plan / unread-activity columns are display-only: the phone has no field to write them
+    expect(() => p.client.write("card", card.id, { plan_json: "null" })).toThrow(/Unknown field/);
+    expect(() => p.client.write("card", card.id, { plan_activity_at: seen })).toThrow(/Unknown field/);
+  });
+});

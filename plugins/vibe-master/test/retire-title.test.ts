@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createMasterRuntime } from "../server/runtime";
-import { ManualClock, assessmentJson, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
+import { askMaster, ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
 
 function build(over: { noSetTitle?: boolean } = {}) {
   const board = setupBoard();
-  const fake = fakePaseo(() => assessmentJson(), { noSetTitle: over.noSetTitle });
+  const fake = fakePaseo(() => "ok", { noSetTitle: over.noSetTitle });
   const settings = defaultSettings({ provider: "claude" });
   const runtime = createMasterRuntime({
     db: board.db,
@@ -22,7 +22,7 @@ function build(over: { noSetTitle?: boolean } = {}) {
 const RETIRED = /^Vibe Master（已退役 \d{4}-\d{2}-\d{2}）$/;
 
 async function started(t: ReturnType<typeof build>) {
-  t.runtime.triggers.assessNow(t.board.draft("A").id);
+  await askMaster(t.runtime);
   await t.runtime.queue.idle();
 }
 
@@ -48,7 +48,7 @@ describe("retired master agents are renamed", () => {
     const t = build();
     await started(t);
     t.settings.permissionMode = "acceptEdits";
-    t.runtime.triggers.assessNow(t.board.draft("B").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     expect(t.fake.agents[0]!.title).toMatch(RETIRED);
     await t.runtime.dispose();

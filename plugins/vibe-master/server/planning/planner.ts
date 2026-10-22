@@ -1,82 +1,85 @@
-// Per-card planning sessions (WP-33). Each draft card that the owner discusses gets its own Paseo
-// agent (role=planner, same model and rules as the master, own context), so discussions never
-// pollute the master's main session. The conversation is the card's group chat, `chat` events
-// (see thread.ts); this module polls for unanswered owner messages, runs one turn per batch
-// (optionally with read-only scout sub-agents), writes the agreed plan back as a plan version and,
-// when the owner moves the card on, writes a hand-off summary to `.vibe/sessions/<KEY>-plan.md`
-// and archives the session. It never moves a card and never edits the card's title, description or
-// acceptance: changes are suggested as proposals that the owner accepts in the chat.
+// Per-card planning sessions (WP-33, reworked by WP-105). The plan tab of a card is a conversation
+// with a planning agent that runs on the card's **planning model** (a preset the owner picks), in
+// the project repository in read-only mode. The 制定方案 button (a plan-thread owner message with
+// action "make_plan") first runs a scout on the card's **scout model** when one is picked, then asks
+// the planner for a plan. The planner may ask the owner questions; the owner answers or gives
+// change requests in the same thread. Its plan overwrites the card's only plan (cards.setPlan) and
+// its acceptance criteria go to the card, or become a proposal when the owner edited them.
+//
+// The master agent takes no part (WP-105). Switching the planning model archives the old session;
+// the new one starts with the card's plan conversation, plan and criteria (nothing is lost: all of
+// it lives on the card).
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { parseReply } from "../assess/parse";
 import { proposeChanges } from "../assess/proposal";
 import type { Clock } from "../clock";
 import { buildProjectBlock } from "../master/prompts";
 import { reviveAgent } from "../master/revive";
-import type { MasterSession } from "../master/session";
 import type { MemoryPort } from "../memory/files";
-import { defaultPromptPort, hashText, rulesUpdateMessage, type PromptPort } from "../prompts/port";
+import { defaultPromptPort, hashText, type PromptPort } from "../prompts/port";
 import { defaultTuning, type TuningSource } from "../tuning";
 import type { Alerts } from "../subscription/alerts";
 import { isQuotaError } from "../subscription/quota";
-import { providerSpec } from "../subscription/target";
+import { providerSpec, resolveTarget } from "../subscription/target";
 import { MasterError, type MasterAgentHandle, type MasterPaseo } from "../types";
-import type { AgentSession, CardView, Preset, Project } from "../vibe/contract";
+import type { AgentSession, CardView, PlanSnapshot, Preset, Project } from "../vibe/contract";
 import type { VibeDb, VibeStore } from "../vibe/db";
 import {
-  buildHandoffMessage,
   buildRepairMessage,
   buildResultsMessage,
   buildScoutMessage,
   buildStartMessage,
   buildTurnMessage,
-  fallbackHandoff,
-  renderPlan,
+  exploreQuestion,
+  renderResearch,
   type ResearchItem,
 } from "./prompts";
-import { HandoffSchema, PlanTurnSchema, type PlanTurn } from "./schema";
-import {
-  HANDOFF,
-  PLANNER_AUTHOR,
-  messagesOf,
-  threadState,
-  type ThreadState,
-} from "./thread";
+import { PlanTurnSchema, type PlanTurn } from "./schema";
+import { PLANNER_AUTHOR, messagesOf, threadState, type ThreadState } from "./thread";
 
 const LIVE = ["starting", "working", "waiting", "idle", "error"] as const;
-/** Worker states that mean an executing agent can receive the owner's chat messages. */
-const EXECUTOR_ONLINE = ["starting", "working", "waiting", "idle"] as const;
 /** Read-only mode of the known providers; any other provider is looked up in its mode catalog. */
-const SCOUT_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
-const READ_ONLY_MODE = /^(plan|read[-_ ]?only)$/i;
+const READ_ONLY_MODE: Record<string, string> = { claude: "plan", codex: "read-only" };
+const READ_ONLY_PATTERN = /^(plan|read[-_ ]?only)$/i;
 
-async function scoutModeOf(paseo: MasterPaseo, provider: string): Promise<string | undefined> {
-  const known = SCOUT_MODE[provider];
+export async function readOnlyModeOf(paseo: MasterPaseo, provider: string): Promise<string | undefined> {
+  const known = READ_ONLY_MODE[provider];
   if (known) return known;
   try {
     const res = await paseo.providers.listModes?.(provider);
-    return res?.modes?.find((m) => READ_ONLY_MODE.test(m.id) || READ_ONLY_MODE.test(m.label))?.id;
+    return res?.modes?.find((m) => READ_ONLY_PATTERN.test(m.id) || READ_ONLY_PATTERN.test(m.label))?.id;
   } catch {
     return undefined; // the provider's default mode
   }
+}
+
+interface Target {
+  provider: string;
+  model: string;
+  thinking: string | null;
+}
+
+/** Provider/model/thinking of a preset; an empty model is resolved from the provider catalog. */
+async function targetOf(paseo: MasterPaseo, preset: Preset): Promise<Target> {
+  const thinking = preset.thinking && preset.thinking !== "default" ? preset.thinking : null;
+  if (preset.model) return { provider: preset.provider, model: preset.model, thinking };
+  const resolved = await resolveTarget(paseo, { provider: preset.provider });
+  return { ...resolved, thinking };
 }
 
 export interface PlanningDeps {
   db: VibeDb;
   store: VibeStore;
   getPaseo(): MasterPaseo | null;
-  /** The master session: its current subscription decides model/provider of new planners. */
-  master: Pick<MasterSession, "currentTarget" | "permission">;
-  /** The system prompt in effect for a project scope (rules body + supplement). */
-  rules(projectId?: string | null): string;
   /** Prompt texts (registry); defaults when omitted. */
   prompts?: PromptPort;
   /** Automation parameters (settings); defaults when omitted. */
   tuning?: TuningSource;
   /** Max characters of the requirements document in the project block (settings). */
   requirementsChars?(): number;
-  /** `<VIBE_HOME>/master`; planner scratch workspaces live under `planning/<KEY>`. */
+  /** `<VIBE_HOME>/master`; cwd of planners whose project has no repository path. */
   dataDir: string;
   clock: Clock;
   memory: MemoryPort;
@@ -86,40 +89,25 @@ export interface PlanningDeps {
   log?: (message: string, error?: unknown) => void;
 }
 
-/** Task id of the hand-off summary (vibe-context `layout.sessionMd(taskId)` convention). */
-export const handoffTaskId = (cardKey: string) => `${cardKey}-plan`;
-
-/** Where the hand-off summary of a card is written: `<repo>/.vibe/sessions/<KEY>-plan.md`. */
-export function handoffPath(repoPath: string, cardKey: string): string {
-  return join(repoPath, ".vibe", "sessions", `${handoffTaskId(cardKey)}.md`);
-}
-
 interface Live {
   agent: MasterAgentHandle;
   session: AgentSession;
-  rulesSent: boolean;
-  /** Hash of the rules text the agent has seen. */
-  rulesHash: string;
+  presetId: string;
+  /** The system prompt was delivered (as system prompt or in the first message). */
+  systemSent: boolean;
+  systemHash: string;
   fresh: boolean;
 }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const NO_PLANNER = "还没有选择规划模型：请先在方案页顶部选一个规划模型，再点「制定方案」或重新发送。";
 
 export function createPlanning(deps: PlanningDeps) {
   const { store, db, clock } = deps;
   const log = deps.log ?? (() => undefined);
   const prompts = deps.prompts ?? defaultPromptPort();
   const tuning = deps.tuning ?? defaultTuning;
-  const handles = new Map<
-    string,
-    {
-      agent: MasterAgentHandle;
-      sessionId: string;
-      rulesSent: boolean;
-      rulesHash: string;
-      modeId?: string | null;
-    }
-  >();
+  const handles = new Map<string, Omit<Live, "session" | "fresh"> & { sessionId: string }>();
   const chains = new Map<string, Promise<void>>();
   const parked = new Set<string>();
   let cursor = 0;
@@ -145,21 +133,12 @@ export function createPlanning(deps: PlanningDeps) {
     }
   }
 
-  const presetName = (id: string) => store.presets.list().find((p) => p.id === id)?.name ?? null;
+  const presetOf = (id: string | null) => (id ? (store.presets.get(id) ?? null) : null);
+  const systemText = (projectId: string) => prompts.resolve("master.plan.system", { projectId });
   const tagNames = (card: CardView) => {
     const all = store.tags.list();
     return card.tags.map((id) => all.find((t) => t.id === id)?.name).filter((n): n is string => !!n);
   };
-
-  function context(card: CardView) {
-    const project = store.projects.get(card.projectId) as Project;
-    const tags = store.tags.list();
-    const presets = store.presets.list();
-    const openCards = store.cards
-      .list({ projectId: card.projectId })
-      .filter((c) => c.id !== card.id && c.column !== "done");
-    return { project, tags, presets, openCards };
-  }
 
   function memoryText(project: Project): string {
     if (!project.repoPath) return "";
@@ -179,40 +158,29 @@ export function createPlanning(deps: PlanningDeps) {
     }
   }
 
-  const executorOnline = (cardId: string) =>
-    store.sessions.list({ cardId, role: "worker", states: EXECUTOR_ONLINE }).length > 0;
-  const stateOf = (card: CardView) =>
-    threadState(store.events.list(card.id), { column: card.column, executorOnline: executorOnline(card.id) });
-
-  /** Hand-off notes stay `note` events (dispatch reads them). */
-  function post(card: Pick<CardView, "id">, body: Record<string, unknown>) {
-    return store.events.add({
-      cardId: card.id,
-      type: "note",
-      authorKind: "agent",
-      author: PLANNER_AUTHOR,
-      body,
-    });
+  function cwdOf(card: CardView, project: Project | undefined): string {
+    if (project?.repoPath) return project.repoPath;
+    const dir = join(deps.dataDir, "planning", card.key);
+    mkdirSync(dir, { recursive: true });
+    return dir;
   }
 
   // ---------- agent lifecycle ----------
 
-  async function spawn(card: CardView): Promise<Live> {
+  async function spawn(card: CardView, preset: Preset): Promise<Live> {
     const paseo = deps.getPaseo();
     if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
-    const target = await deps.master.currentTarget();
-    const cwd = join(deps.dataDir, "planning", card.key);
-    mkdirSync(cwd, { recursive: true });
-    const modeId = (await deps.master.permission()).resolved.modeId;
-    const rules = deps.rules(card.projectId);
+    const target = await targetOf(paseo, preset);
+    const modeId = await readOnlyModeOf(paseo, target.provider);
+    const system = systemText(card.projectId);
     const created = await paseo.agents.create({
-      cwd,
-      title: `Plan ${card.key} · ${card.title}`.slice(0, 80),
-      labels: { role: "planner", card: card.key },
+      cwd: cwdOf(card, store.projects.get(card.projectId)),
+      title: `方案 ${card.key} · ${card.title}`.slice(0, 80),
+      labels: { role: "planner", card: card.key, preset: preset.name },
       env: { VIBE_ROLE: "planner", VIBE_CARD_ID: card.id, VIBE_CARD_KEY: card.key },
       config: {
         provider: providerSpec(target),
-        systemPrompt: rules,
+        systemPrompt: system,
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
         ...(modeId ? { modeId } : {}),
       },
@@ -224,48 +192,49 @@ export function createPlanning(deps: PlanningDeps) {
       provider: target.provider,
     });
     store.cards.update(card.id, { planSessionId: session.id });
-    const rulesSent = target.provider === "claude";
-    const rulesHash = hashText(rules);
-    handles.set(card.id, { agent: created, sessionId: session.id, rulesSent, rulesHash, modeId });
+    const live: Live = {
+      agent: created,
+      session,
+      presetId: preset.id,
+      systemSent: target.provider === "claude",
+      systemHash: hashText(system),
+      fresh: true,
+    };
+    handles.set(card.id, { ...live, sessionId: session.id });
     log(`planner ${created.id} for ${card.key} started on ${providerSpec(target)}`);
-    return { agent: created, session, rulesSent, rulesHash, fresh: true };
+    return live;
   }
 
-  /** The planner of this card: the live one, or a fresh one seeded with the whole context. */
-  async function ensure(card: CardView): Promise<Live> {
+  /** The planner of this card on the card's planning model: the live one, or a fresh one. */
+  async function ensure(card: CardView, preset: Preset): Promise<Live> {
     const live = liveOf(card.id);
     const cached = handles.get(card.id);
     if (live && cached && cached.sessionId === live.id) {
-      // The permission mode changed since this planner started: no in-place change exists, so the
-      // discussion moves to a fresh planner seeded with the whole thread (the card holds it all).
-      const wanted = (await deps.master.permission()).resolved.modeId;
-      if (cached.modeId === undefined || cached.modeId === wanted) {
-        return {
-          agent: cached.agent,
-          session: live,
-          rulesSent: cached.rulesSent,
-          rulesHash: cached.rulesHash,
-          fresh: false,
-        };
-      }
-      log(`planner for ${card.key}: permission mode changed (${cached.modeId} -> ${wanted}), restarting`);
-      await archive(card, "mode_changed");
-      return spawn(card);
+      if (cached.presetId === preset.id) return { ...cached, session: live, fresh: false };
+      // The owner picked another planning model: the new session starts from what the card holds.
+      log(`planner for ${card.key}: planning model changed, restarting on ${preset.name}`);
+      await archive(card, "model_changed");
+      return spawn(card, preset);
     }
     const paseo = deps.getPaseo();
     if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
     if (live) {
+      // After a restart nothing records the preset: keep the agent while the provider matches.
       const candidate = paseo.agents.ref(live.agentId);
-      if (await reviveAgent(candidate)) {
-        // After a restart nothing records what the agent saw: assume the current rules.
-        const rulesHash = hashText(deps.rules(card.projectId));
-        handles.set(card.id, { agent: candidate, sessionId: live.id, rulesSent: true, rulesHash });
-        return { agent: candidate, session: live, rulesSent: true, rulesHash, fresh: false };
+      if (live.currentProvider === preset.provider && (await reviveAgent(candidate))) {
+        const entry = {
+          agent: candidate,
+          sessionId: live.id,
+          presetId: preset.id,
+          systemSent: true,
+          systemHash: hashText(systemText(card.projectId)),
+        };
+        handles.set(card.id, entry);
+        return { ...entry, session: live, fresh: false };
       }
-      moveSession(live, "ended", { outcome: "lost" });
-      handles.delete(card.id);
+      await archive(card, live.currentProvider === preset.provider ? "lost" : "model_changed");
     }
-    return spawn(card);
+    return spawn(card, preset);
   }
 
   async function archive(card: Pick<CardView, "id">, outcome: string): Promise<void> {
@@ -281,18 +250,14 @@ export function createPlanning(deps: PlanningDeps) {
     }
   }
 
-  async function ask(
-    live: Live,
-    card: Pick<CardView, "id" | "projectId">,
-    prompt: string,
-  ): Promise<string> {
+  async function ask(live: Live, card: Pick<CardView, "id" | "projectId">, prompt: string): Promise<string> {
     moveSession(live.session, "working");
-    const rules = deps.rules(card.projectId);
-    const rulesHash = hashText(rules);
-    const message = !live.rulesSent
-      ? `${rules}\n\n---\n\n${prompt}`
-      : rulesHash !== live.rulesHash
-        ? `${rulesUpdateMessage(prompts, rules, card.projectId)}\n\n---\n\n${prompt}`
+    const system = systemText(card.projectId);
+    const hash = hashText(system);
+    const message = !live.systemSent
+      ? `${system}\n\n---\n\n${prompt}`
+      : hash !== live.systemHash
+        ? `${prompts.resolve("master.rules_updated", { projectId: card.projectId, vars: { rules: system } })}\n\n---\n\n${prompt}`
         : prompt;
     const fail = (failure: MasterError): never => {
       moveSession(live.session, "error", { message: failure.message });
@@ -320,17 +285,17 @@ export function createPlanning(deps: PlanningDeps) {
     if (!result.lastMessage?.trim()) {
       return fail(new MasterError("agent", "The planning agent returned an empty reply"));
     }
-    live.rulesSent = true;
-    live.rulesHash = rulesHash;
+    live.systemSent = true;
+    live.systemHash = hash;
     const cached = handles.get(card.id);
     if (cached) {
-      cached.rulesSent = true;
-      cached.rulesHash = rulesHash;
+      cached.systemSent = true;
+      cached.systemHash = hash;
     }
     return result.lastMessage;
   }
 
-  /** Parse a reply into a PlanTurn; repair rounds (settings), then the raw text is the reply (the owner still gets an answer). */
+  /** Parse a reply; repair rounds (settings), then the raw text is the reply (the owner still gets an answer). */
   async function askTurn(live: Live, card: CardView, prompt: string): Promise<PlanTurn> {
     let reply = await ask(live, card, prompt);
     let parsed = parseReply(reply, PlanTurnSchema);
@@ -348,30 +313,39 @@ export function createPlanning(deps: PlanningDeps) {
     return PlanTurnSchema.parse({ reply: reply.trim() || "(empty reply)", research: [] });
   }
 
-  // ---------- scouts ----------
+  // ---------- scouts (the card's scout model) ----------
 
   async function research(
     card: CardView,
-    project: Project,
-    requests: PlanTurn["research"],
+    project: Project | undefined,
+    requests: readonly { question: string; scope?: string }[],
   ): Promise<ResearchItem[]> {
+    const preset = presetOf(card.scoutPresetId);
     const paseo = deps.getPaseo();
-    if (!paseo || !project.repoPath) {
-      const why = !project.repoPath ? "the project has no repoPath" : "no daemon handle";
-      return requests.map((r) => ({ ...r, ok: false, answer: `cannot run a scout: ${why}` }));
-    }
-    const target = await deps.master.currentTarget();
-    const modeId = await scoutModeOf(paseo, target.provider);
+    const why = !preset
+      ? "这张卡片没有选择探路模型，请自己阅读代码"
+      : !project?.repoPath
+        ? "项目没有设置仓库路径"
+        : !paseo
+          ? "还没有连上守护进程"
+          : null;
+    if (why || !preset || !paseo || !project) return requests.map((r) => ({ ...r, ok: false, answer: why ?? "" }));
     return Promise.all(
       requests.map(async (r): Promise<ResearchItem> => {
         let agent: MasterAgentHandle | null = null;
         try {
+          const target = await targetOf(paseo, preset);
+          const modeId = await readOnlyModeOf(paseo, target.provider);
           agent = await paseo.agents.create({
             cwd: project.repoPath,
-            title: `Scout ${card.key}`,
-            labels: { role: "scout", card: card.key },
+            title: `探路 ${card.key}`,
+            labels: { role: "scout", card: card.key, preset: preset.name },
             env: { VIBE_ROLE: "scout", VIBE_CARD_KEY: card.key },
-            config: { provider: providerSpec(target), ...(modeId ? { modeId } : {}) },
+            config: {
+              provider: providerSpec(target),
+              ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
+              ...(modeId ? { modeId } : {}),
+            },
           });
           const out = await agent.run(
             buildScoutMessage({ card, question: r.question, scope: r.scope, prompts }),
@@ -389,99 +363,109 @@ export function createPlanning(deps: PlanningDeps) {
     );
   }
 
-  // ---------- write-back ----------
-
-  /** Save the agreed plan as the next plan version (unchanged plans do not create versions). */
-  function applyPlan(card: CardView, plan: NonNullable<PlanTurn["plan"]>): number {
-    const wanted = plan.recommendedPreset?.trim().toLowerCase();
-    const preset: Preset | undefined = wanted
-      ? store.presets
-          .list()
-          .find((p) => p.id === plan.recommendedPreset || p.name.toLowerCase() === wanted)
-      : undefined;
-    const vocabulary = new Map(store.tags.list().map((t) => [t.name.toLowerCase(), t.name]));
-    const tags = [
-      ...new Set(plan.tags.map((t) => vocabulary.get(t.toLowerCase())).filter((t): t is string => !!t)),
-    ];
-    const snapshot = {
-      description: plan.description,
-      checks: plan.checks.map((c) => (c.method ? { text: c.text, method: c.method } : { text: c.text })),
-      subCards: plan.subCards,
-      tags,
-      recommendedPresetId: preset?.id ?? null,
-      ...(plan.notes ? { notes: plan.notes } : {}),
-      ...(plan.files?.length ? { files: plan.files } : {}),
-    };
-    const latest = store.plans.list(card.id).at(-1);
-    if (latest && JSON.stringify(latest.snapshot) === JSON.stringify(snapshot)) return latest.version;
-    return db.immediate(() => {
-      const saved = store.plans.save(card.id, snapshot);
-      if (preset && preset.id !== card.suggestedPresetId) {
-        store.cards.update(card.id, { suggestedPresetId: preset.id });
-      }
-      return saved.version;
+  function postScout(card: CardView, items: ResearchItem[], key: string): void {
+    store.cards.addChat({
+      cardId: card.id,
+      authorKind: "scout",
+      author: presetOf(card.scoutPresetId)?.name ?? "scout",
+      kind: "summary",
+      thread: "plan",
+      text: renderResearch(items),
+      key,
     });
   }
 
-  // ---------- one discussion turn ----------
+  // ---------- write-back ----------
+
+  /** Overwrite the card's plan and criteria; returns a line for the reply when the criteria became a proposal. */
+  function apply(card: CardView, result: PlanTurn): string {
+    const acceptance = result.acceptance?.trim() || undefined;
+    if (!result.plan && !acceptance) return "";
+    const plan: PlanSnapshot | undefined = result.plan
+      ? {
+          description: result.plan.text,
+          checks: [],
+          subCards: [],
+          tags: [],
+          recommendedPresetId: null,
+          ...(result.plan.files.length ? { files: result.plan.files } : {}),
+        }
+      : undefined;
+    const saved = store.cards.setPlan(card.id, { plan, acceptance, author: PLANNER_AUTHOR });
+    return saved.acceptance === "proposed"
+      ? "\n\n（你改过验收标准，这次的修改作为建议放在下面，采纳后才会写入。）"
+      : "";
+  }
+
+  // ---------- one conversation turn ----------
 
   async function turn(card: CardView, state: ThreadState): Promise<void> {
     const pending = state.pending;
     const answers = pending.map((m) => m.id);
-    const { project, tags, presets, openCards } = context(card);
+    const key = `reply:${answers.join("+")}`;
     let live: Live | undefined;
-    const reply = (text: string, extra: { planVersion?: number; ready?: boolean; error?: boolean } = {}) =>
+    const reply = (text: string, extra: { error?: boolean } = {}) =>
       store.cards.addChat({
         cardId: card.id,
         authorKind: "master",
         author: PLANNER_AUTHOR,
+        thread: "plan",
         text,
         answers,
-        key: `reply:${answers.join("+")}`,
+        key,
         ...(live ? { agentId: live.agent.id, sessionId: live.session.id } : {}),
         ...extra,
       });
+    const preset = presetOf(card.plannerPresetId);
+    if (!preset) {
+      reply(NO_PLANNER, { error: true });
+      return;
+    }
+    const project = store.projects.get(card.projectId);
     try {
-      live = await ensure(card);
+      live = await ensure(card, preset);
+      const makePlan = pending.some((m) => m.makePlan);
+      let findings = "";
+      if (makePlan && card.scoutPresetId) {
+        const items = await research(card, project, [{ question: exploreQuestion(card, prompts) }]);
+        postScout(card, items, `explore:${answers[0]}`);
+        findings = renderResearch(items);
+      }
       const events = store.events.list(card.id);
-      const prompt = live.fresh
-        ? buildStartMessage({
-            projectBlock: buildProjectBlock({
-              project,
-              tags,
-              presets,
-              openCards,
-              requirementsChars: deps.requirementsChars?.(),
-              cardLimit: tuning().projectBlockCardLimit,
-            }),
-            memory: memoryText(project),
-            card,
-            tagNames: tagNames(card),
-            plan: renderPlan(store.plans.list(card.id).at(-1)?.snapshot, presetName),
-            earlier: messagesOf(events).filter((m) => !answers.includes(m.id)),
-            pending,
-            prompts,
-          })
-        : buildTurnMessage(pending, prompts, card.projectId);
+      const prompt =
+        live.fresh || makePlan
+          ? buildStartMessage({
+              projectBlock: project
+                ? buildProjectBlock({
+                    project,
+                    tags: store.tags.list(),
+                    presets: store.presets.list(),
+                    openCards: store.cards
+                      .list({ projectId: card.projectId })
+                      .filter((c) => c.id !== card.id && c.column !== "done"),
+                    requirementsChars: deps.requirementsChars?.(),
+                    cardLimit: tuning().projectBlockCardLimit,
+                  })
+                : "",
+              memory: project ? memoryText(project) : "",
+              card: store.cards.get(card.id) ?? card,
+              tagNames: tagNames(card),
+              earlier: messagesOf(events).filter((m) => !answers.includes(m.id)),
+              pending,
+              findings,
+              prompts,
+            })
+          : buildTurnMessage(pending, prompts, card.projectId);
       let result = await askTurn(live, card, prompt);
       for (let round = 0; round < tuning().maxResearchRounds && result.research.length > 0; round++) {
         const items = await research(card, project, result.research);
-        store.cards.addChat({
-          cardId: card.id,
-          authorKind: "scout",
-          author: "scout",
-          kind: "summary",
-          text: items
-            .map((r) => `Q: ${r.question}\n${r.ok ? r.answer : `(failed) ${r.answer}`}`)
-            .join("\n\n"),
-          key: `research:${answers[0]}:${round + 1}`,
-        });
+        postScout(card, items, `research:${answers[0]}:${round + 1}`);
         result = await askTurn(live, card, buildResultsMessage(items, prompts, card.projectId));
       }
       const current = store.cards.get(card.id) ?? card;
-      const planVersion = result.plan ? applyPlan(current, result.plan) : null;
-      reply(result.reply, { ready: result.ready, ...(planVersion ? { planVersion } : {}) });
-      proposeChanges(store, store.cards.get(card.id) ?? card, result.proposal, PLANNER_AUTHOR);
+      const note = apply(current, result);
+      reply(`${result.reply}${note}`);
+      proposeChanges(store, store.cards.get(card.id) ?? card, result.proposal ?? undefined, PLANNER_AUTHOR);
       moveSession(live.session, "idle");
     } catch (error) {
       if (error instanceof MasterError && error.kind === "unavailable") {
@@ -489,60 +473,8 @@ export function createPlanning(deps: PlanningDeps) {
         throw error;
       }
       log(`planning turn for ${card.key} failed`, error);
-      reply(`规划会话出错：${errorText(error)}。再发一条消息即可重试。`, { error: true });
+      reply(`规划会话出错：${errorText(error)}。再发一条消息或重新点「制定方案」即可重试。`, { error: true });
     }
-  }
-
-  // ---------- hand-off ----------
-
-  async function handoff(card: CardView, state: ThreadState): Promise<void> {
-    const answers = state.handoffRequests.map((e) => e.id);
-    const live = liveOf(card.id);
-    const cached = handles.get(card.id);
-    const plan = renderPlan(store.plans.list(card.id).at(-1)?.snapshot, presetName);
-    let summary: string | null = null;
-    // Ask the live planner; a lost session or a bad reply falls back to a deterministic summary.
-    if (live && cached?.sessionId === live.id && deps.enabled()) {
-      try {
-        const current: Live = {
-          agent: cached.agent,
-          session: live,
-          rulesSent: cached.rulesSent,
-          rulesHash: cached.rulesHash,
-          fresh: false,
-        };
-        let reply = await ask(current, card, buildHandoffMessage(prompts, card.projectId));
-        let parsed = parseReply(reply, HandoffSchema);
-        for (let retry = 0; retry < tuning().jsonRepairRetries && !parsed.ok; retry++) {
-          reply = await ask(current, card, buildRepairMessage(parsed.error, prompts, card.projectId));
-          parsed = parseReply(reply, HandoffSchema);
-        }
-        if (parsed.ok) summary = parsed.value.summary;
-      } catch (error) {
-        log(`hand-off summary of ${card.key} fell back to the deterministic one`, error);
-      }
-    }
-    summary ??= fallbackHandoff({
-      card,
-      plan,
-      messages: messagesOf(store.events.list(card.id)),
-      prompts,
-    });
-
-    const project = store.projects.get(card.projectId);
-    let path: string | null = null;
-    if (project?.repoPath) {
-      path = handoffPath(project.repoPath, card.key);
-      try {
-        mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, `${summary.trim()}\n`);
-      } catch (error) {
-        log(`could not write ${path}`, error);
-        path = null;
-      }
-    }
-    post(card, { kind: HANDOFF, text: summary, path, answers });
-    await archive(card, "handed_off");
   }
 
   // ---------- driver ----------
@@ -550,31 +482,13 @@ export function createPlanning(deps: PlanningDeps) {
   async function processCard(cardId: string): Promise<void> {
     for (let i = 0; i < tuning().maxPlanLoops; i++) {
       const card = store.cards.get(cardId);
-      const live = liveOf(cardId);
-      if (!card || card.archivedAt) {
-        if (live) await archive({ id: cardId }, "card_gone");
+      if (!card || card.archivedAt || card.column === "done") {
+        if (liveOf(cardId)) await archive({ id: cardId }, card?.column === "done" ? "card_done" : "card_gone");
         return;
       }
-      const state = stateOf(card);
-      // `pending` only holds the messages that belong to the planner in this column (see thread.ts):
-      // draft/todo always, in_progress/verifying without an online executor or after a failed forward.
-      if (state.pending.length > 0 && deps.enabled()) {
-        await turn(card, state);
-        continue;
-      }
-      if (card.column !== "draft") {
-        // Discussion in todo goes on with the live session: the hand-off already exists.
-        if (card.column === "todo" && state.handoff) return;
-        // The owner moved the card on: hand over (once per discussion) and close the session.
-        if (live) {
-          if (!state.handoff || state.discussedAfterHandoff) await handoff(card, state);
-          else await archive(card, "handed_off");
-        }
-        return;
-      }
-      if (!deps.enabled()) return;
-      if (state.handoffRequests.length > 0) await handoff(card, state);
-      else return;
+      const state = threadState(store.events.list(card.id));
+      if (state.pending.length === 0 || !deps.enabled()) return;
+      await turn(card, state);
     }
   }
 
@@ -595,16 +509,12 @@ export function createPlanning(deps: PlanningDeps) {
     return next;
   }
 
-  /** One poll: new owner chat messages, routing fallbacks and hand-off requests, plus live sessions whose card moved on. */
+  /** One poll: new owner chat messages, plus live sessions whose card finished or disappeared. */
   async function tick(): Promise<void> {
     const rows = db
       .prepare<{ rid: number; card_id: string }>(
         `SELECT rowid AS rid, card_id FROM card_event
-         WHERE rowid > ? AND (
-           (type = 'chat' AND author_kind = 'user')
-           OR (type = 'chat' AND author_kind = 'system' AND json_extract(body_json, '$.fallback') IS NOT NULL)
-           OR (type = 'note' AND author_kind != 'agent' AND json_extract(body_json, '$.kind') = 'handoff_request')
-         )
+         WHERE rowid > ? AND type = 'chat' AND author_kind = 'user'
          ORDER BY rowid`,
       )
       .all(cursor);

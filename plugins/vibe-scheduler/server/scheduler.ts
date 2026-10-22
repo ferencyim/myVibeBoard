@@ -163,8 +163,10 @@ export function createScheduler(deps: SchedulerDeps) {
     return { total, byProvider, byProject };
   }
 
-  /** Planned files (globs) of a card: the latest plan version's `files`; empty when none declared. */
+  /** Planned files (globs) of a card: the card's plan (WP-105), else its latest plan version; empty when none. */
   function plannedFiles(cardId: string): string[] {
+    const plan = store.cards.get(cardId)?.plan;
+    if (plan) return plan.files ?? [];
     const versions = store.plans.list(cardId);
     return versions[versions.length - 1]?.snapshot.files ?? [];
   }

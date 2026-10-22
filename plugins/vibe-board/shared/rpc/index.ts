@@ -17,6 +17,7 @@ import {
   CardEventTypeSchema,
   CardPrioritySchema,
   CardViewSchema,
+  ChatThreadSchema,
   PlanSnapshotSchema,
   PromptDefSchema,
   PlanVersionSchema,
@@ -97,7 +98,7 @@ const presetFields = {
   instructions: z.string(),
   /** Ordered failover chain: preset ids to continue on when a session on this preset fails. */
   fallbackPresetIds: z.array(z.string()).nullable(),
-  /** Purposes (worker | scout | reviewer); [] = unspecified. Wins over `roleHint`. */
+  /** Purposes (worker | scout | reviewer | planner); [] = unspecified. Wins over `roleHint`. */
   roleHints: z.array(RoleHintSchema),
   // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
   roleHint: z.enum(PRESET_ROLE_HINTS).nullable(),
@@ -114,6 +115,9 @@ const cardEditable = {
   presetId: z.string().nullable(),
   /** Preset of the model that reviews the result (null = no review). */
   reviewerPresetId: z.string().nullable(),
+  /** WP-105: scout model run before planning (null = no scouting) and planning model. */
+  scoutPresetId: z.string().nullable(),
+  plannerPresetId: z.string().nullable(),
   parentCardId: z.string().nullable(),
   tagIds: z.array(z.string()),
 };
@@ -257,6 +261,12 @@ export const cardsUpdateRpc = defineRpc({
     needsEvidence: cardEditable.needsEvidence.optional(),
     presetId: cardEditable.presetId.optional(),
     reviewerPresetId: cardEditable.reviewerPresetId.optional(),
+    scoutPresetId: cardEditable.scoutPresetId.optional(),
+    plannerPresetId: cardEditable.plannerPresetId.optional(),
+    /** Read positions of the plan / execution / verification tabs (see markReadPatch). */
+    planSeenAt: z.string().nullable().optional(),
+    execSeenAt: z.string().nullable().optional(),
+    verifySeenAt: z.string().nullable().optional(),
     parentCardId: cardEditable.parentCardId.optional(),
     tagIds: cardEditable.tagIds.optional(),
   }),
@@ -324,16 +334,42 @@ export const eventsAddRpc = defineRpc({
   output: z.object({ event: CardEventSchema }),
 });
 
-// --- group chat (WP-92) ---------------------------------------------------------------------
+// --- card conversations (WP-92, split into plan / execution by WP-105) ----------------------
 
 export const chatSendRpc = defineRpc({
   name: "vibe.chat.send",
-  /** The owner says something in the card's group chat: a `chat` card event (author kind user).
-   *  The server routes it by the card's column (planner / master for draft and todo, the executor
-   *  session while in_progress / verifying, recorded only when done). `actor: "phone"` marks
-   *  messages typed on the phone. */
-  input: z.object({ card: cardRef, text: nonBlank, actor: moveActorSchema.optional() }),
+  /** The owner says something in the card's plan conversation (default; the planning session
+   *  answers) or execution conversation (`thread: "exec"`; forwarded to the executor). A `chat`
+   *  card event (author kind user). `actor: "phone"` marks messages typed on the phone. */
+  input: z.object({
+    card: cardRef,
+    text: nonBlank,
+    actor: moveActorSchema.optional(),
+    thread: ChatThreadSchema.optional(),
+  }),
   output: z.object({ event: CardEventSchema }),
+});
+
+export const planStartRpc = defineRpc({
+  name: "vibe.plan.start",
+  /** 制定方案: scouting on the card's scout model (if picked), then planning on its planning model. */
+  input: z.object({ card: cardRef, actor: moveActorSchema.optional() }),
+  output: z.object({ event: CardEventSchema }),
+});
+
+export const execStartRpc = defineRpc({
+  name: "vibe.exec.start",
+  /** 立即执行: a draft is moved to todo first; then the card is dispatched to its executing model. */
+  input: z.object({ card: cardRef }),
+  output: z.object({ card: CardViewSchema, session: AgentSessionSchema }),
+});
+
+export const execSwitchRpc = defineRpc({
+  name: "vibe.exec.switch",
+  /** Pick the executing model; while the card runs, the work moves to the new model (same worktree,
+   *  plan, criteria and execution conversation). */
+  input: z.object({ card: cardRef, presetId: z.string().nullable() }),
+  output: z.object({ card: CardViewSchema, switched: z.boolean() }),
 });
 
 export const proposalsAcceptRpc = defineRpc({
@@ -516,13 +552,6 @@ export const cardsDispatchRpc = defineRpc({
   output: z.object({ card: CardViewSchema, session: AgentSessionSchema }),
 });
 
-export const cardsRequestReviewRpc = defineRpc({
-  name: "vibe.cards.request_review",
-  /** Draft card: asks the master agent to review it now (publishes card.review_requested). */
-  input: z.object({ card: cardRef }),
-  output: z.object({ requested: z.literal(true) }),
-});
-
 // --- project requirements document ---------------------------------------------------------
 
 const requirementsDocShape = {
@@ -618,6 +647,9 @@ export const VIBE_BOARD_RPCS = {
   eventsListRpc,
   eventsAddRpc,
   chatSendRpc,
+  planStartRpc,
+  execStartRpc,
+  execSwitchRpc,
   proposalsAcceptRpc,
   proposalsRejectRpc,
   plansListRpc,
@@ -636,7 +668,6 @@ export const VIBE_BOARD_RPCS = {
   attachmentsDeleteRpc,
   sessionsListRpc,
   cardsDispatchRpc,
-  cardsRequestReviewRpc,
   requirementsGetRpc,
   requirementsSaveRpc,
   sessionsRecordSwitchRpc,

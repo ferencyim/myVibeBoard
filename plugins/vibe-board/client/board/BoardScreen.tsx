@@ -116,15 +116,9 @@ function BoardContent({ initialProject, initialCard }: { initialProject?: string
   const onMenuAction = (card: CardView, action: MenuAction) => {
     if (action.type === "open") return setOpenKey(card.key);
     if (action.type === "archive") return run(() => api.cardsArchive({ card: card.id }));
-    if (action.type === "review") {
-      return run(async () => {
-        await api.cardsRequestReview({ card: card.id });
-        toast.show(`已请总 agent 审查 ${card.key}`, { variant: "success" });
-      });
-    }
     if (action.type === "dispatch") {
       return run(async () => {
-        const { session } = await api.cardsDispatch({ card: card.id });
+        const { session } = await api.execStart({ card: card.id });
         toast.show(`已派发 ${card.key}（${session.currentProvider}）`, { variant: "success" });
       });
     }

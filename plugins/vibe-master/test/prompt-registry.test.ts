@@ -14,9 +14,8 @@ import { masterSettings } from "../shared/rpc";
 import { rulesFor } from "../server/prompts/port";
 import {
   ManualClock,
-  assessmentJson,
+  askMaster,
   defaultSettings,
-  fakeMaster,
   fakePaseo,
   setupBoard,
   tempDir,
@@ -41,12 +40,21 @@ function runtimeFor(board: Board, script: Script, over: Parameters<typeof defaul
   return { runtime, clock, fake, settings };
 }
 
+function doneCard(board: Board, title: string) {
+  const card = board.store.cards.create({ projectId: board.project.id, title, description: "d" }, "user");
+  board.store.cards.move(card.id, { to: "todo", actor: "user" });
+  board.store.cards.dispatch({ cardId: card.id, agentId: `w-${title}`, provider: "claude", worktree: null });
+  board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
+  board.store.cards.move(card.id, { to: "done", actor: "user" });
+  return card;
+}
+
 const fence = (value: unknown) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
 
 describe("registration", () => {
   it("registers every master prompt with its metadata, and a restart keeps the owner's overrides", async () => {
     const board = setupBoard();
-    const first = runtimeFor(board, () => assessmentJson());
+    const first = runtimeFor(board, () => "ok");
     const keys = board.store.prompts.list().map((p) => p.key);
     expect(keys.sort()).toEqual(masterPromptDefs().map((d) => d.key).sort());
     const rules = board.store.prompts.list().find((p) => p.key === "master.rules")!;
@@ -57,7 +65,7 @@ describe("registration", () => {
     board.store.prompts.setOverride("master.rules", "My own rules");
     await first.runtime.dispose();
 
-    const second = runtimeFor(board, () => assessmentJson());
+    const second = runtimeFor(board, () => "ok");
     expect(board.store.prompts.list().find((p) => p.key === "master.rules")).toMatchObject({
       source: "global",
       globalOverride: "My own rules",
@@ -68,20 +76,20 @@ describe("registration", () => {
 
   it("the card_done reply format follows the requirements switch", async () => {
     const board = setupBoard();
-    const { runtime } = runtimeFor(board, () => assessmentJson(), { maintainRequirements: false });
+    const { runtime } = runtimeFor(board, () => "ok", { maintainRequirements: false });
     const suffix = () => board.store.prompts.list().find((p) => p.key === "master.wake.card_done")!.fixedSuffix;
     expect(suffix()).not.toContain("requirementsUpdate");
     await runtime.dispose();
-    const on = runtimeFor(board, () => assessmentJson(), { maintainRequirements: true });
+    const on = runtimeFor(board, () => "ok", { maintainRequirements: true });
     expect(suffix()).toContain("requirementsUpdate");
     await on.runtime.dispose();
   });
 
   it("default rendering without a database equals the registry without overrides", async () => {
     const board = setupBoard();
-    const { runtime } = runtimeFor(board, () => assessmentJson());
+    const { runtime } = runtimeFor(board, () => "ok");
     const vars = { "card.key": "A-1", project: "P", pending: "hello" };
-    for (const key of ["master.wake.assess_draft", "master.plan.turn", "master.repair_json"] as const) {
+    for (const key of ["master.wake.card_done", "master.plan.turn", "master.repair_json"] as const) {
       expect(defaultPromptPort().resolve(key, { vars })).toBe(board.store.prompts.resolve(key, { vars }));
     }
     await runtime.dispose();
@@ -92,13 +100,21 @@ describe("scopes", () => {
   it("a project override reaches that project's wake message only; other projects use the global text", async () => {
     const board = setupBoard();
     const other = board.store.projects.create({ name: "Other", prefix: "OTH", repoPath: tempDir("vibe-master-repo2-"), projectType: "web" });
-    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
-    board.store.prompts.setOverride("master.wake.assess_draft", "GLOBAL {{card.key}}");
-    board.store.prompts.setOverride("master.wake.assess_draft", "PROJECT {{card.key}}", { projectId: board.project.id });
-    const mine = board.draft("Mine");
-    const theirs = board.store.cards.create({ projectId: other.id, title: "Theirs", description: "d" });
-    runtime.triggers.assessNow(mine.id);
-    runtime.triggers.assessNow(theirs.id);
+    const { runtime, fake } = runtimeFor(board, () => JSON.stringify({ summary: "m" }));
+    board.store.prompts.setOverride("master.wake.card_done", "GLOBAL {{card.key}}");
+    board.store.prompts.setOverride("master.wake.card_done", "PROJECT {{card.key}}", { projectId: board.project.id });
+    const finish = (projectId: string, title: string) => {
+      const card = board.store.cards.create({ projectId, title, description: "d" }, "user");
+      board.store.cards.move(card.id, { to: "todo", actor: "user" });
+      board.store.cards.dispatch({ cardId: card.id, agentId: `w-${title}`, provider: "claude", worktree: null });
+      board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
+      board.store.cards.move(card.id, { to: "done", actor: "user" });
+      return card;
+    };
+    const mine = finish(board.project.id, "Mine");
+    const theirs = finish(other.id, "Theirs");
+    runtime.wake(mine.key, "card_done", true);
+    runtime.wake(theirs.key, "card_done", true);
     await runtime.queue.idle();
     const sent = fake.agents[0]!.prompts;
     expect(sent.some((p) => p.startsWith(`PROJECT ${mine.key}`))).toBe(true);
@@ -108,13 +124,13 @@ describe("scopes", () => {
 
   it("the JSON repair message is the registered one", async () => {
     const board = setupBoard();
-    board.draft("Bad reply");
+    const card = doneCard(board, "Bad reply");
     let calls = 0;
-    const { runtime, fake } = runtimeFor(board, () => (++calls === 1 ? "not json" : assessmentJson()));
+    const { runtime, fake } = runtimeFor(board, () => (++calls === 1 ? "not json" : JSON.stringify({ summary: "m" })));
     board.store.prompts.setOverride("master.repair_json", "FIX IT ({{kind}}): {{error}}");
-    runtime.triggers.assessNow(board.store.cards.list({ column: "draft" })[0]!.id);
+    runtime.wake(card.key, "card_done", true);
     await runtime.queue.idle();
-    expect(fake.agents[0]!.prompts[1]).toMatch(/^FIX IT \(assess_draft\): /);
+    expect(fake.agents[0]!.prompts[1]).toMatch(/^FIX IT \(card_done\): /);
     await runtime.dispose();
   });
 });
@@ -122,11 +138,8 @@ describe("scopes", () => {
 describe("rules reach running agents", () => {
   it("resends the full rules once when the rules body changes, and not when the text is unchanged", async () => {
     const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
-    const wake = async (title: string) => {
-      runtime.triggers.assessNow(board.draft(title).id);
-      await runtime.queue.idle();
-    };
+    const { runtime, fake } = runtimeFor(board, () => "ok");
+    const wake = async (_title: string) => void (await askMaster(runtime));
     await wake("A");
     board.store.prompts.setOverride("master.rules", "NEW RULES BODY");
     await wake("B");
@@ -150,44 +163,41 @@ describe("rules reach running agents", () => {
     const board = setupBoard();
     board.store.prompts.register(masterPromptDefs());
     board.store.prompts.setOverride("master.rules", "SYSTEM OVERRIDE");
-    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
-    runtime.triggers.assessNow(board.draft("A").id);
-    await runtime.queue.idle();
+    const { runtime, fake } = runtimeFor(board, () => "ok");
+    await askMaster(runtime);
     expect(String(fake.agents[0]!.options.config.systemPrompt)).toBe("SYSTEM OVERRIDE");
     await runtime.dispose();
   });
 
-  it("planning sessions get the project's rules and a notice when they change", async () => {
+  it("planning sessions get the project's planner prompt and a notice when it changes", async () => {
     const board = setupBoard();
-    const fake = fakePaseo(() => fence({ reply: "ok", research: [] }));
+    const fake = fakePaseo(() => fence({ reply: "ok" }));
     const store = board.store;
     store.prompts.register(masterPromptDefs());
     const planning = createPlanning({
       db: board.db,
       store,
       getPaseo: () => fake.paseo,
-      master: fakeMaster(fake),
-      rules: (projectId) => rulesFor({ resolve: (k, o) => store.prompts.resolve(k, o) }, projectId),
       prompts: { resolve: (k, o) => store.prompts.resolve(k, o) },
       dataDir: tempDir("vibe-master-data-"),
       clock: new ManualClock(),
-      memory: { snapshot: () => ({}), apply: () => ({ stateWritten: false, added: 0, superseded: 0, archived: 0, duplicates: 0 }) },
+      memory: { snapshot: () => ({ "DECISIONS.md": [], "LESSONS.md": [], "INDEX.md": [], "PROJECT_STATE.md": [] }), apply: () => ({ stateWritten: false, added: 0, superseded: 0, archived: 0, duplicates: 0 }) },
       enabled: () => true,
       log: () => undefined,
     });
-    store.prompts.setOverride("master.rules", "PROJECT RULES", { projectId: board.project.id });
-    const card = board.draft("Plan me");
-    store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text: "first" });
+    store.prompts.setOverride("master.plan.system", "PROJECT RULES", { projectId: board.project.id });
+    const card = store.cards.update(board.draft("Plan me").id, { plannerPresetId: board.presets.claude.id });
+    const say = (text: string) => store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text, thread: "plan" });
+    say("first");
     await planning.trigger(card.id);
-    expect(String(fake.agents[0]!.options.config.systemPrompt)).toBe("PROJECT RULES");
-    store.prompts.setOverride("master.rules_supplement", "Be terse.", { projectId: board.project.id });
-    store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text: "second" });
+    expect(String(fake.agents[0]!.options.config.systemPrompt).startsWith("PROJECT RULES\n")).toBe(true);
+    store.prompts.setOverride("master.plan.system", "PROJECT RULES v2", { projectId: board.project.id });
+    say("second");
     await planning.trigger(card.id);
     const turn = fake.agents[0]!.prompts.at(-1)!;
     expect(turn).toContain("[总 agent 规则已更新");
-    expect(turn).toContain("Be terse.");
-    expect(turn).toContain("[plan:turn]");
-    store.cards.addChat({ cardId: card.id, authorKind: "user", author: "user", text: "third" });
+    expect(turn).toContain("PROJECT RULES v2");
+    say("third");
     await planning.trigger(card.id);
     expect(fake.agents[0]!.prompts.at(-1)).not.toContain("[总 agent 规则已更新");
     await planning.stop();
@@ -206,35 +216,33 @@ describe("rules reach running agents", () => {
 describe("migration of the old settings", () => {
   const legacy = (over: Partial<Record<keyof typeof LEGACY_PROMPT_KEYS, string>> = {}) => ({
     rulesSupplement: "",
-    templateAssessDraft: "",
     templateCardDone: "",
-    templateSessionHelp: "",
     ...over,
   });
 
-  it("copies the four legacy values to global overrides exactly once", async () => {
+  it("copies the legacy values to global overrides exactly once", async () => {
     const board = setupBoard();
-    const { runtime } = runtimeFor(board, () => assessmentJson());
+    const { runtime } = runtimeFor(board, () => "ok");
     const done = migrateLegacyPromptSettings(
       board.db,
       board.store,
-      legacy({ rulesSupplement: "Chinese please", templateAssessDraft: "A {{card.key}}", templateSessionHelp: "H {{plan}}" }),
+      legacy({ rulesSupplement: "Chinese please", templateCardDone: "D {{card.key}}" }),
     );
-    expect(done.sort()).toEqual(["master.rules_supplement", "master.wake.assess_draft", "master.wake.session_help"]);
+    expect(done.sort()).toEqual(["master.rules_supplement", "master.wake.card_done"]);
+    expect(Object.keys(LEGACY_PROMPT_KEYS).sort()).toEqual(["rulesSupplement", "templateCardDone"]);
     const info = (key: string) => board.store.prompts.list().find((p) => p.key === key)!;
     expect(info("master.rules_supplement")).toMatchObject({ source: "global", globalOverride: "Chinese please" });
-    expect(info("master.wake.card_done").source).toBe("default");
 
     // the owner resets one on the new page; a later start must not bring the old value back
-    board.store.prompts.clearOverride("master.wake.assess_draft");
-    expect(migrateLegacyPromptSettings(board.db, board.store, legacy({ templateAssessDraft: "A {{card.key}}" }))).toEqual([]);
-    expect(info("master.wake.assess_draft").source).toBe("default");
+    board.store.prompts.clearOverride("master.wake.card_done");
+    expect(migrateLegacyPromptSettings(board.db, board.store, legacy({ templateCardDone: "D {{card.key}}" }))).toEqual([]);
+    expect(info("master.wake.card_done").source).toBe("default");
     await runtime.dispose();
   });
 
   it("never replaces an override that already exists, and an all-blank settings page migrates nothing", async () => {
     const board = setupBoard();
-    const { runtime } = runtimeFor(board, () => assessmentJson());
+    const { runtime } = runtimeFor(board, () => "ok");
     board.store.prompts.setOverride("master.wake.card_done", "already edited");
     expect(migrateLegacyPromptSettings(board.db, board.store, legacy({ templateCardDone: "old" }))).toEqual([]);
     expect(board.store.prompts.body("master.wake.card_done").text).toBe("already edited");
@@ -243,7 +251,7 @@ describe("migration of the old settings", () => {
 
   it("runs from the runtime with the live settings", async () => {
     const board = setupBoard();
-    const { runtime } = runtimeFor(board, () => assessmentJson(), { rulesSupplement: "From settings" });
+    const { runtime } = runtimeFor(board, () => "ok", { rulesSupplement: "From settings" });
     expect(runtime.migrateLegacyPrompts()).toEqual(["master.rules_supplement"]);
     expect(runtime.migrateLegacyPrompts()).toEqual([]);
     await runtime.dispose();
@@ -260,7 +268,6 @@ describe("automation parameters", () => {
       maxResearchRounds: 2,
       maxPlanLoops: 10,
       jsonRepairRetries: 1,
-      proposalWindowMs: 15_000,
       projectBlockCardLimit: 40,
     });
   });
@@ -269,13 +276,13 @@ describe("automation parameters", () => {
     const board = setupBoard();
     for (let i = 0; i < 6; i++) board.draft(`Filler ${i}`);
     let calls = 0;
-    const { runtime, fake } = runtimeFor(board, () => (++calls <= 3 ? "not json" : assessmentJson()), {
+    const { runtime, fake } = runtimeFor(board, () => (++calls <= 3 ? "not json" : JSON.stringify({ summary: "m" })), {
       askTimeoutMinutes: 7,
       jsonRepairRetries: 2,
       projectBlockCardLimit: 2,
     });
-    const card = board.draft("Target");
-    runtime.triggers.assessNow(card.id);
+    const card = doneCard(board, "Target");
+    runtime.wake(card.key, "card_done", true);
     await runtime.queue.idle();
     const agent = fake.agents[0]!;
     expect(agent.timeouts[0]).toBe(7 * 60_000);
@@ -285,14 +292,14 @@ describe("automation parameters", () => {
     await runtime.dispose();
   });
 
-  it("no retries means the first bad reply fails the assessment", async () => {
+  it("no retries means the first bad reply fails the consolidation", async () => {
     const board = setupBoard();
     const { runtime, fake } = runtimeFor(board, () => "still not json", { jsonRepairRetries: 0 });
-    const card = board.draft("No retry");
-    runtime.triggers.assessNow(card.id);
+    const card = doneCard(board, "No retry");
+    runtime.wake(card.key, "card_done", true);
     await runtime.queue.idle();
     expect(fake.agents[0]!.prompts).toHaveLength(1);
-    expect(board.store.events.list(card.id).some((e) => (e.body as { kind?: string }).kind === "assessment_failed")).toBe(true);
+    expect(board.store.events.list(card.id).some((e) => (e.body as { kind?: string }).kind === "memory_update_failed")).toBe(true);
     await runtime.dispose();
   });
 });
