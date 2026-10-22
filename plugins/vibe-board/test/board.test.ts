@@ -320,7 +320,7 @@ describe("rpc contract", () => {
   it("has no legacy tasks.* names in the server sources", () => {
     const files = ["../index.server.ts", "../server/service.ts", "../server/rpc.ts", "../shared/rpc/index.ts"];
     for (const file of files) {
-      expect(readFileSync(join(here, file), "utf8")).not.toMatch(/tasks\./);
+      expect(readFileSync(join(here, file), "utf8")).not.toMatch(/\btasks\./);
     }
   });
 });
@@ -336,6 +336,10 @@ describe("MCP tools", () => {
       "vibe_comment",
       "vibe_attach",
       "vibe_session_note",
+      "vibe_subtask_status",
+      "vibe_subtask_start",
+      "vibe_subtask_message",
+      "vibe_subtask_mark",
     ]);
     expect(toolsForRole("verifier").map((t) => t.name)).toEqual([
       "vibe_projects",
@@ -343,6 +347,13 @@ describe("MCP tools", () => {
       "vibe_show",
       "vibe_comment",
     ]);
+    // WP-106: the subtask tools are for the main agent (and callers of unknown role) only.
+    const subtaskTools = (role: string | undefined) =>
+      toolsForRole(role).filter((t) => t.name.startsWith("vibe_subtask_")).length;
+    expect(subtaskTools("worker")).toBe(4);
+    expect(subtaskTools(undefined)).toBe(4);
+    expect(subtaskTools("subagent")).toBe(0);
+    expect(subtaskTools("master")).toBe(0);
   });
 
   it("creates drafts, updates, comments and enforces roles", async () => {

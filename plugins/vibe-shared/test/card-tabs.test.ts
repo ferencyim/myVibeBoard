@@ -46,7 +46,7 @@ describe("card_tabs migration", () => {
     db.exec(
       "CREATE TABLE schema_version (owner TEXT NOT NULL, version INTEGER NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY (owner, version))",
     );
-    const before = MIGRATIONS.core.filter((m) => m.name !== "card_tabs");
+    const before = MIGRATIONS.core.filter((m) => m.version < 7);
     for (const m of before) {
       if (m.foreignKeysOff) db.exec("PRAGMA foreign_keys = OFF");
       db.exec(m.sql);

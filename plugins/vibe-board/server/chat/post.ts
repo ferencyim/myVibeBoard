@@ -12,6 +12,8 @@ export interface PostChatInput {
   kind?: ChatKind;
   /** Conversation (WP-105); dispatch, executor and reviewer lines are "exec". */
   thread?: ChatThread;
+  /** WP-106: the subtask whose sub-agent the line is about. */
+  subtask?: string;
   sessionId?: string;
   agentId?: string;
   detail?: string;

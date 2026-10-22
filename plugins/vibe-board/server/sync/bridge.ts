@@ -421,6 +421,7 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
       else if (c === "reviewer_preset_id") patch.reviewerPresetId = v;
       else if (c === "scout_preset_id") patch.scoutPresetId = v;
       else if (c === "planner_preset_id") patch.plannerPresetId = v;
+      else if (c === "subagent_preset_id") patch.subagentPresetId = v;
       else if (c === "plan_seen_at") patch.planSeenAt = v;
       else if (c === "exec_seen_at") patch.execSeenAt = v;
       else if (c === "verify_seen_at") patch.verifySeenAt = v;

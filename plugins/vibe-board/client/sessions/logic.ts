@@ -139,6 +139,7 @@ export function asOfLabel(asOf: number | null): string {
 export const ROLE_LABELS: Record<AgentSession["role"], string> = {
   master: "总 agent",
   planner: "规划",
-  worker: "执行",
+  worker: "主代理",
   verifier: "验证",
+  subagent: "子代理",
 };

@@ -167,7 +167,7 @@ describe("chat router: who gets a user message (exec thread only)", () => {
     expect(r.resume).toHaveBeenCalledTimes(1);
     expect(r.send).toHaveBeenCalledWith("one more round please");
     expect(r.resume.mock.invocationCallOrder[0]).toBeLessThan(r.send.mock.invocationCallOrder[0]!);
-    expect(systemNotes(t)[0]!.body).toMatchObject({ text: "已唤回执行 agent 并转给它。", answers: [m.id], thread: "exec" });
+    expect(systemNotes(t)[0]!.body).toMatchObject({ text: "已唤回主代理并转给它。", answers: [m.id], thread: "exec" });
     await r.stop();
   });
 

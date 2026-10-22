@@ -2,7 +2,7 @@
 
 import type { CardEvent, CardEventType, ProposalStatus } from "../../shared/vibe/contract";
 import { COLUMN_LABELS } from "../board/logic";
-import { AUTHOR_LABELS, PROPOSAL_STATUS_LABELS } from "../planning/logic";
+import { PROPOSAL_STATUS_LABELS, authorLabel } from "../planning/logic";
 
 export const EVENT_TYPE_LABELS: Record<CardEventType, string> = {
   evaluation: "评估",
@@ -38,7 +38,11 @@ export function describeEvent(event: Pick<CardEvent, "type" | "body"> & { author
     return `离线回复未发送（${why}）：${String(body.text ?? "")}`;
   }
   if (event.type === "chat" && typeof body.text === "string") {
-    return `[${(AUTHOR_LABELS as Record<string, string>)[event.authorKind ?? ""] ?? event.authorKind ?? "?"}] ${body.text}`;
+    const subtask = typeof body.subtask === "string" ? body.subtask : undefined;
+    const label = event.authorKind
+      ? authorLabel(event.authorKind as Parameters<typeof authorLabel>[0], subtask)
+      : "?";
+    return `[${label}] ${body.text}`;
   }
   if (event.type === "proposal") {
     const status = PROPOSAL_STATUS_LABELS[body.status as ProposalStatus] ?? "";
@@ -65,4 +69,37 @@ export function describeEvent(event: Pick<CardEvent, "type" | "body"> & { author
   if (event.type === "compaction") return `已压缩上下文（${String(body.strategy ?? "")}）`;
   const json = JSON.stringify(body);
   return json.length > 200 ? `${json.slice(0, 200)}…` : json;
+}
+
+/** WP-106 timeline: one collapsed line per event - time, type and a short title. */
+export interface TimelineSummary {
+  time: string;
+  type: string;
+  title: string;
+  /** The full text is longer than the title (worth expanding). */
+  more: boolean;
+}
+
+const TITLE_MAX = 60;
+
+export function timelineSummary(
+  event: Pick<CardEvent, "type" | "body" | "createdAt"> & { authorKind?: string },
+): TimelineSummary {
+  const full = describeEvent(event).trim();
+  const firstLine = full.split("\n")[0] ?? "";
+  const title = firstLine.length > TITLE_MAX ? `${firstLine.slice(0, TITLE_MAX - 1)}…` : firstLine;
+  return {
+    time: event.createdAt.replace("T", " ").slice(5, 16),
+    type: EVENT_TYPE_LABELS[event.type] ?? event.type,
+    title: title || "（无内容）",
+    more: full !== title,
+  };
+}
+
+/** Expanded timeline rows: tapping a row toggles it. */
+export function toggleExpanded(expanded: ReadonlySet<string>, id: string): Set<string> {
+  const next = new Set(expanded);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
 }

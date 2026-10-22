@@ -73,7 +73,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     ...(project.description.trim() ? [`简介：${project.description.trim()}`] : []),
     ...(excerpt ? [excerpt.text] : []),
     `标签词表：${[...input.tags].map((t) => t.name).sort().join(", ")}`,
-    `执行预设（recommendation.preset 请使用这些名称）：\n${presets.join("\n") || "- 未配置"}`,
+    `执行预设（给子任务指定模型时，"preset" 请使用这些名称）：\n${presets.join("\n") || "- 未配置"}`,
     `其它未完成卡片：\n${cards.join("\n") || "- 无"}`,
   ].join("\n");
 }

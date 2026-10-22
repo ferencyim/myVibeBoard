@@ -11,7 +11,7 @@ import type { CardView, DeviceKind } from "./vibe/contract";
 import { publishEvent, type DeviceLeases, type VibeDb, type createVibeStore } from "./vibe/db";
 import { quotaFor } from "./quota";
 import { topSessions, type ResourceSnapshot } from "./resources";
-import { PRIORITY_RANK, pickPresetId, type Priority, type ProviderQuota } from "./vibe/contract";
+import { PRIORITY_RANK, pickPresetId, takesSlot, type Priority, type ProviderQuota } from "./vibe/contract";
 import type { PortAllocator } from "./ports";
 import { findOverlap } from "./overlap";
 
@@ -148,7 +148,9 @@ export function createScheduler(deps: SchedulerDeps) {
     const byProvider: Record<string, number> = {};
     const byProject: Record<string, number> = {};
     let total = 0;
-    for (const s of store.sessions.list({ role: "worker", states: ACTIVE_STATES })) {
+    // Sub-agents of a card count like card executors while they work (WP-106, takesSlot).
+    const running = store.sessions.list({ states: ACTIVE_STATES }).filter(takesSlot);
+    for (const s of running) {
       total++;
       byProvider[s.currentProvider] = (byProvider[s.currentProvider] ?? 0) + 1;
       const card = s.cardId ? store.cards.get(s.cardId) : undefined;

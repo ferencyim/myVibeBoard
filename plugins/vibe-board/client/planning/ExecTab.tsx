@@ -1,6 +1,8 @@
 // 执行 tab (WP-105): pick the executing and reviewing models, see which model is executing now,
 // 立即执行 (execution -> review if picked -> evidence verification), and the execution conversation
 // (the executor's questions, round summaries and final summary; the owner replies here).
+// WP-106: the executing model is the main agent; sub-agents run the plan's subtasks on their own
+// model or the sub-agent default; the subtask list shows their state and opens their sessions.
 
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import React, { useState } from "react";
@@ -13,7 +15,8 @@ import { Btn, Muted } from "../common/ui";
 import { useOptimisticCard } from "../detail/optimistic";
 import { Conversation } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
-import { canExecute, chatItemsOf, executingLabel, runningWorkerOf } from "./logic";
+import { canExecute, chatItemsOf, chatTargets, executingLabel, runningWorkerOf } from "./logic";
+import { SubtaskList } from "./Subtasks";
 
 export interface ExecTabProps {
   api: BoardApi;
@@ -56,19 +59,32 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
 
   const pickExecutor = (presetId: string | null) =>
     running && presetId
-      ? act(() => api.execSwitch({ card: card.id, presetId }), "已切换执行模型，新模型会带着执行对话和方案接着做")
+      ? act(() => api.execSwitch({ card: card.id, presetId }), "已切换主代理模型，新模型会带着执行对话和方案接着做")
       : void updateCard({ presetId });
 
   return (
     <View style={{ gap: 14 }}>
       <ModelPicker
-        label="执行模型"
+        label="主代理模型"
         role="worker"
         presets={presets}
         value={card.presetId}
-        hint={running ? "执行中换模型：新模型在同一个工作树接着做，带上执行对话、方案和验收标准。" : "没选时用项目的默认预设。"}
+        hint={
+          running
+            ? "执行中换模型：新的主代理在同一个工作树接着统筹，带上执行对话、方案和子任务状态。"
+            : "主代理统筹子任务的顺序与并行；没选时用项目的默认预设。"
+        }
         disabled={busy || offline}
         onChange={pickExecutor}
+      />
+      <ModelPicker
+        label="子代理默认模型"
+        role="worker"
+        presets={presets}
+        value={card.subagentPresetId}
+        noneLabel="同主代理模型"
+        hint="子任务没有单独指定模型时用它；只影响之后启动的子代理。"
+        onChange={(subagentPresetId) => void updateCard({ subagentPresetId })}
       />
       <ModelPicker
         label="复核模型"
@@ -95,6 +111,7 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
           <Muted size={12}>这张卡片还没有方案：执行模型只会拿到任务描述和验收标准。</Muted>
         ) : null}
       </View>
+      <SubtaskList card={card} presets={presets} sessions={sessions} />
       {canExecute(card) ? (
         <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
           <Btn
@@ -112,16 +129,17 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
         card={card}
         thread="exec"
         items={items}
-        busyText={running?.state === "working" || running?.state === "starting" ? "执行模型正在工作…" : null}
-        emptyText="执行对话：执行模型的提问、阶段小结、完成总结和复核结论都在这里。"
+        busyText={running?.state === "working" || running?.state === "starting" ? "主代理正在工作…" : null}
+        emptyText="执行对话：主代理和子代理的提问、阶段小结、完成总结和复核结论都在这里。"
         composerHint={
           running
-            ? "消息会转给正在执行的模型；它在等你回答时，这条消息就是回答。"
+            ? "消息会转给主代理；它在等你回答时，这条消息就是回答。"
             : card.column === "done"
               ? "卡片已完成，发言只作记录。"
-              : "执行模型这一轮已结束时，消息会把它唤回来继续。"
+              : "主代理这一轮已结束时，消息会把它唤回来继续。"
         }
-        placeholder="回答执行模型的问题或补充要求…"
+        placeholder="回答主代理或子代理的问题，或补充要求…"
+        targets={chatTargets(card)}
         reload={reload}
         onOpenVerification={onOpenVerification}
       />

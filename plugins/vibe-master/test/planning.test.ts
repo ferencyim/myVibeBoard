@@ -307,3 +307,63 @@ describe("the master is out of the card flow", () => {
     }
   });
 });
+
+describe("subtasks in the plan (WP-106)", () => {
+  const sub = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title: `任务 ${id}`,
+    goal: "目标",
+    method: "方法",
+    notes: "注意",
+    acceptance: "验收",
+    files: [`src/${id}.ts`],
+    ...extra,
+  });
+
+  it("rejects subtask lists with unknown dependencies or cycles", () => {
+    const ok = PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p", subtasks: [sub("s1"), sub("s2", { dependsOn: ["s1"] })] } });
+    expect(ok.success).toBe(true);
+    expect(ok.success && ok.data.plan?.subtasks?.[0]?.dependsOn).toEqual([]);
+    expect(PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p", subtasks: [sub("s1", { dependsOn: ["s9"] })] } }).success).toBe(false);
+    expect(
+      PlanTurnSchema.safeParse({
+        reply: "x",
+        plan: { text: "p", subtasks: [sub("s1", { dependsOn: ["s2"] }), sub("s2", { dependsOn: ["s1"] })] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("writes the planner's subtasks (preset names -> ids); after the owner's edit they become a proposal", async () => {
+    let n = 0;
+    const t = setup(({ prompt }) => {
+      n++;
+      if (n === 1) {
+        return fence({
+          reply: "拆成两个子任务",
+          plan: { text: "v1", subtasks: [sub("s1", { preset: t.presets.kimi.name }), sub("s2", { dependsOn: ["s1"], preset: "不存在" })] },
+        });
+      }
+      // The planner sees the current subtasks (the owner's version) as JSON.
+      expect(prompt).toContain("负责人改过子任务");
+      return fence({ reply: "改了", plan: { text: "v2", subtasks: [sub("s1")] } });
+    });
+    const c = t.card("Split");
+    t.makePlan(c.id);
+    await t.planning.tick();
+    const first = t.store.cards.get(c.id)!;
+    expect(first.plan?.subtasks?.map((s) => [s.id, s.presetId])).toEqual([
+      ["s1", t.presets.kimi.id],
+      ["s2", null],
+    ]);
+
+    t.store.cards.setSubtasks(c.id, [...first.plan!.subtasks!, { ...sub("s3"), dependsOn: [], presetId: null }]);
+    t.makePlan(c.id);
+    await t.planning.tick();
+    const second = t.store.cards.get(c.id)!;
+    expect(second.plan?.description).toBe("v2");
+    expect(second.plan?.subtasks?.map((s) => s.id)).toEqual(["s1", "s2", "s3"]);
+    const proposal = t.store.events.list(c.id).find((e) => e.type === "proposal")!;
+    expect((proposal.body as { changes: { subtasks: Array<{ id: string }> } }).changes.subtasks.map((s) => s.id)).toEqual(["s1"]);
+    expect(t.chats(c.id).at(-1)!.text).toContain("你改过子任务");
+  });
+});

@@ -9,7 +9,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { join } from "node:path";
 import { runBoardCli } from "../cli/runner";
 import type { BoardService } from "../service";
-import { callMcpTool, toolsForRole } from "./tools";
+import { callMcpTool, toolsForRole, type McpServices } from "./tools";
 
 export interface BoardBridgeHandle {
   readonly url: string;
@@ -119,6 +119,8 @@ rl.on("line", async (line) => {
 export async function startBoardBridge(
   board: BoardService,
   dataDir: string,
+  /** Read per call: services created after the bridge (WP-106 sub-agents). */
+  services: () => McpServices = () => ({}),
 ): Promise<BoardBridgeHandle> {
   const token = randomBytes(24).toString("hex");
   const binDir = join(dataDir, "bin");
@@ -180,7 +182,7 @@ export async function startBoardBridge(
           reply({ tools: toolsForRole(caller.role) });
         } else if (rpc.method === "tools/call") {
           const args = (rpc.params?.arguments as Record<string, unknown> | undefined) ?? {};
-          reply(await callMcpTool(String(rpc.params?.name ?? ""), args, board, caller));
+          reply(await callMcpTool(String(rpc.params?.name ?? ""), args, board, caller, services()));
         } else {
           reply({});
         }

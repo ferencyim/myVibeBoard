@@ -396,6 +396,7 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 | WP-92  | 卡片群聊                                                    | `plugins/vibe-board/client/{detail,planning}/**`、`plugins/vibe-board/server/{chat,dispatch,finalizer}/**`；vibe-master assess/planning、vibe-verify review 的发言接入                                                                                                                                                  | 91,93  | 难   |
 | WP-104 | 标签编辑与配色、选择器即时响应、项目自动关联 Paseo 项目     | `plugins/vibe-shared`（core 迁移 6 `tag.color`、`tags.update`）、`plugins/vibe-board/client/{common/colors.ts,detail/optimistic.ts,presets,board}`、`server/dispatch/link-project.ts`；[core] 手机端 `toTag`                                                                                                            | 90     | 中   |
 | WP-105 | 卡片五 tab：方案/执行对话、未读、总 agent 退出卡片流程      | `plugins/vibe-board/{client,server}/**`、`plugins/vibe-master/server/{planning,wake,assess}/**`、`plugins/vibe-shared/**`（core 迁移、命令层）、vibe-verify 复核顺序；[core] App 离线映射                                                                                                                               | 92,104 | 难   |
+| WP-106 | 一张卡多个执行代理（主代理统筹子代理）、时间线默认收起      | `plugins/vibe-shared/**`（core 迁移 8、命令层、`contract/subtasks.ts`）、`plugins/vibe-board/{client,server}/**`（`server/subtasks/**`）、`plugins/vibe-master/server/planning/**` 与规划提示词、vibe-scheduler 并发计数；[core] App 离线映射                                                                           | 105    | 难   |
 
 - **WP-90**：`Project.projectTypes`（非空数组）取代单值，`projectType` 保留为 `projectTypes[0]` 的兼容字段（`COMPAT(project-types)`，旧手机端仍可同步）；
   `Project.description`、`Project.requirementsPath`（默认 `PRODUCT-REQUIREMENTS.md`）；`Preset.roleHints`（数组）取代 `roleHint`，同样保留兼容字段。
@@ -434,6 +435,21 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
   - **总 agent 退出卡片流程**：删除草稿自动/手动审查（`assess_draft`、`card.review_requested` 消费、`vibe.cards.request_review`）、执行提问时的建议（`session_help`）及其设置与提示词；
     卡片完成后整理项目记忆与需求文档（`card_done`）保留。自动派发仍只来自 vibe-scheduler（`scheduler.admitted` → 看板派发），与总 agent 无关。
     执行阶段的探路（MCP `vibe_scout`、看板 `scout*` 设置、`board.scout_*` 提示词）删除；探路只在制定方案时进行。设置版本号 +1 并在 `migrate` 中丢弃旧键。
+- **WP-106**（在 WP-105 之上扩展）：一张卡由**主代理**统筹 1..N 个**子代理**执行；时间线默认收起。
+  - **子任务定义在方案里**：`PlanSnapshot.subtasks`（`Subtask`：`id`、标题、目标、方法、注意事项、验收标准、涉及文件、依赖 `dependsOn`、指定预设 `presetId`，null = 用子代理默认模型），可选字段，旧方案无子任务照旧由主代理自己做。
+    规划模型在回复的 `plan.subtasks` 里给出（预设按名称匹配，未知名称 = 不指定）；`cards.setPlan` 覆盖整份方案，但 `plan.subtasksEdited` 为真（用户在方案页改过子任务）时保留用户版本，模型版本作为 `proposal{changes.subtasks}` 放进方案对话，采纳后写回并清掉标记——与验收标准的 `model_acceptance` 同一套规则。
+    用户编辑走 `vibe.plan.subtasks.set` → `cards.setSubtasks`（校验 id 唯一、依赖存在、无环），在线才能改（`plan_json` 是 daemon 写的显示列）。
+  - **数据（core 迁移 8 `sub_agents`）**：`card.subagent_preset_id`（子代理默认模型，双向同步，与 `preset_id`=主代理模型、`reviewer_preset_id` 并列）；`card.subtask_runs_json`（`subtaskRuns`：子任务 id → `SubtaskRun{status, sessionId, agentId, presetId, summary, error, attempts, notified, startedAt, finishedAt}`，daemon 写的显示列）；
+    `agent_session.role` 增加 `subagent`（SQLite 不能改 CHECK，按 12 步重建表）。子代理是独立 Paseo 会话、`role = subagent`，所以现有「`role = worker` 即执行者」的查询（对话转发、复核退回、换模型、推送）天然只指向主代理。
+  - **主代理统筹**：`board.brief` 新增 `{{subtasks}}` 段（`board.orchestrate` 说明 + 全部子任务）。主代理用看板 MCP 工具 `vibe_subtask_status / vibe_subtask_start / vibe_subtask_message / vibe_subtask_mark`（只对主代理与身份未知的调用者可见，子代理和复核看不到）。
+    `vibe_subtask_start` 由看板（`server/subtasks`）判断并拒绝、把原因返回主代理：依赖未完成、该子任务已在跑、与正在跑的子任务涉及文件有交集（与调度器同一套 glob 重叠规则，空列表不冲突）、并发已满（全局与 provider 上限来自 vibe-scheduler 写入 `vibe_meta['scheduler.limits']` 的设置，项目上限取项目；计数 = 活动的 worker + subagent 会话，调度器同样把子代理计入）。
+    放行后在主代理的 workspace（同一个 worktree）里建会话，提示词 = `board.subtask_brief`（子任务目标、方法、注意事项、验收标准、涉及文件 + 卡片描述与方案摘要），`VIBE_ROLE=subagent`。预设 = 子任务指定 → 卡片子代理默认 → 主代理模型；启动即失败按预设备选顺序换下一个。
+  - **通知主代理**：lifecycle 把子代理事件写进 `subtaskRuns`（完成 = 一轮正常结束，小结取最后一条回复；失败 = 出错且改派不成；提问 = 等待中）并把关键消息写进执行对话（作者 executor，`body.subtask` 标明子任务）；
+    每条状态变化带 `notified=false`，协调器轮询把未通知的变化合成一条 `board.subtask_notify` 消息以 `activeTurnBehavior: "steer"` 发给主代理（主代理在等用户回答时暂不发，避免清掉它的提问），发出后置 `notified`。
+    主代理一轮结束时，只要还有进行中/提问中的子代理或未送达的通知，卡片不进验证；否则照旧进入复核→证据验证。复核退回给 `role = worker` 的最新会话，即主代理。
+  - **对话**：用户在执行对话里默认对主代理说话；选了某个子代理（`chat.body.subtask`）时由 chat router 转给该子代理（等待提问时作为回答）。子代理的提问先通知主代理，主代理用 `vibe_subtask_message` 回答，答不了就在自己的回复里问用户。
+  - **换模型与改派**：换主代理模型仍是 `vibe.exec.switch`；改子任务的指定模型只影响之后启动的子代理（进行中的不打断，执行对话写一条说明）。子代理因额度/登录等失败时 `reassigner.reassign` 按该子代理所用预设的备选链改派，新会话拿子任务简报 + 接手说明，`subtaskRuns` 指向新会话，不改 `card.preset_id`；改派与失败都记入卡片。
+  - **时间线**：每条事件默认一行（时间、类型、`timelineTitle` 短标题），点开显示完整内容，再点收起；纯函数在 `client/detail/events.ts`，桌面和手机同一份。
 - **WP-98 / WP-99**：提示词注册表在 vibe-shared（core 迁移 5：`prompt_template` 由注册插件启动时 upsert 默认值与元数据、从不改覆盖；`prompt_override` 以 `<key>@<项目id|*>` 为行 id，仅 `text` 字段按字段 LWW 同步，空串 = 无覆盖）。
   命令层 `store.prompts.{register,resolve,body,setOverride,clearOverride,list}`：项目覆盖 > 全局覆盖 > 默认；`{{占位符}}` 单次渲染（未声明占位符的提示词原样返回）后追加 `fixedSuffix`（解析所需格式，界面只读）。
   手机策略：`prompt_template` 为 down 表只读；`prompt_override` 只能写已注册 key 的 `text`，不能删除。中央页在 vibe-board（`vibe.prompts.list/set/clear`），按注册表自动列出，不写死插件。

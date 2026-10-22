@@ -210,7 +210,7 @@ describe("reassigner", () => {
     t.store.sessions.setState(t.session.id, "ended", { outcome: "closed" });
     expect(await r.reassign(t.session.id, failure)).toMatchObject({ reassigned: null });
     const verifier = t.store.sessions.start({ cardId: t.card.id, role: "verifier", agentId: "v1", provider: "claude" });
-    expect(await r.reassign(verifier.id, failure)).toMatchObject({ reassigned: null, reason: "only card workers are reassigned" });
+    expect(await r.reassign(verifier.id, failure)).toMatchObject({ reassigned: null, reason: "only card workers and sub-agents are reassigned" });
   });
 
   it("renders a transcript from timeline pages", async () => {
