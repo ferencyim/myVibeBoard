@@ -211,6 +211,8 @@ export const TagSchema = z.object({
   name: z.string().min(1),
   /** Default for card.needs_evidence when this tag is applied. */
   evidence: z.boolean(),
+  /** Hex color chosen by the user; empty means the client derives one from the tag id. */
+  color: z.string(),
   builtin: z.boolean(),
   updatedHlc: Hlc,
 });

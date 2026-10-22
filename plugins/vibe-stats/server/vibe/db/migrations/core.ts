@@ -348,4 +348,12 @@ CREATE TABLE prompt_override (
 CREATE UNIQUE INDEX idx_prompt_override_scope ON prompt_override(key, COALESCE(project_id, ''));
 `,
   },
+  {
+    version: 6,
+    name: "tag_color",
+    sql: `
+-- Tags get a user-chosen color (hex; '' = the client derives one from the tag id).
+ALTER TABLE tag ADD COLUMN color TEXT NOT NULL DEFAULT '';
+`,
+  },
 ];

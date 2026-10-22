@@ -4,6 +4,7 @@ import { Pressable, Text, View } from "react-native";
 import type { CardView, Preset, Tag } from "../../shared/vibe/contract";
 import { useHost } from "../common/ctx";
 import { SessionBadge } from "../badges/SessionBadge";
+import { PRIORITY_COLORS, tagColor, withAlpha } from "../common/colors";
 import { Muted } from "../common/ui";
 import { PRIORITY_LABELS } from "./logic";
 
@@ -53,17 +54,10 @@ export function CardItem({
           ) : null}
           <View style={{ flex: 1 }} />
           {card.priority !== "none" ? (
-            <Text
-              style={{
-                color:
-                  card.priority === "urgent" || card.priority === "high"
-                    ? theme.colors.statusDanger
-                    : theme.colors.foregroundMuted,
-                fontSize: 11,
-              }}
-            >
-              {PRIORITY_LABELS[card.priority]}
-            </Text>
+            <View accessibilityLabel={`优先级：${PRIORITY_LABELS[card.priority]}`} style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+              <Icon name="Flag" size={11} color={PRIORITY_COLORS[card.priority]} />
+              <Text style={{ color: PRIORITY_COLORS[card.priority], fontSize: 11 }}>{PRIORITY_LABELS[card.priority]}</Text>
+            </View>
           ) : null}
           {card.reviewerPresetId ? (
             <View
@@ -81,16 +75,25 @@ export function CardItem({
         <SessionBadge cardId={card.id} />
         {card.tags.length > 0 || preset ? (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
-            {card.tags.map((id) => (
-              <View
-                key={id}
-                style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, backgroundColor: theme.colors.surface2 }}
-              >
-                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-                  {tagsById.get(id)?.name ?? id}
-                </Text>
-              </View>
-            ))}
+            {card.tags.map((id) => {
+              const tag = tagsById.get(id);
+              const c = tag ? tagColor(tag) : theme.colors.foregroundMuted;
+              return (
+                <View
+                  key={id}
+                  style={{
+                    paddingHorizontal: 6,
+                    paddingVertical: 1,
+                    borderRadius: 4,
+                    borderWidth: 1,
+                    borderColor: withAlpha(c, 0.5),
+                    backgroundColor: withAlpha(c, 0.16),
+                  }}
+                >
+                  <Text style={{ color: theme.colors.foreground, fontSize: 10 }}>{tag?.name ?? id}</Text>
+                </View>
+              );
+            })}
             {preset ? (
               <Muted size={10}>
                 {suggestedOnly ? "推荐 " : ""}
