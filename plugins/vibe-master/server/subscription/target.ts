@@ -1,4 +1,5 @@
-// Resolve "which subscription" into a concrete provider/model/thinking from the provider catalog.
+// Resolve a provider (and optionally a model) into a concrete model from the provider catalog.
+// Used for presets without a model (WP-109) and by the planning sessions.
 
 import type { MasterTarget } from "../../shared/rpc";
 import type { MasterPaseo, ModelInfoLike } from "../types";
@@ -6,8 +7,6 @@ import type { MasterPaseo, ModelInfoLike } from "../types";
 export interface TargetRequest {
   provider: string;
   model?: string;
-  /** A thinking option id, or "max" for the highest option the model offers. */
-  thinking?: string;
 }
 
 const MODEL_PREFERENCE: Record<string, RegExp> = { claude: /opus/i };
@@ -31,19 +30,6 @@ export function pickModel(models: ModelInfoLike[], provider: string, requested?:
   return preferred ?? usable.find((m) => m.isDefault) ?? usable[0]!;
 }
 
-export function pickThinking(model: ModelInfoLike, requested?: string): string | null {
-  const options = model.thinkingOptions ?? [];
-  if (!requested) return null;
-  // Provider catalogs list thinking options from lowest to highest: the last one is the top level.
-  if (requested === "max") return options.at(-1)?.id ?? null;
-  if (!options.some((o) => o.id === requested)) {
-    throw new Error(
-      `Thinking option "${requested}" is not available for ${model.id} (available: ${options.map((o) => o.id).join(", ") || "none"})`,
-    );
-  }
-  return requested;
-}
-
 export async function resolveTarget(
   paseo: Pick<MasterPaseo, "providers">,
   request: TargetRequest,
@@ -56,7 +42,7 @@ export async function resolveTarget(
   return {
     provider: request.provider,
     model: model.id,
-    thinking: pickThinking(model, request.thinking || undefined),
+    thinking: null,
   };
 }
 

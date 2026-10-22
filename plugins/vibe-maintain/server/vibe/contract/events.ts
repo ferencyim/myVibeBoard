@@ -127,6 +127,22 @@ export const EVENT_PAYLOADS = {
     deviceIds: z.array(z.string()).optional(),
   }),
   "scheduler.dispatch_failed": z.object({ cardId: z.string(), message: z.string() }),
+  // WP-109 master dispatch: the scheduler has free slots and these cards could start; the master
+  // picks (in order) the ones to admit, or says why it cannot. Answers carry the same requestId.
+  "scheduler.dispatch_wanted": z.object({
+    requestId: z.string(),
+    /** Free global slots right now. */
+    slots: z.number().int().min(0),
+    /** Cards that pass every scheduler check, in the scheduler's own order. */
+    cardIds: z.array(z.string()),
+  }),
+  "master.dispatch_chosen": z.object({
+    requestId: z.string(),
+    /** Chosen cards, dispatch order first. Never more than the slots and only requested cards. */
+    cardIds: z.array(z.string()),
+    reason: z.string(),
+  }),
+  "master.dispatch_failed": z.object({ requestId: z.string(), reason: z.string() }),
   "scheduler.quota_low": z.object({
     provider: z.string(),
     level: z.enum(["tight", "exhausted"]),

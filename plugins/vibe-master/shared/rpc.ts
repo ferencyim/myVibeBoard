@@ -3,7 +3,6 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
-/** Host-scoped defaults. A manual switch (RPC `master.switch`) overrides provider/model/thinking. */
 /** Settings keys of the card-flow triggers that WP-105 removed (the master left the card flow). */
 export const REMOVED_SETTING_KEYS = [
   "debounceSeconds",
@@ -30,10 +29,24 @@ export const masterSettings = defineSettings({
   },
   schema: z.object({
     enabled: z.boolean().default(true),
-    /** Default master subscription. Empty model = best match from the provider catalog. */
-    provider: z.string().default("claude"),
+    /**
+     * The agent preset the master runs on (WP-109; provider, model and thinking come from it).
+     * Empty = not chosen yet, unless the legacy fields below still match a preset.
+     */
+    presetId: z.string().default(""),
+    // COMPAT(master-preset): added 2026-10-22, remove after 2027-04-01
+    // Before WP-109 the master had its own provider/model/thinking. They are only read to find the
+    // matching preset for an owner who never picked one; choosing a preset in the settings clears them.
+    provider: z.string().default(""),
     model: z.string().default(""),
     thinking: z.string().default(""),
+    /**
+     * Master dispatch (WP-109): when a slot is free the master decides which waiting todo card
+     * starts first. Off = the scheduler's own rules. The master being unavailable also falls back to them.
+     */
+    dispatch: z.boolean().default(true),
+    /** How long one dispatch question to the master may take. */
+    dispatchTimeoutSeconds: z.number().int().min(10).max(600).default(120),
     /**
      * Permission mode of the master: "auto" = the provider's automatic mode (Claude auto, Codex
      * auto-review), else a concrete Paseo modeId of the provider.
@@ -93,28 +106,25 @@ export const masterSettings = defineSettings({
 });
 export type MasterSettings = z.output<typeof masterSettings.schema>;
 
+/** A preset the master can run on, with the quota of its provider (the settings page lists them). */
+export const PresetChoiceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  thinking: z.string(),
+  roleHints: z.array(z.string()),
+  remainingPct: z.number().nullable(),
+  level: z.enum(["ok", "tight", "exhausted", "unknown"]),
+});
+export type PresetChoice = z.infer<typeof PresetChoiceSchema>;
+
 const Target = z.object({
   provider: z.string(),
   model: z.string(),
   thinking: z.string().nullable(),
 });
 export type MasterTarget = z.infer<typeof Target>;
-
-const ModelInfo = z.object({
-  id: z.string(),
-  label: z.string(),
-  isDefault: z.boolean(),
-  thinking: z.array(z.object({ id: z.string(), label: z.string() })),
-});
-
-export const ProviderInfoSchema = z.object({
-  id: z.string(),
-  label: z.string(),
-  remainingPct: z.number().nullable(),
-  level: z.enum(["ok", "tight", "exhausted", "unknown"]),
-  models: z.array(ModelInfo),
-});
-export type ProviderInfo = z.infer<typeof ProviderInfoSchema>;
 
 const PermissionInfo = z.object({
   /** The setting value: "auto" or a modeId. */
@@ -133,7 +143,10 @@ export const MasterStatusSchema = z.object({
   /** false until the first hook or RPC handed the plugin a daemon handle. */
   paseoReady: z.boolean(),
   target: Target.nullable(),
-  targetSource: z.enum(["settings", "switched"]),
+  /** The preset the master runs on; null = none chosen (the settings page asks for one). */
+  preset: z.object({ id: z.string(), name: z.string(), migrated: z.boolean() }).nullable(),
+  /** Master dispatch as the scheduler sees it. */
+  dispatch: z.object({ enabled: z.boolean(), available: z.boolean(), reason: z.string() }),
   permission: PermissionInfo.nullable(),
   session: z
     .object({
@@ -161,27 +174,14 @@ export const MasterStatusSchema = z.object({
   switchHistory: z.array(
     z.object({ from: z.string(), to: z.string(), at: z.string(), reason: z.string().optional() }),
   ),
-  providers: z.array(ProviderInfoSchema),
+  presets: z.array(PresetChoiceSchema),
 });
 export type MasterStatus = z.infer<typeof MasterStatusSchema>;
 
 export const statusRpc = defineRpc({
   name: "master.status",
-  input: z.object({ includeProviders: z.boolean().default(false) }),
+  input: z.object({}),
   output: MasterStatusSchema,
-});
-
-export const switchRpc = defineRpc({
-  name: "master.switch",
-  input: z.object({
-    provider: z.string().min(1),
-    /** Empty/omitted = pick from the catalog (Claude: Opus; others: the default model). */
-    model: z.string().optional(),
-    /** A thinking option id, or "max" for the provider's highest option. */
-    thinking: z.string().optional(),
-    reason: z.string().optional(),
-  }),
-  output: z.object({ target: Target, changed: z.boolean(), sessionId: z.string().nullable() }),
 });
 
 export const wakeRpc = defineRpc({

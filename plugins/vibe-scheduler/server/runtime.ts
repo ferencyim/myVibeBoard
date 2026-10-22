@@ -114,12 +114,16 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   const consumer = createEventConsumer({
     db,
     consumer: "vibe-scheduler",
-    types: ["scheduler.dispatch_failed"],
+    types: ["scheduler.dispatch_failed", "master.dispatch_chosen", "master.dispatch_failed"],
     startAt: "now",
     now,
     handler: (event) => {
       if (event.type === "scheduler.dispatch_failed") {
         scheduler.handleDispatchFailed((event.payload as { cardId: string }).cardId);
+      } else if (event.type === "master.dispatch_chosen") {
+        scheduler.handleMasterChosen(event.payload as Parameters<typeof scheduler.handleMasterChosen>[0]);
+      } else if (event.type === "master.dispatch_failed") {
+        scheduler.handleMasterFailed(event.payload as Parameters<typeof scheduler.handleMasterFailed>[0]);
       }
     },
     onError: (e) => onError(e),

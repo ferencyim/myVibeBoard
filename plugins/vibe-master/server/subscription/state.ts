@@ -1,6 +1,6 @@
 // Small JSON state file under <VIBE_HOME>/master. Cards, assessments and plans live in vibe.db and
-// the memory files; this only remembers which subscription the owner picked and the running agent,
-// so a daemon restart or a provider switch does not lose its place.
+// the memory files; this only remembers the running agent and the permission override, so a daemon
+// restart or a preset switch does not lose its place.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -23,8 +23,6 @@ export interface MasterAlert {
 }
 
 export interface MasterStateData {
-  /** Set by a manual switch; overrides the settings default until switched again. */
-  target?: MasterTarget;
   /** Set by a manual permission switch; overrides the settings default until switched back. */
   permissionMode?: string;
   agent?: MasterAgentRecord;

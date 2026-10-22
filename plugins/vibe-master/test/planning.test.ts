@@ -129,7 +129,7 @@ describe("制定方案", () => {
     expect(planner!.provider).toBe("claude");
     expect(planner!.options.cwd).toBe(t.repoPath);
     expect(planner!.options.config.modeId).toBe("plan");
-    expect(String(planner!.options.config.provider)).toBe("claude/opus");
+    expect(String(planner!.options.config.provider)).toBe("claude/opus-x");
     expect(planner!.options.config.thinkingOptionId).toBe("high");
     expect(String(planner!.options.config.systemPrompt)).toContain("规划会话");
 
