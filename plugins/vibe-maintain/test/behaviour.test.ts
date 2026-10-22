@@ -6,7 +6,7 @@ import { READ_ONLY_MODE, createSubAgentRunner } from "../server/launch";
 import type { MaintenanceRule, Project } from "../server/vibe/contract";
 import { maintainSettings } from "../shared/rpc";
 
-const project = { id: "pr", defaultPresetId: null, repoPath: "/repo" } as Project;
+const project = { id: "pr", defaultPresets: {}, repoPath: "/repo" } as Project;
 const rule = (agent: string | null) => ({ name: "r", id: "r1", agent }) as MaintenanceRule;
 
 describe("maintenance settings", () => {

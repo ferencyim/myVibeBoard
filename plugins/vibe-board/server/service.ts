@@ -102,6 +102,11 @@ export interface CardCreateInput {
   needsEvidence?: boolean;
   presetId?: string | null;
   reviewerPresetId?: string | null;
+  scoutPresetId?: string | null;
+  plannerPresetId?: string | null;
+  planReviewerPresetId?: string | null;
+  subagentPresetId?: string | null;
+  verifierPresetId?: string | null;
   parentCardId?: string | null;
   tagIds?: string[];
   sortKey?: string;
@@ -119,8 +124,11 @@ export interface CardUpdateInput {
   scoutPresetId?: string | null;
   plannerPresetId?: string | null;
   subagentPresetId?: string | null;
+  planReviewerPresetId?: string | null;
+  verifierPresetId?: string | null;
   planSeenAt?: string | null;
   execSeenAt?: string | null;
+  reviewSeenAt?: string | null;
   verifySeenAt?: string | null;
   parentCardId?: string | null;
   tagIds?: string[];
@@ -249,6 +257,11 @@ export function createBoardService(runtime: BoardRuntime) {
             needsEvidence: input.needsEvidence,
             presetId: input.presetId,
             reviewerPresetId: input.reviewerPresetId,
+            scoutPresetId: input.scoutPresetId,
+            plannerPresetId: input.plannerPresetId,
+            planReviewerPresetId: input.planReviewerPresetId,
+            subagentPresetId: input.subagentPresetId,
+            verifierPresetId: input.verifierPresetId,
             parentCardId: input.parentCardId ? card(input.parentCardId).id : undefined,
             tagIds: input.tagIds,
             sortKey: input.sortKey,
@@ -416,6 +429,12 @@ export function createBoardService(runtime: BoardRuntime) {
           store.presets.delete(id);
           return { deleted: true };
         }),
+    },
+    /** Global default model per job (WP-108); the project level is a project field. */
+    defaults: {
+      get: () => ({ global: store.modelDefaults.global() }),
+      set: (global: Parameters<typeof store.modelDefaults.setGlobal>[0]) =>
+        guard(() => ({ global: store.modelDefaults.setGlobal(global) })),
     },
     /** Agent behaviour page (WP-98): every registered prompt with its overrides. */
     prompts: {

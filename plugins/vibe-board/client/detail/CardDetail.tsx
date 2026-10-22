@@ -1,8 +1,8 @@
-// Card detail (WP-105): five tabs - 详情 (fields), 方案 (scout / planning model, the single plan,
-// acceptance criteria, plan conversation), 执行 (executing / reviewing model, 立即执行, execution
-// conversation), 验证 (review conclusions and evidence verification) and 时间线 (card events; each
-// one line until tapped, WP-106).
-// 方案 / 执行 / 验证 carry an unread dot; opening the tab marks it read (synced to the phone).
+// Card detail: six tabs (WP-105, WP-108) - 详情 (fields), 方案 (scout / planning / plan review model,
+// the single plan, acceptance criteria, plan conversation), 执行 (main / sub-agent model, 立即执行,
+// execution conversation), 复核 (reviewer model, review conclusions and history), 验证 (verification
+// model and evidence verification) and 时间线 (card events; each one line until tapped, WP-106).
+// 方案 / 执行 / 复核 / 验证 carry an unread dot; opening the tab marks it read (synced to the phone).
 
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
@@ -19,14 +19,15 @@ import {
   type UnreadTab,
 } from "../../shared/vibe/contract";
 import { COLUMN_LABELS, errorMessage, evidenceDefault, userTargets } from "../board/logic";
-import { queryKey, type BoardApi } from "../common/api";
+import { queryKey, useGlobalDefaults, type BoardApi } from "../common/api";
 import { useHost } from "../common/ctx";
 import { canPickFile, pickImage } from "../common/pick-file";
 import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
-import { Bubble } from "../planning/Chat";
 import { ExecTab } from "../planning/ExecTab";
+import { ModelPicker } from "../planning/ModelPicker";
 import { PlanTab } from "../planning/PlanTab";
-import { reviewItemsOf } from "../planning/logic";
+import { ReviewTab } from "../planning/ReviewTab";
+import { defaultChoice, type ModelScope } from "../planning/logic";
 import { PrioritySelector, TagSelector } from "../presets/selectors";
 import type { ProviderUsageLike } from "../presets/logic";
 import { VerificationPanel } from "../verification/VerificationPanel";
@@ -35,15 +36,16 @@ import { EVENT_TYPE_LABELS, describeEvent, timelineSummary, toggleExpanded } fro
 import { useOptimisticCard } from "./optimistic";
 
 type Tab = "details" | UnreadTab | "timeline";
-const TABS: readonly Tab[] = ["details", "plan", "exec", "verify", "timeline"];
+const TABS: readonly Tab[] = ["details", "plan", "exec", "review", "verify", "timeline"];
 const TAB_LABELS: Record<Tab, string> = {
   details: "详情",
   plan: "方案",
   exec: "执行",
+  review: "复核",
   verify: "验证",
   timeline: "时间线",
 };
-const isUnreadTab = (t: Tab): t is UnreadTab => t === "plan" || t === "exec" || t === "verify";
+const isUnreadTab = (t: Tab): t is UnreadTab => t !== "details" && t !== "timeline";
 
 export interface CardDetailProps {
   cardKey: string;
@@ -68,6 +70,7 @@ export function CardDetail(props: CardDetailProps) {
     refetchInterval: 3000,
   });
   const toast = useToast();
+  const globalDefaults = useGlobalDefaults();
   const data = detail.data;
   const reload = () => {
     refresh();
@@ -100,6 +103,7 @@ export function CardDetail(props: CardDetailProps) {
     );
   }
   const project = props.projects.find((p) => p.id === card.projectId);
+  const scope: ModelScope = { project, global: globalDefaults, presets: props.presets };
 
   const move = async (to: CardView["column"]) => {
     try {
@@ -144,6 +148,7 @@ export function CardDetail(props: CardDetailProps) {
             events={data.events}
             sessions={data.sessions}
             presets={props.presets}
+            scope={scope}
             reload={reload}
           />
         ) : null}
@@ -154,11 +159,15 @@ export function CardDetail(props: CardDetailProps) {
             events={data.events}
             sessions={data.sessions}
             presets={props.presets}
+            scope={scope}
             reload={reload}
             onOpenVerification={() => setTab("verify")}
           />
         ) : null}
-        {tab === "verify" ? <VerifyTab api={api} card={card} events={data.events} reload={reload} /> : null}
+        {tab === "review" ? (
+          <ReviewTab api={api} card={card} events={data.events} presets={props.presets} reload={reload} />
+        ) : null}
+        {tab === "verify" ? <VerifyTab api={api} card={card} scope={scope} reload={reload} /> : null}
         {tab === "timeline" ? (
           <Timeline api={api} card={card} events={data.events} reload={reload} />
         ) : null}
@@ -192,38 +201,38 @@ function TabChip({
   );
 }
 
-/** 验证: the reviewer's conclusions, then the evidence verification (WP-21). */
+/** 验证 (WP-108): the verification model (every card is verified, no "none"), then the evidence verification (WP-21). */
 function VerifyTab({
   api,
-  card,
-  events,
+  card: serverCard,
+  scope,
   reload,
 }: {
   api: BoardApi;
   card: CardView;
-  events: readonly CardEvent[];
-  reload: () => void;
+  scope: ModelScope;
+  reload: () => Promise<unknown>;
 }) {
-  const reviews = reviewItemsOf(events);
+  const toast = useToast();
+  const { card, update } = useOptimisticCard(
+    serverCard,
+    (patch) => api.cardsUpdate({ card: serverCard.id, ...patch }),
+    reload,
+    (e) => toast.error(errorMessage(e)),
+  );
   return (
     <View style={{ gap: 14 }}>
-      <Field label="复核结论">
-        {reviews.length === 0 ? (
-          <Muted size={13}>
-            {card.reviewerPresetId
-              ? "还没有复核结果：执行完成后由复核模型 review。"
-              : "这张卡片没有选复核模型（在执行页选择）。"}
-          </Muted>
-        ) : (
-          <View style={{ gap: 8 }}>
-            {reviews.map((item) => (
-              <Bubble key={item.id} item={item} />
-            ))}
-          </View>
-        )}
-      </Field>
+      <ModelPicker
+        label="验证模型"
+        role="verifier"
+        presets={scope.presets}
+        value={card.verifierPresetId}
+        fallback={defaultChoice("verifier", scope)}
+        hint="每张卡都要验证：它按验收标准逐条取证判定（不需要截图的卡按测试与 lint 结果判定）。"
+        onChange={(verifierPresetId) => void update({ verifierPresetId })}
+      />
       <Field label="证据验证">
-        <VerificationPanel api={api} card={card} reload={reload} />
+        <VerificationPanel api={api} card={card} reload={() => void reload()} />
       </Field>
     </View>
   );

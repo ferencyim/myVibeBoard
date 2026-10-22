@@ -534,3 +534,29 @@ describe("WP-105 card fields over sync", () => {
     expect(() => p.client.write("card", card.id, { plan_activity_at: seen })).toThrow(/Unknown field/);
   });
 });
+
+describe("WP-108 card fields over sync", () => {
+  it("maps plan reviewer / verifier picks and the review read position; phone cards start from the default models", async () => {
+    const t = setup();
+    const preset = t.store.presets.create({ name: "v", provider: "claude", model: "m", roleHints: ["verifier"] });
+    t.store.projects.update(t.project.id, { defaultPresets: { verifier: preset.id } });
+    const card = t.store.cards.create({ projectId: t.project.id, title: "c", column: "draft" });
+    t.store.events.add({ cardId: card.id, type: "chat", authorKind: "reviewer", author: "r", body: { text: "ok", thread: "review" } });
+    const p = t.phone();
+    await p.syncNow();
+    expect(JSON.parse(String(p.row("project", t.project.id)!.default_presets_json))).toEqual({ verifier: preset.id });
+    expect(p.row("card", card.id)).toMatchObject({ verifier_preset_id: preset.id });
+    expect(p.row("card", card.id)!.review_activity_at).toBeTruthy();
+
+    t.clock.ms += 5_000;
+    const seen = new Date(t.clock.ms).toISOString();
+    p.client.write("card", card.id, { plan_reviewer_preset_id: preset.id, verifier_preset_id: null, review_seen_at: seen });
+    const offline = p.newCard("written offline");
+    t.clock.ms += 5_000;
+    await p.syncNow();
+    expect(t.store.cards.get(card.id)).toMatchObject({ planReviewerPresetId: preset.id, verifierPresetId: null, reviewSeenAt: seen });
+    // The phone set no models on the new card: it starts from the project default like any new card.
+    expect(t.store.cards.get(offline)!.verifierPresetId).toBe(preset.id);
+    expect(() => p.client.write("card", card.id, { review_activity_at: seen })).toThrow(/Unknown field/);
+  });
+});

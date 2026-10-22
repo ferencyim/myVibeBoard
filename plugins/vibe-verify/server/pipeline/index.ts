@@ -2,7 +2,11 @@
 //
 //   evidence mode  : verifier agent round 1 (writes verify.json) -> collectors from the registry
 //                    -> automatic tests/lint -> verifier round 2 (judges the evidence per check)
-//   tests_only mode: automatic tests + lint only
+//   tests_only mode: automatic tests + lint -> verifier round 2 (judges the checks on their logs)
+//
+// WP-108: every card is verified by a verification model - the card's pick, else the project /
+// global default (resolveModel "verifier"); only when none is set anywhere (a card the scheduler
+// dispatched) the old automatic pick runs, and the notes say so.
 //
 // then aggregate (fail > doubt > pass), store, and on failure send the card back to `in_progress`
 // (actor verifier) with the failing evidence as the worker's next prompt.
@@ -10,6 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  resolveModel,
   type CardView,
   type PlanVersion,
   type Project,
@@ -192,7 +197,7 @@ export function createPipeline(deps: PipelineDeps) {
           authorKind: "reviewer",
           author: preset?.name ?? "reviewer",
           kind: "verdict",
-          thread: "exec",
+          thread: "review",
           text: reviewChatText(verdict, summary, issues, failure),
           agentId: reviewerAgentId,
           sessionId,
@@ -336,6 +341,18 @@ export function createPipeline(deps: PipelineDeps) {
     }
   }
 
+  /** The card's verification model: its pick, else the project / global default (WP-108). */
+  const verifierPreset = (card: CardView, project: Project) => {
+    const { presetId } = resolveModel(
+      "verifier",
+      card,
+      project,
+      board.modelDefaults.global(),
+      (id) => !!board.presets.get(id),
+    );
+    return presetId ? board.presets.get(presetId) : undefined;
+  };
+
   const workerSession = (cardId: string) => {
     const workers = board.sessions.list({ cardId, role: "worker" });
     return workers.findLast((s) => s.state !== "ended") ?? workers.at(-1);
@@ -364,7 +381,7 @@ export function createPipeline(deps: PipelineDeps) {
     const worktree = card.worktree ?? project.repoPath;
     const commitHash = await headCommit(runner, worktree);
     const mode = card.needsEvidence ? "evidence" : "tests_only";
-    const checks = mode === "evidence" ? splitChecks(card, planOf(card)) : [];
+    const checks = splitChecks(card, planOf(card));
     const { verification, items } = verify.create({
       cardId: card.id,
       projectId: project.id,
@@ -418,17 +435,20 @@ export function createPipeline(deps: PipelineDeps) {
     }
 
     try {
-      if (reviewReturns) {
-        // nothing more to collect this round
-      } else if (mode === "evidence") {
-        // ---- verifier agent -------------------------------------------------------------
+      if (!reviewReturns) {
+        // ---- verifier agent (both modes, WP-108) ----------------------------------------
         const worker = workerSession(card.id);
-        const choice = pick({
-          card,
-          project,
-          workerProvider: worker?.currentProvider ?? null,
-          presets: board.presets.list(),
-        });
+        const chosen = verifierPreset(card, project);
+        const choice = chosen
+          ? { provider: chosen.provider, model: chosen.model || undefined }
+          : pick({
+              card,
+              project,
+              workerProvider: worker?.currentProvider ?? null,
+              presets: board.presets.list(),
+            });
+        if (chosen) notes.push(`验证模型：${chosen.name}（${chosen.provider}/${chosen.model}）`);
+        else notes.push(`没有选验证模型（卡片、项目、全局都没有），自动挑选了 ${choice.provider}`);
         let launchError: string | undefined;
         try {
           verifierAgent = await deps.launcher.launch({
@@ -469,8 +489,9 @@ export function createPipeline(deps: PipelineDeps) {
           }
           return result;
         };
-        let setupReply = "";
         let judgeReply = "";
+        if (mode === "evidence") {
+        let setupReply = "";
 
         // ---- round 1: how to run it -----------------------------------------------------
         const existingPerf = readExistingPerf(worktree);
@@ -572,6 +593,18 @@ export function createPipeline(deps: PipelineDeps) {
         for (const auto of await runAutoChecks(ctx, runner, { skipTests: backendRan })) {
           extraItem(auto.text, auto.method, auto.judgement, auto.note, auto.artifacts);
         }
+        } else {
+          // ---- tests_only: the automatic tests/lint are the evidence ----------------------
+          for (const auto of await runAutoChecks(ctx, runner)) {
+            const item = extraItem(auto.text, auto.method, auto.judgement, auto.note, auto.artifacts);
+            for (const file of verify.evidence(vid).filter((e) => e.itemId === item.id)) {
+              names.set(path.basename(file.path), file.id);
+            }
+          }
+          if (!verify.items(vid).some((i) => i.method.startsWith("auto"))) {
+            notes.push("No test or lint command was found; the verifier judges the checks without them");
+          }
+        }
 
         // ---- round 2: judge the evidence ------------------------------------------------
         if (verifierAgent) {
@@ -590,7 +623,7 @@ export function createPipeline(deps: PipelineDeps) {
               })),
               notes: verify
                 .items(vid)
-                .filter((i) => i.method === "auto" && i.note)
+                .filter((i) => i.method.startsWith("auto") && i.note)
                 .map((i) => `${i.checkText}: ${i.note}`),
             }),
           ))?.text ?? "";
@@ -611,11 +644,6 @@ export function createPipeline(deps: PipelineDeps) {
             notes.push("The verifier produced no valid verdict");
           }
         }
-      } else {
-        for (const auto of await runAutoChecks(ctx, runner)) {
-          extraItem(auto.text, auto.method, auto.judgement, auto.note, auto.artifacts);
-        }
-        if (verify.items(vid).length === 0) notes.push("No test or lint command was found; nothing could be checked");
       }
     } catch (e) {
       notes.push(`Verification aborted: ${e instanceof Error ? e.message : String(e)}`);

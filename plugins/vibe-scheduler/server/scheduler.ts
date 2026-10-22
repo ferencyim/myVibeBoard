@@ -275,11 +275,11 @@ export function createScheduler(deps: SchedulerDeps) {
         continue;
       }
       const project = store.projects.get(card.projectId);
-      // Same order as vibe-board's dispatcher: card, master recommendation, project default.
-      const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id));
+      // Same order as vibe-board's dispatcher: card, master recommendation, project default, global default.
+      const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id), store.modelDefaults.global());
       const preset = presetId ? store.presets.get(presetId) : undefined;
       if (!project || !preset) {
-        deferred[card.key] = "没有执行预设（请在卡片上选择，或给项目设默认预设）";
+        deferred[card.key] = "没有主代理模型（请在卡片上选择，或在项目/全局设置默认模型）";
         continue;
       }
       const provider = preset.provider;

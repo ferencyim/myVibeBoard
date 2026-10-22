@@ -129,6 +129,8 @@ export function registerBoardRpcs(
   server.handle(rpc.presetsUpdateRpc, ({ presetId, ...patch }) => board.presets.update(presetId, patch));
   server.handle(rpc.presetsDeleteRpc, (input) => board.presets.delete(input.presetId));
   server.handle(rpc.providersCatalogRpc, (_input, { paseo }) => providerCatalog(paseo));
+  server.handle(rpc.defaultsGetRpc, () => board.defaults.get());
+  server.handle(rpc.defaultsSetRpc, (input) => board.defaults.set(input.global));
 
   server.handle(rpc.promptsListRpc, (input) => board.prompts.list(input.projectId));
   server.handle(rpc.promptsSetRpc, (input) => board.prompts.set(input.key, input.text, input.projectId));
@@ -159,6 +161,7 @@ export function registerBoardRpcs(
   }
   if (flow) {
     server.handle(rpc.planStartRpc, (input) => flow.planStart(input.card, input.actor));
+    server.handle(rpc.planReviewRpc, (input) => flow.planReview(input.card, input.actor));
     server.handle(rpc.planSubtasksRpc, (input) => flow.setSubtasks(input.card, input.subtasks, input.actor));
     server.handle(rpc.execStartRpc, async (input, { paseo }) => {
       extras.onPaseo?.(paseo);

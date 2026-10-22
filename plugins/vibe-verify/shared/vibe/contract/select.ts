@@ -264,17 +264,19 @@ export function parseWorkerHistory(markdown: string): Record<string, number> {
 }
 
 /**
- * The preset a card runs with, in the order every dispatch path must use: the card's own pick,
- * the master agent's recommendation (`suggestedPresetId`), the project default. Dispatch and the
- * scheduler's admission both call this so they cannot disagree about which preset a card has.
- * `presetExists` skips a stored id whose preset was deleted and goes on to the next source.
+ * The preset a card's main agent runs with, in the order every dispatch path must use: the card's
+ * own pick, the master agent's recommendation (`suggestedPresetId`), the project default, the global
+ * default (WP-108, see model-roles.ts). Dispatch and the scheduler's admission both call this so they
+ * cannot disagree about which preset a card has. `presetExists` skips a stored id whose preset was
+ * deleted and goes on to the next source.
  */
 export function pickPresetId(
   card: { presetId: string | null; suggestedPresetId: string | null },
-  project: { defaultPresetId: string | null } | null | undefined,
+  project: { defaultPresets: { worker?: string } } | null | undefined,
   presetExists: (id: string) => boolean = () => true,
+  global: { worker?: string } | null = null,
 ): string | null {
-  for (const id of [card.presetId, card.suggestedPresetId, project?.defaultPresetId]) {
+  for (const id of [card.presetId, card.suggestedPresetId, project?.defaultPresets.worker, global?.worker]) {
     if (id && presetExists(id)) return id;
   }
   return null;

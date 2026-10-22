@@ -18,6 +18,7 @@ import {
   CardPrioritySchema,
   CardViewSchema,
   ChatThreadSchema,
+  ModelDefaultsSchema,
   PlanSnapshotSchema,
   PromptDefSchema,
   PlanVersionSchema,
@@ -78,7 +79,8 @@ const projectFields = {
   description: z.string(),
   /** Requirements document, relative to the repository root. */
   requirementsPath: z.string().refine(isSafeRepoRelativePath, "must be relative to the repository root"),
-  defaultPresetId: z.string().nullable(),
+  /** WP-108: default preset per model job; a missing job follows the global default. */
+  defaultPresets: ModelDefaultsSchema,
   concurrencyLimit: z.number().int().min(1).nullable(),
   devices: z.array(z.string()),
   paseoProjectId: z.string().nullable(),
@@ -99,7 +101,7 @@ const presetFields = {
   instructions: z.string(),
   /** Ordered failover chain: preset ids to continue on when a session on this preset fails. */
   fallbackPresetIds: z.array(z.string()).nullable(),
-  /** Purposes (worker | scout | reviewer | planner); [] = unspecified. Wins over `roleHint`. */
+  /** Purposes (worker | scout | reviewer | planner | verifier); [] = unspecified. Wins over `roleHint`. */
   roleHints: z.array(RoleHintSchema),
   // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
   roleHint: z.enum(PRESET_ROLE_HINTS).nullable(),
@@ -121,6 +123,9 @@ const cardEditable = {
   plannerPresetId: z.string().nullable(),
   /** WP-106: default model of the sub-agents (presetId is the main agent). */
   subagentPresetId: z.string().nullable(),
+  /** WP-108: model of 复核方案, and the verification model (null = the project / global default). */
+  planReviewerPresetId: z.string().nullable(),
+  verifierPresetId: z.string().nullable(),
   parentCardId: z.string().nullable(),
   tagIds: z.array(z.string()),
 };
@@ -143,7 +148,7 @@ export const projectsCreateRpc = defineRpc({
     projectType: projectFields.projectType.optional(),
     description: projectFields.description.optional(),
     requirementsPath: projectFields.requirementsPath.optional(),
-    defaultPresetId: projectFields.defaultPresetId.optional(),
+    defaultPresets: projectFields.defaultPresets.optional(),
     concurrencyLimit: projectFields.concurrencyLimit.optional(),
     devices: projectFields.devices.optional(),
     paseoProjectId: projectFields.paseoProjectId.optional(),
@@ -163,7 +168,7 @@ export const projectsUpdateRpc = defineRpc({
     projectType: projectFields.projectType.optional(),
     description: projectFields.description.optional(),
     requirementsPath: projectFields.requirementsPath.optional(),
-    defaultPresetId: projectFields.defaultPresetId.optional(),
+    defaultPresets: projectFields.defaultPresets.optional(),
     concurrencyLimit: projectFields.concurrencyLimit.optional(),
     devices: projectFields.devices.optional(),
     paseoProjectId: projectFields.paseoProjectId.optional(),
@@ -245,6 +250,11 @@ export const cardsCreateRpc = defineRpc({
     needsEvidence: cardEditable.needsEvidence.optional(),
     presetId: cardEditable.presetId.optional(),
     reviewerPresetId: cardEditable.reviewerPresetId.optional(),
+    scoutPresetId: cardEditable.scoutPresetId.optional(),
+    plannerPresetId: cardEditable.plannerPresetId.optional(),
+    planReviewerPresetId: cardEditable.planReviewerPresetId.optional(),
+    subagentPresetId: cardEditable.subagentPresetId.optional(),
+    verifierPresetId: cardEditable.verifierPresetId.optional(),
     parentCardId: cardEditable.parentCardId.optional(),
     tagIds: cardEditable.tagIds.optional(),
     sortKey: z.string().optional(),
@@ -267,9 +277,12 @@ export const cardsUpdateRpc = defineRpc({
     scoutPresetId: cardEditable.scoutPresetId.optional(),
     plannerPresetId: cardEditable.plannerPresetId.optional(),
     subagentPresetId: cardEditable.subagentPresetId.optional(),
-    /** Read positions of the plan / execution / verification tabs (see markReadPatch). */
+    planReviewerPresetId: cardEditable.planReviewerPresetId.optional(),
+    verifierPresetId: cardEditable.verifierPresetId.optional(),
+    /** Read positions of the plan / execution / review / verification tabs (see markReadPatch). */
     planSeenAt: z.string().nullable().optional(),
     execSeenAt: z.string().nullable().optional(),
+    reviewSeenAt: z.string().nullable().optional(),
     verifySeenAt: z.string().nullable().optional(),
     parentCardId: cardEditable.parentCardId.optional(),
     tagIds: cardEditable.tagIds.optional(),
@@ -363,6 +376,14 @@ export const planStartRpc = defineRpc({
   output: z.object({ event: CardEventSchema }),
 });
 
+export const planReviewRpc = defineRpc({
+  name: "vibe.plan.review",
+  /** WP-108 复核方案: the plan reviewer model reads the plan, its opinion goes to the planning model,
+   *  which revises the plan. Both models: the card's pick, else the project / global default. */
+  input: z.object({ card: cardRef, actor: moveActorSchema.optional() }),
+  output: z.object({ event: CardEventSchema }),
+});
+
 export const planSubtasksRpc = defineRpc({
   name: "vibe.plan.subtasks",
   /** WP-106: the owner's subtasks of the plan (edit, add, remove, pick a model). The planning
@@ -414,6 +435,22 @@ export const plansSaveRpc = defineRpc({
   /** Appends the next version (1, 2, ...). */
   input: z.object({ card: cardRef, snapshot: PlanSnapshotSchema }),
   output: z.object({ version: PlanVersionSchema }),
+});
+
+// --- default models (WP-108) ----------------------------------------------------------------
+
+export const defaultsGetRpc = defineRpc({
+  name: "vibe.defaults.get",
+  /** The global default model per job (the project level is project.defaultPresets). */
+  input: z.object({}),
+  output: z.object({ global: ModelDefaultsSchema }),
+});
+
+export const defaultsSetRpc = defineRpc({
+  name: "vibe.defaults.set",
+  /** Replaces the global defaults; a missing job = no global default. */
+  input: z.object({ global: ModelDefaultsSchema }),
+  output: z.object({ global: ModelDefaultsSchema }),
 });
 
 // --- tags / presets / providers ------------------------------------------------------------
@@ -676,7 +713,10 @@ export const VIBE_BOARD_RPCS = {
   eventsAddRpc,
   chatSendRpc,
   planStartRpc,
+  planReviewRpc,
   planSubtasksRpc,
+  defaultsGetRpc,
+  defaultsSetRpc,
   execStartRpc,
   execSwitchRpc,
   proposalsAcceptRpc,

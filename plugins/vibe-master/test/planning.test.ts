@@ -158,7 +158,7 @@ describe("制定方案", () => {
     const reply = t.chats(bare.id).at(-1)!;
     expect(reply.author).toBe("master");
     expect(reply.error).toBe(true);
-    expect(reply.text).toContain("还没有选择规划模型");
+    expect(reply.text).toContain("还没有规划模型");
     expect(t.fake.agents).toHaveLength(1);
   });
 
@@ -365,5 +365,72 @@ describe("subtasks in the plan (WP-106)", () => {
     const proposal = t.store.events.list(c.id).find((e) => e.type === "proposal")!;
     expect((proposal.body as { changes: { subtasks: Array<{ id: string }> } }).changes.subtasks.map((s) => s.id)).toEqual(["s1"]);
     expect(t.chats(c.id).at(-1)!.text).toContain("你改过子任务");
+  });
+});
+
+describe("复核方案 (WP-108)", () => {
+  const oldPlan = { description: "旧方案：直接改表", checks: [], subCards: [], tags: [], recommendedPresetId: null };
+  const reviewPlan = (t: ReturnType<typeof setup>, cardId: string) =>
+    t.store.cards.addChat({ cardId, authorKind: "user", author: "user", text: "请复核方案。", thread: "plan", action: "review_plan" });
+
+  it("the plan reviewer's opinion goes to the plan conversation, then the planning model revises the plan", async () => {
+    const t = setup(({ provider, prompt }) => {
+      if (provider === "kimi") {
+        expect(prompt).toContain("方案复核模型");
+        expect(prompt).toContain("旧方案：直接改表");
+        return "需要修改：缺少回滚步骤";
+      }
+      expect(prompt).toContain("[plan:review]");
+      expect(prompt).toContain("缺少回滚步骤");
+      return fence({ reply: "已按复核意见补上回滚步骤", plan: { text: "新方案：先备份，可回滚" } });
+    });
+    const c = t.card("Migrate");
+    t.store.cards.setPlan(c.id, { plan: oldPlan });
+    // No pick on the card: the global default plan reviewer is used.
+    t.store.modelDefaults.setGlobal({ plan_reviewer: t.presets.kimi.id });
+    reviewPlan(t, c.id);
+    await t.planning.tick();
+
+    const reviewer = t.fake.agents.find((a) => a.provider === "kimi")!;
+    expect(reviewer.options.labels).toMatchObject({ role: "plan_reviewer" });
+    expect(reviewer.options.cwd).toBe(t.repoPath);
+    expect(reviewer.archived).toBe(true);
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("新方案：先备份，可回滚");
+    const chats = t.chats(c.id);
+    expect(chats.map((m) => m.author)).toEqual(["user", "reviewer", "master"]);
+    expect(chats[1]).toMatchObject({ thread: "plan", text: "需要修改：缺少回滚步骤" });
+    expect(chats[2]!.text).toContain("已按复核意见");
+    expect(threadState(t.store.events.list(c.id)).pending).toEqual([]);
+  });
+
+  it("can be repeated; each review is answered on its own", async () => {
+    let reviews = 0;
+    const t = setup(({ provider }) => {
+      if (provider === "kimi") return `意见 ${++reviews}`;
+      return fence({ reply: `已改 ${reviews}`, plan: { text: `方案 v${reviews + 1}` } });
+    });
+    const c = t.card("Repeat");
+    t.store.cards.update(c.id, { planReviewerPresetId: t.presets.kimi.id });
+    t.store.cards.setPlan(c.id, { plan: oldPlan });
+    reviewPlan(t, c.id);
+    await t.planning.tick();
+    reviewPlan(t, c.id);
+    await t.planning.tick();
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("方案 v3");
+    expect(t.chats(c.id).filter((m) => m.author === "reviewer").map((m) => m.text)).toEqual(["意见 1", "意见 2"]);
+  });
+
+  it("without a plan or a plan reviewer it says so; the planning model may come from the project default", async () => {
+    const t = setup(() => fence({ reply: "ok" }));
+    const bare = t.draft("Defaults");
+    t.store.projects.update(t.project.id, { defaultPresets: { planner: t.presets.claude.id } });
+    reviewPlan(t, bare.id);
+    await t.planning.tick();
+    expect(t.chats(bare.id).at(-1)).toMatchObject({ author: "master", error: true, text: expect.stringContaining("还没有方案") });
+    t.store.cards.setPlan(bare.id, { plan: oldPlan });
+    reviewPlan(t, bare.id);
+    await t.planning.tick();
+    expect(t.chats(bare.id).at(-1)).toMatchObject({ error: true, text: expect.stringContaining("还没有方案复核模型") });
+    expect(t.fake.agents).toHaveLength(0);
   });
 });

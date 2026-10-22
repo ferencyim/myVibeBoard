@@ -9,12 +9,13 @@ import {
   PRESET_PERMISSION_MODES,
   PROJECT_TYPES,
   ROLE_HINTS,
+  type ModelDefaults,
   type Preset,
   type Project,
   type Tag,
 } from "../../shared/vibe/contract";
 import { errorMessage, projectColor } from "../board/logic";
-import { queryKey, type BoardApi } from "../common/api";
+import { queryKey, useGlobalDefaults, type BoardApi } from "../common/api";
 import { TAG_PALETTE, tagColor } from "../common/colors";
 import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
@@ -40,6 +41,7 @@ import {
   type ProjectDraft,
   type ProviderUsageLike,
 } from "./logic";
+import { DefaultModelsEditor, GlobalDefaultsPanel } from "./defaults";
 import { RequirementsPanel } from "./requirements";
 import { QuotaBadge } from "./usage";
 
@@ -96,11 +98,13 @@ function ProjectForm({
   draft,
   onChange,
   presets,
+  globalDefaults,
 }: {
   mode: "create" | "edit";
   draft: ProjectDraft;
   onChange: (patch: Partial<ProjectDraft>) => void;
   presets: readonly Preset[];
+  globalDefaults: ModelDefaults;
 }) {
   return (
     <View style={{ gap: 10 }}>
@@ -135,13 +139,13 @@ function ProjectForm({
       <Field label="需求文档路径（相对仓库根目录）">
         <TextField value={draft.requirementsPath} onChangeText={(requirementsPath) => onChange({ requirementsPath })} autoCapitalize="none" />
       </Field>
-      <Field label="默认预设">
-        <Row>
-          <Chip label="无" selected={draft.defaultPresetId === null} onPress={() => onChange({ defaultPresetId: null })} />
-          {presets.map((p) => (
-            <Chip key={p.id} label={p.name} selected={draft.defaultPresetId === p.id} onPress={() => onChange({ defaultPresetId: p.id })} />
-          ))}
-        </Row>
+      <Field label="默认模型（覆盖全局；不选则沿用全局）">
+        <DefaultModelsEditor
+          value={draft.defaultPresets}
+          presets={presets}
+          inherited={globalDefaults}
+          onChange={(defaultPresets) => onChange({ defaultPresets })}
+        />
       </Field>
       <Field label="并发上限（留空不限）">
         <TextField value={draft.concurrencyLimit} onChangeText={(concurrencyLimit) => onChange({ concurrencyLimit })} keyboardType="number-pad" />
@@ -165,6 +169,7 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
   const nextColor = (n: number) => COLOR_CHOICES[n % COLOR_CHOICES.length]!;
   const [createDraft, setCreateDraft] = useState<ProjectDraft>(() => emptyProjectDraft(nextColor(projects.length)));
   const [edit, setEdit] = useState<{ id: string; draft: ProjectDraft } | null>(null);
+  const globalDefaults = useGlobalDefaults();
 
   const run = async (fn: () => Promise<unknown>) => {
     try {
@@ -204,6 +209,7 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
               mode="edit"
               draft={edit.draft}
               presets={presets}
+              globalDefaults={globalDefaults}
               onChange={(patch) => setEdit((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e))}
             />
             <View style={{ flexDirection: "row", gap: 8 }}>
@@ -230,7 +236,7 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
       {projects.length === 0 ? <Muted>还没有项目，先在下面创建一个。</Muted> : null}
       <View style={{ gap: 10 }}>
         <Text style={{ fontWeight: "600" }}>新建项目</Text>
-        <ProjectForm mode="create" draft={createDraft} presets={presets} onChange={(patch) => setCreateDraft((d) => ({ ...d, ...patch }))} />
+        <ProjectForm mode="create" draft={createDraft} presets={presets} globalDefaults={globalDefaults} onChange={(patch) => setCreateDraft((d) => ({ ...d, ...patch }))} />
         <Btn variant="primary" label="创建项目" icon="Plus" disabled={!createDraft.name.trim() || !createDraft.prefix.trim()} onPress={create} />
       </View>
     </View>
@@ -367,6 +373,8 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
 
   return (
     <View style={{ gap: 10 }}>
+      <GlobalDefaultsPanel api={api} presets={presets} />
+      <Text style={{ fontWeight: "600", marginTop: 8 }}>预设列表</Text>
       {presets.map((p) => (
         <View key={p.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <View style={{ flex: 1 }}>

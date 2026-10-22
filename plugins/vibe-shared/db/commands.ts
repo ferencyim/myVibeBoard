@@ -88,6 +88,7 @@ import {
 import { isSafeRepoRelativePath } from "../contract/paths";
 import { syncSpec } from "../contract/sync-spec";
 import { ACTIVITY_COLUMN, activityTabsOf } from "../contract/card-tabs";
+import { MODEL_ROLES, cleanDefaults, prefillModels, type ModelDefaults } from "../contract/model-roles";
 import { publishEvent } from "./events";
 import { decodeRow, decodeRows } from "./rows";
 import type { Row, SqlParam, VibeDb } from "./sqlite";
@@ -121,7 +122,8 @@ export interface CreateProjectInput {
   description?: string;
   /** Repo-relative requirements file; default PRODUCT-REQUIREMENTS.md. */
   requirementsPath?: string;
-  defaultPresetId?: string | null;
+  /** WP-108: default preset per model job (missing = follow the global default). Replaces defaultPresetId. */
+  defaultPresets?: ModelDefaults;
   concurrencyLimit?: number | null;
   devices?: string[];
   paseoProjectId?: string | null;
@@ -173,6 +175,8 @@ export interface CreateCardInput {
   scoutPresetId?: string | null;
   plannerPresetId?: string | null;
   subagentPresetId?: string | null;
+  planReviewerPresetId?: string | null;
+  verifierPresetId?: string | null;
   origin?: CardOrigin;
   originRef?: string | null;
   dedupeKey?: string | null;
@@ -198,9 +202,13 @@ export interface UpdateCardInput {
   plannerPresetId?: string | null;
   /** WP-106: default model of the sub-agents. */
   subagentPresetId?: string | null;
-  /** Read positions of the card tabs (WP-105); see contract/card-tabs.ts markReadPatch. */
+  /** WP-108: plan reviewer and verification model. */
+  planReviewerPresetId?: string | null;
+  verifierPresetId?: string | null;
+  /** Read positions of the card tabs (WP-105/108); see contract/card-tabs.ts markReadPatch. */
   planSeenAt?: string | null;
   execSeenAt?: string | null;
+  reviewSeenAt?: string | null;
   verifySeenAt?: string | null;
   parentCardId?: string | null;
   planSessionId?: string | null;
@@ -208,7 +216,10 @@ export interface UpdateCardInput {
 }
 
 /** Card fields that only move a read position (no edit of the card). */
-const READ_POSITION_FIELDS = new Set(["planSeenAt", "execSeenAt", "verifySeenAt"]);
+const READ_POSITION_FIELDS = new Set(["planSeenAt", "execSeenAt", "reviewSeenAt", "verifySeenAt"]);
+
+/** vibe_meta key of the global default models (WP-108; computer-only, not synced). */
+export const MODEL_DEFAULTS_KEY = "models.defaults";
 
 /** A plan with nothing in it (subtasks edited before any plan was made). */
 const EMPTY_PLAN: PlanSnapshot = { description: "", checks: [], subCards: [], tags: [], recommendedPresetId: null };
@@ -254,7 +265,7 @@ export interface AddChatInput {
   ready?: boolean;
   error?: boolean;
   thread?: ChatThread;
-  action?: "make_plan";
+  action?: "make_plan" | "review_plan";
   /** WP-106: subtask of the sub-agent that wrote it / the owner addresses. */
   subtask?: string;
 }
@@ -354,7 +365,7 @@ const PROJECT_FIELDS: FieldMap = {
   projectType: ["project_type", asIs],
   description: ["description", asIs],
   requirementsPath: ["requirements_path", asIs],
-  defaultPresetId: ["default_preset_id", asIs],
+  defaultPresets: ["default_presets_json", (v) => JSON.stringify(cleanDefaults(v))],
   concurrencyLimit: ["concurrency_limit", asIs],
   devices: ["devices_json", asJson],
   paseoProjectId: ["paseo_project_id", asIs],
@@ -387,8 +398,11 @@ const CARD_FIELDS: FieldMap = {
   scoutPresetId: ["scout_preset_id", asIs],
   plannerPresetId: ["planner_preset_id", asIs],
   subagentPresetId: ["subagent_preset_id", asIs],
+  planReviewerPresetId: ["plan_reviewer_preset_id", asIs],
+  verifierPresetId: ["verifier_preset_id", asIs],
   planSeenAt: ["plan_seen_at", asIs],
   execSeenAt: ["exec_seen_at", asIs],
+  reviewSeenAt: ["review_seen_at", asIs],
   verifySeenAt: ["verify_seen_at", asIs],
   parentCardId: ["parent_card_id", asIs],
   planSessionId: ["plan_session_id", asIs],
@@ -720,7 +734,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         try {
           db.prepare(
             `INSERT INTO project (id, name, prefix, repo_path, project_type, project_types_json, description,
-               requirements_path, default_preset_id, concurrency_limit,
+               requirements_path, default_presets_json, concurrency_limit,
                devices_json, paseo_project_id, color, created_at, updated_at, updated_hlc)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
@@ -732,7 +746,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             JSON.stringify(input.projectTypes ?? ["other"]),
             input.description ?? "",
             input.requirementsPath ?? DEFAULT_REQUIREMENTS_PATH,
-            input.defaultPresetId ?? null,
+            JSON.stringify(cleanDefaults(input.defaultPresets ?? {})),
             input.concurrencyLimit ?? null,
             JSON.stringify(input.devices ?? []),
             input.paseoProjectId ?? null,
@@ -850,9 +864,15 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     delete(id: string): void {
       write((hlc) => {
         mustPreset(id);
-        db.prepare("UPDATE project SET default_preset_id = NULL WHERE default_preset_id = ?").run(
-          id,
-        );
+        // WP-108: forget the preset in the project and global default models.
+        for (const p of projects.list(true)) {
+          const kept = Object.fromEntries(Object.entries(p.defaultPresets).filter(([, v]) => v !== id));
+          if (Object.keys(kept).length !== Object.keys(p.defaultPresets).length)
+            patchRow("project", p.id, PROJECT_FIELDS, { defaultPresets: kept }, hlc);
+        }
+        const globals = modelDefaults.global();
+        if (Object.values(globals).includes(id))
+          writeGlobalDefaults(Object.fromEntries(Object.entries(globals).filter(([, v]) => v !== id)));
         db.prepare("UPDATE card SET preset_id = NULL WHERE preset_id = ?").run(id);
         db.prepare("UPDATE card SET suggested_preset_id = NULL WHERE suggested_preset_id = ?").run(
           id,
@@ -861,6 +881,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare("UPDATE card SET scout_preset_id = NULL WHERE scout_preset_id = ?").run(id);
         db.prepare("UPDATE card SET planner_preset_id = NULL WHERE planner_preset_id = ?").run(id);
         db.prepare("UPDATE card SET subagent_preset_id = NULL WHERE subagent_preset_id = ?").run(id);
+        db.prepare("UPDATE card SET plan_reviewer_preset_id = NULL WHERE plan_reviewer_preset_id = ?").run(id);
+        db.prepare("UPDATE card SET verifier_preset_id = NULL WHERE verifier_preset_id = ?").run(id);
         db.prepare("DELETE FROM preset WHERE id = ?").run(id);
         tombstone("preset", id, hlc);
         // Drop the deleted id from other presets' fallback chains.
@@ -989,7 +1011,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         .map(viewOf);
     },
 
-    create(input: CreateCardInput, actor: MoveActor = "user", author = ""): CardView {
+    create(rawInput: CreateCardInput, actor: MoveActor = "user", author = ""): CardView {
+      let input = rawInput;
       const column = input.column ?? "draft";
       const origin = input.origin ?? "manual";
       if (!input.title.trim()) throw new CommandError("invalid", "Card title is required");
@@ -1001,6 +1024,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       }
       return write((hlc) => {
         const project = mustProject(input.projectId);
+        // WP-108: jobs the caller left open start from the project, then the global default model.
+        input = { ...input, ...prefillModels(input, project, modelDefaults.global(), (p) => !!presets.get(p)) };
         const id = input.id ?? newId(now().getTime());
         const createdAt = input.createdAt ?? iso();
         const number = project.nextNumber;
@@ -1018,8 +1043,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare(
           `INSERT INTO card (id, project_id, number, key, title, description, "column", sort_key, priority, acceptance,
              ref_images_json, needs_evidence, preset_id, suggested_preset_id, reviewer_preset_id, scout_preset_id, planner_preset_id,
-             subagent_preset_id, worktree, origin, origin_ref, dedupe_key, plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             subagent_preset_id, plan_reviewer_preset_id, verifier_preset_id, worktree, origin, origin_ref, dedupe_key, plan_session_id,
+             parent_card_id, created_at, updated_at, updated_hlc)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           id,
           project.id,
@@ -1039,6 +1065,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           input.scoutPresetId ?? null,
           input.plannerPresetId ?? null,
           input.subagentPresetId ?? null,
+          input.planReviewerPresetId ?? null,
+          input.verifierPresetId ?? null,
           input.worktree ?? null,
           origin,
           input.originRef ?? null,
@@ -2235,5 +2263,35 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
   };
 
-  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, limits, deviceId, db };
+  // ---- default models (WP-108): the global level; the project level is project.defaultPresets ----
+
+  function writeGlobalDefaults(value: ModelDefaults): void {
+    db.prepare(
+      "INSERT INTO vibe_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(MODEL_DEFAULTS_KEY, JSON.stringify(cleanDefaults(value)));
+  }
+
+  const modelDefaults = {
+    global(): ModelDefaults {
+      const raw = db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(MODEL_DEFAULTS_KEY)?.value;
+      if (!raw) return {};
+      try {
+        return cleanDefaults(JSON.parse(raw));
+      } catch {
+        return {};
+      }
+    },
+    /** Replaces the global defaults; unknown preset ids are refused. */
+    setGlobal(value: ModelDefaults): ModelDefaults {
+      const clean = cleanDefaults(value);
+      for (const role of MODEL_ROLES) {
+        const id = clean[role];
+        if (id && !presets.get(id)) throw new CommandError("not_found", `Preset not found: ${id}`);
+      }
+      writeGlobalDefaults(clean);
+      return clean;
+    },
+  };
+
+  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, limits, modelDefaults, deviceId, db };
 }

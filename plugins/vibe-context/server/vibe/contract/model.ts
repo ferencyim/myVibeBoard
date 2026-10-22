@@ -32,6 +32,7 @@ import {
   VerificationKindSchema,
   VerificationModeSchema,
 } from "./enums";
+import { ModelDefaultsSchema } from "./model-roles";
 import { isSafeRepoRelativePath } from "./paths";
 
 const Iso = z.string(); // ISO-8601 UTC
@@ -57,7 +58,8 @@ export const ProjectSchema = z.object({
   description: z.string(),
   /** Requirements document, relative to the repository root (never absolute, never `..`). */
   requirementsPath: z.string().refine(isSafeRepoRelativePath, "requirementsPath must be repo-relative"),
-  defaultPresetId: z.string().nullable(),
+  /** WP-108: default preset per model job; missing keys follow the global default. Replaces defaultPresetId. */
+  defaultPresets: ModelDefaultsSchema,
   concurrencyLimit: z.number().int().nullable(),
   devices: z.array(z.string()),
   paseoProjectId: z.string().nullable(),
@@ -92,6 +94,9 @@ export const CardSchema = z.object({
   plannerPresetId: z.string().nullable(),
   /** WP-106: default model of the sub-agents (a subtask may pick its own); `presetId` is the main agent. */
   subagentPresetId: z.string().nullable(),
+  /** WP-108: model that reviews the plan (复核方案) and model that runs the evidence verification. */
+  planReviewerPresetId: z.string().nullable(),
+  verifierPresetId: z.string().nullable(),
   /** WP-106: runtime state per subtask id of the plan. Daemon-written. */
   subtaskRuns: z.record(z.string(), z.lazy(() => SubtaskRunSchema)),
   /** WP-105: the card's single plan (overwritten on re-planning); null = no plan yet. Daemon-written. */
@@ -101,9 +106,12 @@ export const CardSchema = z.object({
   /** WP-105 unread markers: newest content per tab (daemon-written) and what the owner has seen. */
   planActivityAt: Iso.nullable(),
   execActivityAt: Iso.nullable(),
+  /** WP-108: the review tab. */
+  reviewActivityAt: Iso.nullable(),
   verifyActivityAt: Iso.nullable(),
   planSeenAt: Iso.nullable(),
   execSeenAt: Iso.nullable(),
+  reviewSeenAt: Iso.nullable(),
   verifySeenAt: Iso.nullable(),
   worktree: z.string().nullable(),
   origin: CardOriginSchema,
@@ -158,8 +166,8 @@ export const ChatEventBodySchema = z.object({
   error: z.boolean().optional(),
   /** WP-105: the conversation it belongs to; absent on old rows (see chatThreadOf). */
   thread: ChatThreadSchema.optional(),
-  /** WP-105: a user message that asks for something beyond text ("make_plan": the 制定方案 button). */
-  action: z.literal("make_plan").optional(),
+  /** A user message that asks for something beyond text: "make_plan" = 制定方案 (WP-105), "review_plan" = 复核方案 (WP-108). */
+  action: z.enum(["make_plan", "review_plan"]).optional(),
   /** WP-106: the subtask whose sub-agent wrote the message, or that an owner message is addressed to. */
   subtask: z.string().optional(),
 });

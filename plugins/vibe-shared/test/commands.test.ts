@@ -380,11 +380,13 @@ describe("presets and tags", () => {
       name: "n",
       prefix: "AB",
       repoPath: "r",
-      defaultPresetId: preset.id,
+      defaultPresets: { worker: preset.id, verifier: preset.id },
     });
+    s.store.modelDefaults.setGlobal({ planner: preset.id });
     const card = s.store.cards.create({ projectId: proj.id, title: "t", presetId: preset.id });
     s.store.presets.delete(preset.id);
-    expect(s.store.projects.get(proj.id)?.defaultPresetId).toBeNull();
+    expect(s.store.projects.get(proj.id)?.defaultPresets).toEqual({});
+    expect(s.store.modelDefaults.global()).toEqual({});
     expect(s.store.cards.get(card.id)?.presetId).toBeNull();
   });
 

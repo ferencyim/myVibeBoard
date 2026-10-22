@@ -113,7 +113,10 @@ try {
       runtimeEnv: null,
       instructions: "",
     });
-    await board("vibe.projects.update", { project: project.id, defaultPresetId: preset.id });
+    await board("vibe.projects.update", {
+      project: project.id,
+      defaultPresets: { worker: preset.id, verifier: preset.id },
+    });
     step("1 project + preset created", true, `${project.prefix}, ${provider}/${model.id}`);
 
     // 2. draft card

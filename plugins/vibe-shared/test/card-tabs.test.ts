@@ -137,18 +137,31 @@ describe("cards.setPlan", () => {
 describe("chat threads and unread markers", () => {
   it("classifies chat rows written before WP-105 by author", () => {
     expect(chatThreadOf(ev({ authorKind: "executor" }))).toBe("exec");
-    expect(chatThreadOf(ev({ authorKind: "reviewer" }))).toBe("exec");
+    expect(chatThreadOf(ev({ authorKind: "reviewer" }))).toBe("review");
     expect(chatThreadOf(ev({ authorKind: "system", author: "dispatch" }))).toBe("exec");
     expect(chatThreadOf(ev({ authorKind: "master" }))).toBe("plan");
     expect(chatThreadOf(ev({ authorKind: "user" }))).toBe("plan");
     expect(chatThreadOf(ev({ authorKind: "user", body: { text: "x", thread: "exec" } }))).toBe("exec");
   });
 
+  it("WP-108: review conclusions belong to the review tab, the plan reviewer to the plan conversation", () => {
+    // Conclusions written before WP-108 said thread "exec".
+    expect(chatThreadOf(ev({ authorKind: "reviewer", body: { text: "x", thread: "exec" } }))).toBe("review");
+    expect(chatThreadOf(ev({ authorKind: "reviewer", body: { text: "x", thread: "review" } }))).toBe("review");
+    expect(chatThreadOf(ev({ authorKind: "reviewer", body: { text: "x", thread: "plan" } }))).toBe("plan");
+    expect(activityTabsOf(ev({ authorKind: "reviewer", body: { text: "x", thread: "plan" } }))).toEqual(["plan"]);
+    expect(activityTabsOf(ev({ type: "reject", authorKind: "system", body: { text: "x", reviewReturn: true } }))).toEqual([
+      "review",
+      "verify",
+    ]);
+    expect(activityTabsOf(ev({ type: "reject", authorKind: "system", body: { text: "x" } }))).toEqual(["verify"]);
+  });
+
   it("only other parties' content counts as new", () => {
     expect(activityTabsOf(ev({ authorKind: "user", body: { text: "x", thread: "plan" } }))).toEqual([]);
     expect(activityTabsOf(ev({ authorKind: "master", body: { text: "x", thread: "plan" } }))).toEqual(["plan"]);
     expect(activityTabsOf(ev({ authorKind: "executor", body: { text: "x", thread: "exec" } }))).toEqual(["exec"]);
-    expect(activityTabsOf(ev({ authorKind: "reviewer" }))).toEqual(["exec", "verify"]);
+    expect(activityTabsOf(ev({ authorKind: "reviewer" }))).toEqual(["review"]);
     expect(activityTabsOf(ev({ type: "proposal", authorKind: "master" }))).toEqual(["plan"]);
     expect(activityTabsOf(ev({ type: "status", authorKind: "system", body: { kind: "verification" } }))).toEqual([
       "verify",
@@ -174,7 +187,12 @@ describe("chat threads and unread markers", () => {
       author: "verifier",
       body: { kind: "verification", conclusion: "pass" },
     });
+    tick();
+    store.cards.addChat({ cardId: card.id, authorKind: "reviewer", text: "复核通过", thread: "review", kind: "verdict" });
     let now = store.cards.get(card.id)!;
+    expect(unreadTabsOf(now)).toEqual(["plan", "exec", "review", "verify"]);
+    now = store.cards.update(card.id, markReadPatch(now, "review")!);
+    expect(now.reviewSeenAt).toBe(now.reviewActivityAt);
     expect(unreadTabsOf(now)).toEqual(["plan", "exec", "verify"]);
 
     const before = now.updatedAt;

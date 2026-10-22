@@ -571,7 +571,9 @@ describe("unread markers (WP-105)", () => {
     add("executor", "exec");
     expect(get().execActivityAt).toBeTruthy();
     add("reviewer", "exec");
-    expect(get().verifyActivityAt).toBeTruthy();
+    // WP-108: review conclusions mark the review tab (old rows said thread "exec").
+    expect(get().reviewActivityAt).toBeTruthy();
+    expect(get().verifyActivityAt).toBeNull();
   });
 
   it("updating only the seen positions does not bump updatedAt", () => {

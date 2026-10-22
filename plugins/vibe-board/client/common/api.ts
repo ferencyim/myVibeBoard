@@ -22,6 +22,9 @@ export function useBoardApi() {
     cardsDelete: useRpc(rpc.cardsDeleteRpc),
     cardsDispatch: useRpc(rpc.cardsDispatchRpc),
     planStart: useRpc(rpc.planStartRpc),
+    planReview: useRpc(rpc.planReviewRpc),
+    defaultsGet: useRpc(rpc.defaultsGetRpc),
+    defaultsSet: useRpc(rpc.defaultsSetRpc),
     planSubtasks: useRpc(rpc.planSubtasksRpc),
     execStart: useRpc(rpc.execStartRpc),
     execSwitch: useRpc(rpc.execSwitchRpc),
@@ -111,6 +114,18 @@ export function useSessionsData() {
     refetchInterval: 3000,
   });
   return { sessions: query.data?.sessions ?? [], loading: query.isLoading, error: query.error ?? null };
+}
+
+/** Global default models (WP-108). Computer-only: offline (phone) they read as none. */
+export function useGlobalDefaults() {
+  const api = useBoardApi();
+  const query = useQuery({
+    queryKey: [ROOT, "defaults"],
+    queryFn: () => api.defaultsGet({}),
+    refetchInterval: 15000,
+    retry: false,
+  });
+  return query.data?.global ?? {};
 }
 
 /** Offline state: `asOf` for the read-only banner and the replies queued on the phone. */

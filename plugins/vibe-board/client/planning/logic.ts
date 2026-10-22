@@ -4,14 +4,19 @@
 // Tool calls and other details stay in the full agent session and the timeline tab.
 
 import {
+  MODEL_ROLE_HINT,
   chatThreadOf,
+  resolveModel,
   type AgentSession,
   type AuthorKind,
   type CardEvent,
   type CardView,
   type ChatKind,
   type ChatThread,
+  type ModelDefaults,
+  type ModelRole,
   type Preset,
+  type Project,
   type ProposalChanges,
   type ProposalStatus,
   type RoleHint,
@@ -50,9 +55,11 @@ const PROPOSAL_FIELDS: readonly { field: ProposalField; label: string }[] = [
   { field: "acceptance", label: "验收标准" },
 ];
 
-/** Author label of a chat line; a sub-agent's lines carry their subtask (WP-106). */
-export function authorLabel(author: AuthorKind, subtask?: string): string {
+/** Author label of a chat line; a sub-agent's lines carry their subtask (WP-106); in the plan
+ *  conversation the reviewer is the plan reviewer (WP-108). */
+export function authorLabel(author: AuthorKind, subtask?: string, thread?: ChatThread): string {
   if (author === "executor" && subtask) return `子代理 ${subtask}`;
+  if (author === "reviewer" && thread === "plan") return "方案复核";
   return AUTHOR_LABELS[author] ?? author;
 }
 
@@ -167,7 +174,7 @@ export function chatItemsOf(events: readonly CardEvent[], thread: ChatThread): C
         kind: "message",
         id: e.id,
         author: e.authorKind,
-        label: e.authorKind === "user" && subtask ? `你 → 子代理 ${subtask}` : authorLabel(e.authorKind, subtask),
+        label: e.authorKind === "user" && subtask ? `你 → 子代理 ${subtask}` : authorLabel(e.authorKind, subtask, thread),
         subtask,
         text: typeof b.text === "string" ? b.text : "",
         at: e.createdAt,
@@ -194,17 +201,60 @@ export function chatItemsOf(events: readonly CardEvent[], thread: ChatThread): C
     } else if (thread === "exec") {
       const row = systemRow(e);
       if (row) items.push(row);
+    } else if (thread === "review" && e.type === "reject" && b.reviewReturn === true) {
+      // WP-108: the returns a review caused belong to the review history too.
+      const row = systemRow(e);
+      if (row) items.push(row);
     }
   }
   return items;
 }
 
-/** The reviewer's conclusions (newest last), shown on the verification tab too. */
+/** The reviewer's conclusions (newest last). */
 export function reviewItemsOf(events: readonly CardEvent[]): MessageItem[] {
-  return chatItemsOf(events, "exec").filter(
+  return chatItemsOf(events, "review").filter(
     (i): i is MessageItem => i.kind === "message" && i.author === "reviewer",
   );
 }
+
+// --- model jobs (WP-108) ---------------------------------------------------------------------
+
+export const MODEL_ROLE_LABELS: Record<ModelRole, string> = {
+  scout: "探路",
+  planner: "规划方案",
+  plan_reviewer: "方案复核",
+  worker: "执行主代理",
+  subagent: "执行子代理",
+  reviewer: "复核",
+  verifier: "验证",
+};
+
+/** Where the defaults of a card come from: its project and the global settings. */
+export interface ModelScope {
+  project: Pick<Project, "defaultPresets"> | null | undefined;
+  global: ModelDefaults;
+  presets: readonly Preset[];
+}
+
+const existsIn = (presets: readonly Preset[]) => (id: string) => presets.some((p) => p.id === id);
+
+/** The preset a job of this card runs with (card -> project -> global), or null. */
+export function resolvedPreset(role: ModelRole, card: CardView | null, scope: ModelScope): Preset | null {
+  const { presetId } = resolveModel(role, card, scope.project, scope.global, existsIn(scope.presets));
+  return scope.presets.find((p) => p.id === presetId) ?? null;
+}
+
+/** "名称（项目默认）" of the default a job falls back to when the card has no pick; null = none. */
+export function defaultChoice(role: ModelRole, scope: ModelScope, ownerLevel: "card" | "project" = "card"): string | null {
+  const project = ownerLevel === "card" ? scope.project : null;
+  const { presetId, source } = resolveModel(role, null, project, scope.global, existsIn(scope.presets));
+  const name = scope.presets.find((p) => p.id === presetId)?.name;
+  if (!name) return null;
+  return `${name}（${source === "project" ? "项目默认" : "全局默认"}）`;
+}
+
+/** The preset purpose a job's picker filters by. */
+export const roleHintOf = (role: ModelRole): RoleHint => MODEL_ROLE_HINT[role];
 
 export interface FieldDiff {
   field: ProposalField | "subtasks";
@@ -307,6 +357,11 @@ export function executingLabel(sessions: readonly AgentSession[], presets: reado
   const preset = presets.find((p) => p.id === card.presetId);
   const model = preset && preset.provider === worker.currentProvider ? `${preset.name}（${preset.provider}/${preset.model}）` : worker.currentProvider;
   return `${model} · ${WORKER_STATE_LABELS[worker.state] ?? worker.state}`;
+}
+
+/** 立即执行 needs a verification model (every card is verified, WP-108). */
+export function missingVerifier(card: CardView, scope: ModelScope): boolean {
+  return resolvedPreset("verifier", card, scope) === null;
 }
 
 /** Can 立即执行 start the card now? */

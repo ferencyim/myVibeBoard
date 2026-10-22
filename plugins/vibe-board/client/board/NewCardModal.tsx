@@ -47,8 +47,9 @@ export function NewCardModal({
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [needsEvidence, setNeedsEvidence] = useState(false);
   const [evidenceTouched, setEvidenceTouched] = useState(false);
-  const [presetId, setPresetId] = useState<string | null>(null);
-  const [reviewerPresetId, setReviewerPresetId] = useState<string | null>(null);
+  // undefined = not picked here: the card starts from the project / global default models (WP-108).
+  const [presetId, setPresetId] = useState<string | null | undefined>(undefined);
+  const [reviewerPresetId, setReviewerPresetId] = useState<string | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -71,8 +72,8 @@ export function NewCardModal({
     setTagIds([]);
     setNeedsEvidence(false);
     setEvidenceTouched(false);
-    setPresetId(null);
-    setReviewerPresetId(null);
+    setPresetId(undefined);
+    setReviewerPresetId(undefined);
   };
 
   const submit = async () => {
@@ -88,8 +89,8 @@ export function NewCardModal({
         priority,
         tagIds,
         needsEvidence,
-        presetId,
-        reviewerPresetId,
+        ...(presetId !== undefined ? { presetId } : {}),
+        ...(reviewerPresetId !== undefined ? { reviewerPresetId } : {}),
       });
       reset();
       refresh();
@@ -147,11 +148,14 @@ export function NewCardModal({
               setNeedsEvidence(v);
             }}
           />
-          <Field label="执行 Agent 预设">
-            <PresetSelector presets={presets} value={presetId} usage={usage} onChange={setPresetId} />
+          <Text style={{ fontSize: 11, opacity: 0.7 }}>
+            各项模型不选时按项目、全局的默认模型预填，创建后可在卡片的各个页签里改。
+          </Text>
+          <Field label="执行主代理模型">
+            <PresetSelector presets={presets} value={presetId ?? null} usage={usage} onChange={setPresetId} />
           </Field>
           <Field label="复核模型" hint="任务完成后由该模型 review 代码改动；发现严重问题会自动退回。">
-            <ReviewerSelect presets={presets} value={reviewerPresetId} onChange={setReviewerPresetId} />
+            <ReviewerSelect presets={presets} value={reviewerPresetId ?? null} onChange={setReviewerPresetId} />
           </Field>
           <View style={{ flexDirection: "row", gap: 8 }}>
             <Btn variant="primary" label="创建" disabled={busy || !title.trim() || !projectId} onPress={submit} />

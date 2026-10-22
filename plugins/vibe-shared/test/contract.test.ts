@@ -143,7 +143,7 @@ describe("zod contract round trips", () => {
       prefix: "RT",
       repoPath: "r",
       projectType: "android",
-      defaultPresetId: preset.id,
+      defaultPresets: { worker: preset.id },
       devices: ["emu-1"],
       concurrencyLimit: 2,
     });
@@ -388,17 +388,18 @@ describe("collector interfaces", () => {
 
 describe("pickPresetId", () => {
   const exists = (id: string) => id !== "gone";
-  it("card pick, then the master's recommendation, then the project default", () => {
-    const project = { defaultPresetId: "proj" };
+  it("card pick, then the master's recommendation, then the project default, then the global default", () => {
+    const project = { defaultPresets: { worker: "proj" } };
     expect(pickPresetId({ presetId: "own", suggestedPresetId: "rec" }, project)).toBe("own");
     expect(pickPresetId({ presetId: null, suggestedPresetId: "rec" }, project)).toBe("rec");
     expect(pickPresetId({ presetId: null, suggestedPresetId: null }, project)).toBe("proj");
-    expect(pickPresetId({ presetId: null, suggestedPresetId: null }, { defaultPresetId: null })).toBeNull();
+    expect(pickPresetId({ presetId: null, suggestedPresetId: null }, { defaultPresets: {} })).toBeNull();
+    expect(pickPresetId({ presetId: null, suggestedPresetId: null }, { defaultPresets: {} }, undefined, { worker: "g" })).toBe("g");
     expect(pickPresetId({ presetId: null, suggestedPresetId: null }, undefined)).toBeNull();
   });
   it("a deleted preset falls through to the next source", () => {
     expect(
-      pickPresetId({ presetId: "gone", suggestedPresetId: "gone" }, { defaultPresetId: "proj" }, exists),
+      pickPresetId({ presetId: "gone", suggestedPresetId: "gone" }, { defaultPresets: { worker: "proj" } }, exists),
     ).toBe("proj");
   });
 });

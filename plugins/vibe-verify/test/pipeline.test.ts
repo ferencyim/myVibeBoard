@@ -47,6 +47,8 @@ interface Harness {
   cardId: string;
   sent: Array<{ agentId: string; prompt: string }>;
   launched: number;
+  /** Provider of every verifier launch. */
+  providers: string[];
   runnerCalls: RunCall[];
   worktree: string;
   seenConfig?: { backend?: { perf?: { baseline?: { path: string; commitHash?: string } } } };
@@ -64,6 +66,8 @@ function setup(options: {
   reply?: boolean;
   /** the worker wrote a backend.perf block into the worktree's .vibe/verify.json */
   perf?: boolean;
+  /** WP-108: the card's verification model / the global default one */
+  verifierPreset?: "card" | "global";
 }): Harness {
   const db = openVibeDb({ path: ":memory:" });
   migrateOwner(db, "verify");
@@ -112,7 +116,7 @@ function setup(options: {
   });
 
   const configs: RunConfigs = new Map();
-  const harness = { sent: [] as Harness["sent"], launched: 0 } as Harness;
+  const harness = { sent: [] as Harness["sent"], launched: 0, providers: [] as string[] } as Harness;
   const collector: EvidenceCollector = {
     id: "fake-backend",
     projectTypes: ["backend"],
@@ -130,16 +134,23 @@ function setup(options: {
   const registry = createCollectorRegistry();
   registry.register(collector);
 
+  if (options.verifierPreset) {
+    const preset = board.presets.create({ name: "Verifier", provider: "kimi", model: "k2", roleHints: ["verifier"] });
+    if (options.verifierPreset === "card") board.cards.update(card.id, { verifierPresetId: preset.id });
+    else board.modelDefaults.setGlobal({ verifier: preset.id });
+  }
+
   const launcher: VerifierLauncher = {
     async launch(input) {
       harness.launched++;
+      harness.providers.push(input.provider);
       mkdirSync(input.outputDir, { recursive: true });
-      let round = 0;
       return {
         agentId: "verifier-1",
         provider: input.provider,
-        async run() {
-          round++;
+        async run(prompt) {
+          // The judge round asks for "judgement"s; the setup round (evidence mode only) does not.
+          const round = prompt.includes("judgement") ? 2 : 1;
           if (options.reply) {
             const json = round === 1 ? { backend: { requests: [] } } : (options.verdict?.(2) ?? { items: [] });
             return { status: "idle" as const, text: ["Here you go:", "```json", JSON.stringify(json), "```"].join(String.fromCharCode(10)) };
@@ -257,19 +268,36 @@ describe("verification pipeline", () => {
     expect(result!.conclusion).toBe("pass");
   });
 
-  it("needs_evidence=false runs only tests and lint: no verifier, no collectors", async () => {
-    const h = setup({ needsEvidence: false, hasTestScript: true });
+  it("needs_evidence=false: tests and lint, no collectors; the verification model judges the checks on them (WP-108)", async () => {
+    const h = setup({
+      needsEvidence: false,
+      hasTestScript: true,
+      verifierPreset: "card",
+      verdict: () => ({ items: [{ check: 1, judgement: "pass" }, { check: 2, judgement: "pass" }] }),
+    });
     const result = await h.pipeline.run(h.cardId);
     expect(result!.conclusion).toBe("pass");
-    expect(h.launched).toBe(0);
+    expect(h.launched).toBe(1);
+    expect(h.providers).toEqual(["kimi"]);
     const detail = h.verify.detail(result!.verificationId)!;
     expect(detail.verification.mode).toBe("tests_only");
-    expect(detail.items.map((i) => i.checkText)).toEqual(["Tests pass"]);
+    expect(detail.items.map((i) => i.checkText)).toEqual(["GET /hello returns 200", "body says hello", "Tests pass"]);
+    expect(detail.notes.join(" ")).toContain("验证模型：Verifier");
     expect(h.runnerCalls.some((c) => c.command === "npm")).toBe(true);
   });
 
+  it("WP-108: evidence mode uses the global default verification model; without any it picks one and says so", async () => {
+    const withDefault = setup({ needsEvidence: true, verifierPreset: "global", verdict: () => passing });
+    await withDefault.pipeline.run(withDefault.cardId);
+    expect(withDefault.providers).toEqual(["kimi"]);
+    const without = setup({ needsEvidence: false, hasTestScript: true });
+    const result = await without.pipeline.run(without.cardId);
+    expect(without.launched).toBe(1);
+    expect(without.verify.detail(result!.verificationId)!.notes.join(" ")).toContain("没有选验证模型");
+  });
+
   it("failing tests in tests_only mode send the card back", async () => {
-    const h = setup({ needsEvidence: false, hasTestScript: true, testExit: 1 });
+    const h = setup({ needsEvidence: false, hasTestScript: true, testExit: 1, verifierPreset: "card" });
     const result = await h.pipeline.run(h.cardId);
     expect(result).toMatchObject({ conclusion: "fail", returned: true });
     expect(h.board.cards.get(h.cardId)!.column).toBe("in_progress");

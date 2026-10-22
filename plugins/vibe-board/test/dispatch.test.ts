@@ -213,7 +213,7 @@ describe("dispatch", () => {
     await expect(t.dispatcher.dispatch(draft.key)).rejects.toThrow(/只有待办卡片可以派发/);
 
     t.board.cards.update(t.card.id, { presetId: null });
-    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/还没有选执行预设/);
+    await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/还没有选主代理模型/);
 
     t.board.cards.update(t.card.id, { presetId: t.preset.id });
     t.board.projects.update("DEMO", { repoPath: "/elsewhere" });
@@ -225,9 +225,17 @@ describe("dispatch", () => {
   it("falls back to the project default preset", async () => {
     const t = setup();
     t.board.cards.update(t.card.id, { presetId: null });
-    t.board.projects.update("DEMO", { defaultPresetId: t.preset.id });
+    t.board.projects.update("DEMO", { defaultPresets: { worker: t.preset.id } });
     await t.dispatcher.dispatch("DEMO-1");
     expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.preset.id);
+  });
+
+  it("WP-108: falls back to the global default main-agent model last", async () => {
+    const t = setup();
+    t.board.cards.update(t.card.id, { presetId: null });
+    t.board.defaults.set({ worker: t.preset.id });
+    const result = await t.dispatcher.dispatch("DEMO-1");
+    expect(result.session.currentProvider).toBe(t.preset.provider);
   });
 
   it("uses the master agent's recommended preset when the card and the project have none", async () => {
@@ -249,7 +257,7 @@ describe("dispatch", () => {
       environmentKind: "new-worktree",
     } as any);
     t.board.cards.update(t.card.id, { presetId: null });
-    t.board.projects.update("DEMO", { defaultPresetId: t.preset.id });
+    t.board.projects.update("DEMO", { defaultPresets: { worker: t.preset.id } });
     t.store.cards.update(t.card.id, { suggestedPresetId: other.id });
     const result = await t.dispatcher.dispatch("DEMO-1");
     expect(result.session.currentProvider).toBe("claude");
@@ -506,8 +514,33 @@ describe("flow service (WP-105)", () => {
     });
     const flow = createFlowService({ board: t.board, dispatcher: t.dispatcher, reassigner: { switchTo } as never });
     const chats = (id = t.card.id) => t.store.events.list(id).filter((e) => e.type === "chat");
+    // Every card is verified (WP-108): a global default verification model.
+    t.store.modelDefaults.setGlobal({ verifier: t.preset.id });
     return { ...t, flow, switchTo, chats };
   }
+
+  it("WP-108: execStart refuses a card without any verification model (card, project, global)", async () => {
+    const t = flowSetup();
+    t.store.modelDefaults.setGlobal({});
+    await expect(t.flow.execStart(t.card.key)).rejects.toThrow(/验证模型/);
+    expect(t.fake.calls.agent).toHaveLength(0);
+    t.board.projects.update("DEMO", { defaultPresets: { verifier: t.preset.id } });
+    expect((await t.flow.execStart(t.card.key)).card.column).toBe("in_progress");
+  });
+
+  it("WP-108: planReview needs a plan, a planning model and a plan reviewer (defaults count)", () => {
+    const t = flowSetup();
+    const planner = t.board.presets.create({ name: "planner", provider: "claude", model: "opus", roleHints: ["planner"] }).preset;
+    t.store.modelDefaults.setGlobal({ planner: planner.id, verifier: t.preset.id });
+    expect(() => t.flow.planReview(t.card.key)).toThrow(/还没有方案/);
+    t.store.cards.setPlan(t.card.id, {
+      plan: { description: "做法", checks: [], subCards: [], tags: [], recommendedPresetId: null },
+    });
+    expect(() => t.flow.planReview(t.card.key)).toThrow(/方案复核模型/);
+    t.board.projects.update("DEMO", { defaultPresets: { plan_reviewer: planner.id } });
+    const { event } = t.flow.planReview(t.card.key);
+    expect(event.body).toMatchObject({ thread: "plan", action: "review_plan", text: "请复核方案。" });
+  });
 
   it("planStart needs a planning model and writes a plan-thread make_plan message", () => {
     const t = flowSetup();

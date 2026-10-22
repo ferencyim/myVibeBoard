@@ -218,7 +218,7 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 
 | 表                                 | 关键字段（在方案基础上的补充）                                                                                                                                                                                                                                                 | 同步                   |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------- |
-| project                            | id, name, prefix, repo_path, project_type, default_preset_id, concurrency_limit, devices_json, paseo_project_id, color                                                                                                                                                         | 双向                   |
+| project                            | id, name, prefix, repo_path, project_type, default_presets_json, concurrency_limit, devices_json, paseo_project_id, color                                                                                                                                                      | 双向                   |
 | card                               | id, project_id, number, key, title, description, column, sort_key(分数索引), priority, acceptance, ref_images_json, needs_evidence, preset_id, suggested_preset_id, worktree, origin(manual/maintenance), plan_session_id, parent_card_id, archived_at, created_at, updated_at | 双向（column 受限）    |
 | card_event                         | id, card_id, type, author_kind(user/agent/system), author, body_json, created_at                                                                                                                                                                                               | 双向                   |
 | plan_version                       | id, card_id, version, snapshot_json（描述/检查项/子卡/标签/推荐 agent）, created_at                                                                                                                                                                                            | daemon→手机            |
@@ -397,6 +397,7 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 | WP-104 | 标签编辑与配色、选择器即时响应、项目自动关联 Paseo 项目     | `plugins/vibe-shared`（core 迁移 6 `tag.color`、`tags.update`）、`plugins/vibe-board/client/{common/colors.ts,detail/optimistic.ts,presets,board}`、`server/dispatch/link-project.ts`；[core] 手机端 `toTag`                                                                                                            | 90     | 中   |
 | WP-105 | 卡片五 tab：方案/执行对话、未读、总 agent 退出卡片流程      | `plugins/vibe-board/{client,server}/**`、`plugins/vibe-master/server/{planning,wake,assess}/**`、`plugins/vibe-shared/**`（core 迁移、命令层）、vibe-verify 复核顺序；[core] App 离线映射                                                                                                                               | 92,104 | 难   |
 | WP-106 | 一张卡多个执行代理（主代理统筹子代理）、时间线默认收起      | `plugins/vibe-shared/**`（core 迁移 8、命令层、`contract/subtasks.ts`）、`plugins/vibe-board/{client,server}/**`（`server/subtasks/**`）、`plugins/vibe-master/server/planning/**` 与规划提示词、vibe-scheduler 并发计数；[core] App 离线映射                                                                           | 105    | 难   |
+| WP-108 | 方案复核、复核/验证独立 tab 与验证模型、全局/项目默认模型   | `plugins/vibe-shared/**`（core 迁移 9、`contract/model-roles.ts`、命令层 `modelDefaults`）、`plugins/vibe-board/{client,server}/**`、`plugins/vibe-master/server/planning/**` 与方案复核提示词、vibe-verify 验证模型、vibe-scheduler/vibe-maintain 默认模型读取；[core] App 离线映射                                    | 106    | 难   |
 
 - **WP-90**：`Project.projectTypes`（非空数组）取代单值，`projectType` 保留为 `projectTypes[0]` 的兼容字段（`COMPAT(project-types)`，旧手机端仍可同步）；
   `Project.description`、`Project.requirementsPath`（默认 `PRODUCT-REQUIREMENTS.md`）；`Preset.roleHints`（数组）取代 `roleHint`，同样保留兼容字段。
@@ -450,6 +451,20 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
   - **对话**：用户在执行对话里默认对主代理说话；选了某个子代理（`chat.body.subtask`）时由 chat router 转给该子代理（等待提问时作为回答）。子代理的提问先通知主代理，主代理用 `vibe_subtask_message` 回答，答不了就在自己的回复里问用户。
   - **换模型与改派**：换主代理模型仍是 `vibe.exec.switch`；改子任务的指定模型只影响之后启动的子代理（进行中的不打断，执行对话写一条说明）。子代理因额度/登录等失败时 `reassigner.reassign` 按该子代理所用预设的备选链改派，新会话拿子任务简报 + 接手说明，`subtaskRuns` 指向新会话，不改 `card.preset_id`；改派与失败都记入卡片。
   - **时间线**：每条事件默认一行（时间、类型、`timelineTitle` 短标题），点开显示完整内容，再点收起；纯函数在 `client/detail/events.ts`，桌面和手机同一份。
+- **WP-108**（在 WP-105/106 之上扩展）：方案复核；卡片六个 tab（详情、方案、执行、复核、验证、时间线）；验证模型必选；全局与项目两级默认模型。
+  - **七个模型角色**（`contract/model-roles.ts`）：探路 `scout`、规划 `planner`、方案复核 `plan_reviewer`、主代理 `worker`、子代理 `subagent`、复核 `reviewer`、验证 `verifier`。
+    卡片字段依次是 `scoutPresetId`、`plannerPresetId`、`planReviewerPresetId`（新）、`presetId`、`subagentPresetId`、`reviewerPresetId`、`verifierPresetId`（新）。
+    解析顺序 **卡片 → 项目默认 → 全局默认**（`resolveModel`，纯函数，跳过已删除的预设）。探路和复核的空字段表示「不做」，运行时不回落，只在新建卡片时预填；其余五个角色空字段运行时回落。子代理最后再回落到主代理模型（WP-106 不变）。
+  - **默认模型只存一份**：项目级是 `project.default_presets_json`（`ModelDefaults`：角色 → 预设 id，缺键 = 沿用全局，双向同步），取代 `project.default_preset_id`（core 迁移 9 把它搬到 `worker` 键后删列，不留兼容列：手机端不能离线改项目，旧手机只是读不到这个字段）；
+    全局在 `vibe_meta['models.defaults']`（命令层 `store.modelDefaults.{global,setGlobal}`，RPC `vibe.defaults.get/set`，只在电脑上），界面在「管理 → Agent 预设」顶部；项目级在项目编辑面板，每个角色可选「沿用全局」。
+    新卡片在命令层 `cards.create` 里按项目 → 全局预填调用方没给的角色（手机离线建的卡同步进来时同样预填）。`pickPresetId` 与调度器、维护、子代理都改用同一解析。删除预设时一并从项目与全局默认里清掉。
+  - **方案复核**：方案页顶部「方案复核模型」（按用途「复核」过滤，默认不选，可用默认）；「复核方案」= `vibe.plan.review` 写一条 plan 线程用户消息（`action:"review_plan"`）。
+    规划器轮询到后，用解析出的方案复核预设在项目仓库里开一个一次性只读会话（与探路同一套只读模式），提示词 `master.plan.review`（卡片描述、当前方案含子任务、验收标准），回复自由文本，作为 `chat{authorKind:"reviewer", thread:"plan", kind:"verdict"}` 写进方案对话（界面标「方案复核」）；
+    然后把复核意见包进 `master.plan.revise` 作为这条用户消息的内容交给当前规划模型，按普通规划回合处理：方案单版覆盖，用户改过的验收标准/子任务照 WP-105/106 规则以建议提出。可反复复核。没有方案或没有可用的复核模型时直接在方案对话里说明。
+  - **复核 tab**：复核模型选择（「不复核」）与复核结论历史。复核结论的对话线程为 `review`（`ChatThread` 新增值；`chatThreadOf`：显式 `plan`/`review` 优先，其余作者为 reviewer 的消息归 `review`，含旧行），因果的复核退回（`reject{reviewReturn}`）也列在这里。严重问题退回主代理的流程不变。
+  - **未读**：`UnreadTab` 增加 `review`，core 迁移 9 加 `review_activity_at`（daemon 写）/`review_seen_at`（双向同步）；`activityTabsOf`：复核结论 → review（不再盖 exec/verify），复核退回 → review + verify。
+  - **验证模型**：验证 tab 顶部选择（按用途「验证」过滤，新增 `RoleHint` `verifier`；没有「不验证」选项）。vibe-verify 用解析出的验证预设启动验证 agent；以前不需要 agent 的 `tests_only`（卡片不需要截图证据）现在也用它：跑完测试/lint 后，验证 agent 按验收标准逐条判定（`verify.judge`，证据是测试与 lint 日志），所以每张卡都由验证模型给结论。
+    卡片、项目、全局都没有验证模型时：「立即执行」被拒绝并提示去验证页选择；调度器自动派发的卡仍会验证，此时退回旧的自动挑选（不同 provider 优先）并在验证备注里写明。
 - **WP-98 / WP-99**：提示词注册表在 vibe-shared（core 迁移 5：`prompt_template` 由注册插件启动时 upsert 默认值与元数据、从不改覆盖；`prompt_override` 以 `<key>@<项目id|*>` 为行 id，仅 `text` 字段按字段 LWW 同步，空串 = 无覆盖）。
   命令层 `store.prompts.{register,resolve,body,setOverride,clearOverride,list}`：项目覆盖 > 全局覆盖 > 默认；`{{占位符}}` 单次渲染（未声明占位符的提示词原样返回）后追加 `fixedSuffix`（解析所需格式，界面只读）。
   手机策略：`prompt_template` 为 down 表只读；`prompt_override` 只能写已注册 key 的 `text`，不能删除。中央页在 vibe-board（`vibe.prompts.list/set/clear`），按注册表自动列出，不写死插件。
