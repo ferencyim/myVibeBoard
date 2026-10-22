@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMasterRuntime } from "../server/runtime";
-import { askMaster, ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
+import { askMaster, choosePreset, ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
 
 function build(over: { noSetTitle?: boolean } = {}) {
   const board = setupBoard();
@@ -27,10 +27,10 @@ async function started(t: ReturnType<typeof build>) {
 }
 
 describe("retired master agents are renamed", () => {
-  it("renames the old agent on a subscription switch", async () => {
+  it("renames the old agent on a preset switch", async () => {
     const t = build();
     await started(t);
-    await t.runtime.switchTo({ provider: "codex" }, "owner picked Codex");
+    await choosePreset(t, t.board.presets.codex.id);
     expect(t.fake.agents[0]!.title).toMatch(RETIRED);
     expect(t.fake.agents[1]!.title).toBeUndefined();
     await t.runtime.dispose();

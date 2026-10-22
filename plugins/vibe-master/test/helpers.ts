@@ -55,8 +55,8 @@ export function setupBoard() {
     repoPath,
     projectType: "web",
   });
-  const claude = store.presets.create({ name: "Claude Opus", provider: "claude", model: "opus", thinking: "high" });
-  const codex = store.presets.create({ name: "Codex Max", provider: "codex", model: "gpt-5", thinking: "xhigh" });
+  const claude = store.presets.create({ name: "Claude Opus", provider: "claude", model: "opus-x", thinking: "high" });
+  const codex = store.presets.create({ name: "Codex Max", provider: "codex", model: "gpt-5-codex", thinking: "xhigh" });
   const kimi = store.presets.create({ name: "Kimi", provider: "kimi", model: "kimi-k2", thinking: "default" });
   const draft = (title: string, extra: Partial<Parameters<typeof store.cards.create>[0]> = {}) =>
     store.cards.create({ projectId: project.id, title, description: `${title} description`, ...extra });
@@ -212,10 +212,22 @@ export function fakePaseo(
   };
 }
 
+/** The legacy `provider` setting stands in for a chosen preset (it resolves to the board's first preset of that provider). */
 export const defaultSettings = (over: Partial<MasterSettings> = {}): MasterSettings => ({
   ...masterSettings.schema.parse({}),
+  provider: "claude",
   ...over,
 });
+
+/** The owner picks another preset on the settings page: the legacy fields go, a running master moves over. */
+export async function choosePreset(
+  t: { settings: MasterSettings; runtime: { onSettingsChanged(): Promise<void> } },
+  presetId: string,
+): Promise<void> {
+  t.settings.provider = "";
+  t.settings.presetId = presetId;
+  await t.runtime.onSettingsChanged();
+}
 
 export const usageOf = (providerId: string, remainingPct: number): UsageProviderLike => ({
   providerId,

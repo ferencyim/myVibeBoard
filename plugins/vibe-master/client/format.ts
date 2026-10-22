@@ -1,95 +1,28 @@
-// Pure helpers for the master screen (no React): what the owner can switch to, and how to label it.
+// Pure helpers for the master screen (no React): which presets to offer, and how to label things.
 
-import type { MasterSessionRow, MasterTarget, ProviderInfo } from "../shared/rpc";
+import type { MasterSessionRow, MasterTarget, PresetChoice } from "../shared/rpc";
 import { thinkingLabel } from "../shared/vibe/ui/thinking";
-
-export interface SwitchChoice {
-  key: string;
-  label: string;
-  detail: string;
-  level: ProviderInfo["level"];
-  request: { provider: string; model?: string; thinking?: string };
-  active: boolean;
-}
 
 export const targetLabel = (t: MasterTarget | null): string =>
   t ? `${t.provider} / ${t.model}${t.thinking ? `（${thinkingLabel({ id: t.thinking })}）` : ""}` : "尚未解析";
 
-export function quotaLabel(p: Pick<ProviderInfo, "remainingPct" | "level">): string {
+export function quotaLabel(p: Pick<PresetChoice, "remainingPct" | "level">): string {
   if (p.remainingPct === null) return "额度未知";
   return `剩余 ${p.remainingPct}%${p.level === "ok" ? "" : ` - ${LEVEL_LABELS[p.level] ?? p.level}`}`;
 }
 
 const LEVEL_LABELS: Record<string, string> = { tight: "紧张", exhausted: "已用完", unknown: "未知" };
 
-export interface ThinkingChip {
-  id: string;
-  label: string;
+/** Presets the master can run on, as the card's planner selector filters them (open or tagged planner); the chosen one always stays. */
+export function presetChoices(presets: readonly PresetChoice[], selectedId: string): PresetChoice[] {
+  return presets.filter((p) => p.id === selectedId || p.roleHints.length === 0 || p.roleHints.includes("planner"));
 }
 
-/**
- * Chips of the "思考档位" setting: "默认" plus the thinking levels of the model the settings pick
- * (an empty model means the master's own default: Claude's Opus, else the provider default).
- * A saved value the model does not list (e.g. the old free-text "max") stays selectable.
- */
-export function thinkingChips(
-  providers: readonly ProviderInfo[],
-  provider: string,
-  model: string,
-  current: string,
-): ThinkingChip[] {
-  const models = providers.find((p) => p.id === provider)?.models ?? [];
-  const picked =
-    models.find((m) => m.id === model) ??
-    (model ? undefined : provider === "claude" ? models.find((m) => /opus/i.test(m.id)) : undefined) ??
-    (model ? undefined : (models.find((m) => m.isDefault) ?? models[0]));
-  const options = picked?.thinking ?? [];
-  const chips: ThinkingChip[] = [
-    { id: "", label: "默认" },
-    ...options.map((o) => ({ id: o.id, label: thinkingLabel(o) })),
-  ];
-  if (current && !options.some((o) => o.id === current)) {
-    chips.push({ id: current, label: `${thinkingLabel({ id: current })}（当前值）` });
-  }
-  return chips;
-}
-
-/**
- * One choice per provider model (default reasoning), plus one "max reasoning" choice for models
- * that offer thinking levels. Claude's Opus and the default models come first.
- */
-export function switchChoices(providers: ProviderInfo[], active: MasterTarget | null): SwitchChoice[] {
-  const out: SwitchChoice[] = [];
-  for (const p of providers) {
-    const models = [...p.models].sort(
-      (a, b) =>
-        Number(/opus/i.test(b.id)) - Number(/opus/i.test(a.id)) ||
-        Number(b.isDefault) - Number(a.isDefault) ||
-        a.id.localeCompare(b.id),
-    );
-    for (const m of models.slice(0, 3)) {
-      const isActive = active?.provider === p.id && active.model === m.id;
-      out.push({
-        key: `${p.id}:${m.id}`,
-        label: `${p.label} / ${m.label}`,
-        detail: quotaLabel(p),
-        level: p.level,
-        request: { provider: p.id, model: m.id },
-        active: isActive && !active?.thinking,
-      });
-      if (m.thinking.length > 1) {
-        out.push({
-          key: `${p.id}:${m.id}:max`,
-          label: `${p.label} / ${m.label} - 最高推理`,
-          detail: quotaLabel(p),
-          level: p.level,
-          request: { provider: p.id, model: m.id, thinking: "max" },
-          active: isActive && !!active?.thinking,
-        });
-      }
-    }
-  }
-  return out;
+/** One line on the master screen: who decides the dispatch order, and why the scheduler does when the master cannot. */
+export function dispatchLabel(d: { enabled: boolean; available: boolean; reason: string }): string {
+  if (!d.enabled) return "派发：调度器按规则派发（总 agent 派发已关闭）";
+  if (!d.available) return `派发：暂时回落到调度器规则（${d.reason || "总 agent 不可用"}）`;
+  return "派发：调度器有空位时由总 agent 选择先开始的待办卡";
 }
 
 const STATE_LABELS: Record<string, string> = {
@@ -102,7 +35,7 @@ const STATE_LABELS: Record<string, string> = {
 };
 
 const RETIRED_LABELS: Record<string, string> = {
-  switched: "切换订阅",
+  switched: "更换预设",
   mode_changed: "权限模式变更",
   replaced: "原会话不可用，已重建",
 };

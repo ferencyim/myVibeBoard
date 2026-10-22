@@ -11,19 +11,29 @@ npm ci && npm run typecheck && npm test
 ## What it does
 
 - **One long-lived master agent** (a normal Paseo agent, `VIBE_ROLE=master`, recorded in
-  `agent_session` with `role=master`, no card). Default Claude Opus (the "opus" model of the provider
-  catalog, configurable); the cwd is an empty scratch directory (`<VIBE_HOME>/master/workspace`).
+  `agent_session` with `role=master`, no card). WP-109: it runs on an **agent preset** chosen in the
+  settings (`presetId`; provider, model and thinking come from the preset, like the models picked on a card).
+  An owner who never picked one keeps working through the matching preset of the old `provider/model/thinking`
+  settings (shown as "migrated" until confirmed); with no preset the master reports `unavailable` and its jobs
+  are parked. The cwd is an empty scratch directory (`<VIBE_HOME>/master/workspace`).
   The static rules are the system prompt; the wake message is a deterministic per-project block (tags,
   presets, open cards) followed by the dynamic card/quota part, for prefix-cache hits.
 - **Wake-ups** come from the `vibe_event` bus only (`server/wake`): `card.moved -> done` consolidates project
-  memory; scheduler and maintenance signals raise reminders. Since WP-105 the master takes **no part in the card
-  flow**: no draft review, no dispatch recommendation, no advice on worker questions, no acceptance. One serial
-  queue; jobs that cannot run (no daemon handle yet, quota exhausted) are parked and resumed on the next handle or
+  memory; `scheduler.dispatch_wanted` asks for a dispatch pick (below); scheduler and maintenance signals raise
+  reminders. Since WP-105 the master takes **no part in the card flow**: no draft review, no advice on worker
+  questions, no acceptance, no planning. One serial queue; jobs that cannot run (no daemon handle yet, quota exhausted) are parked and resumed on the next handle or
   switch. On start, recently finished cards without a memory update are swept.
-- **Subscription switch** (RPC `master.switch`, screen, command palette, settings): starts the new
-  agent first, then retires the old one (`session.switched` event); the queue and the board carry on
-  unchanged, so the same cards are processed. The choice is kept in `<VIBE_HOME>/master/state.json`.
-  "highest reasoning" = the last thinking option of the catalog.
+- **Master dispatch** (WP-109, setting `dispatch`, default on; `server/dispatch`): when vibe-scheduler has free
+  slots it publishes `scheduler.dispatch_wanted {requestId, slots, cardIds}` (cards that passed its side-effect-free
+  checks). The master answers with the registered prompt `master.dispatch` and replies
+  `{"order": ["PROD-3", ...], "reason": ""}`; the pick is cut to the offered cards, deduplicated and capped at the slots,
+  then published as `master.dispatch_chosen`. Anything else (switch off, no preset, quota, error, timeout, unreadable reply) is
+  `master.dispatch_failed {reason}`. The scheduler admits the pick through its normal checks (it never skips them) and, on
+  failure, dispatches by its own rules for a while and writes the reason on each card it admits. The master publishes
+  `{enabled, available, reason, timeoutSeconds}` to `vibe_meta['master.dispatch']` (`store.masterDispatch`) on start and on
+  every settings change, so the scheduler knows without calling the plugin.
+- **Preset switch** (settings page; no RPC): `runtime.onSettingsChanged` starts the new agent first, then retires the old
+  one (`session.switched` event); the queue and the board carry on unchanged, so the same cards are processed.
 - **Permission mode** (WP-71, setting `permissionMode`, RPC `master.permission`, status screen, command palette): the
   master's (planning sessions run read-only on their own preset, see below). `auto` (default) = the provider's own automatic mode taken from the Paseo
   mode catalog (`providers.listModes`): Claude `auto` (classifier), Codex `auto-review` (older Codex without it: `auto`,
@@ -66,9 +76,9 @@ npm ci && npm run typecheck && npm test
 
 ## RPCs
 
-`master.status` (queue, session, target, switch history, providers with models/quota),
-`master.switch {provider, model?, thinking? ("max")}`, `master.permission {mode: auto|<modeId>|settings}`,
-`master.wake {card, reason: "card_done"}`.
+`master.status` (queue, session, target, preset, dispatch state, switch history, presets with quota),
+`master.permission {mode: auto|<modeId>|settings}`,
+`master.wake {card, reason: "card_done"}`, `master.sessions`.
 
 ## Notes for other work packages
 

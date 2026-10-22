@@ -60,6 +60,12 @@ import {
   type Tag,
 } from "../contract/model";
 import {
+  DEFAULT_MASTER_DISPATCH,
+  MASTER_DISPATCH_KEY,
+  MasterDispatchModeSchema,
+  type MasterDispatchMode,
+} from "../contract/dispatch";
+import {
   DEFAULT_SCHEDULER_LIMITS,
   SCHEDULER_LIMITS_KEY,
   SchedulerLimitsSchema,
@@ -2235,5 +2241,25 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
   };
 
-  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, limits, deviceId, db };
+  // ---- master dispatch mode (WP-109): vibe-master publishes, vibe-scheduler reads ----
+
+  const masterDispatch = {
+    publish(value: MasterDispatchMode): void {
+      const parsed = MasterDispatchModeSchema.parse(value);
+      db.prepare(
+        "INSERT INTO vibe_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run(MASTER_DISPATCH_KEY, JSON.stringify(parsed));
+    },
+    get(): MasterDispatchMode {
+      const raw = db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(MASTER_DISPATCH_KEY)?.value;
+      if (!raw) return DEFAULT_MASTER_DISPATCH;
+      try {
+        return MasterDispatchModeSchema.parse(JSON.parse(raw));
+      } catch {
+        return DEFAULT_MASTER_DISPATCH;
+      }
+    },
+  };
+
+  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, limits, masterDispatch, deviceId, db };
 }

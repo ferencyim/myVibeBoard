@@ -4,13 +4,14 @@
 // writer) is injected.
 
 import { join } from "node:path";
-import type { MasterSettings, MasterStatus, ProviderInfo } from "../shared/rpc";
+import type { MasterSettings, MasterStatus, PresetChoice } from "../shared/rpc";
 import { systemClock, type Clock } from "./clock";
 import { MASTER_RULES } from "./master/rules.generated";
 import { createMasterSession } from "./master/session";
 import { createConsolidator } from "./memory/consolidate";
 import { createFileMemoryPort, type MemoryPort } from "./memory/files";
 import { createPlanning } from "./planning/planner";
+import { createDispatcher } from "./dispatch/dispatch";
 import { createPromptPort, rulesFor } from "./prompts/port";
 import { migrateLegacyPromptSettings } from "./prompts/migrate";
 import { tuningOf } from "./tuning";
@@ -18,7 +19,7 @@ import { createAlerts } from "./subscription/alerts";
 import { createPermissionResolver, isBoardMcpCall } from "./subscription/permission";
 import { createQuotaReader } from "./subscription/quota";
 import { createStateFile } from "./subscription/state";
-import { providerSpec, type TargetRequest } from "./subscription/target";
+import { resolveMasterPreset } from "./subscription/preset";
 import { MasterError, type MasterPaseo, type WakeJob } from "./types";
 import type { GitRunner, VibeDb, VibeStore } from "./vibe/db";
 import { createWakeQueue } from "./wake/queue";
@@ -79,6 +80,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     alerts,
     log,
   });
+  const currentPreset = () => resolveMasterPreset(deps.settings(), store.presets.list());
+  /** Provider the master runs on: the live agent, else the chosen preset. */
+  const ownProvider = () => session.activeProvider() ?? currentPreset().preset?.provider ?? null;
   const memory = deps.memory ?? createFileMemoryPort();
   const consolidator = createConsolidator({
     db,
@@ -131,7 +135,37 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   });
 
   let schedulerPaused = false;
+  // Master dispatch (WP-109): the scheduler asks, the master picks, the scheduler admits.
+  const dispatcher = createDispatcher({
+    db,
+    store,
+    master: session,
+    exclusive: (fn) => queue.exclusive(fn),
+    prompts,
+    tuning,
+    enabled: () => deps.settings().enabled && deps.settings().dispatch,
+    timeoutSeconds: () => deps.settings().dispatchTimeoutSeconds,
+    log,
+  });
+  /** Tell the scheduler whether (and why not) it can ask the master. */
+  function publishDispatchMode(): void {
+    const s = deps.settings();
+    const { preset } = currentPreset();
+    try {
+      store.masterDispatch.publish({
+        enabled: s.dispatch,
+        available: s.enabled && !!preset,
+        reason: !s.enabled ? "总 agent 已在设置中停用" : preset ? "" : "没有为总 agent 选择预设",
+        timeoutSeconds: s.dispatchTimeoutSeconds,
+      });
+    } catch (error) {
+      log("could not publish the dispatch mode", error);
+    }
+  }
+  publishDispatchMode();
+
   const triggers = createTriggers({
+    onDispatchWanted: (request) => void dispatcher.handle(request),
     onMaintenancePaused({ ruleName, rejections }) {
       alerts.raise(
         "maintenance_paused",
@@ -146,8 +180,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
         // Reassign or wait is decided per draft from fresh quota numbers; the owner is reminded
         // when it is the master's own provider (never an automatic switch).
         quota.invalidate();
-        const own = session.activeProvider() ?? state.read().target?.provider ?? deps.settings().provider;
-        if (own.toLowerCase() === signal.provider.toLowerCase()) {
+        const own = ownProvider();
+        if (own && own.toLowerCase() === signal.provider.toLowerCase()) {
           alerts.raise(
             "quota_low",
             signal.provider,
@@ -171,7 +205,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   let stopMonitor: (() => void) | null = null;
   let monitoring = false;
   async function checkQuota(): Promise<void> {
-    const provider = session.activeProvider() ?? state.read().target?.provider ?? deps.settings().provider;
+    const provider = ownProvider();
+    if (!provider) return;
     const levels = await quota.get();
     const q = levels[provider.toLowerCase()];
     if (!q || q.level === "ok" || q.level === "unknown") return;
@@ -194,19 +229,17 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     arm();
   }
 
-  async function status(includeProviders: boolean): Promise<MasterStatus> {
+  async function status(): Promise<MasterStatus> {
     const snap = queue.snapshot();
     const keyOf = (cardId: string) => store.cards.get(cardId)?.key ?? null;
     const record = state.read();
-    const switched = record.target;
-    let target = switched ?? null;
-    if (!target) {
-      try {
-        target = await session.currentTarget();
-      } catch {
-        target = null;
-      }
+    let target = null;
+    try {
+      target = await session.currentTarget();
+    } catch {
+      target = null;
     }
+    const { preset, source } = currentPreset();
     const live = session.liveSession();
     const history = store.sessions
       .list({ role: "master" })
@@ -230,50 +263,26 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       }
     }
 
-    let providers: ProviderInfo[] = [];
+    const levels = await quota.get();
+    const presets: PresetChoice[] = store.presets.list().map((p) => ({
+      id: p.id,
+      name: p.name,
+      provider: p.provider,
+      model: p.model,
+      thinking: p.thinking,
+      roleHints: [...p.roleHints],
+      remainingPct: levels[p.provider.toLowerCase()]?.remainingPct ?? null,
+      level: levels[p.provider.toLowerCase()]?.level ?? "unknown",
+    }));
+    const dispatch = store.masterDispatch.get();
     const paseo = deps.getPaseo();
-    if (includeProviders && paseo) {
-      const levels = await quota.get();
-      // Whatever Paseo offers (any built-in or plugin provider), plus providers with usage data or presets.
-      const catalog = await paseo.providers.listAvailable?.().catch(() => null);
-      const ids = [
-        ...new Set([
-          ...(catalog?.providers ?? []).filter((p) => p.available !== false).map((p) => p.provider),
-          ...Object.keys(levels),
-          ...store.presets.list().map((p) => p.provider),
-        ]),
-      ];
-      const listed = await Promise.all(
-        ids.map(async (id): Promise<ProviderInfo | null> => {
-          try {
-            const res = await paseo.providers.listModels(id);
-            const models = (res.models ?? []).filter((m) => m.isSelectable !== false);
-            if (models.length === 0) return null;
-            return {
-              id,
-              label: id,
-              remainingPct: levels[id]?.remainingPct ?? null,
-              level: levels[id]?.level ?? "unknown",
-              models: models.map((m) => ({
-                id: m.id,
-                label: m.label,
-                isDefault: !!m.isDefault,
-                thinking: (m.thinkingOptions ?? []).map((o) => ({ id: o.id, label: o.label })),
-              })),
-            };
-          } catch {
-            return null;
-          }
-        }),
-      );
-      providers = listed.filter((p): p is ProviderInfo => p !== null);
-    }
 
     return {
       enabled: deps.settings().enabled,
       paseoReady: paseo !== null,
       target,
-      targetSource: switched ? "switched" : "settings",
+      preset: preset ? { id: preset.id, name: preset.name, migrated: source === "migrated" } : null,
+      dispatch: { enabled: dispatch.enabled, available: dispatch.available, reason: dispatch.reason },
       permission,
       session: live
         ? { sessionId: live.id, agentId: live.agentId, provider: live.currentProvider, state: live.state }
@@ -288,7 +297,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       schedulerPaused,
       lastAlert: record.lastAlert ?? null,
       switchHistory: history,
-      providers,
+      presets,
     };
   }
 
@@ -302,6 +311,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     triggers,
     consolidator,
     planning,
+    dispatcher,
     quota,
     alerts,
     status,
@@ -320,11 +330,19 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     /** All master sessions, newest first (the history list of the screen). */
     sessions: (limit?: number) => session.sessions(limit),
 
-    /** Manual switch of the master subscription; parked jobs continue on the new agent. */
-    async switchTo(request: TargetRequest, reason?: string) {
-      const result = await queue.exclusive(() => session.switchTo(request, reason ?? "manual switch"));
+    /**
+     * The settings changed (or were read for the first time): tell the scheduler whether the master
+     * can dispatch, and move a running master to a newly chosen preset. Parked jobs continue on it.
+     */
+    async onSettingsChanged(): Promise<void> {
+      publishDispatchMode();
+      if (!deps.getPaseo()) return;
+      try {
+        await queue.exclusive(() => session.applyPreset("切换总 agent 预设"));
+      } catch (error) {
+        log("could not apply the chosen preset", error);
+      }
       queue.resume();
-      return result;
     },
 
     /** Manual permission switch: a running master moves to a fresh agent, parked jobs continue on it. */

@@ -6,7 +6,6 @@ import {
   permissionRpc,
   sessionsRpc,
   statusRpc,
-  switchRpc,
   wakeRpc,
   type MasterSettings,
 } from "./shared/rpc";
@@ -32,6 +31,8 @@ export default function contribute(server: PluginServerContext) {
       maintainRequirements = current.maintainRequirements;
       runtime?.prompts.register();
     }
+    // Dispatch availability for the scheduler, and a newly chosen preset for a running master.
+    void runtime?.onSettingsChanged();
   };
   void settings.read().then((state) => {
     applySettings(state);
@@ -74,24 +75,15 @@ export default function contribute(server: PluginServerContext) {
     }),
   ];
 
-  server.handle(statusRpc, async (input, { paseo: api }) => {
+  server.handle(statusRpc, async (_input, { paseo: api }) => {
     onPaseo(api);
-    return master.status(input.includeProviders);
-  });
-
-  server.handle(switchRpc, async (input, { paseo: api }) => {
-    onPaseo(api);
-    const result = await master.switchTo(
-      { provider: input.provider, model: input.model, thinking: input.thinking },
-      input.reason,
-    );
-    return { target: result.target, changed: result.changed, sessionId: result.sessionId };
+    return master.status();
   });
 
   server.handle(permissionRpc, async (input, { paseo: api }) => {
     onPaseo(api);
     const result = await master.setPermission(input.mode);
-    return { changed: result.changed, permission: (await master.status(false)).permission };
+    return { changed: result.changed, permission: (await master.status()).permission };
   });
 
   server.handle(sessionsRpc, async (input, { paseo: api }) => {
