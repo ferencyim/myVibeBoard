@@ -70,6 +70,7 @@ import {
 import {
   checkProviderLaunchAvailable,
   createProviderEnvSpec,
+  createProviderEnv,
   resolveProviderLaunch,
   type ProviderRuntimeSettings,
 } from "../provider-launch-config.js";
@@ -1785,7 +1786,10 @@ export class OpenCodeAgentClient implements AgentClient {
       commandConfig: this.runtimeSettings?.command,
       defaultBinary: "opencode",
     });
-    const availability = await checkProviderLaunchAvailable(launch);
+    const availability = await checkProviderLaunchAvailable({
+      ...launch,
+      env: createProviderEnv({ runtimeSettings: this.runtimeSettings }),
+    });
     return availability.available;
   }
 
@@ -1799,7 +1803,10 @@ export class OpenCodeAgentClient implements AgentClient {
         commandConfig: this.runtimeSettings?.command,
         defaultBinary: "opencode",
       });
-      const availability = await checkProviderLaunchAvailable(launch);
+      const availability = await checkProviderLaunchAvailable({
+        ...launch,
+        env: createProviderEnv({ runtimeSettings: this.runtimeSettings }),
+      });
 
       let authValue = "Not checked";
       const authCommand = availability.available
@@ -1811,7 +1818,7 @@ export class OpenCodeAgentClient implements AgentClient {
             authCommand,
             [...launch.args, "auth", "list"],
             {
-              ...createProviderEnvSpec(),
+              ...createProviderEnvSpec({ runtimeSettings: this.runtimeSettings }),
               timeout: 5_000,
             },
           );

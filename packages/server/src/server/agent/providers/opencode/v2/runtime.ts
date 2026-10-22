@@ -9,6 +9,8 @@ import { spawnProcess } from "../../../../../utils/spawn.js";
 import { terminateWithTreeKill } from "../../../../../utils/tree-kill.js";
 import {
   createProviderEnvSpec,
+  createProviderEnv,
+  checkProviderLaunchAvailable,
   resolveProviderLaunch,
   type ProviderRuntimeSettings,
 } from "../../../provider-launch-config.js";
@@ -163,8 +165,12 @@ export class V2Runtime {
     const decorated = this.options.decorateEnv
       ? await this.options.decorateEnv(configured)
       : decorateOpenCodeV2Env(configured, await materializeOpenCodeV2Plugin(resolvePaseoHome()));
+    const { resolvedPath } = await checkProviderLaunchAvailable({
+      ...launch,
+      env: createProviderEnv({ runtimeSettings: settings, overlays: [decorated] }),
+    });
     const args = [...launch.args, "serve", "--hostname", "127.0.0.1", "--port", "0"];
-    const process = spawnProcess(launch.command, args, {
+    const process = spawnProcess(resolvedPath ?? launch.command, args, {
       cwd,
       detached: globalThis.process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
@@ -188,7 +194,7 @@ export class V2Runtime {
             .record({
               owner: { provider: "opencode", kind: "helper-server" },
               pid: process.pid,
-              command: launch.command,
+              command: resolvedPath ?? launch.command,
               args,
             })
             .catch((error: unknown) => {

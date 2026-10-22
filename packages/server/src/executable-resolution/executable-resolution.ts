@@ -166,6 +166,7 @@ export async function findExecutable(
       probeExecutable: (command, timeout) =>
         probeExecutable(command, { probeTimeoutMs: timeout, env }),
       exists: existsSync,
+      roamingAppData: env?.APPDATA,
       probeTimeoutMs,
     });
   }

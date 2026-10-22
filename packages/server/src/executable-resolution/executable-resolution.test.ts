@@ -1,4 +1,12 @@
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -210,5 +218,93 @@ describe("executableExists", () => {
 
   test("returns null when no matching path exists", () => {
     expect(executableExists("/missing/codex", () => false)).toBeNull();
+  });
+});
+
+describe("OpenCode desktop CLI resolution", () => {
+  function desktopCli(appData: string, directory: string): string {
+    const dir = path.join(appData, "ai.opencode.desktop", "cli", directory);
+    mkdirSync(dir, { recursive: true });
+    const cli = path.join(dir, "opencode-cli.exe");
+    writeFileSync(cli, "fixture");
+    return cli;
+  }
+
+  test("finds the newest valid desktop CLI for the current architecture outside PATH", async () => {
+    const roamingAppData = makeTempDir();
+    desktopCli(roamingAppData, "2.9.0-x64");
+    const newest = desktopCli(roamingAppData, "2.10.0-x64");
+    desktopCli(roamingAppData, "3.0.0-arm64");
+    desktopCli(roamingAppData, "invalid-x64");
+    const probeExecutable = vi.fn(async () => true);
+    await expect(
+      windowsExecutableResolution.find("opencode", {
+        roamingAppData,
+        arch: "x64",
+        enumeratePathCandidates: async () => [],
+        probeExecutable,
+        exists: existsSync,
+        probeTimeoutMs: 100,
+      }),
+    ).resolves.toBe(newest);
+    expect(probeExecutable).toHaveBeenCalledExactlyOnceWith(newest, 100);
+  });
+
+  test("keeps PATH and explicit commands ahead of the desktop CLI", async () => {
+    const roamingAppData = makeTempDir();
+    desktopCli(roamingAppData, "2.1.2-x64");
+    const command = path.join(roamingAppData, "opencode.exe");
+    writeFileSync(command, "fixture");
+    const options = {
+      roamingAppData,
+      arch: "x64",
+      enumeratePathCandidates: async () => [command],
+      probeExecutable: vi.fn(async () => true),
+      exists: existsSync,
+      probeTimeoutMs: 100,
+    };
+    await expect(windowsExecutableResolution.find("opencode", options)).resolves.toBe(command);
+    await expect(windowsExecutableResolution.find(command, options)).resolves.toBe(command);
+    expect(options.probeExecutable.mock.calls).toEqual([
+      [command, 100],
+      [command, 100],
+    ]);
+  });
+
+  test("skips a broken or incomplete update and tries the previous desktop CLI", async () => {
+    const roamingAppData = makeTempDir();
+    const working = desktopCli(roamingAppData, "2.1.2-arm64");
+    desktopCli(roamingAppData, "2.2.0-arm64");
+    mkdirSync(path.join(roamingAppData, "ai.opencode.desktop", "cli", "2.3.0-arm64"));
+    await expect(
+      windowsExecutableResolution.find("opencode", {
+        roamingAppData,
+        arch: "arm64",
+        enumeratePathCandidates: async () => [],
+        probeExecutable: async (candidate) => candidate === working,
+        exists: existsSync,
+        probeTimeoutMs: 100,
+      }),
+    ).resolves.toBe(working);
+  });
+
+  test("does not use the desktop CLI for a different command or missing explicit path", async () => {
+    const roamingAppData = makeTempDir();
+    desktopCli(roamingAppData, "2.1.2-x64");
+    const options = {
+      roamingAppData,
+      arch: "x64",
+      enumeratePathCandidates: async () => [],
+      probeExecutable: vi.fn(async () => true),
+      exists: existsSync,
+      probeTimeoutMs: 100,
+    };
+    await expect(
+      windowsExecutableResolution.find("different-command", options),
+    ).resolves.toBeNull();
+    await expect(
+      windowsExecutableResolution.find(path.join(roamingAppData, "missing"), options),
+    ).resolves.toBeNull();
+    expect(options.probeExecutable).not.toHaveBeenCalled();
   });
 });

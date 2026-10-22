@@ -13,6 +13,8 @@ import type {
 } from "../../agent-sdk-types.js";
 import {
   createProviderEnvSpec,
+  createProviderEnv,
+  checkProviderLaunchAvailable,
   resolveProviderLaunch,
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
@@ -75,10 +77,18 @@ export class OpenCodeRuntimeClient implements AgentClient {
           commandConfig: this.settings?.command,
           defaultBinary: "opencode",
         });
-        const result = await execCommand(launch.command, [...launch.args, "--version"], {
-          ...createProviderEnvSpec({ runtimeSettings: this.settings }),
-          timeout: 5_000,
+        const { resolvedPath } = await checkProviderLaunchAvailable({
+          ...launch,
+          env: createProviderEnv({ runtimeSettings: this.settings }),
         });
+        const result = await execCommand(
+          resolvedPath ?? launch.command,
+          [...launch.args, "--version"],
+          {
+            ...createProviderEnvSpec({ runtimeSettings: this.settings }),
+            timeout: 5_000,
+          },
+        );
         output = result.stdout;
       } catch {
         // Version discovery is additive: legacy wrappers need not support --version.

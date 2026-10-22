@@ -109,7 +109,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     this.portAllocator = options.portAllocator ?? findAvailablePort;
     this.resolveCommandPrefix =
       options.resolveCommandPrefix ??
-      (() => resolveProviderCommandPrefix(this.runtimeSettings?.command, resolveOpenCodeBinary));
+      (() =>
+        resolveProviderCommandPrefix(this.runtimeSettings?.command, () =>
+          resolveOpenCodeBinary(this.runtimeSettings),
+        ));
     this.resolveHomeDir = options.resolveHomeDir ?? resolveOpenCodeHomeDir;
     this.spawnServerProcess = options.spawnServerProcess ?? spawnProcess;
     this.createEventSource =
@@ -630,8 +633,10 @@ async function waitForServerAcquisition<T>(
   }
 }
 
-async function resolveOpenCodeBinary(): Promise<string> {
-  const found = await findExecutable("opencode");
+async function resolveOpenCodeBinary(runtimeSettings?: ProviderRuntimeSettings): Promise<string> {
+  const found = await findExecutable("opencode", {
+    env: createProviderEnv({ runtimeSettings }),
+  });
   if (!found) {
     throw new Error(
       "OpenCode binary not found. Install OpenCode (https://github.com/opencode-ai/opencode) and ensure it is available in your shell PATH.",

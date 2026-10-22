@@ -1,11 +1,15 @@
 import { readdirSync } from "node:fs";
 import { extname, join } from "node:path";
+import compareVersions from "semver/functions/rcompare.js";
+import validVersion from "semver/functions/valid.js";
 
 interface WindowsFindExecutableOptions {
   enumeratePathCandidates: (name: string) => Promise<string[]>;
   probeExecutable: (executablePath: string, timeoutMs: number) => Promise<boolean>;
   exists: (path: string) => boolean;
   localAppData?: string;
+  roamingAppData?: string;
+  arch?: string;
   probeTimeoutMs: number;
 }
 
@@ -57,7 +61,36 @@ async function find(input: string, options: WindowsFindExecutableOptions): Promi
     options.localAppData ?? process.env.LOCALAPPDATA,
   ).filter(options.exists);
 
-  return findFirstProbeable([...pathCandidates, ...wingetCandidates], options);
+  const desktopCandidates =
+    input.toLowerCase() === "opencode"
+      ? enumerateOpenCodeDesktopCandidates(
+          options.roamingAppData ?? process.env.APPDATA,
+          options.arch ?? process.arch,
+        )
+      : [];
+  return findFirstProbeable(
+    [...pathCandidates, ...wingetCandidates, ...desktopCandidates],
+    options,
+  );
+}
+
+function enumerateOpenCodeDesktopCandidates(appData: string | undefined, arch: string): string[] {
+  if (!appData) return [];
+  // The desktop app keeps its CLI outside PATH in versioned architecture directories.
+  const cliRoot = join(appData, "ai.opencode.desktop", "cli");
+  try {
+    return readdirSync(cliRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith(`-${arch}`))
+      .map((entry) => ({
+        name: entry.name,
+        version: validVersion(entry.name.slice(0, -arch.length - 1)),
+      }))
+      .filter((entry): entry is { name: string; version: string } => entry.version !== null)
+      .sort((a, b) => compareVersions(a.version, b.version))
+      .map((entry) => join(cliRoot, entry.name, "opencode-cli.exe"));
+  } catch {
+    return [];
+  }
 }
 
 async function findFirstProbeable(
