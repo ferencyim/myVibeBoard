@@ -26,6 +26,7 @@ describe("rules", () => {
     ).replace(/\r\n/g, "\n");
     expect(skill).toMatch(/^---\nname: vibe-master\n/);
     expect(skill).toContain("card_done");
+    expect(skill).toContain("### dispatch");
     for (const removed of ["assess_draft", "session_help", "plan_discussion"]) expect(skill).not.toContain(removed);
     expect(skill).toContain("绝不自行在列之间移动卡片");
     expect(existsSync(join(pluginDir, "server/master/rules.generated.ts"))).toBe(true);

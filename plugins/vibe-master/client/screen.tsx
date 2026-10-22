@@ -350,6 +350,7 @@ type CrossPluginNavigation = {
 export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) {
   const settings = useSettings(masterSettings);
   const statusCall = useRpc(statusRpc);
+  const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: ["vibe-master", "status-presets"],
     queryFn: () => statusCall({}),
@@ -382,10 +383,14 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
           <PresetPicker
             theme={theme}
             presets={status.data?.presets ?? []}
-            selectedId={status.data?.preset?.id ?? ""}
-            migrated={!!status.data?.preset?.migrated}
+            selectedId={values.presetId || status.data?.preset?.id || ""}
+            migrated={!values.presetId && !!status.data?.preset?.migrated}
             loaded={!!status.data}
-            onChange={(presetId) => save({ ...values, presetId, provider: "", model: "", thinking: "" })}
+            onChange={(presetId) => {
+              void settings
+                .save({ ...values, presetId, provider: "", model: "", thinking: "" }, revision)
+                .then(() => queryClient.invalidateQueries({ queryKey: ["vibe-master"] }));
+            }}
           />
           <SettingsSwitch
             label="由总 agent 决定先派发哪些待办卡"
