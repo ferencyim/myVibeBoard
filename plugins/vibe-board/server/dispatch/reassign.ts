@@ -14,18 +14,24 @@
 // WP-105: the owner can also switch the executing model by hand (`switchTo`, the executor picker of
 // the execution tab). Same mechanics; the new agent's brief carries the plan, the acceptance
 // criteria and the execution conversation, plus the `board.switch_model` note.
+//
+// WP-106: a sub-agent (role "subagent") is reassigned the same way along the chain of the preset it
+// ran on; the replacement gets the subtask brief, the subtask's run points to it and the card's main
+// model (card.preset_id) is left alone.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
-import type { AgentSession, CardView, Preset } from "../vibe/contract";
+import { subtasksOf, type AgentSession, type CardView, type Preset, type Subtask } from "../vibe/contract";
 import type { BoardService } from "../service";
 import type { AgentTracker } from "./index";
 import { ensurePresetModel } from "./model";
 import { buildDispatchBrief, modeIdFor, providerSpec, type BriefLimits } from "./brief";
 import { defaultPrompts, type PromptResolver } from "../prompts";
+import { buildSubtaskBrief } from "../subtasks/brief";
+import { postChat } from "../chat/post";
 import type { FailureCategory } from "../lifecycle/error-class";
 
 export type ReassignPaseo = Pick<PaseoApi, "agents" | "workspaces"> &
@@ -116,23 +122,27 @@ export function createReassigner(deps: ReassignDeps) {
 
   const presetById = (id: string) => store.presets.list().find((p) => p.id === id);
 
-  /** Presets already used for the card (failover events) plus the current one. */
-  function history(card: CardView) {
+  /** Presets already used for the card's main agent, or for one subtask (failover events). */
+  function history(card: CardView, subtaskId?: string) {
     const used: string[] = [];
     for (const e of store.events.list(card.id)) {
-      const b = e.body as { kind?: string; fromPresetId?: string; toPresetId?: string } | null;
-      if (e.type === "status" && b?.kind === "failover") {
+      const b = e.body as { kind?: string; fromPresetId?: string; toPresetId?: string; subtask?: string } | null;
+      if (e.type === "status" && b?.kind === "failover" && b.subtask === subtaskId) {
         for (const id of [b.fromPresetId, b.toPresetId]) if (id && !used.includes(id)) used.push(id);
       }
     }
     return used;
   }
 
-  /** Ordered candidates: the current preset's chain, then the chains of the presets already tried. */
-  function candidatesFor(card: CardView): Preset[] {
-    if (!card.presetId) return [];
-    const tried = new Set([card.presetId, ...history(card)]);
-    const roots = [card.presetId, ...[...tried].filter((id) => id !== card.presetId).reverse()];
+  /**
+   * Ordered candidates: the current preset's chain, then the chains of the presets already tried.
+   * With `subtaskId`: the chain of the preset that subtask's sub-agent runs on.
+   */
+  function candidatesFor(card: CardView, subtaskId?: string): Preset[] {
+    const current = subtaskId ? card.subtaskRuns[subtaskId]?.presetId : card.presetId;
+    if (!current) return [];
+    const tried = new Set([current, ...history(card, subtaskId)]);
+    const roots = [current, ...[...tried].filter((id) => id !== current).reverse()];
     const out: Preset[] = [];
     for (const root of roots) {
       for (const id of presetById(root)?.fallbackPresetIds ?? []) {
@@ -210,28 +220,40 @@ export function createReassigner(deps: ReassignDeps) {
     } catch (error) {
       log("could not read the previous agent's timeline", error);
     }
-    const prompt = buildDispatchBrief({
-      prompts,
-      limits: await deps.getLimits?.(),
-      card,
-      project,
-      preset,
-      events,
-      extraInstructions: takeoverNote(transcriptSentence(transcriptPath)),
-    });
+    const subtask = subtaskOfSession(card, old);
+    const prompt = subtask
+      ? buildSubtaskBrief({ card, subtask, prompts, extra: takeoverNote(transcriptSentence(transcriptPath)) })
+      : buildDispatchBrief({
+          prompts,
+          limits: await deps.getLimits?.(),
+          card,
+          project,
+          preset,
+          events,
+          presets: store.presets.list(),
+          extraInstructions: takeoverNote(transcriptSentence(transcriptPath)),
+        });
+    const role = subtask ? "subagent" : "worker";
     const agentId = (deps.newAgentId ?? randomUUID)();
     tracker?.expect(agentId);
     try {
       const modeId = modeIdFor(preset.provider, preset.permissionMode);
       const options = {
         agentId,
-        title: `${card.key} · ${card.title}`.slice(0, 80),
+        title: (subtask ? `${card.key} · ${subtask.id} ${subtask.title}` : `${card.key} · ${card.title}`).slice(0, 80),
         prompt,
-        labels: { cardKey: card.key, cardId: card.id, role: "worker", preset: preset.name },
+        labels: {
+          cardKey: card.key,
+          cardId: card.id,
+          role,
+          preset: preset.name,
+          ...(subtask ? { subtask: subtask.id } : {}),
+        },
         env: {
-          VIBE_ROLE: "worker",
+          VIBE_ROLE: role,
           VIBE_CARD_ID: card.id,
           VIBE_CARD_KEY: card.key,
+          ...(subtask ? { VIBE_SUBTASK_ID: subtask.id } : {}),
           ...(preset.runtimeEnv ? { VIBE_RUNTIME_ENV: preset.runtimeEnv } : {}),
         },
         config: {
@@ -259,12 +281,16 @@ export function createReassigner(deps: ReassignDeps) {
   async function reassign(sessionId: string, failure: Failure): Promise<ReassignResult> {
     const old = store.sessions.get(sessionId);
     if (!old || old.state === "ended") return { reassigned: null, reason: "session already ended", attempts: [] };
-    if (old.role !== "worker" || !old.cardId) return { reassigned: null, reason: "only card workers are reassigned", attempts: [] };
+    if ((old.role !== "worker" && old.role !== "subagent") || !old.cardId) {
+      return { reassigned: null, reason: "only card workers and sub-agents are reassigned", attempts: [] };
+    }
     if (inflight.has(old.id)) return { reassigned: null, reason: "already reassigning", attempts: [] };
     const card = store.cards.get(old.cardId);
     const paseo = deps.getPaseo();
     if (!card || !paseo) return { reassigned: null, reason: "no daemon connection or card", attempts: [] };
-    const candidates = candidatesFor(card);
+    const subtask = old.role === "subagent" ? subtaskOfSession(card, old) : undefined;
+    if (old.role === "subagent" && !subtask) return { reassigned: null, reason: "the sub-agent's subtask is gone", attempts: [] };
+    const candidates = candidatesFor(card, subtask?.id);
     if (candidates.length === 0) return { reassigned: null, reason: "no fallback preset configured", attempts: [] };
 
     inflight.add(old.id);
@@ -311,7 +337,7 @@ export function createReassigner(deps: ReassignDeps) {
           log(`fallback ${preset.name} could not start`, error);
           continue;
         }
-        const fromPresetId = card.presetId;
+        const fromPresetId = subtask ? (card.subtaskRuns[subtask.id]?.presetId ?? null) : card.presetId;
         const { to } = store.sessions.recordReassign({
           fromSessionId: old.id,
           agentId: started.agentId,
@@ -331,9 +357,37 @@ export function createReassigner(deps: ReassignDeps) {
             toPresetId: preset.id,
             category: failure.category,
             method: started.method,
-            text: `${old.currentProvider} failed (${failure.category}); continuing on ${preset.name} (${preset.provider}/${preset.model}) in the same worktree.`,
+            ...(subtask ? { subtask: subtask.id } : {}),
+            text: `${subtask ? `子任务 ${subtask.id}：` : ""}${old.currentProvider} failed (${failure.category}); continuing on ${preset.name} (${preset.provider}/${preset.model}) in the same worktree.`,
           },
         });
+        if (subtask) {
+          const run = card.subtaskRuns[subtask.id];
+          store.cards.setSubtaskRun(card.id, subtask.id, {
+            status: "running",
+            sessionId: to.id,
+            agentId: started.agentId,
+            presetId: preset.id,
+            attempts: (run?.attempts ?? 0) + 1,
+            error: "",
+          });
+          postChat(
+            store,
+            {
+              cardId: card.id,
+              authorKind: "system",
+              author: "failover",
+              kind: "info",
+              thread: "exec",
+              subtask: subtask.id,
+              text: `子代理「${subtask.id} · ${subtask.title}」在 ${old.currentProvider} 上失败（${failure.category}），已改派给「${preset.name}」（${preset.provider}/${preset.model}）在同一个工作树里接着做。`,
+              agentId: started.agentId,
+              sessionId: to.id,
+              key: `subtask-failover:${to.id}`,
+            },
+            log,
+          );
+        }
         await tracker?.bind(started.agentId);
         if (started.method === "converted") {
           // An imported agent has no prompt of its own: tell it to carry on.
@@ -418,6 +472,13 @@ export function createReassigner(deps: ReassignDeps) {
   }
 
   return { reassign, switchTo, candidatesFor };
+}
+
+/** The subtask a sub-agent session runs (its run points to the session). */
+export function subtaskOfSession(card: CardView, session: Pick<AgentSession, "id" | "role">): Subtask | undefined {
+  if (session.role !== "subagent") return undefined;
+  const id = Object.entries(card.subtaskRuns).find(([, run]) => run.sessionId === session.id)?.[0];
+  return id ? subtasksOf(card).find((s) => s.id === id) : undefined;
 }
 
 export type Reassigner = ReturnType<typeof createReassigner>;

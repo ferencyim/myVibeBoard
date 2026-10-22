@@ -7,6 +7,7 @@
 //   only an ended worker session                                 -> its agent is resumed and gets it
 //                                                                   (continues the card after a finished round)
 //   no worker yet / done card / resume failed                    -> a system line says what to do
+//   addressed to a subtask (`body.subtask`, WP-106)              -> sent to that subtask's sub-agent
 // A handled message is marked with a system chat that lists it in `answers`. The master agent is
 // never involved. The router polls card_event rows (the chat lives there, not on the vibe_event
 // bus) and keeps its cursor in vibe_meta, so messages written while the daemon was down are handled
@@ -17,6 +18,7 @@ import { chatThreadOf, type AgentSession, type CardView } from "../vibe/contract
 import type { VibeDb } from "../vibe/db";
 import type { BoardService } from "../service";
 import type { ReplyService } from "../sync";
+import type { SubtaskService } from "../subtasks";
 import { postChat } from "./post";
 import { clip } from "./format";
 
@@ -32,6 +34,8 @@ export interface ChatRouterOptions {
   board: BoardService;
   getPaseo: () => ChatRouterPaseo | null;
   replies: Pick<ReplyService, "send">;
+  /** Owner messages addressed to a sub-agent (WP-106); resolved lazily. */
+  subtasks?: () => Pick<SubtaskService, "message"> | null;
   pollIntervalMs?: number;
   log?: (message: string, error?: unknown) => void;
 }
@@ -117,7 +121,7 @@ export function createChatRouter(options: ChatRouterOptions) {
 
   /** "done": handled (or not ours); "retry": try again on the next poll. */
   async function handle(row: Row): Promise<"done" | "retry"> {
-    let body: { text?: unknown; thread?: unknown } = {};
+    let body: { text?: unknown; thread?: unknown; subtask?: unknown } = {};
     try {
       body = JSON.parse(row.body_json) as typeof body;
     } catch {
@@ -129,6 +133,23 @@ export function createChatRouter(options: ChatRouterOptions) {
     if (answered(card.id, row.id)) return "done";
     const text = String(body.text ?? "");
     if (!text.trim()) return "done";
+
+    if (typeof body.subtask === "string" && body.subtask) {
+      const subtasks = options.subtasks?.();
+      if (!subtasks) return "retry";
+      try {
+        const sent = await subtasks.message(card.id, body.subtask, text, "user", row.id);
+        note(card.id, row.id, sent.asAnswer ? `已作为回答发给子代理 ${body.subtask} 的提问。` : `已转发给子代理 ${body.subtask}。`, {
+          agentId: sent.agentId,
+          sessionId: sent.sessionId,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (reason.includes("[unavailable]")) return "retry";
+        note(card.id, row.id, `没能发给子代理 ${body.subtask}（${clip(reason, 200)}）。`);
+      }
+      return "done";
+    }
 
     const live = liveExecutorOf(card.id);
     const last = workers(card.id).at(-1);
@@ -169,7 +190,7 @@ export function createChatRouter(options: ChatRouterOptions) {
       note(
         card.id,
         row.id,
-        asAnswer ? "已作为回答发给执行 agent 的提问。" : route === "resume" ? "已唤回执行 agent 并转给它。" : "已转发给执行 agent。",
+        asAnswer ? "已作为回答发给主代理的提问。" : route === "resume" ? "已唤回主代理并转给它。" : "已转发给主代理。",
         { agentId: session.agentId, sessionId: session.id },
       );
     } catch (error) {
@@ -178,7 +199,7 @@ export function createChatRouter(options: ChatRouterOptions) {
       note(
         card.id,
         row.id,
-        `没能发给执行 agent（${clip(reason, 200)}）。可以换一个执行模型，或重新「立即执行」。`,
+        `没能发给主代理（${clip(reason, 200)}）。可以换一个主代理模型，或重新「立即执行」。`,
       );
     }
     return "done";

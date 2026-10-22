@@ -5,8 +5,11 @@
 //   立即执行   -> draft is moved to todo by the owner, then the card is dispatched at once (force)
 //                to its executing model; review and evidence verification follow on verifying.
 //   执行模型   -> while a worker runs, picking another model hands the work over (reassigner.switchTo).
+//   子任务     -> the owner's version of the plan's subtasks (WP-106); a new model for a subtask whose
+//                sub-agent is running applies to the sub-agents started later, said in the exec chat.
 
-import type { ChatThread, MoveActor } from "../vibe/contract";
+import { ACTIVE_SUBTASK_STATUSES, runOf, subtasksOf, type ChatThread, type MoveActor, type Subtask } from "../vibe/contract";
+import { postChat } from "../chat/post";
 import { BoardError, toBoardError, type BoardService } from "../service";
 import type { Dispatcher } from "../dispatch";
 import type { Reassigner } from "../dispatch/reassign";
@@ -81,7 +84,34 @@ export function createFlowService(options: FlowOptions) {
     }
   }
 
-  return { planStart, execStart, execSwitch };
+  function setSubtasks(ref: string, subtasks: readonly Subtask[], actor: UiActor = "user") {
+    try {
+      const card = board.cards.get(ref);
+      const before = new Map(subtasksOf(card).map((s) => [s.id, s]));
+      const next = store.cards.setSubtasks(card.id, subtasks, actor);
+      const presets = store.presets.list();
+      for (const s of subtasks) {
+        const old = before.get(s.id);
+        if (!old || old.presetId === s.presetId || !ACTIVE_SUBTASK_STATUSES.includes(runOf(card, s.id).status)) continue;
+        const name = presets.find((p) => p.id === s.presetId)?.name ?? "子代理默认模型";
+        postChat(store, {
+          cardId: card.id,
+          authorKind: "system",
+          author: "subtasks",
+          kind: "info",
+          thread: "exec",
+          subtask: s.id,
+          text: `子任务 ${s.id} 改用「${name}」：正在运行的子代理不受影响，之后启动的子代理使用新模型。`,
+          key: `subtask-model:${s.id}:${next.updatedAt}`,
+        });
+      }
+      return { card: next };
+    } catch (error) {
+      throw toBoardError(error);
+    }
+  }
+
+  return { planStart, execStart, execSwitch, setSubtasks };
 }
 
 export type FlowService = ReturnType<typeof createFlowService>;

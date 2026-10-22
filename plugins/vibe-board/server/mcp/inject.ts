@@ -41,6 +41,8 @@ export function injectBoard<T extends InjectRequest>(
         env: {
           VIBE_BOARD_BRIDGE_FILE: active.bridgeFile,
           ...(checking ? { VIBE_ROLE: "verifier" } : {}),
+          // Sub-agents never see the subtask tools, even on providers that do not pass env to MCP.
+          ...(role === "subagent" ? { VIBE_ROLE: "subagent" } : {}),
         },
       },
     };

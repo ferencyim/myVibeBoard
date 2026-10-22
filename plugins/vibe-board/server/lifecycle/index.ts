@@ -20,11 +20,16 @@
 //   completed compaction    compaction card event
 //   session_open(import)    agent switched inside the card (switch-provider): switch card event
 //
+// Sub-agents (role "subagent", WP-106) go through the same hooks; their outcomes (round done, failed,
+// question, closed) are handed to options.subtasks (server/subtasks), which updates the card's
+// subtask runs and tells the main agent. A main agent's completed round only moves the card to
+// verifying when no sub-agent is still working and every change has reached it (subtasksBusy).
+//
 // Handlers never throw into the daemon: failures are logged and swallowed.
 
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginLifecycleRegistration } from "@getpaseo/plugin/server";
-import type { AgentSession, SessionState } from "../vibe/contract";
+import { subtasksBusy, type AgentSession, type SessionState } from "../vibe/contract";
 import { createHash } from "node:crypto";
 import { lastAssistantText, questionSummary } from "../chat/format";
 import { postChat } from "../chat/post";
@@ -33,6 +38,7 @@ import type { BoardService } from "../service";
 import { approveSessionNoteWrite, mayWriteFile } from "./auto-approve";
 import { classifyFailure, isReassignable, type FailureCategory } from "./error-class";
 import { consumeSystemTurn } from "./system-turn";
+import type { SubtaskHooks } from "../subtasks";
 
 export type LifecycleRegistration = Pick<PluginLifecycleRegistration, "on" | "before">;
 
@@ -51,6 +57,8 @@ export interface LifecycleOptions {
     session: AgentSession,
     failure: { message: string; category: FailureCategory },
   ) => Promise<boolean>;
+  /** Sub-agent outcomes (WP-106); resolved lazily because the service needs this lifecycle as tracker. */
+  subtasks?: () => SubtaskHooks | null;
 }
 
 interface Question {
@@ -127,6 +135,8 @@ export function registerLifecycle(
   function moveCard(s: AgentSession, to: "verifying" | "in_progress", reason: string) {
     if (s.role !== "worker" || !s.cardId) return;
     const card = store.cards.get(s.cardId);
+    // Sub-agents still at work, or news the main agent has not received yet: not finished.
+    if (to === "verifying" && card && subtasksBusy(card)) return;
     const from = to === "verifying" ? "in_progress" : "verifying";
     if (card?.column === from) store.cards.move(card.id, { to, actor: "lifecycle", reason });
   }
@@ -190,8 +200,13 @@ export function registerLifecycle(
   function end(agentId: string, outcome: string) {
     pending.delete(agentId);
     systemTurns.delete(agentId);
-    withSession(agentId, outcome, (s) => setState(s, "ended", { outcome }));
+    withSession(agentId, outcome, (s) => {
+      setState(s, "ended", { outcome });
+      if (s.role === "subagent") subtaskHooks()?.onEnded(s, outcome);
+    });
   }
+
+  const subtaskHooks = () => options.subtasks?.() ?? null;
 
   const lifecycle: Lifecycle = {
     expect: (agentId) => void expected.set(agentId, []),
@@ -248,6 +263,7 @@ export function registerLifecycle(
         setState(s, "working");
         touch(s);
         if (!system) moveCard(s, "in_progress", "user continued the session");
+        if (!system && s.role === "subagent") subtaskHooks()?.onActive(s);
       });
     }),
 
@@ -259,7 +275,11 @@ export function registerLifecycle(
           pending.delete(agent.id);
           const message = outcome.error.message;
           const category = classifyFailure(message, outcome.error.code);
-          if (s.role === "worker" && options.onFailure && isReassignable(category)) {
+          const failed = () => {
+            setState(s, "error", { message });
+            if (s.role === "subagent") subtaskHooks()?.onFailed(s, message);
+          };
+          if ((s.role === "worker" || s.role === "subagent") && options.onFailure && isReassignable(category)) {
             // Async: the session stays as it is until a fallback took over or none did.
             void options
               .onFailure(s, { message, category })
@@ -268,11 +288,11 @@ export function registerLifecycle(
                 return false;
               })
               .then((taken) => {
-                if (!taken) safe("turn_failed", () => setState(s, "error", { message }));
+                if (!taken) safe("turn_failed", failed);
               });
             return;
           }
-          setState(s, "error", { message });
+          failed();
           return;
         }
         syncCompactions(
@@ -286,6 +306,14 @@ export function registerLifecycle(
         if (outcome.kind === "completed" && !system) {
           summarizeTurn(s, turnId, timeline);
           moveCard(s, "verifying", "round completed, no open question");
+          if (s.role === "subagent") {
+            const text = lastAssistantText(timeline);
+            const turn = turnId ?? createHash("sha256").update(text ?? "").digest("hex").slice(0, 12);
+            subtaskHooks()?.onDone(s, text, turn);
+          }
+        } else if (!system && s.role === "subagent") {
+          // Interrupted (canceled): reported as failed unless a new round starts right away.
+          subtaskHooks()?.onFailed(s, "子代理这一轮被中断");
         }
       });
     }),
@@ -308,6 +336,7 @@ export function registerLifecycle(
           setState(s, "waiting", { question: { ...question, pending: open.size } });
           touch(s); // waiting for the user is never a stall
           askInChat(s, question);
+          if (s.role === "subagent") subtaskHooks()?.onQuestion(s, questionSummary(question), request.id);
         });
       // Only a worker's file-writing tool request can be a session-note write; the rest stays synchronous.
       const owner = mayWriteFile(request) ? store.sessions.getByAgent(agent.id) : undefined;
@@ -337,6 +366,7 @@ export function registerLifecycle(
         pending.delete(agent.id);
         if ((store.sessions.get(s.id) ?? s).state === "waiting") setState(s, "working");
         touch(s);
+        if (s.role === "subagent") subtaskHooks()?.onActive(s);
       });
     }),
 

@@ -90,6 +90,16 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   let usageBusy = false;
   let lastPrune = 0;
 
+  /** WP-106: the board checks sub-agent starts against the same limits (vibe_meta, see contract/subtasks.ts). */
+  const publishLimits = () => {
+    try {
+      store.limits.publish({ globalLimit: settings.globalLimit, providerLimits: settings.providerLimits });
+    } catch (error) {
+      onError(error);
+    }
+  };
+  publishLimits();
+
   const scheduler = createScheduler({
     db,
     store,
@@ -235,6 +245,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     quota: () => quota,
     setSettings(next: RuntimeSettings) {
       settings = next;
+      publishLimits();
     },
     start() {
       stopped = false;

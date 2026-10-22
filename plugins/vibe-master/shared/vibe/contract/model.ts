@@ -28,6 +28,7 @@ import {
   SessionComplexitySchema,
   SessionRoleSchema,
   SessionStateSchema,
+  SubtaskStatusSchema,
   VerificationKindSchema,
   VerificationModeSchema,
 } from "./enums";
@@ -89,6 +90,10 @@ export const CardSchema = z.object({
   /** WP-105: preset of the scout run before planning (null = no scouting) and of the planning session. */
   scoutPresetId: z.string().nullable(),
   plannerPresetId: z.string().nullable(),
+  /** WP-106: default model of the sub-agents (a subtask may pick its own); `presetId` is the main agent. */
+  subagentPresetId: z.string().nullable(),
+  /** WP-106: runtime state per subtask id of the plan. Daemon-written. */
+  subtaskRuns: z.record(z.string(), z.lazy(() => SubtaskRunSchema)),
   /** WP-105: the card's single plan (overwritten on re-planning); null = no plan yet. Daemon-written. */
   plan: z.lazy(() => PlanSnapshotSchema).nullable(),
   /** Acceptance criteria as last written by the planning model; differs from `acceptance` after a user edit. */
@@ -155,14 +160,56 @@ export const ChatEventBodySchema = z.object({
   thread: ChatThreadSchema.optional(),
   /** WP-105: a user message that asks for something beyond text ("make_plan": the 制定方案 button). */
   action: z.literal("make_plan").optional(),
+  /** WP-106: the subtask whose sub-agent wrote the message, or that an owner message is addressed to. */
+  subtask: z.string().optional(),
 });
 export type ChatEventBody = z.infer<typeof ChatEventBodySchema>;
+
+/** WP-106: one unit of work of a card's plan, run by its own sub-agent. */
+export const SubtaskSchema = z.object({
+  /** Stable within the card ("s1", "s2", ...); dependencies and runs refer to it. */
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  goal: z.string(),
+  method: z.string(),
+  /** 注意事项: constraints, pitfalls, what not to touch. */
+  notes: z.string(),
+  acceptance: z.string(),
+  /** Files/directories (globs) it changes; sub-agents with overlapping files never run together. */
+  files: z.array(z.string()),
+  /** Subtask ids that must be done before this one starts. */
+  dependsOn: z.array(z.string()),
+  /** Preset that runs it; null = the card's sub-agent default model. */
+  presetId: z.string().nullable(),
+});
+export type Subtask = z.infer<typeof SubtaskSchema>;
+
+/** WP-106: what happened to a subtask in the current execution (card.subtask_runs_json). */
+export const SubtaskRunSchema = z.object({
+  status: SubtaskStatusSchema,
+  /** agent_session / Paseo agent of the current (or last) sub-agent. */
+  sessionId: z.string().nullable(),
+  agentId: z.string().nullable(),
+  presetId: z.string().nullable(),
+  /** Last reply of the sub-agent (done), its question (waiting) or the main agent's note. */
+  summary: z.string(),
+  error: z.string(),
+  /** Sub-agents started for it so far (failover replacements included). */
+  attempts: z.number().int(),
+  /** The main agent has been told about the latest status change. */
+  notified: z.boolean(),
+  startedAt: Iso.nullable(),
+  finishedAt: Iso.nullable(),
+});
+export type SubtaskRun = z.infer<typeof SubtaskRunSchema>;
 
 /** Card fields a proposal may change. */
 export const ProposalChangesSchema = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional(),
   acceptance: z.string().optional(),
+  /** WP-106: the planning model's subtasks when the owner had edited them (applied to the plan). */
+  subtasks: z.array(SubtaskSchema).optional(),
 });
 export type ProposalChanges = z.infer<typeof ProposalChangesSchema>;
 
@@ -188,6 +235,10 @@ export const PlanSnapshotSchema = z.object({
   notes: z.string().optional(),
   /** Files/directories (globs) the plan touches; the scheduler uses them to avoid parallel conflicts. */
   files: z.array(z.string()).optional(),
+  /** WP-106: the work split into sub-agent tasks; absent/empty = the main agent works alone. */
+  subtasks: z.array(SubtaskSchema).optional(),
+  /** WP-106: the owner edited the subtasks since the planning model last wrote them. */
+  subtasksEdited: z.boolean().optional(),
 });
 export type PlanSnapshot = z.infer<typeof PlanSnapshotSchema>;
 

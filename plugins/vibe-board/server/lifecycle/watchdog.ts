@@ -28,7 +28,7 @@ export const DEFAULT_STALL_CONFIG: StallConfig = {
 };
 
 /** Roles that run turns on behalf of a card; the long-lived master has its own flows. */
-export const STALL_ROLES: readonly string[] = ["worker", "verifier", "reviewer", "planner"];
+export const STALL_ROLES: readonly string[] = ["worker", "subagent", "verifier", "reviewer", "planner"];
 
 /** Default text of the "continue" nudge (the owner may override it, see server/prompts). */
 export const CONTINUE_PROMPT = defaultPrompts.resolve("board.watchdog_continue");

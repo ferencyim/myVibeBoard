@@ -19,10 +19,17 @@ export function createChatService(board: BoardService, db: VibeDb, onMessage?: (
   const { store } = board;
 
   /** The owner (or the phone, online) says something in the card's plan or execution conversation. */
-  function send(ref: string, text: string, actor: UiActor = "user", thread: ChatThread = "plan") {
+  function send(ref: string, text: string, actor: UiActor = "user", thread: ChatThread = "plan", subtask?: string) {
     return guard(() => {
       const card = board.cards.get(ref);
-      const event = store.cards.addChat({ cardId: card.id, authorKind: "user", author: actor, text, thread });
+      const event = store.cards.addChat({
+        cardId: card.id,
+        authorKind: "user",
+        author: actor,
+        text,
+        thread,
+        ...(thread === "exec" && subtask ? { subtask } : {}),
+      });
       onMessage?.();
       return { event };
     });

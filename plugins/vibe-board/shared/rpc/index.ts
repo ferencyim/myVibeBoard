@@ -27,6 +27,7 @@ import {
   ProjectSchema,
   ProjectTypeSchema,
   RoleHintSchema,
+  SubtaskSchema,
   TagSchema,
   PROJECT_PREFIX_PATTERN,
   ROLE_HINTS,
@@ -118,6 +119,8 @@ const cardEditable = {
   /** WP-105: scout model run before planning (null = no scouting) and planning model. */
   scoutPresetId: z.string().nullable(),
   plannerPresetId: z.string().nullable(),
+  /** WP-106: default model of the sub-agents (presetId is the main agent). */
+  subagentPresetId: z.string().nullable(),
   parentCardId: z.string().nullable(),
   tagIds: z.array(z.string()),
 };
@@ -263,6 +266,7 @@ export const cardsUpdateRpc = defineRpc({
     reviewerPresetId: cardEditable.reviewerPresetId.optional(),
     scoutPresetId: cardEditable.scoutPresetId.optional(),
     plannerPresetId: cardEditable.plannerPresetId.optional(),
+    subagentPresetId: cardEditable.subagentPresetId.optional(),
     /** Read positions of the plan / execution / verification tabs (see markReadPatch). */
     planSeenAt: z.string().nullable().optional(),
     execSeenAt: z.string().nullable().optional(),
@@ -346,6 +350,8 @@ export const chatSendRpc = defineRpc({
     text: nonBlank,
     actor: moveActorSchema.optional(),
     thread: ChatThreadSchema.optional(),
+    /** WP-106: an execution message for one subtask's sub-agent instead of the main agent. */
+    subtask: z.string().min(1).optional(),
   }),
   output: z.object({ event: CardEventSchema }),
 });
@@ -355,6 +361,15 @@ export const planStartRpc = defineRpc({
   /** 制定方案: scouting on the card's scout model (if picked), then planning on its planning model. */
   input: z.object({ card: cardRef, actor: moveActorSchema.optional() }),
   output: z.object({ event: CardEventSchema }),
+});
+
+export const planSubtasksRpc = defineRpc({
+  name: "vibe.plan.subtasks",
+  /** WP-106: the owner's subtasks of the plan (edit, add, remove, pick a model). The planning
+   *  model's next version of them becomes a proposal. Changing the model of a running subtask
+   *  only affects sub-agents started later. */
+  input: z.object({ card: cardRef, subtasks: z.array(SubtaskSchema), actor: moveActorSchema.optional() }),
+  output: z.object({ card: CardViewSchema }),
 });
 
 export const execStartRpc = defineRpc({
@@ -661,6 +676,7 @@ export const VIBE_BOARD_RPCS = {
   eventsAddRpc,
   chatSendRpc,
   planStartRpc,
+  planSubtasksRpc,
   execStartRpc,
   execSwitchRpc,
   proposalsAcceptRpc,

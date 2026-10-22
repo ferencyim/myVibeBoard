@@ -2,6 +2,7 @@
 
 import { chatThreadOf, type CardEvent, type CardView, type Preset, type Project } from "../vibe/contract";
 import { defaultPrompts, type PromptResolver } from "../prompts";
+import { subtasksSegment } from "../subtasks/brief";
 
 const RECENT_EVENT_LIMIT = 5;
 const TITLE_WIDTH = 80;
@@ -65,6 +66,8 @@ export interface BriefInput {
   preset: Preset;
   events: readonly CardEvent[];
   extraInstructions?: string;
+  /** All presets, to name the model of each subtask (WP-106); omitted = only ids are known. */
+  presets?: readonly Preset[];
   /** Prompt registry; default texts when omitted. */
   prompts?: PromptResolver;
   limits?: Partial<BriefLimits>;
@@ -158,6 +161,7 @@ export function buildDispatchBrief(input: BriefInput): string {
               .join("\n"),
           )
         : "",
+    subtasks: subtasksSegment(card, input.presets ?? [], prompts),
     notes: section("最近备注", notes),
     project: section("项目", `- 名称：${project.name}\n- 类型：${project.projectTypes.join(", ")}`),
     contract: section("回报约定", contract),

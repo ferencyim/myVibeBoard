@@ -24,6 +24,7 @@ import { createVerifyService } from "./server/verify";
 import { buildBoardInstructions } from "./server/mcp/instructions";
 import { createBoardPrompts } from "./server/prompts";
 import type { BriefLimits } from "./server/dispatch/brief";
+import { createSubtaskService, type SubtaskService } from "./server/subtasks";
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(boardSettings);
@@ -49,8 +50,11 @@ export default function contribute(server: PluginServerContext) {
   // The SDK handle arrives later through hooks/RPCs (see below) and is read lazily.
   let paseo: PaseoApi | null = (server as { paseo?: PaseoApi }).paseo ?? null;
 
+  // Sub-agents (WP-106): created below, after the lifecycle it uses as tracker.
+  let subtasks: SubtaskService | null = null;
+
   let bridge: BoardBridgeHandle | null = null;
-  const bridgeReady = startBoardBridge(board, dataDir)
+  const bridgeReady = startBoardBridge(board, dataDir, () => ({ subtasks }))
     .then((handle) => (bridge = handle))
     .catch((error) => {
       console.error("Failed to start the vibe-board local bridge:", error);
@@ -102,6 +106,7 @@ export default function contribute(server: PluginServerContext) {
   const lifecycle = registerLifecycle(server, {
     board,
     onPaseo,
+    subtasks: () => subtasks?.hooks ?? null,
     onFailure: async (session, failure) => {
       if (!reassigner || !(await failoverEnabled())) return false;
       const result = await reassigner.reassign(session.id, failure);
@@ -162,9 +167,18 @@ export default function contribute(server: PluginServerContext) {
   const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, prompts, onError: (e) => console.error("vibe-board admission:", e) });
   const sync = createSyncService({ db: runtime.db, store: runtime.store });
   const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
+  subtasks = createSubtaskService({
+    board,
+    getPaseo: () => paseo,
+    tracker: lifecycle,
+    prompts,
+    replies,
+    failoverEnabled,
+  });
+  subtasks.startPolling();
   // Card conversations: execution-thread messages go to the executor (router); plan-thread ones
   // are answered by the planning session (vibe-master).
-  const chatRouter = createChatRouter({ db: runtime.db, board, getPaseo: () => paseo, replies });
+  const chatRouter = createChatRouter({ db: runtime.db, board, getPaseo: () => paseo, replies, subtasks: () => subtasks });
   chatRouter.start();
   const chat = createChatService(board, runtime.db, () => void chatRouter.poll());
   const finalizer = startFinalizer({
@@ -206,6 +220,7 @@ export default function contribute(server: PluginServerContext) {
 
   return async () => {
     watchdog.stop();
+    await subtasks?.stop();
     await admission.stop();
     await chatRouter.stop();
     lifecycle.close();

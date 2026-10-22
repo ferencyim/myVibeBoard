@@ -90,13 +90,19 @@ export type PresetPermissionMode = (typeof PRESET_PERMISSION_MODES)[number];
 export const PresetPermissionModeSchema = z.enum(PRESET_PERMISSION_MODES);
 
 // --- agent sessions --------------------------------------------------------------------
-export const SESSION_ROLES = ["master", "planner", "worker", "verifier"] as const;
+/** `worker` is a card's (main) executing agent; `subagent` runs one subtask of it (WP-106). */
+export const SESSION_ROLES = ["master", "planner", "worker", "verifier", "subagent"] as const;
 export type SessionRole = (typeof SESSION_ROLES)[number];
 export const SessionRoleSchema = z.enum(SESSION_ROLES);
 
 export const SESSION_STATES = ["starting", "working", "waiting", "idle", "ended", "error"] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
 export const SessionStateSchema = z.enum(SESSION_STATES);
+
+/** Runtime state of one subtask of a card's plan (WP-106); `waiting` = its sub-agent asked something. */
+export const SUBTASK_STATUSES = ["pending", "running", "waiting", "done", "failed"] as const;
+export type SubtaskStatus = (typeof SUBTASK_STATUSES)[number];
+export const SubtaskStatusSchema = z.enum(SUBTASK_STATUSES);
 
 /** Task complexity as judged by the scout / scheduler (round 2: complexity policy). */
 export const SESSION_COMPLEXITIES = ["short", "multi", "long"] as const;

@@ -14,6 +14,8 @@ export interface ReplyInput {
   /** Permission/question request id as shown in agent_session.pending_question_json. */
   questionId: string;
   text: string;
+  /** Who answered (the card note's author); default "phone" (the offline queue). */
+  author?: string;
 }
 
 interface OpenQuestion {
@@ -142,7 +144,7 @@ export function createReplyService({ db, store, getPaseo }: ReplyServiceOptions)
           cardId: input.cardId,
           type: "note",
           authorKind: "user",
-          author: "phone",
+          author: input.author ?? "phone",
           body: { kind: "reply", questionId: input.questionId, text: input.text },
         });
       } catch {

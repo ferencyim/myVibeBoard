@@ -17,12 +17,13 @@ import {
   type RoleHint,
 } from "../../shared/vibe/contract";
 import { COLUMN_LABELS } from "../board/logic";
+import { subtasksText } from "./subtask-logic";
 
 export const AUTHOR_LABELS: Record<AuthorKind, string> = {
   user: "你",
   master: "规划模型",
   agent: "总 agent",
-  executor: "执行模型",
+  executor: "主代理",
   reviewer: "复核模型",
   scout: "探路模型",
   system: "系统",
@@ -49,6 +50,12 @@ const PROPOSAL_FIELDS: readonly { field: ProposalField; label: string }[] = [
   { field: "acceptance", label: "验收标准" },
 ];
 
+/** Author label of a chat line; a sub-agent's lines carry their subtask (WP-106). */
+export function authorLabel(author: AuthorKind, subtask?: string): string {
+  if (author === "executor" && subtask) return `子代理 ${subtask}`;
+  return AUTHOR_LABELS[author] ?? author;
+}
+
 export interface MessageItem {
   kind: "message";
   id: string;
@@ -61,6 +68,8 @@ export interface MessageItem {
   agentId?: string;
   detail?: string;
   error?: boolean;
+  /** WP-106: the sub-agent's subtask (its lines), or the subtask an owner message was sent to. */
+  subtask?: string;
   /** User messages only: some chat message answers it. */
   answered: boolean;
 }
@@ -80,6 +89,9 @@ export interface SystemItem {
   text: string;
   at: string;
   link?: "verification";
+  /** WP-106: the line is about this sub-agent; `agentId` opens its full session. */
+  subtask?: string;
+  agentId?: string;
 }
 export type ChatItem = MessageItem | ProposalItem | SystemItem;
 
@@ -138,8 +150,16 @@ export function chatItemsOf(events: readonly CardEvent[], thread: ChatThread): C
     const b = bodyOf(e);
     if (e.type === "chat") {
       if (chatThreadOf(e) !== thread) continue;
+      const subtask = str(b.subtask);
       if (e.authorKind === "system") {
-        items.push({ kind: "system", id: e.id, text: typeof b.text === "string" ? b.text : "", at: e.createdAt });
+        items.push({
+          kind: "system",
+          id: e.id,
+          text: typeof b.text === "string" ? b.text : "",
+          at: e.createdAt,
+          ...(subtask ? { subtask } : {}),
+          ...(subtask && str(b.agentId) ? { agentId: str(b.agentId) } : {}),
+        });
         continue;
       }
       const msgKind = b.kind as ChatKind | undefined;
@@ -147,7 +167,8 @@ export function chatItemsOf(events: readonly CardEvent[], thread: ChatThread): C
         kind: "message",
         id: e.id,
         author: e.authorKind,
-        label: AUTHOR_LABELS[e.authorKind] ?? e.authorKind,
+        label: e.authorKind === "user" && subtask ? `你 → 子代理 ${subtask}` : authorLabel(e.authorKind, subtask),
+        subtask,
         text: typeof b.text === "string" ? b.text : "",
         at: e.createdAt,
         msgKind,
@@ -186,7 +207,7 @@ export function reviewItemsOf(events: readonly CardEvent[]): MessageItem[] {
 }
 
 export interface FieldDiff {
-  field: ProposalField;
+  field: ProposalField | "subtasks";
   label: string;
   /** Undefined: the old value is unknown and must not be shown. */
   before: string | undefined;
@@ -196,9 +217,20 @@ export interface FieldDiff {
 /** Changed fields of a proposal; a pending one is compared with the card as it is now. */
 export function proposalDiff(
   item: Pick<ProposalItem, "status" | "changes" | "before">,
-  card: Pick<CardView, ProposalField>,
+  card: Pick<CardView, ProposalField | "plan">,
+  presets: readonly Preset[] = [],
 ): FieldDiff[] {
   const diffs: FieldDiff[] = [];
+  // WP-106: the planning model's subtasks after the owner edited them.
+  if (item.changes.subtasks !== undefined) {
+    const before = item.status === "pending" ? card.plan?.subtasks : item.before?.subtasks;
+    diffs.push({
+      field: "subtasks",
+      label: "子任务",
+      before: before === undefined && item.status !== "pending" ? undefined : subtasksText(before, presets),
+      after: subtasksText(item.changes.subtasks, presets),
+    });
+  }
   for (const { field, label } of PROPOSAL_FIELDS) {
     const after = item.changes[field];
     if (after === undefined) continue;
@@ -247,6 +279,18 @@ export function plannerStatusLabel(session: AgentSession | undefined): string {
     default:
       return "已结束";
   }
+}
+
+/** A message for the execution conversation goes to the main agent (null) or one sub-agent. */
+export interface ChatTarget {
+  subtask: string | null;
+  label: string;
+}
+
+/** Who the owner can talk to in the execution conversation: the main agent, and every subtask that has a sub-agent. */
+export function chatTargets(card: Pick<CardView, "plan" | "subtaskRuns">): ChatTarget[] {
+  const subs = (card.plan?.subtasks ?? []).filter((s) => card.subtaskRuns[s.id]?.sessionId);
+  return [{ subtask: null, label: "主代理" }, ...subs.map((s) => ({ subtask: s.id, label: `子代理 ${s.id} · ${s.title}` }))];
 }
 
 const WORKER_STATE_LABELS: Record<string, string> = {

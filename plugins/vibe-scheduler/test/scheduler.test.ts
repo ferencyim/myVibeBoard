@@ -67,6 +67,25 @@ describe("priority admission", () => {
   });
 });
 
+describe("sub-agents (WP-106)", () => {
+  it("count against the limits like card executors, and the limits are published for the board", async () => {
+    const t = setup({ settings: { globalLimit: 2, providerLimits: { codex: 3 } } });
+    expect(t.store.limits.get()).toEqual({ globalLimit: 2, providerLimits: { codex: 3 } });
+    const p = t.preset("claude");
+    const a = t.card("a", "high", p.id);
+    const { session } = t.store.cards.dispatch({ cardId: a.id, agentId: "main", provider: "claude", worktree: null, presetId: p.id });
+    t.store.sessions.start({ cardId: a.id, agentId: "sub", role: "subagent", provider: "claude" });
+    t.card("b", "high", p.id);
+    const r = await t.runtime.tickOnce();
+    expect(keys(r)).toEqual([]);
+    expect(r.deferred["DEMO-2"]).toMatch(/全局并发上限 2/);
+    t.store.sessions.setState(session.id, "ended");
+    expect(keys(await t.runtime.tickOnce())).toEqual(["DEMO-2"]);
+    t.runtime.setSettings({ ...DEFAULT_CONFIG, ...t.runtime.store.limits.get(), globalLimit: 7 } as never);
+    expect(t.store.limits.get().globalLimit).toBe(7);
+  });
+});
+
 describe("quota-aware admission", () => {
   it("when quota is tight, high priority gets the strong provider first and low waits", async () => {
     const t = setup({ usage: usage(["claude", 80]) }); // 20% left <= tight 25%

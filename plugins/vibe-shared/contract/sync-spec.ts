@@ -71,6 +71,7 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
       "reviewer_preset_id",
       "scout_preset_id",
       "planner_preset_id",
+      "subagent_preset_id",
       "plan_seen_at",
       "exec_seen_at",
       "verify_seen_at",

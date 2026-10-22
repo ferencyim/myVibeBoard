@@ -11,6 +11,12 @@ import {
   type CardPriority,
 } from "../vibe/contract";
 import { agentActor, toBoardError, type BoardService } from "../service";
+import type { SubtaskService } from "../subtasks";
+
+/** Services the tools need beyond the board (WP-106 sub-agents). */
+export interface McpServices {
+  subtasks?: Pick<SubtaskService, "status" | "start" | "message" | "mark"> | null;
+}
 
 export interface McpCaller {
   agentId?: string;
@@ -128,17 +134,86 @@ export const MCP_TOOLS = [
       additionalProperties: false,
     },
   },
+  // WP-106: the main agent coordinates the plan's subtasks; the board starts the sub-agents.
+  {
+    name: "vibe_subtask_status",
+    description:
+      "Main agent only. List the card's subtasks with their status (pending/running/waiting/done/failed), model, dependencies, files, the sub-agent's last summary or question, and why a subtask cannot start yet.",
+    inputSchema: {
+      type: "object",
+      properties: { key: str("Card key such as PROD-12") },
+      required: ["key"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vibe_subtask_start",
+    description:
+      "Main agent only. Ask the board to start the sub-agent of one subtask in the card's worktree. The board refuses (and says why) when a dependency is not done, the subtask is already running, its files overlap a running subtask, or the concurrency limit is reached. You are notified when the sub-agent finishes, fails or asks something.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: str("Card key such as PROD-12"),
+        subtask: str("Subtask id such as s1"),
+        instructions: str("Extra instructions for this sub-agent (optional)"),
+      },
+      required: ["key", "subtask"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vibe_subtask_message",
+    description:
+      "Main agent only. Send a message to a subtask's sub-agent: answers its open question, or gives it new instructions (an ended sub-agent is resumed).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: str("Card key such as PROD-12"),
+        subtask: str("Subtask id such as s1"),
+        text: str("Message for the sub-agent"),
+      },
+      required: ["key", "subtask", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vibe_subtask_mark",
+    description:
+      "Main agent only. Record a subtask's status yourself: done (for example you did it), failed (given up) or pending (to start it again later), with a short note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: str("Card key such as PROD-12"),
+        subtask: str("Subtask id such as s1"),
+        status: { type: "string", enum: ["done", "failed", "pending"] },
+        note: str("Why / what was done"),
+      },
+      required: ["key", "subtask", "status"],
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 const READ_ONLY_TOOLS = new Set(["vibe_projects", "vibe_list", "vibe_show", "vibe_comment"]);
+const SUBTASK_TOOLS = new Set(["vibe_subtask_status", "vibe_subtask_start", "vibe_subtask_message", "vibe_subtask_mark"]);
 
-/** Tools visible to a role. Verifiers are read-only (they may only comment). */
+/**
+ * Tools visible to a role. Verifiers are read-only (they may only comment); the subtask tools are
+ * for the main agent (worker) and callers whose role is unknown (some providers do not pass env to
+ * MCP servers), never for sub-agents, verifiers, planners or the master.
+ */
 export function toolsForRole(role: string | undefined) {
   if (role === "verifier") return MCP_TOOLS.filter((t) => READ_ONLY_TOOLS.has(t.name));
-  return MCP_TOOLS;
+  if (role === undefined || role === "worker") return MCP_TOOLS;
+  return MCP_TOOLS.filter((t) => !SUBTASK_TOOLS.has(t.name));
 }
 
 const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+
+function subtasksOf(services: McpServices) {
+  if (!services.subtasks) throw new Error("Sub-agents are not available in this board process");
+  return services.subtasks;
+}
 
 function tagIds(board: BoardService, names: unknown): string[] | undefined {
   if (!Array.isArray(names)) return undefined;
@@ -155,6 +230,7 @@ export async function callMcpTool(
   args: Record<string, unknown>,
   board: BoardService,
   caller: McpCaller,
+  services: McpServices = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
   const result = (data: unknown) => ({
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -228,6 +304,17 @@ export async function callMcpTool(
         await mkdir(join(card.worktree, ".vibe", "sessions"), { recursive: true });
         await writeFile(file, String(args.text ?? ""), "utf8");
         return result({ saved: file });
+      }
+      case "vibe_subtask_status":
+        return result(subtasksOf(services).status(key));
+      case "vibe_subtask_start":
+        return result(await subtasksOf(services).start(key, String(args.subtask ?? ""), text(args.instructions)));
+      case "vibe_subtask_message":
+        return result(await subtasksOf(services).message(key, String(args.subtask ?? ""), String(args.text ?? ""), "main"));
+      case "vibe_subtask_mark": {
+        const status = String(args.status ?? "");
+        if (status !== "done" && status !== "failed" && status !== "pending") throw new Error(`Unknown status: ${status}`);
+        return result(subtasksOf(services).mark(key, String(args.subtask ?? ""), status, String(args.note ?? "")));
       }
       default:
         throw new Error(`Unknown tool: ${name}`);

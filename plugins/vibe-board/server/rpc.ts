@@ -147,7 +147,9 @@ export function registerBoardRpcs(
 
   const { dispatcher, lifecycle, sync, replies, verify, requirements, chat, flow } = extras;
   if (chat) {
-    server.handle(rpc.chatSendRpc, (input) => chat.send(input.card, input.text, input.actor, input.thread));
+    server.handle(rpc.chatSendRpc, (input) =>
+      chat.send(input.card, input.text, input.actor, input.thread, input.subtask),
+    );
     server.handle(rpc.proposalsAcceptRpc, (input) => chat.accept(input.eventId, input.actor));
     server.handle(rpc.proposalsRejectRpc, (input) => chat.reject(input.eventId, input.actor));
   }
@@ -157,6 +159,7 @@ export function registerBoardRpcs(
   }
   if (flow) {
     server.handle(rpc.planStartRpc, (input) => flow.planStart(input.card, input.actor));
+    server.handle(rpc.planSubtasksRpc, (input) => flow.setSubtasks(input.card, input.subtasks, input.actor));
     server.handle(rpc.execStartRpc, async (input, { paseo }) => {
       extras.onPaseo?.(paseo);
       return flow.execStart(input.card);

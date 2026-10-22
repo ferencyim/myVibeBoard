@@ -22,6 +22,7 @@ export function useBoardApi() {
     cardsDelete: useRpc(rpc.cardsDeleteRpc),
     cardsDispatch: useRpc(rpc.cardsDispatchRpc),
     planStart: useRpc(rpc.planStartRpc),
+    planSubtasks: useRpc(rpc.planSubtasksRpc),
     execStart: useRpc(rpc.execStartRpc),
     execSwitch: useRpc(rpc.execSwitchRpc),
     requirementsGet: useRpc(rpc.requirementsGetRpc),

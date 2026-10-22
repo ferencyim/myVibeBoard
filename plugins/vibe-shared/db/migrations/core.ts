@@ -378,4 +378,52 @@ UPDATE card SET plan_json = (
 );
 `,
   },
+  {
+    version: 8,
+    name: "sub_agents",
+    // agent_session.role gains 'subagent'; SQLite cannot alter a CHECK, so the table is rebuilt
+    // (12-step procedure; nothing references agent_session, foreign keys off as for migration 4).
+    foreignKeysOff: true,
+    sql: `
+-- WP-106: a card's main agent (preset_id) coordinates sub-agents. Their default model, and the
+-- runtime state per plan subtask (daemon-written display column, JSON object keyed by subtask id).
+ALTER TABLE card ADD COLUMN subagent_preset_id TEXT;
+ALTER TABLE card ADD COLUMN subtask_runs_json TEXT NOT NULL DEFAULT '{}';
+
+CREATE TABLE agent_session_new (
+  id TEXT PRIMARY KEY,
+  card_id TEXT REFERENCES card(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  workspace_id TEXT,
+  role TEXT NOT NULL CHECK (role IN ('master','planner','worker','verifier','subagent')),
+  current_provider TEXT NOT NULL,
+  switch_history_json TEXT NOT NULL DEFAULT '[]',
+  state TEXT NOT NULL DEFAULT 'starting'
+    CHECK (state IN ('starting','working','waiting','idle','ended','error')),
+  waiting_since TEXT,
+  pending_question_json TEXT,
+  cache_expires_at TEXT,
+  last_activity_at TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  error_message TEXT,
+  updated_hlc TEXT NOT NULL DEFAULT '',
+  stalled_since TEXT,
+  complexity TEXT CHECK (complexity IS NULL OR complexity IN ('short','multi','long')),
+  reassigned_from_session_id TEXT
+);
+INSERT INTO agent_session_new (id, card_id, agent_id, workspace_id, role, current_provider,
+  switch_history_json, state, waiting_since, pending_question_json, cache_expires_at,
+  last_activity_at, started_at, ended_at, error_message, updated_hlc, stalled_since, complexity,
+  reassigned_from_session_id)
+  SELECT id, card_id, agent_id, workspace_id, role, current_provider, switch_history_json, state,
+    waiting_since, pending_question_json, cache_expires_at, last_activity_at, started_at, ended_at,
+    error_message, updated_hlc, stalled_since, complexity, reassigned_from_session_id
+  FROM agent_session;
+DROP TABLE agent_session;
+ALTER TABLE agent_session_new RENAME TO agent_session;
+CREATE INDEX idx_agent_session_card ON agent_session(card_id, state);
+CREATE UNIQUE INDEX idx_agent_session_agent ON agent_session(agent_id);
+`,
+  },
 ];

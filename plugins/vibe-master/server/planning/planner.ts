@@ -381,6 +381,9 @@ export function createPlanning(deps: PlanningDeps) {
   function apply(card: CardView, result: PlanTurn): string {
     const acceptance = result.acceptance?.trim() || undefined;
     if (!result.plan && !acceptance) return "";
+    const presets = store.presets.list();
+    const presetIdOf = (name: string | null | undefined) =>
+      name ? (presets.find((p) => p.name === name || p.id === name)?.id ?? null) : null;
     const plan: PlanSnapshot | undefined = result.plan
       ? {
           description: result.plan.text,
@@ -389,12 +392,19 @@ export function createPlanning(deps: PlanningDeps) {
           tags: [],
           recommendedPresetId: null,
           ...(result.plan.files.length ? { files: result.plan.files } : {}),
+          ...(result.plan.subtasks
+            ? {
+                subtasks: result.plan.subtasks.map(({ preset, ...s }) => ({ ...s, presetId: presetIdOf(preset) })),
+              }
+            : {}),
         }
       : undefined;
     const saved = store.cards.setPlan(card.id, { plan, acceptance, author: PLANNER_AUTHOR });
-    return saved.acceptance === "proposed"
-      ? "\n\n（你改过验收标准，这次的修改作为建议放在下面，采纳后才会写入。）"
-      : "";
+    const notes = [
+      saved.acceptance === "proposed" ? "你改过验收标准，这次的修改作为建议放在下面，采纳后才会写入。" : "",
+      saved.subtasks === "proposed" ? "你改过子任务，这次的子任务作为建议放在下面，采纳后才会替换。" : "",
+    ].filter(Boolean);
+    return notes.length ? `\n\n（${notes.join("")}）` : "";
   }
 
   // ---------- one conversation turn ----------
@@ -448,6 +458,7 @@ export function createPlanning(deps: PlanningDeps) {
                   })
                 : "",
               memory: project ? memoryText(project) : "",
+              presets: store.presets.list(),
               card: store.cards.get(card.id) ?? card,
               tagNames: tagNames(card),
               earlier: messagesOf(events).filter((m) => !answers.includes(m.id)),

@@ -13,6 +13,7 @@ import { Btn, Chip, Field, Muted, TextField } from "../common/ui";
 import {
   proposalDiff,
   type ChatItem,
+  type ChatTarget,
   type MessageItem,
   type ProposalItem,
   type SystemItem,
@@ -30,6 +31,8 @@ export interface ConversationProps {
   placeholder: string;
   reload: () => void;
   onOpenVerification?: () => void;
+  /** WP-106: who a message goes to (main agent or one sub-agent); omitted = the thread's default. */
+  targets?: readonly ChatTarget[];
 }
 
 export function Conversation(props: ConversationProps) {
@@ -39,13 +42,23 @@ export function Conversation(props: ConversationProps) {
   const { offline } = useLocalStatus();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [target, setTarget] = useState<string | null>(null);
+  const targets = props.targets ?? [];
+  // A sub-agent that left the list (re-planned) falls back to the main agent.
+  const subtask = target && targets.some((t) => t.subtask === target) ? target : null;
 
   const submit = async () => {
     const value = text.trim();
     if (!value || sending) return;
     setSending(true);
     try {
-      await api.chatSend({ card: card.id, text: value, thread, ...(compact ? { actor: "phone" as const } : {}) });
+      await api.chatSend({
+        card: card.id,
+        text: value,
+        thread,
+        ...(subtask ? { subtask } : {}),
+        ...(compact ? { actor: "phone" as const } : {}),
+      });
       setText("");
       reload();
     } catch (e) {
@@ -70,7 +83,24 @@ export function Conversation(props: ConversationProps) {
         />
       ))}
       {props.busyText ? <Muted size={12}>{props.busyText}</Muted> : null}
-      <Field label="发言" hint={offline ? "离线，联网后发送" : props.composerHint}>
+      {targets.length > 1 ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <Muted size={11}>发给：</Muted>
+          {targets.map((t) => (
+            <Chip key={t.subtask ?? "main"} label={t.label} selected={subtask === t.subtask} onPress={() => setTarget(t.subtask)} />
+          ))}
+        </View>
+      ) : null}
+      <Field
+        label="发言"
+        hint={
+          offline
+            ? "离线，联网后发送"
+            : subtask
+              ? `消息直接发给子代理 ${subtask}；它在等回答时，这条消息就是回答。`
+              : props.composerHint
+        }
+      >
         <TextField multiline value={text} onChangeText={setText} placeholder={props.placeholder} />
       </Field>
       <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
@@ -109,11 +139,15 @@ function ChatRow({
 }
 
 function SystemRow({ item, onOpenVerification }: { item: SystemItem; onOpenVerification?: () => void }) {
+  const { openAgent } = useHost();
   return (
     <View style={{ alignSelf: "center", alignItems: "center", maxWidth: "92%", gap: 2 }}>
       <Muted size={11}>{item.text}</Muted>
       {item.link === "verification" && onOpenVerification ? (
         <Btn small variant="ghost" label="查看验证" onPress={onOpenVerification} />
+      ) : null}
+      {item.agentId && openAgent ? (
+        <Btn small variant="ghost" icon="ExternalLink" label="查看子代理会话" onPress={() => openAgent({ agentId: item.agentId! })} />
       ) : null}
     </View>
   );

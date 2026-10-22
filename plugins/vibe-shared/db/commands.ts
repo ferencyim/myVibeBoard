@@ -41,6 +41,8 @@ import {
   ProjectSchema,
   ProposalChangesSchema,
   ProposalEventBodySchema,
+  SubtaskRunSchema,
+  SubtaskSchema,
   TagSchema,
   type AgentSession,
   type CardEvent,
@@ -53,8 +55,18 @@ import {
   type ProposalChanges,
   type ProposalEventBody,
   type Project,
+  type Subtask,
+  type SubtaskRun,
   type Tag,
 } from "../contract/model";
+import {
+  DEFAULT_SCHEDULER_LIMITS,
+  SCHEDULER_LIMITS_KEY,
+  SchedulerLimitsSchema,
+  emptyRun,
+  subtaskListError,
+  type SchedulerLimits,
+} from "../contract/subtasks";
 import {
   PROMPT_OVERRIDE_MAX_CHARS,
   PromptDefSchema,
@@ -160,6 +172,7 @@ export interface CreateCardInput {
   reviewerPresetId?: string | null;
   scoutPresetId?: string | null;
   plannerPresetId?: string | null;
+  subagentPresetId?: string | null;
   origin?: CardOrigin;
   originRef?: string | null;
   dedupeKey?: string | null;
@@ -183,6 +196,8 @@ export interface UpdateCardInput {
   reviewerPresetId?: string | null;
   scoutPresetId?: string | null;
   plannerPresetId?: string | null;
+  /** WP-106: default model of the sub-agents. */
+  subagentPresetId?: string | null;
   /** Read positions of the card tabs (WP-105); see contract/card-tabs.ts markReadPatch. */
   planSeenAt?: string | null;
   execSeenAt?: string | null;
@@ -194,6 +209,9 @@ export interface UpdateCardInput {
 
 /** Card fields that only move a read position (no edit of the card). */
 const READ_POSITION_FIELDS = new Set(["planSeenAt", "execSeenAt", "verifySeenAt"]);
+
+/** A plan with nothing in it (subtasks edited before any plan was made). */
+const EMPTY_PLAN: PlanSnapshot = { description: "", checks: [], subCards: [], tags: [], recommendedPresetId: null };
 
 /** WP-105: the planning model's result for a card (cards.setPlan). */
 export interface SetPlanInput {
@@ -212,6 +230,8 @@ export interface SetPlanResult {
   planChanged: boolean;
   /** applied: written to the card; proposed: the owner edited it, so a proposal waits in the plan chat. */
   acceptance: "applied" | "proposed" | "unchanged" | "none";
+  /** WP-106: the subtasks the model sent were applied, or wait as a proposal (the owner edited them). */
+  subtasks: "applied" | "proposed";
 }
 
 export interface AddChatInput {
@@ -235,6 +255,8 @@ export interface AddChatInput {
   error?: boolean;
   thread?: ChatThread;
   action?: "make_plan";
+  /** WP-106: subtask of the sub-agent that wrote it / the owner addresses. */
+  subtask?: string;
 }
 
 export interface ProposeInput {
@@ -364,6 +386,7 @@ const CARD_FIELDS: FieldMap = {
   reviewerPresetId: ["reviewer_preset_id", asIs],
   scoutPresetId: ["scout_preset_id", asIs],
   plannerPresetId: ["planner_preset_id", asIs],
+  subagentPresetId: ["subagent_preset_id", asIs],
   planSeenAt: ["plan_seen_at", asIs],
   execSeenAt: ["exec_seen_at", asIs],
   verifySeenAt: ["verify_seen_at", asIs],
@@ -546,6 +569,20 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       ).run(created.createdAt, created.cardId, created.createdAt);
     }
     return created;
+  }
+
+  /** The card's plan (WP-105 plan_json), null when there is none yet. */
+  function planOf(row: Row): PlanSnapshot | null {
+    return row.plan_json ? PlanSnapshotSchema.parse(JSON.parse(row.plan_json as string)) : null;
+  }
+
+  function writePlan(id: string, plan: PlanSnapshot, hlc: Hlc): void {
+    db.prepare("UPDATE card SET plan_json = ?, updated_at = ?, updated_hlc = ? WHERE id = ?").run(
+      JSON.stringify(plan),
+      iso(),
+      hlc,
+      id,
+    );
   }
 
   function rawCard(id: string): Row {
@@ -823,6 +860,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare("UPDATE card SET reviewer_preset_id = NULL WHERE reviewer_preset_id = ?").run(id);
         db.prepare("UPDATE card SET scout_preset_id = NULL WHERE scout_preset_id = ?").run(id);
         db.prepare("UPDATE card SET planner_preset_id = NULL WHERE planner_preset_id = ?").run(id);
+        db.prepare("UPDATE card SET subagent_preset_id = NULL WHERE subagent_preset_id = ?").run(id);
         db.prepare("DELETE FROM preset WHERE id = ?").run(id);
         tombstone("preset", id, hlc);
         // Drop the deleted id from other presets' fallback chains.
@@ -980,8 +1018,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare(
           `INSERT INTO card (id, project_id, number, key, title, description, "column", sort_key, priority, acceptance,
              ref_images_json, needs_evidence, preset_id, suggested_preset_id, reviewer_preset_id, scout_preset_id, planner_preset_id,
-             worktree, origin, origin_ref, dedupe_key, plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             subagent_preset_id, worktree, origin, origin_ref, dedupe_key, plan_session_id, parent_card_id, created_at, updated_at, updated_hlc)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           id,
           project.id,
@@ -1000,6 +1038,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           input.reviewerPresetId ?? null,
           input.scoutPresetId ?? null,
           input.plannerPresetId ?? null,
+          input.subagentPresetId ?? null,
           input.worktree ?? null,
           origin,
           input.originRef ?? null,
@@ -1082,6 +1121,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       if (input.error !== undefined) body.error = input.error;
       if (input.thread !== undefined) body.thread = input.thread;
       if (input.action !== undefined) body.action = input.action;
+      if (input.subtask !== undefined) body.subtask = input.subtask;
       return events.add({
         id: input.id,
         createdAt: input.createdAt,
@@ -1110,6 +1150,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         for (const key of ["title", "description", "acceptance"] as const) {
           if (changes[key] !== undefined) before[key] = row[key] as string;
         }
+        if (changes.subtasks !== undefined) before.subtasks = planOf(row)?.subtasks ?? [];
         const body: ProposalEventBody = { changes, rationale: input.rationale, status: "pending", before };
         return insertCardEvent(
           {
@@ -1133,6 +1174,14 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         if (body.changes.description !== undefined) changes.description = body.changes.description;
         if (body.changes.acceptance !== undefined) changes.acceptance = body.changes.acceptance;
         cards.update(event.cardId, changes);
+        // WP-106: the model's subtasks replace the owner's; its next version applies directly again.
+        if (body.changes.subtasks !== undefined) {
+          const row = rawCard(event.cardId);
+          const next: PlanSnapshot = { ...(planOf(row) ?? EMPTY_PLAN), subtasks: body.changes.subtasks };
+          delete next.subtasksEdited;
+          writePlan(event.cardId, next, hlc);
+          emit("card.updated", { fields: ["plan"] }, { cardId: event.cardId, projectId: row.project_id as string });
+        }
         // The criteria are the model's text again: its next revision may overwrite them.
         if (changes.acceptance !== undefined)
           db.prepare("UPDATE card SET model_acceptance = ? WHERE id = ?").run(
@@ -1160,6 +1209,23 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       return write((hlc) => {
         const before = rawCard(id);
         const projectId = before.project_id as string;
+        // WP-106: subtasks the owner edited are kept; the model's version waits as a proposal.
+        let proposedSubtasks: Subtask[] | null = null;
+        if (plan) {
+          const listError = plan.subtasks ? subtaskListError(plan.subtasks) : null;
+          if (listError) throw new CommandError("invalid", listError);
+          const current = planOf(before);
+          if (current?.subtasksEdited) {
+            const mine = current.subtasks ?? [];
+            if (plan.subtasks !== undefined && JSON.stringify(plan.subtasks) !== JSON.stringify(mine)) {
+              proposedSubtasks = plan.subtasks;
+            }
+            plan.subtasks = mine;
+            plan.subtasksEdited = true;
+          } else {
+            delete plan.subtasksEdited;
+          }
+        }
         const json = plan === undefined ? null : JSON.stringify(plan);
         const planChanged = json !== null && json !== before.plan_json;
         if (planChanged) {
@@ -1177,6 +1243,19 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             hlc,
           );
           emit("card.updated", { fields: ["plan"] }, { cardId: id, projectId });
+        }
+        const proposed = proposedSubtasks;
+        if (
+          proposed &&
+          !pendingProposals(id).some((pp) => JSON.stringify(pp.body.changes.subtasks) === JSON.stringify(proposed))
+        ) {
+          cards.propose({
+            cardId: id,
+            changes: { subtasks: proposed },
+            rationale: "你改过子任务，所以规划模型这次的子任务先作为建议提出，由你决定是否采纳。",
+            authorKind: "master",
+            author: input.author ?? "planner",
+          });
         }
         let acceptance: SetPlanResult["acceptance"] = "none";
         const next = input.acceptance?.trim();
@@ -1203,7 +1282,47 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             acceptance = "proposed";
           }
         }
-        return { card: viewOf(rawCard(id)), planChanged, acceptance };
+        return {
+          card: viewOf(rawCard(id)),
+          planChanged,
+          acceptance,
+          subtasks: proposed ? ("proposed" as const) : ("applied" as const),
+        };
+      });
+    },
+
+    /**
+     * WP-106: the owner's version of the plan's subtasks (add, remove, edit, pick a model). Marks the
+     * subtasks as edited, so the planning model's next version becomes a proposal instead.
+     */
+    setSubtasks(id: string, subtasks: readonly Subtask[], author = "user"): CardView {
+      const list = subtasks.map((s) => SubtaskSchema.parse(s));
+      const error = subtaskListError(list);
+      if (error) throw new CommandError("invalid", error);
+      return write((hlc) => {
+        const before = rawCard(id);
+        const current = planOf(before) ?? EMPTY_PLAN;
+        if (JSON.stringify(current.subtasks ?? []) === JSON.stringify(list)) return viewOf(before);
+        for (const s of list) if (s.presetId !== null) mustPreset(s.presetId);
+        writePlan(id, { ...current, subtasks: list, subtasksEdited: true }, hlc);
+        insertCardEvent(
+          { cardId: id, type: "note", authorKind: "user", author, body: { kind: "subtasks_edited", text: "子任务已修改" } },
+          hlc,
+        );
+        emit("card.updated", { fields: ["plan"] }, { cardId: id, projectId: before.project_id as string });
+        return viewOf(rawCard(id));
+      });
+    },
+
+    /** WP-106: update the runtime state of one subtask (daemon only; a display column, no sync stamp). */
+    setSubtaskRun(id: string, subtaskId: string, patch: Partial<SubtaskRun>): SubtaskRun {
+      return write(() => {
+        const before = rawCard(id);
+        const runs = JSON.parse((before.subtask_runs_json as string) || "{}") as Record<string, SubtaskRun>;
+        const next = SubtaskRunSchema.parse({ ...emptyRun(), ...runs[subtaskId], ...patch });
+        runs[subtaskId] = next;
+        db.prepare("UPDATE card SET subtask_runs_json = ? WHERE id = ?").run(JSON.stringify(runs), id);
+        return next;
       });
     },
 
@@ -1771,7 +1890,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           },
           hlc,
         );
-        if (old.cardId && input.presetId) {
+        // A sub-agent's replacement changes its subtask's model, not the card's main agent (WP-106).
+        if (old.cardId && input.presetId && old.role !== "subagent") {
           patchRow("card", old.cardId, CARD_FIELDS, { presetId: input.presetId }, hlc);
         }
         if (old.cardId) {
@@ -2095,5 +2215,25 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
   };
 
-  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, deviceId, db };
+  // ---- scheduler limits (WP-106): vibe-scheduler publishes, the board checks sub-agent starts ----
+
+  const limits = {
+    publish(value: SchedulerLimits): void {
+      const parsed = SchedulerLimitsSchema.parse(value);
+      db.prepare(
+        "INSERT INTO vibe_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run(SCHEDULER_LIMITS_KEY, JSON.stringify(parsed));
+    },
+    get(): SchedulerLimits {
+      const raw = db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(SCHEDULER_LIMITS_KEY)?.value;
+      if (!raw) return DEFAULT_SCHEDULER_LIMITS;
+      try {
+        return SchedulerLimitsSchema.parse(JSON.parse(raw));
+      } catch {
+        return DEFAULT_SCHEDULER_LIMITS;
+      }
+    },
+  };
+
+  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, limits, deviceId, db };
 }

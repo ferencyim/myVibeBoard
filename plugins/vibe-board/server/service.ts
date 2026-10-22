@@ -118,6 +118,7 @@ export interface CardUpdateInput {
   reviewerPresetId?: string | null;
   scoutPresetId?: string | null;
   plannerPresetId?: string | null;
+  subagentPresetId?: string | null;
   planSeenAt?: string | null;
   execSeenAt?: string | null;
   verifySeenAt?: string | null;

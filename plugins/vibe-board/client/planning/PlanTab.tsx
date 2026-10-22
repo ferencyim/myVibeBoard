@@ -14,6 +14,7 @@ import { discard, edit, initialDraft, isDirty, reconcileField } from "../detail/
 import { useOptimisticCard } from "../detail/optimistic";
 import { Conversation } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
+import { SubtaskEditor } from "./Subtasks";
 import { chatItemsOf, plannerSessionOf, plannerStatusLabel, waitingForReply } from "./logic";
 
 // Hosts older than v0.12.1 have no Markdown component; the plan then shows as plain text.
@@ -115,6 +116,8 @@ export function PlanTab({ api, card: serverCard, events, sessions, presets, relo
           <Muted size={13}>还没有方案：选好规划模型后点「制定方案」。</Muted>
         )}
       </Field>
+
+      <SubtaskEditor api={api} card={card} presets={presets} reload={reload} />
 
       <AcceptanceEditor api={api} card={card} reload={reload} />
 

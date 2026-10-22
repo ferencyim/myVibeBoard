@@ -1,6 +1,7 @@
 // Card detail (WP-105): five tabs - 详情 (fields), 方案 (scout / planning model, the single plan,
 // acceptance criteria, plan conversation), 执行 (executing / reviewing model, 立即执行, execution
-// conversation), 验证 (review conclusions and evidence verification) and 时间线 (card events).
+// conversation), 验证 (review conclusions and evidence verification) and 时间线 (card events; each
+// one line until tapped, WP-106).
 // 方案 / 执行 / 验证 carry an unread dot; opening the tab marks it read (synced to the phone).
 
 import { useToast } from "@getpaseo/plugin/client/react-native";
@@ -30,7 +31,7 @@ import { PrioritySelector, TagSelector } from "../presets/selectors";
 import type { ProviderUsageLike } from "../presets/logic";
 import { VerificationPanel } from "../verification/VerificationPanel";
 import { discard, edit, initialDraft, isDirty, reconcileField } from "./draft";
-import { EVENT_TYPE_LABELS, describeEvent } from "./events";
+import { EVENT_TYPE_LABELS, describeEvent, timelineSummary, toggleExpanded } from "./events";
 import { useOptimisticCard } from "./optimistic";
 
 type Tab = "details" | UnreadTab | "timeline";
@@ -476,6 +477,8 @@ function Timeline({
   const { theme } = useHost();
   const toast = useToast();
   const [text, setText] = useState("");
+  // Collapsed by default (WP-106): one line per event, a tap shows the full content, another hides it.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const send = async () => {
     if (!text.trim()) return;
     try {
@@ -488,24 +491,44 @@ function Timeline({
   };
   return (
     <View style={{ gap: 12 }}>
-      {events.map((ev) => (
-        <View
-          key={ev.id}
-          style={{
-            gap: 2,
-            paddingLeft: 10,
-            borderLeftWidth: 2,
-            borderLeftColor: ev.authorKind === "user" ? theme.colors.accent : theme.colors.border,
-          }}
-        >
-          <Muted>
-            {EVENT_TYPE_LABELS[ev.type]} · {ev.author || ev.authorKind} · {ev.createdAt.replace("T", " ").slice(0, 16)}
-          </Muted>
-          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
-            {describeEvent(ev)}
-          </Text>
-        </View>
-      ))}
+      {events.map((ev) => {
+        const open = expanded.has(ev.id);
+        const line = timelineSummary(ev);
+        return (
+          <Pressable
+            key={ev.id}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: open }}
+            onPress={() => setExpanded((current) => toggleExpanded(current, ev.id))}
+            style={{
+              gap: 4,
+              paddingLeft: 10,
+              paddingVertical: 2,
+              borderLeftWidth: 2,
+              borderLeftColor: ev.authorKind === "user" ? theme.colors.accent : theme.colors.border,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Muted size={11}>{line.time}</Muted>
+              <Muted size={11}>{line.type}</Muted>
+              <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.foreground, fontSize: 13 }}>
+                {line.title}
+              </Text>
+              <Muted size={11}>{open ? "收起" : line.more ? "展开" : ""}</Muted>
+            </View>
+            {open ? (
+              <View style={{ gap: 2 }}>
+                <Muted size={11}>
+                  {EVENT_TYPE_LABELS[ev.type]} · {ev.author || ev.authorKind} · {ev.createdAt.replace("T", " ").slice(0, 19)}
+                </Muted>
+                <Text selectable style={{ color: theme.colors.foreground, fontSize: 13 }}>
+                  {describeEvent(ev)}
+                </Text>
+              </View>
+            ) : null}
+          </Pressable>
+        );
+      })}
       {events.length === 0 ? <Muted>暂无事件。</Muted> : null}
       <Field label="添加备注">
         <TextField multiline value={text} onChangeText={setText} />

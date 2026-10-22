@@ -156,6 +156,7 @@ export function createDispatcher(options: DispatcherOptions) {
             project,
             preset: current,
             events,
+            presets: store.presets.list(),
             extraInstructions: opts.extraInstructions,
           });
           const modeId = modeIdFor(current.provider, current.permissionMode);
