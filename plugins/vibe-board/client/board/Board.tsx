@@ -143,8 +143,8 @@ export function Board(props: BoardProps) {
         ref={(r) => void columnRefs.current.set(column, r as unknown as RefView | null)}
         collapsable={false}
         style={{
-          // Wide: columns share the width but never get narrower than 240 (then the board scrolls).
-          ...(compact ? { flex: 1 } : { flexGrow: 1, flexShrink: 0, flexBasis: 240, minWidth: 240 }),
+          // Wide: columns share the width between 216 and 280, so all five fit on a laptop and none gets huge.
+          ...(compact ? { flex: 1 } : { flexGrow: 1, flexShrink: 0, flexBasis: 216, minWidth: 216, maxWidth: 280 }),
           marginRight: compact ? 0 : 10,
           borderRadius: 10,
           padding: 8,
