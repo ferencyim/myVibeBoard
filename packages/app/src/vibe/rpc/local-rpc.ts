@@ -228,6 +228,8 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
       reviewerPresetId: "reviewer_preset_id",
       scoutPresetId: "scout_preset_id",
       plannerPresetId: "planner_preset_id",
+      // WP-106: default model of the card's sub-agents.
+      subagentPresetId: "subagent_preset_id",
       planSeenAt: "plan_seen_at",
       execSeenAt: "exec_seen_at",
       verifySeenAt: "verify_seen_at",
@@ -400,7 +402,13 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
     if (!text.trim()) throw new RpcError("invalid", "Message must not be blank");
     // WP-105: plan or execution conversation (the daemon routes it after the sync).
     const thread = i.thread === "exec" ? "exec" : "plan";
-    return addUserEvent(card.id, "chat", asString(i.actor) ?? "user", { text, thread });
+    // WP-106: an execution message may be addressed to one subtask's sub-agent.
+    const subtask = thread === "exec" ? asString(i.subtask) : undefined;
+    return addUserEvent(card.id, "chat", asString(i.actor) ?? "user", {
+      text,
+      thread,
+      ...(subtask ? { subtask } : {}),
+    });
   }
 
   function replySend(i: Input) {

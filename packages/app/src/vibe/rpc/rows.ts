@@ -139,6 +139,9 @@ export function toCard(r: RawRow, prefix: string, tags: string[]): CardView {
     // WP-105: models picked on the plan / execution tabs, the single plan and the unread markers.
     scoutPresetId: strOrNull(r.v.scout_preset_id),
     plannerPresetId: strOrNull(r.v.planner_preset_id),
+    // WP-106: sub-agent default model and the runtime state of the plan's subtasks.
+    subagentPresetId: strOrNull(r.v.subagent_preset_id),
+    subtaskRuns: json<CardView["subtaskRuns"]>(r.v.subtask_runs_json, {}),
     plan: json<CardView["plan"]>(r.v.plan_json, null),
     modelAcceptance: str(r.v.model_acceptance),
     planActivityAt: strOrNull(r.v.plan_activity_at),
