@@ -18,6 +18,8 @@ type CardPatch = {
   scoutPresetId?: string | null;
   plannerPresetId?: string | null;
   subagentPresetId?: string | null;
+  planReviewerPresetId?: string | null;
+  verifierPresetId?: string | null;
   needsEvidence?: boolean;
   [other: string]: unknown;
 };
@@ -30,6 +32,8 @@ const OPTIMISTIC_KEYS = [
   "scoutPresetId",
   "plannerPresetId",
   "subagentPresetId",
+  "planReviewerPresetId",
+  "verifierPresetId",
   "needsEvidence",
 ] as const;
 type OptimisticKey = (typeof OPTIMISTIC_KEYS)[number];

@@ -63,7 +63,7 @@ export function createDispatcher(options: DispatcherOptions) {
   const { store } = board;
   const inflight = new Set<string>();
 
-  /** Explicit override, else card pick -> master recommendation -> project default (see pickPresetId). */
+  /** Explicit override, else card pick -> master recommendation -> project default -> global default (see pickPresetId). */
   function pickPreset(card: CardView, project: Project, presetId?: string): Preset {
     const presets = store.presets.list();
     const find = (id: string) => presets.find((p) => p.id === id || p.name === id);
@@ -72,8 +72,8 @@ export function createDispatcher(options: DispatcherOptions) {
       if (!explicit) throw new BoardError("not_found", `找不到预设：${presetId}`);
       return explicit;
     }
-    const id = pickPresetId(card, project, (candidate) => !!find(candidate));
-    if (!id) throw new BoardError("invalid", "这张卡还没有选执行预设，项目也没有默认预设，请先选择预设");
+    const id = pickPresetId(card, project, (candidate) => !!find(candidate), store.modelDefaults.global());
+    if (!id) throw new BoardError("invalid", "这张卡还没有选主代理模型，项目和全局也没有默认主代理模型，请先选择");
     return find(id)!;
   }
 

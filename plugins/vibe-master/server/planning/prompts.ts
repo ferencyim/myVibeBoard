@@ -116,6 +116,38 @@ export function buildRepairMessage(
   return prompts.resolve("master.repair_json", { projectId, vars: { kind: "plan", error } });
 }
 
+/** WP-108: the task of the read-only plan reviewer (the card, its plan with subtasks, its criteria). */
+export function buildPlanReviewMessage(input: {
+  card: CardView;
+  presets?: readonly Pick<Preset, "id" | "name">[];
+  prompts?: PromptPort;
+}): string {
+  const { card } = input;
+  return (input.prompts ?? defaultPromptPort()).resolve("master.plan.review", {
+    projectId: card.projectId,
+    vars: {
+      "card.key": card.key,
+      "card.title": card.title,
+      "card.description": card.description || "（空）",
+      plan: renderPlan(card.plan, input.presets),
+      "card.acceptance": card.acceptance || "（空）",
+    },
+  });
+}
+
+/** WP-108: the plan reviewer's opinion, handed to the planner as the owner's 复核方案 message. */
+export function buildReviseMessage(input: {
+  reviewer: string;
+  review: string;
+  prompts?: PromptPort;
+  projectId?: string | null;
+}): string {
+  return (input.prompts ?? defaultPromptPort()).resolve("master.plan.revise", {
+    projectId: input.projectId,
+    vars: { reviewer: input.reviewer, review: input.review },
+  });
+}
+
 /** Read-only scout: one question, a short structured answer. */
 export function buildScoutMessage(input: {
   card: CardView;

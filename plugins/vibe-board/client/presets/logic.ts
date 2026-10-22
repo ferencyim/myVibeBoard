@@ -4,6 +4,7 @@ import {
   DEFAULT_REQUIREMENTS_PATH,
   ROLE_HINTS,
   isSafeRepoRelativePath,
+  type ModelDefaults,
   type Preset,
   type PresetEnvironmentKind,
   type PresetPermissionMode,
@@ -81,6 +82,7 @@ export const ROLE_HINT_LABELS: Record<RoleHint, string> = {
   scout: "探路",
   planner: "规划",
   reviewer: "复核",
+  verifier: "验证",
 };
 
 export interface PresetDraft {
@@ -218,7 +220,8 @@ export interface ProjectDraft {
   projectTypes: ProjectType[];
   description: string;
   requirementsPath: string;
-  defaultPresetId: string | null;
+  /** WP-108: default model per job; a missing job follows the global default. */
+  defaultPresets: ModelDefaults;
   /** "" = unlimited. */
   concurrencyLimit: string;
   /** Comma / newline separated device ids. */
@@ -234,7 +237,7 @@ export function emptyProjectDraft(color: string): ProjectDraft {
     projectTypes: [],
     description: "",
     requirementsPath: DEFAULT_REQUIREMENTS_PATH,
-    defaultPresetId: null,
+    defaultPresets: {},
     concurrencyLimit: "",
     devices: "",
     color,
@@ -249,11 +252,19 @@ export function projectToDraft(p: Project, fallbackColor: string): ProjectDraft 
     projectTypes: [...p.projectTypes],
     description: p.description,
     requirementsPath: p.requirementsPath,
-    defaultPresetId: p.defaultPresetId,
+    defaultPresets: { ...p.defaultPresets },
     concurrencyLimit: p.concurrencyLimit === null ? "" : String(p.concurrencyLimit),
     devices: p.devices.join(", "),
     color: p.color ?? fallbackColor,
   };
+}
+
+/** Sets one job of a defaults map; null removes it (follow the next level). */
+export function setDefault(d: ModelDefaults, role: keyof ModelDefaults, presetId: string | null): ModelDefaults {
+  const next = { ...d };
+  if (presetId) next[role] = presetId;
+  else delete next[role];
+  return next;
 }
 
 /** Toggle a type; selection order is kept (the first one is the primary type). */
@@ -288,7 +299,7 @@ export function projectDraftToPayload(d: ProjectDraft) {
     projectTypes: d.projectTypes,
     description: d.description,
     requirementsPath: d.requirementsPath.trim() || DEFAULT_REQUIREMENTS_PATH,
-    defaultPresetId: d.defaultPresetId,
+    defaultPresets: d.defaultPresets,
     concurrencyLimit: parseConcurrency(d.concurrencyLimit) ?? null,
     devices: parseDevices(d.devices),
     color: d.color,

@@ -9,6 +9,10 @@
 // The master agent takes no part (WP-105). Switching the planning model archives the old session;
 // the new one starts with the card's plan conversation, plan and criteria (nothing is lost: all of
 // it lives on the card).
+//
+// WP-108: the planning model and the plan reviewer come from the card, else the project / global
+// default. 复核方案 (action "review_plan") runs a one-shot read-only session on the plan reviewer
+// model; its opinion goes into the plan conversation, then to the planner as that owner message.
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -24,13 +28,15 @@ import type { Alerts } from "../subscription/alerts";
 import { isQuotaError } from "../subscription/quota";
 import { providerSpec, resolveTarget } from "../subscription/target";
 import { MasterError, type MasterAgentHandle, type MasterPaseo } from "../types";
-import type { AgentSession, CardView, PlanSnapshot, Preset, Project } from "../vibe/contract";
+import { resolveModel, type AgentSession, type CardView, type ModelRole, type PlanSnapshot, type Preset, type Project } from "../vibe/contract";
 import type { VibeDb, VibeStore } from "../vibe/db";
 import {
   buildRepairMessage,
   buildResultsMessage,
   buildScoutMessage,
   buildStartMessage,
+  buildPlanReviewMessage,
+  buildReviseMessage,
   buildTurnMessage,
   exploreQuestion,
   renderResearch,
@@ -100,7 +106,9 @@ interface Live {
 }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const NO_PLANNER = "还没有选择规划模型：请先在方案页顶部选一个规划模型，再点「制定方案」或重新发送。";
+const NO_PLANNER = "还没有规划模型：请先在方案页顶部选一个（或在项目 / 全局设置默认规划模型），再点「制定方案」或重新发送。";
+const NO_PLAN_REVIEWER = "还没有方案复核模型：请先在方案页选一个（或在项目 / 全局设置默认方案复核模型），再点「复核方案」。";
+const NO_PLAN = "还没有方案可以复核：先点「制定方案」。";
 
 export function createPlanning(deps: PlanningDeps) {
   const { store, db, clock } = deps;
@@ -134,6 +142,12 @@ export function createPlanning(deps: PlanningDeps) {
   }
 
   const presetOf = (id: string | null) => (id ? (store.presets.get(id) ?? null) : null);
+  /** The preset of a job of the card: its own pick, else the project / global default (WP-108). */
+  const modelOf = (card: CardView, role: ModelRole): Preset | null =>
+    presetOf(
+      resolveModel(role, card, store.projects.get(card.projectId), store.modelDefaults.global(), (id) => !!store.presets.get(id))
+        .presetId,
+    );
   const systemText = (projectId: string) => prompts.resolve("master.plan.system", { projectId });
   const tagNames = (card: CardView) => {
     const all = store.tags.list();
@@ -363,6 +377,38 @@ export function createPlanning(deps: PlanningDeps) {
     );
   }
 
+  // ---------- plan review (WP-108) ----------
+
+  /** One read-only session on the plan reviewer model; its reply is the opinion (free text). */
+  async function reviewPlan(card: CardView, project: Project | undefined, reviewer: Preset): Promise<string> {
+    const paseo = deps.getPaseo();
+    if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
+    let agent: MasterAgentHandle | null = null;
+    try {
+      const target = await targetOf(paseo, reviewer);
+      const modeId = await readOnlyModeOf(paseo, target.provider);
+      agent = await paseo.agents.create({
+        cwd: cwdOf(card, project),
+        title: `方案复核 ${card.key}`.slice(0, 80),
+        labels: { role: "plan_reviewer", card: card.key, preset: reviewer.name },
+        env: { VIBE_ROLE: "reviewer", VIBE_CARD_ID: card.id, VIBE_CARD_KEY: card.key },
+        config: {
+          provider: providerSpec(target),
+          ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
+          ...(modeId ? { modeId } : {}),
+        },
+      });
+      const out = await agent.run(buildPlanReviewMessage({ card, presets: store.presets.list(), prompts }), {
+        timeoutMs: tuning().planTurnTimeoutMs,
+      });
+      const text = out.lastMessage?.trim();
+      if (out.status === "idle" && text) return text;
+      throw new MasterError("agent", out.error ?? `方案复核会话结束状态：${out.status}`);
+    } finally {
+      await agent?.archive().catch(() => undefined);
+    }
+  }
+
   function postScout(card: CardView, items: ResearchItem[], key: string): void {
     store.cards.addChat({
       cardId: card.id,
@@ -426,13 +472,37 @@ export function createPlanning(deps: PlanningDeps) {
         ...(live ? { agentId: live.agent.id, sessionId: live.session.id } : {}),
         ...extra,
       });
-    const preset = presetOf(card.plannerPresetId);
+    const preset = modelOf(card, "planner");
     if (!preset) {
       reply(NO_PLANNER, { error: true });
       return;
     }
     const project = store.projects.get(card.projectId);
     try {
+      // 复核方案: the plan reviewer's opinion first; the planner gets it as the owner's message.
+      for (const [i, m] of pending.entries()) {
+        if (!m.reviewPlan) continue;
+        const current = store.cards.get(card.id) ?? card;
+        const reviewer = modelOf(current, "plan_reviewer");
+        if (!current.plan?.description.trim() && !current.plan?.subtasks?.length) return void reply(NO_PLAN, { error: true });
+        if (!reviewer) return void reply(NO_PLAN_REVIEWER, { error: true });
+        // A turn retried after a daemon hiccup reuses the opinion it already posted.
+        const posted = store.events
+          .list(card.id)
+          .find((e) => e.type === "chat" && (e.body as { key?: unknown } | null)?.key === `plan-review:${m.id}`);
+        const postedText = (posted?.body as { text?: unknown } | undefined)?.text;
+        const opinion = typeof postedText === "string" ? postedText : await reviewPlan(current, project, reviewer);
+        store.cards.addChat({
+          cardId: card.id,
+          authorKind: "reviewer",
+          author: reviewer.name,
+          kind: "verdict",
+          thread: "plan",
+          text: opinion,
+          key: `plan-review:${m.id}`,
+        });
+        pending[i] = { ...m, text: buildReviseMessage({ reviewer: reviewer.name, review: opinion, prompts, projectId: card.projectId }) };
+      }
       live = await ensure(card, preset);
       const makePlan = pending.some((m) => m.makePlan);
       let findings = "";

@@ -4,6 +4,7 @@
 
 import {
   ROLE_HINTS,
+  cleanDefaults,
   parseHlc,
   type AgentSession,
   type CardEvent,
@@ -99,7 +100,8 @@ export function toProject(r: RawRow): Project {
     projectType: str(r.v.project_type, "other") as Project["projectType"], // COMPAT(project-types)
     description: str(r.v.description),
     requirementsPath: str(r.v.requirements_path) || "PRODUCT-REQUIREMENTS.md",
-    defaultPresetId: strOrNull(r.v.default_preset_id),
+    // WP-108: default model per job (replaces default_preset_id).
+    defaultPresets: cleanDefaults(json<unknown>(r.v.default_presets_json, {})),
     concurrencyLimit: intOrNull(r.v.concurrency_limit),
     devices: json<string[]>(r.v.devices_json, []),
     paseoProjectId: strOrNull(r.v.paseo_project_id),
@@ -141,14 +143,19 @@ export function toCard(r: RawRow, prefix: string, tags: string[]): CardView {
     plannerPresetId: strOrNull(r.v.planner_preset_id),
     // WP-106: sub-agent default model and the runtime state of the plan's subtasks.
     subagentPresetId: strOrNull(r.v.subagent_preset_id),
+    // WP-108: plan reviewer and verification model, review tab unread marker.
+    planReviewerPresetId: strOrNull(r.v.plan_reviewer_preset_id),
+    verifierPresetId: strOrNull(r.v.verifier_preset_id),
     subtaskRuns: json<CardView["subtaskRuns"]>(r.v.subtask_runs_json, {}),
     plan: json<CardView["plan"]>(r.v.plan_json, null),
     modelAcceptance: str(r.v.model_acceptance),
     planActivityAt: strOrNull(r.v.plan_activity_at),
     execActivityAt: strOrNull(r.v.exec_activity_at),
+    reviewActivityAt: strOrNull(r.v.review_activity_at),
     verifyActivityAt: strOrNull(r.v.verify_activity_at),
     planSeenAt: strOrNull(r.v.plan_seen_at),
     execSeenAt: strOrNull(r.v.exec_seen_at),
+    reviewSeenAt: strOrNull(r.v.review_seen_at),
     verifySeenAt: strOrNull(r.v.verify_seen_at),
     worktree: strOrNull(r.v.worktree),
     origin: str(r.v.origin, "manual") as CardView["origin"],

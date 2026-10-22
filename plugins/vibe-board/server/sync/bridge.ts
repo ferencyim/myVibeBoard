@@ -65,6 +65,7 @@ const DISPLAY_COLUMNS: Record<string, readonly string[]> = {
     "model_acceptance",
     "plan_activity_at",
     "exec_activity_at",
+    "review_activity_at",
     "verify_activity_at",
   ],
   preset: ["builtin", "created_at", "updated_at"],
@@ -314,6 +315,17 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
 
   const val = (p: Pending, c: string) => p.fields[c]?.value;
 
+/** Card model columns -> CreateCardInput keys (WP-108). */
+const MODEL_COLUMNS: Record<string, string> = {
+  preset_id: "presetId",
+  reviewer_preset_id: "reviewerPresetId",
+  scout_preset_id: "scoutPresetId",
+  planner_preset_id: "plannerPresetId",
+  plan_reviewer_preset_id: "planReviewerPresetId",
+  subagent_preset_id: "subagentPresetId",
+  verifier_preset_id: "verifierPresetId",
+};
+
   function importProjects(): void {
     for (const p of pendingRows("project")) {
       const row = bizRow("project", p.rowId);
@@ -327,7 +339,7 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
         else if (c === "project_types_json") patch.projectTypes = asJson(v, []);
         else if (c === "description") patch.description = v;
         else if (c === "requirements_path") patch.requirementsPath = v;
-        else if (c === "default_preset_id") patch.defaultPresetId = v;
+        else if (c === "default_presets_json") patch.defaultPresets = asJson(v, {});
         else if (c === "concurrency_limit") patch.concurrencyLimit = v;
         else if (c === "devices_json") patch.devices = asJson(v, []);
         else if (c === "color") patch.color = v;
@@ -422,8 +434,11 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
       else if (c === "scout_preset_id") patch.scoutPresetId = v;
       else if (c === "planner_preset_id") patch.plannerPresetId = v;
       else if (c === "subagent_preset_id") patch.subagentPresetId = v;
+      else if (c === "plan_reviewer_preset_id") patch.planReviewerPresetId = v;
+      else if (c === "verifier_preset_id") patch.verifierPresetId = v;
       else if (c === "plan_seen_at") patch.planSeenAt = v;
       else if (c === "exec_seen_at") patch.execSeenAt = v;
+      else if (c === "review_seen_at") patch.reviewSeenAt = v;
       else if (c === "verify_seen_at") patch.verifySeenAt = v;
       else if (c === "parent_card_id") patch.parentCardId = v;
     }
@@ -453,6 +468,15 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     }
   }
 
+  /** Model columns the phone wrote for a new card; absent ones stay undefined (prefilled by the store). */
+  function modelPicks(p: Pending): Record<string, string | null> {
+    const out: Record<string, string | null> = {};
+    for (const [column, key] of Object.entries(MODEL_COLUMNS)) {
+      if (column in p.fields) out[key] = (val(p, column) as string | null | undefined) ?? null;
+    }
+    return out;
+  }
+
   function importCards(): void {
     const parents: Array<{ id: string; parent: string }> = [];
     const done: Pending[] = [];
@@ -473,9 +497,9 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
               acceptance: (val(p, "acceptance") as string | undefined) ?? "",
               refImages: asJson(val(p, "ref_images_json"), []) as string[],
               needsEvidence: "needs_evidence" in p.fields ? asBool(val(p, "needs_evidence")) : undefined,
-              presetId: (val(p, "preset_id") as string | null | undefined) ?? null,
               suggestedPresetId: (val(p, "suggested_preset_id") as string | null | undefined) ?? null,
-              reviewerPresetId: (val(p, "reviewer_preset_id") as string | null | undefined) ?? null,
+              // WP-108: a model the phone did not set starts from the project / global default.
+              ...modelPicks(p),
             },
             "phone",
             "phone",

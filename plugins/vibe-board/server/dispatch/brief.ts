@@ -84,13 +84,17 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
 const SPEAKER: Record<string, string> = { user: "用户", executor: "执行模型", reviewer: "复核模型" };
 
 /**
- * Key messages of the execution conversation (owner, executor, reviewer; no system lines): what a
- * new or switched executor needs to continue (WP-105).
+ * Key messages of the execution conversation (owner, executor; no system lines) and the review
+ * conclusions (review tab since WP-108): what a new or switched executor needs to continue (WP-105).
  */
 function chatLines(events: readonly CardEvent[], limit: number): string {
   if (limit <= 0) return "";
+  const wanted = (e: CardEvent) => {
+    const thread = chatThreadOf(e);
+    return thread === "exec" || (thread === "review" && e.authorKind === "reviewer");
+  };
   return events
-    .filter((e) => e.type === "chat" && SPEAKER[e.authorKind] && chatThreadOf(e) === "exec")
+    .filter((e) => e.type === "chat" && SPEAKER[e.authorKind] && wanted(e))
     .slice(-limit)
     .map((e) => {
       const text = (e.body as { text?: unknown } | null)?.text;

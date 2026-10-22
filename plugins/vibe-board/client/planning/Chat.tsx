@@ -138,7 +138,7 @@ function ChatRow({
   return <Bubble item={item} />;
 }
 
-function SystemRow({ item, onOpenVerification }: { item: SystemItem; onOpenVerification?: () => void }) {
+export function SystemRow({ item, onOpenVerification }: { item: SystemItem; onOpenVerification?: () => void }) {
   const { openAgent } = useHost();
   return (
     <View style={{ alignSelf: "center", alignItems: "center", maxWidth: "92%", gap: 2 }}>

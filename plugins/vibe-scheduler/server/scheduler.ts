@@ -220,10 +220,10 @@ export function createScheduler(deps: SchedulerDeps) {
       return no(failure.count >= config.maxAdmitAttempts ? "多次派发失败，已放弃" : "派发失败后冷却中，稍后重试");
     }
     const project = store.projects.get(card.projectId);
-    // Same order as vibe-board's dispatcher: card, master recommendation, project default.
-    const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id));
+    // Same order as vibe-board's dispatcher: card, master recommendation, project default, global default.
+    const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id), store.modelDefaults.global());
     const preset = presetId ? store.presets.get(presetId) : undefined;
-    if (!project || !preset) return no("没有执行预设（请在卡片上选择，或给项目设默认预设）");
+    if (!project || !preset) return no("没有主代理模型（请在卡片上选择，或在项目/全局设置默认模型）");
     const provider = preset.provider;
     const providerLimit = effectiveLimit(config, provider, null);
     if ((counts.byProvider[provider] ?? 0) >= providerLimit) return no(`${provider} 已达并发上限 ${providerLimit}`);

@@ -260,7 +260,7 @@ describe("dispatch failures", () => {
     t.store.cards.create({ projectId: t.project.id, title: "bare", column: "todo" });
     const r = await t.runtime.tickOnce();
     expect(r.admitted).toEqual([]);
-    expect(r.deferred["DEMO-1"]).toMatch(/没有执行预设/);
+    expect(r.deferred["DEMO-1"]).toMatch(/没有主代理模型/);
   });
 });
 

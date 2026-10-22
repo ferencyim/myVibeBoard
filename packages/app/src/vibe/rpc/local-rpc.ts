@@ -230,8 +230,12 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
       plannerPresetId: "planner_preset_id",
       // WP-106: default model of the card's sub-agents.
       subagentPresetId: "subagent_preset_id",
+      // WP-108: plan reviewer, verification model and the review tab's read position.
+      planReviewerPresetId: "plan_reviewer_preset_id",
+      verifierPresetId: "verifier_preset_id",
       planSeenAt: "plan_seen_at",
       execSeenAt: "exec_seen_at",
+      reviewSeenAt: "review_seen_at",
       verifySeenAt: "verify_seen_at",
     } as const;
     for (const [key, column] of Object.entries(nullable)) {

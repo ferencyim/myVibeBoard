@@ -87,7 +87,7 @@ function fromText(text: string, presets: Preset[], project: Project, unattended?
   }
   // Bare provider ("codex"): borrow the model of a preset for that provider.
   const ofProvider = presets.filter((p) => p.provider.toLowerCase() === wanted);
-  const chosen = ofProvider.find((p) => p.id === project.defaultPresetId) ?? ofProvider[0];
+  const chosen = ofProvider.find((p) => p.id === project.defaultPresets.worker) ?? ofProvider[0];
   if (chosen) return fromPreset(chosen, `preset ${chosen.name}`, unattended);
   throw new Error(
     `Maintenance rule agent "${text}" is neither a preset nor provider/model; write a preset name or "${text}/<model>"`,
@@ -111,7 +111,7 @@ export function resolveAgent(
     );
     const picked = presets.find((p) => p.id === selection.agentId);
     if (picked) return fromPreset(picked, `selected: ${selection.reason}`, unattended);
-    const fallback = presets.find((p) => p.id === project.defaultPresetId);
+    const fallback = presets.find((p) => p.id === project.defaultPresets.worker);
     if (fallback) return fromPreset(fallback, "project default preset", unattended);
   }
   return fromText(deps.defaultAgent(), presets, project, unattended);

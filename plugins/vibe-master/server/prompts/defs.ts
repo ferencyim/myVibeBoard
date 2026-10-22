@@ -295,6 +295,61 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       order: 32,
     },
     {
+      key: "master.plan.review",
+      plugin: PLUGIN,
+      role: "reviewer",
+      title: "方案复核：复核任务",
+      description:
+        "点「复核方案」时，方案复核模型（卡片上选的，或项目 / 全局默认）收到的任务：在项目仓库里只读阅读代码，复核卡片的方案（含子任务）与验收标准，给出复核意见。意见会写进方案对话，再交给规划模型修改方案。",
+      whenSent: "每次点「复核方案」，发给一个新的只读方案复核会话。",
+      audience: "方案复核模型（只读）",
+      defaultText: `你是卡片 {{card.key}}（{{card.title}}）的方案复核模型。规划模型已经为它写好了方案，负责人请你复核。
+你在项目仓库里以只读模式运行：可以阅读代码、文档和日志来核对方案，不要修改、创建或删除任何文件，不要运行会写入的命令。
+
+请重点检查：
+- 方案能否达成卡片目标，有没有遗漏的需求、边界情况和风险；
+- 方案与仓库现状是否一致：涉及的模块、文件、接口是否真实存在，做法是否可行；
+- 子任务拆分是否合理：目标与验收标准是否清楚，涉及文件是否会冲突，依赖是否正确，能并行的有没有写成串行；
+- 验收标准是否可观察、可验证，是否覆盖了关键行为。
+
+## 卡片描述
+{{card.description}}
+
+## 当前方案
+{{plan}}
+
+## 当前验收标准
+{{card.acceptance}}`,
+      placeholders: [
+        ...CARD,
+        { name: "card.description", description: "卡片描述" },
+        { name: "plan", description: "卡片上的当前方案（含子任务）" },
+        { name: "card.acceptance", description: "当前验收标准" },
+      ],
+      fixedSuffix:
+        "用中文回复复核意见（markdown）：先一句话结论（可以执行 / 需要修改），再按严重程度列出问题和具体的修改建议，必要时写上文件路径。没有问题就直接说明可以执行。不要输出 JSON。",
+      order: 35,
+    },
+    {
+      key: "master.plan.revise",
+      plugin: PLUGIN,
+      role: "planner",
+      title: "规划会话：按方案复核意见修改",
+      description:
+        "方案复核模型给出意见后，交给规划会话的消息：请它据此修改方案。方案仍只保留一版；负责人改过的验收标准、子任务照常以建议提出。",
+      whenSent: "「复核方案」得到复核意见之后，作为这条负责人消息的内容交给规划会话。",
+      audience: "规划会话",
+      defaultText: `[plan:review] 负责人请 {{reviewer}} 复核了当前方案，复核意见如下。请逐条判断：合理的意见就修改方案（给出完整的新方案、子任务和验收标准），不采纳的说明理由；需要负责人决定的，在回复里提问。
+
+## 方案复核意见
+{{review}}`,
+      placeholders: [
+        { name: "reviewer", description: "方案复核模型（预设名称）" },
+        { name: "review", description: "方案复核意见全文" },
+      ],
+      order: 36,
+    },
+    {
       key: "master.plan.explore",
       plugin: PLUGIN,
       role: "scout",
@@ -365,6 +420,8 @@ export type MasterPromptKey =
   | "master.plan.start"
   | "master.plan.turn"
   | "master.plan.research_results"
+  | "master.plan.review"
+  | "master.plan.revise"
   | "master.plan.explore"
   | "master.plan.scout"
   | "master.handoff_summary";

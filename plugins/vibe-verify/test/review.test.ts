@@ -24,6 +24,8 @@ const minor = {
   issues: [{ severity: "minor", text: "rename x" }],
 };
 const clean = { verdict: "pass", summary: "Looks fine", issues: [] };
+/** The verification model's verdict on the card's single check (every card is verified, WP-108). */
+const checked = { items: [{ check: 1, judgement: "pass" }] };
 
 function setup(options: {
   maxReviewReturns?: number;
@@ -139,12 +141,12 @@ describe("model review", () => {
     expect(items.findIndex((i) => i.kind === "review")).toBeLessThan(items.findIndex((i) => i.method.startsWith("auto")));
   });
 
-  it("the reviewer's conclusion belongs to the execution conversation", async () => {
-    const h = setup({ replies: [clean] });
+  it("the reviewer's conclusion belongs to the review tab (WP-108)", async () => {
+    const h = setup({ replies: [clean, checked] });
     await h.pipeline.run(h.cardId);
     const chat = h.board.events.list(h.cardId).find((e) => e.type === "chat" && e.authorKind === "reviewer")!;
-    expect(chat.body).toMatchObject({ thread: "exec" });
-    expect(h.board.cards.get(h.cardId)!.verifyActivityAt).not.toBeNull();
+    expect(chat.body).toMatchObject({ thread: "review" });
+    expect(h.board.cards.get(h.cardId)!.reviewActivityAt).not.toBeNull();
   });
 
   it("major/minor issues only make the verification doubtful and stay with the user", async () => {
@@ -157,7 +159,7 @@ describe("model review", () => {
   });
 
   it("a clean review does not affect the conclusion", async () => {
-    const h = setup({ replies: [clean] });
+    const h = setup({ replies: [clean, checked] });
     const result = await h.pipeline.run(h.cardId);
     expect(result).toMatchObject({ conclusion: "pass", returned: false });
     const review = h.verify.items(result!.verificationId).filter((i) => i.kind === "review");
@@ -166,19 +168,20 @@ describe("model review", () => {
   });
 
   it("no reviewer preset on the card: no review agent", async () => {
-    const h = setup({ replies: [], reviewer: false });
+    const h = setup({ replies: [checked], reviewer: false });
     await h.pipeline.run(h.cardId);
-    expect(h.launched).toHaveLength(0);
+    // Only the verification model runs.
+    expect(h.launched.map((l) => l.role ?? "verifier")).toEqual(["verifier"]);
     expect(h.events("review.started")).toHaveLength(0);
   });
 
   it("after the worker's fix the change is reviewed again", async () => {
-    const h = setup({ replies: [severe, clean] });
+    const h = setup({ replies: [severe, clean, checked] });
     await h.pipeline.run(h.cardId);
     h.reenter();
     const second = await h.pipeline.run(h.cardId);
     expect(second).toMatchObject({ conclusion: "pass", returned: false });
-    expect(h.launched).toHaveLength(2);
+    expect(h.launched.filter((l) => l.role === "reviewer")).toHaveLength(2);
     expect(h.events("review.started")).toHaveLength(2);
     expect(h.board.cards.get(h.cardId)!.column).toBe("verifying");
   });

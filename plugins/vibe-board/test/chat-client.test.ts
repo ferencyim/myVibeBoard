@@ -55,11 +55,13 @@ describe("chatItemsOf", () => {
     (legacyDispatch as { author: string }).author = "dispatch";
     const legacySystem = chatEv("system", { text: "plain system" });
     const events = [planUser, execUser, legacyUser, legacyMaster, legacyExecutor, legacyReviewer, legacyDispatch, legacySystem];
-    const text = (thread: "plan" | "exec") =>
+    const text = (thread: "plan" | "exec" | "review") =>
       chatItemsOf(events, thread).map((i) => (i.kind === "proposal" ? "proposal" : i.text));
     expect(text("plan")).toEqual(["plan talk", "old owner message", "old master", "plain system"]);
-    expect(text("exec")).toEqual(["exec talk", "old executor", "old verdict", "dispatched"]);
-    expect(msgs(chatItemsOf(events, "exec")).find((i) => i.author === "reviewer")).toMatchObject({
+    expect(text("exec")).toEqual(["exec talk", "old executor", "dispatched"]);
+    // WP-108: review conclusions (also old ones) live on the review tab.
+    expect(text("review")).toEqual(["old verdict"]);
+    expect(msgs(chatItemsOf(events, "review")).find((i) => i.author === "reviewer")).toMatchObject({
       msgKindLabel: "结论",
       error: true,
       label: "复核模型",

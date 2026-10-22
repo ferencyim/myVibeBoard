@@ -11,7 +11,7 @@ import { buildRepairMessage } from "../master/prompts";
 import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import { defaultTuning, type TuningSource } from "../tuning";
 import { MasterError, type MasterAsk } from "../types";
-import type { CardView } from "../vibe/contract";
+import { pickPresetId, type CardView } from "../vibe/contract";
 import { publishEvent, type VibeDb, type VibeStore } from "../vibe/db";
 
 const Reply = z.object({
@@ -90,7 +90,9 @@ export function createDispatcher(deps: DispatcherDeps) {
 
   function describe(card: CardView): string {
     const project = store.projects.get(card.projectId);
-    const preset = store.presets.get(card.presetId ?? project?.defaultPresetId ?? "");
+    // Same main-agent model the board will dispatch with (card -> project -> global default, WP-108).
+    const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id), store.modelDefaults.global());
+    const preset = presetId ? store.presets.get(presetId) : undefined;
     const files = filesOf(card);
     return [
       `- ${card.key} [优先级 ${card.priority}] 项目 ${project?.prefix ?? "?"}${preset ? `，执行预设 ${preset.name}（${preset.provider}）` : ""}`,

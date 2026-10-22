@@ -426,4 +426,23 @@ CREATE INDEX idx_agent_session_card ON agent_session(card_id, state);
 CREATE UNIQUE INDEX idx_agent_session_agent ON agent_session(agent_id);
 `,
   },
+  {
+    version: 9,
+    name: "review_defaults",
+    sql: `
+-- WP-108: plan reviewer and verification model of a card; the review tab's unread marker; default
+-- models per job. The project's single default preset becomes the "worker" entry of
+-- default_presets_json and its column is dropped (one place for the setting; phones cannot edit
+-- projects offline, an old phone just stops seeing it).
+ALTER TABLE card ADD COLUMN plan_reviewer_preset_id TEXT;
+ALTER TABLE card ADD COLUMN verifier_preset_id TEXT;
+ALTER TABLE card ADD COLUMN review_activity_at TEXT;
+ALTER TABLE card ADD COLUMN review_seen_at TEXT;
+ALTER TABLE project ADD COLUMN default_presets_json TEXT NOT NULL DEFAULT '{}';
+UPDATE project SET default_presets_json = json_object('worker', default_preset_id)
+  WHERE default_preset_id IS NOT NULL AND default_preset_id <> '';
+ALTER TABLE project DROP COLUMN default_preset_id;
+DELETE FROM sync_meta WHERE table_name = 'project' AND column_name = 'default_preset_id';
+`,
+  },
 ];

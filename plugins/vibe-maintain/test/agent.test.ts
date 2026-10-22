@@ -17,7 +17,7 @@ const preset = (over: Partial<Preset>): Preset =>
     builtin: false,
     ...over,
   }) as Preset;
-const project = { id: "pr", defaultPresetId: null } as Project;
+const project = { id: "pr", defaultPresets: {} } as Project;
 const rule = (agent: string | null) => ({ name: "r", agent }) as MaintenanceRule;
 const deps = (presets: Preset[], defaultAgent = "claude/sonnet") => ({ presets: () => presets, defaultAgent: () => defaultAgent });
 

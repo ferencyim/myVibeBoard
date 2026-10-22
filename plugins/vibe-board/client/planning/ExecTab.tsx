@@ -1,6 +1,7 @@
-// 执行 tab (WP-105): pick the executing and reviewing models, see which model is executing now,
-// 立即执行 (execution -> review if picked -> evidence verification), and the execution conversation
-// (the executor's questions, round summaries and final summary; the owner replies here).
+// 执行 tab (WP-105): pick the executing models, see which model is executing now, 立即执行
+// (execution -> review if picked -> evidence verification), and the execution conversation (the
+// executor's questions, round summaries and final summary; the owner replies here). WP-108: the
+// reviewer moved to its own tab; 立即执行 needs a verification model (card, project or global).
 // WP-106: the executing model is the main agent; sub-agents run the plan's subtasks on their own
 // model or the sub-agent default; the subtask list shows their state and opens their sessions.
 
@@ -15,7 +16,16 @@ import { Btn, Muted } from "../common/ui";
 import { useOptimisticCard } from "../detail/optimistic";
 import { Conversation } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
-import { canExecute, chatItemsOf, chatTargets, executingLabel, runningWorkerOf } from "./logic";
+import {
+  canExecute,
+  chatItemsOf,
+  chatTargets,
+  defaultChoice,
+  executingLabel,
+  missingVerifier,
+  runningWorkerOf,
+  type ModelScope,
+} from "./logic";
 import { SubtaskList } from "./Subtasks";
 
 export interface ExecTabProps {
@@ -24,11 +34,13 @@ export interface ExecTabProps {
   events: readonly CardEvent[];
   sessions: readonly AgentSession[];
   presets: readonly Preset[];
+  /** Project / global default models (WP-108). */
+  scope: ModelScope;
   reload: () => Promise<unknown>;
   onOpenVerification: () => void;
 }
 
-export function ExecTab({ api, card: serverCard, events, sessions, presets, reload, onOpenVerification }: ExecTabProps) {
+export function ExecTab({ api, card: serverCard, events, sessions, presets, scope, reload, onOpenVerification }: ExecTabProps) {
   const { theme } = useHost();
   const toast = useToast();
   // Picks show at once (WP-104 optimistic.ts); handing a running card to another model is not optimistic.
@@ -43,6 +55,8 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
   const items = chatItemsOf(events, "exec");
   const running = runningWorkerOf(sessions);
   const executing = executingLabel(sessions, presets, card);
+  const noVerifier = missingVerifier(card, scope);
+  const subagentDefault = defaultChoice("subagent", scope);
 
   const act = async (fn: () => Promise<unknown>, done?: string) => {
     setBusy(true);
@@ -69,10 +83,11 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
         role="worker"
         presets={presets}
         value={card.presetId}
+        fallback={defaultChoice("worker", scope)}
         hint={
           running
             ? "执行中换模型：新的主代理在同一个工作树接着统筹，带上执行对话、方案和子任务状态。"
-            : "主代理统筹子任务的顺序与并行；没选时用项目的默认预设。"
+            : "主代理统筹子任务的顺序与并行；没选时用项目或全局的默认模型。"
         }
         disabled={busy || offline}
         onChange={pickExecutor}
@@ -82,18 +97,9 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
         role="worker"
         presets={presets}
         value={card.subagentPresetId}
-        noneLabel="同主代理模型"
+        {...(subagentDefault ? { fallback: subagentDefault } : { noneLabel: "同主代理模型" })}
         hint="子任务没有单独指定模型时用它；只影响之后启动的子代理。"
         onChange={(subagentPresetId) => void updateCard({ subagentPresetId })}
-      />
-      <ModelPicker
-        label="复核模型"
-        role="reviewer"
-        presets={presets}
-        value={card.reviewerPresetId}
-        noneLabel="不复核"
-        hint="执行完成后先由它 review 代码改动；发现严重问题会自动退回执行模型修改，然后再做证据验证。"
-        onChange={(reviewerPresetId) => void updateCard({ reviewerPresetId })}
       />
       <View
         style={{
@@ -119,8 +125,16 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
             icon="Play"
             label="立即执行"
             disabled={busy || offline}
-            onPress={() => act(() => api.execStart({ card: card.id }), `已开始执行 ${card.key}`)}
+            onPress={() => {
+              if (noVerifier) {
+                toast.error("每张卡都要验证：请先在验证页选择验证模型");
+                onOpenVerification();
+                return;
+              }
+              void act(() => api.execStart({ card: card.id }), `已开始执行 ${card.key}`);
+            }}
           />
+          {noVerifier ? <Muted size={12}>还没有验证模型：执行前先在「验证」页选一个（或设置默认验证模型）。</Muted> : null}
         </View>
       ) : null}
 
@@ -130,7 +144,7 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, relo
         thread="exec"
         items={items}
         busyText={running?.state === "working" || running?.state === "starting" ? "主代理正在工作…" : null}
-        emptyText="执行对话：主代理和子代理的提问、阶段小结、完成总结和复核结论都在这里。"
+        emptyText="执行对话：主代理和子代理的提问、阶段小结和完成总结都在这里；复核结论在「复核」页。"
         composerHint={
           running
             ? "消息会转给主代理；它在等你回答时，这条消息就是回答。"

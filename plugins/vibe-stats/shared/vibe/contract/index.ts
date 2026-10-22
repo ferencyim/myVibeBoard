@@ -5,6 +5,7 @@ export * from "./events";
 export * from "./hlc";
 export * from "./ids";
 export * from "./model";
+export * from "./model-roles";
 export * from "./sort-key";
 export * from "./state-machine";
 export * from "./sync-spec";

@@ -54,6 +54,17 @@ Additive and nullable; shared by the round-2 work packages.
   `scout.started`, `scout.finished`.
 - `verification.kind` / `verification_item.kind`: `check` (default) | `review`.
 
+## Default models (WP-108, core migration 9)
+
+- `contract/model-roles.ts`: the seven model jobs (`MODEL_ROLES`), the card field of each (`CARD_MODEL_FIELD`) and
+  `resolveModel(role, card, project, global, exists)` = card pick, else `project.defaultPresets[role]`, else the global
+  default. Scout and reviewer are skippable: an empty card pick means "do not". Every plugin resolves through it.
+- `project.default_presets_json` (`defaultPresets`, synced) replaces `default_preset_id` (moved to `worker`, column dropped).
+  The global level is `store.modelDefaults.{global, setGlobal}` (`vibe_meta['models.defaults']`, not synced).
+  `cards.create` prefills the jobs the caller left `undefined`; `presets.delete` also clears both default levels.
+- `card.plan_reviewer_preset_id`, `card.verifier_preset_id`, `card.review_seen_at` (synced), `card.review_activity_at`
+  (daemon display column); `UnreadTab` / `ChatThread` gain `review`, `RoleHint` gains `verifier`.
+
 ## Commands
 
     npm ci && npm run typecheck && npm test

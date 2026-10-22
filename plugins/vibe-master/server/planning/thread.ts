@@ -2,7 +2,9 @@
 // client (desktop, phone, offline sync) reads and writes it the same way and plugins never call
 // each other:
 //
-//   chat(user, thread plan)                 an owner message; action "make_plan" = the 制定方案 button
+//   chat(user, thread plan)                 an owner message; action "make_plan" = the 制定方案 button,
+//                                           "review_plan" = the 复核方案 button (WP-108)
+//   chat(reviewer, thread plan)             the plan reviewer's opinion (WP-108)
 //   chat(master/planner, answers: [...])    the planning model's reply
 //   chat(scout, thread plan)                findings of a read-only scout
 //
@@ -32,6 +34,8 @@ export interface ThreadMessage {
   at: string;
   /** The owner pressed 制定方案 (plan from scratch, scouting first). */
   makePlan?: boolean;
+  /** The owner pressed 复核方案 (WP-108: the plan reviewer reads the plan, the planner revises it). */
+  reviewPlan?: boolean;
 }
 
 const isPlanChat = (e: CardEvent) => e.type === "chat" && chatThreadOf(e) === "plan";
@@ -51,6 +55,7 @@ export function messagesOf(events: readonly CardEvent[]): ThreadMessage[] {
       text: bodyOf(e).text as string,
       at: e.createdAt,
       ...(bodyOf(e).action === "make_plan" ? { makePlan: true } : {}),
+      ...(bodyOf(e).action === "review_plan" ? { reviewPlan: true } : {}),
     }));
 }
 

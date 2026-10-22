@@ -33,7 +33,7 @@ export function seedBoard(daemon: ReturnType<typeof createFakeDaemon>): void {
     name: "Alpha",
     prefix: "ALP",
     project_type: "android",
-    default_preset_id: null,
+    default_presets_json: "{}",
     concurrency_limit: null,
     devices_json: "[]",
     color: null,

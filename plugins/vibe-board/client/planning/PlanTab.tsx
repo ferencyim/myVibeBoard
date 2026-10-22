@@ -1,5 +1,6 @@
 // 方案 tab (WP-105): pick the scout and planning models, 制定方案, read the card's single plan,
 // edit the acceptance criteria, and talk to the planning model in the plan conversation.
+// WP-108: pick the plan reviewer model; 复核方案 has it review the plan and the planning model revise it.
 
 import * as hostUi from "@getpaseo/plugin/client/react-native";
 import { useToast } from "@getpaseo/plugin/client/react-native";
@@ -15,7 +16,15 @@ import { useOptimisticCard } from "../detail/optimistic";
 import { Conversation } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
 import { SubtaskEditor } from "./Subtasks";
-import { chatItemsOf, plannerSessionOf, plannerStatusLabel, waitingForReply } from "./logic";
+import {
+  chatItemsOf,
+  defaultChoice,
+  plannerSessionOf,
+  plannerStatusLabel,
+  resolvedPreset,
+  waitingForReply,
+  type ModelScope,
+} from "./logic";
 
 // Hosts older than v0.12.1 have no Markdown component; the plan then shows as plain text.
 const HostMarkdown = (hostUi as { Markdown?: React.ComponentType<{ text: string }> }).Markdown;
@@ -26,10 +35,12 @@ export interface PlanTabProps {
   events: readonly CardEvent[];
   sessions: readonly AgentSession[];
   presets: readonly Preset[];
+  /** Project / global default models (WP-108). */
+  scope: ModelScope;
   reload: () => Promise<unknown>;
 }
 
-export function PlanTab({ api, card: serverCard, events, sessions, presets, reload }: PlanTabProps) {
+export function PlanTab({ api, card: serverCard, events, sessions, presets, scope, reload }: PlanTabProps) {
   const { theme } = useHost();
   const toast = useToast();
   const { offline } = useLocalStatus();
@@ -45,13 +56,20 @@ export function PlanTab({ api, card: serverCard, events, sessions, presets, relo
     reload,
     (e) => toast.error(errorMessage(e)),
   );
-  const update = (patch: { scoutPresetId?: string | null; plannerPresetId?: string | null }) =>
-    void updateCard(patch);
+  const update = (patch: {
+    scoutPresetId?: string | null;
+    plannerPresetId?: string | null;
+    planReviewerPresetId?: string | null;
+  }) => void updateCard(patch);
+  const planner = resolvedPreset("planner", card, scope);
+  const planReviewer = resolvedPreset("plan_reviewer", card, scope);
+  const hasPlan = !!card.plan?.description.trim() || !!card.plan?.subtasks?.length;
 
-  const makePlan = async () => {
+  const send = async (which: "plan" | "review") => {
     setStarting(true);
     try {
-      await api.planStart({ card: card.id });
+      if (which === "plan") await api.planStart({ card: card.id });
+      else await api.planReview({ card: card.id });
       void reload();
     } catch (e) {
       toast.error(errorMessage(e));
@@ -76,19 +94,35 @@ export function PlanTab({ api, card: serverCard, events, sessions, presets, relo
         role="planner"
         presets={presets}
         value={card.plannerPresetId}
+        fallback={defaultChoice("planner", scope)}
         hint="中途换模型时，新模型会拿到方案对话、当前方案和验收标准接着做。"
         onChange={(plannerPresetId) => update({ plannerPresetId })}
+      />
+      <ModelPicker
+        label="方案复核模型"
+        role="reviewer"
+        presets={presets}
+        value={card.planReviewerPresetId}
+        fallback={defaultChoice("plan_reviewer", scope)}
+        hint="点「复核方案」时由它只读阅读仓库和方案，复核意见交给规划模型修改方案；可以反复复核。"
+        onChange={(planReviewerPresetId) => update({ planReviewerPresetId })}
       />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <Btn
           variant="primary"
           icon="Sparkles"
           label={card.plan ? "重新制定方案" : "制定方案"}
-          disabled={starting || offline || !card.plannerPresetId || card.column === "done"}
-          onPress={makePlan}
+          disabled={starting || offline || !planner || card.column === "done"}
+          onPress={() => send("plan")}
+        />
+        <Btn
+          icon="ShieldCheck"
+          label="复核方案"
+          disabled={starting || offline || !planner || !planReviewer || !hasPlan || card.column === "done"}
+          onPress={() => send("review")}
         />
         <Chip label={plannerStatusLabel(session)} />
-        {!card.plannerPresetId ? <Muted>先选规划模型</Muted> : null}
+        {!planner ? <Muted>先选规划模型</Muted> : !hasPlan ? null : !planReviewer ? <Muted>复核前先选方案复核模型</Muted> : null}
       </View>
 
       <Field label="方案">
@@ -127,7 +161,7 @@ export function PlanTab({ api, card: serverCard, events, sessions, presets, relo
         thread="plan"
         items={items}
         busyText={working ? "规划模型正在思考…" : null}
-        emptyText="方案对话：规划模型的提问、你的回答和修改要求都在这里。"
+        emptyText="方案对话：规划模型的提问、你的回答和修改要求、方案复核意见都在这里。"
         composerHint="回答规划模型的问题，或者直接提修改要求，方案会随之更新。"
         placeholder="回答问题或提出修改…"
         reload={reload}

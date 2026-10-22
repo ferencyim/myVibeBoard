@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type { PaseoApi } from "@getpaseo/client";
 import {
   ACTIVE_SUBTASK_STATUSES,
+  resolveModel,
   SUBTASK_STATUS_LABELS,
   concurrencyBlock,
   runOf,
@@ -88,14 +89,18 @@ export function createSubtaskService(options: SubtaskServiceOptions) {
   };
   const name = (s: Subtask) => `「${s.id} · ${s.title}」`;
 
-  /** The subtask's own model, else the card's sub-agent default, else the main agent's model. */
+  /**
+   * The subtask's own model, else the sub-agent default (card -> project -> global, WP-108), else the
+   * main agent's model (same chain).
+   */
   function presetFor(card: CardView, subtask: Subtask): Preset {
     const project = store.projects.get(card.projectId);
+    const global = store.modelDefaults.global();
+    const exists = (id: string) => !!presetById(id);
     const preset =
       presetById(subtask.presetId) ??
-      presetById(card.subagentPresetId) ??
-      presetById(card.presetId) ??
-      presetById(project?.defaultPresetId);
+      presetById(resolveModel("subagent", card, project, global, exists).presetId) ??
+      presetById(resolveModel("worker", card, project, global, exists).presetId);
     if (!preset) throw new BoardError("invalid", "没有可用的子代理模型：请在执行页选择子代理默认模型");
     return preset;
   }
