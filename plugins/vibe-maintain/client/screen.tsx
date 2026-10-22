@@ -147,6 +147,7 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
     id: string,
     change: (config: RulesConfig) => { config: RulesConfig; error?: string },
     done: string,
+    keepOpen = false,
   ) =>
     act(id, async () => {
       if (rulesState.status !== "ready") return "规则配置还没有加载好，请稍后再试";
@@ -154,8 +155,10 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
       if (next.error) return next.error;
       const ok = await rulesState.save(next.config, rulesState.revision);
       if (!ok) return `保存失败：${rulesState.saveError ?? "配置已被其他地方修改，请重试"}`;
-      setEditing(null);
-      setCreating(null);
+      if (!keepOpen) {
+        setEditing(null);
+        setCreating(null);
+      }
       return done;
     });
 
@@ -302,7 +305,7 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
               presets={s.presets}
               saving={busy === `save:${group.key}`}
               onCancel={() => setEditing(null)}
-              onSave={(fields, scope) =>
+              onSave={(fields, scope, keepOpen) =>
                 void saveConfig(
                   `save:${group.key}`,
                   (config) => ({
@@ -314,6 +317,7 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
                     ),
                   }),
                   `「${group.name}」已保存`,
+                  keepOpen,
                 )
               }
             />
