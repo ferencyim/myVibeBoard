@@ -1,6 +1,7 @@
 // 方案 tab (WP-105): pick the scout and planning models, 制定方案, read the card's single plan,
 // edit the acceptance criteria, and talk to the planning model in the plan conversation.
 
+import * as hostUi from "@getpaseo/plugin/client/react-native";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import React, { useState } from "react";
 import { Text, View } from "react-native";
@@ -13,6 +14,9 @@ import { discard, edit, initialDraft, isDirty, reconcileField } from "../detail/
 import { Conversation } from "./Chat";
 import { ModelPicker } from "./ModelPicker";
 import { chatItemsOf, plannerSessionOf, plannerStatusLabel, waitingForReply } from "./logic";
+
+// Hosts older than v0.12.1 have no Markdown component; the plan then shows as plain text.
+const HostMarkdown = (hostUi as { Markdown?: React.ComponentType<{ text: string }> }).Markdown;
 
 export interface PlanTabProps {
   api: BoardApi;
@@ -96,9 +100,13 @@ export function PlanTab({ api, card, events, sessions, presets, reload }: PlanTa
               backgroundColor: theme.colors.surface1,
             }}
           >
-            <Text selectable style={{ color: theme.colors.foreground, fontSize: 13 }}>
-              {card.plan.description}
-            </Text>
+            {HostMarkdown ? (
+              <HostMarkdown text={card.plan.description} />
+            ) : (
+              <Text selectable style={{ color: theme.colors.foreground, fontSize: 13 }}>
+                {card.plan.description}
+              </Text>
+            )}
             {card.plan.files?.length ? <Muted size={12}>涉及文件：{card.plan.files.join(", ")}</Muted> : null}
           </View>
         ) : (

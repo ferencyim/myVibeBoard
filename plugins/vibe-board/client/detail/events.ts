@@ -12,7 +12,7 @@ export const EVENT_TYPE_LABELS: Record<CardEventType, string> = {
   reject: "退回",
   note: "备注",
   maintenance: "维护",
-  chat: "群聊",
+  chat: "对话",
   proposal: "修改建议",
 };
 

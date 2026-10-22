@@ -32,7 +32,7 @@ export function renderResearch(items: readonly ResearchItem[]): string {
   return items
     .map(
       (r, i) =>
-        `### ${i + 1}. ${r.question}${r.scope ? `（${r.scope}）` : ""}\n${r.ok ? r.answer : `失败：${r.answer}`}`,
+        `### ${i + 1}. ${clip(r.question.split("\n")[0] ?? "", 80)}${r.scope ? `（${r.scope}）` : ""}\n${r.ok ? r.answer : `失败：${r.answer}`}`,
     )
     .join("\n\n");
 }
