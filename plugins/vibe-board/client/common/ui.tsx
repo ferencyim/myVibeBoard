@@ -4,6 +4,7 @@ import { Icon, TextInput } from "@getpaseo/plugin/client/react-native";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, Text, View, type TextInputProps } from "react-native";
 import { useHost } from "./ctx";
+import { withAlpha } from "./colors";
 import { displayedFieldValue } from "./field";
 
 type FocusEvt = Parameters<NonNullable<TextInputProps["onFocus"]>>[0];
@@ -69,11 +70,14 @@ export function Chip({
   color,
   count,
   hint,
+  variant = "dot",
 }: {
   label: string;
   selected?: boolean;
   onPress?: () => void;
   color?: string;
+  /** "flag": priority (outlined, flag icon); "tag": tinted fill. Both use their own color group. */
+  variant?: "dot" | "flag" | "tag";
   count?: number;
   /** Secondary info shown as a hover tooltip (web) and read by screen readers, e.g. a project prefix. */
   hint?: string;
@@ -94,11 +98,31 @@ export function Chip({
         paddingVertical: 5,
         borderRadius: 999,
         borderWidth: 1,
-        borderColor: selected ? (color ?? theme.colors.accent) : theme.colors.border,
-        backgroundColor: selected ? theme.colors.surface2 : theme.colors.surface1,
+        borderColor:
+          variant === "tag" && color
+            ? selected
+              ? color
+              : withAlpha(color, 0.5)
+            : variant === "flag" && color
+              ? color
+              : selected
+                ? (color ?? theme.colors.accent)
+                : theme.colors.border,
+        backgroundColor:
+          variant === "tag" && color
+            ? withAlpha(color, selected ? 0.35 : 0.14)
+            : variant === "flag" && color && selected
+              ? withAlpha(color, 0.25)
+              : selected
+                ? theme.colors.surface2
+                : theme.colors.surface1,
       }}
     >
-      {color ? <Dot color={color} size={8} /> : null}
+      {variant === "flag" && color ? (
+        <Icon name="Flag" size={11} color={color} />
+      ) : variant === "dot" && color ? (
+        <Dot color={color} size={8} />
+      ) : null}
       <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{label}</Text>
       {count !== undefined ? (
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{count}</Text>

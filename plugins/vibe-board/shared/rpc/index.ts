@@ -373,9 +373,22 @@ export const tagsListRpc = defineRpc({
   output: z.object({ tags: z.array(TagSchema) }),
 });
 
+const tagColor = z.string().regex(/^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6})?$/, "颜色需为 #RGB / #RRGGBB，留空表示自动");
+
 export const tagsCreateRpc = defineRpc({
   name: "vibe.tags.create",
-  input: z.object({ name: nonBlank, evidence: z.boolean().optional() }),
+  input: z.object({ name: nonBlank, evidence: z.boolean().optional(), color: tagColor.optional() }),
+  output: z.object({ tag: TagSchema }),
+});
+
+export const tagsUpdateRpc = defineRpc({
+  name: "vibe.tags.update",
+  input: z.object({
+    tagId: z.string(),
+    name: nonBlank.optional(),
+    evidence: z.boolean().optional(),
+    color: tagColor.optional(),
+  }),
   output: z.object({ tag: TagSchema }),
 });
 
@@ -624,6 +637,7 @@ export const VIBE_BOARD_RPCS = {
   plansSaveRpc,
   tagsListRpc,
   tagsCreateRpc,
+  tagsUpdateRpc,
   tagsDeleteRpc,
   presetsListRpc,
   presetsCreateRpc,

@@ -11,6 +11,7 @@ import {
 } from "../../shared/vibe/contract";
 import { PRIORITY_LABELS, errorMessage } from "../board/logic";
 import type { BoardApi } from "../common/api";
+import { PRIORITY_COLORS, tagColor } from "../common/colors";
 import { useHost } from "../common/ctx";
 import { Btn, Chip, Muted, TextField } from "../common/ui";
 import { QuotaBadge } from "./usage";
@@ -26,7 +27,14 @@ export function PrioritySelector({
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
       {CARD_PRIORITIES.map((p) => (
-        <Chip key={p} label={PRIORITY_LABELS[p]} selected={value === p} onPress={() => onChange(p)} />
+        <Chip
+          key={p}
+          variant="flag"
+          color={PRIORITY_COLORS[p]}
+          label={PRIORITY_LABELS[p]}
+          selected={value === p}
+          onPress={() => onChange(p)}
+        />
       ))}
     </View>
   );
@@ -68,7 +76,14 @@ export function TagSelector({
     <View style={{ gap: 8 }}>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
         {tags.map((t) => (
-          <Chip key={t.id} label={t.name} selected={value.includes(t.id)} onPress={() => toggle(t.id)} />
+          <Chip
+            key={t.id}
+            variant="tag"
+            color={tagColor(t)}
+            label={t.name}
+            selected={value.includes(t.id)}
+            onPress={() => toggle(t.id)}
+          />
         ))}
       </View>
       {api ? (

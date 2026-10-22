@@ -122,7 +122,7 @@ export const CLI_USAGE = `vibe-board <command>
   comment KEY --body TEXT
   events KEY
   attachment add KEY --file PATH [--ref-image] | attachment list KEY | attachment get ID --out PATH | attachment rm ID
-  tag list | tag create --name N [--evidence]
+  tag list | tag create --name N [--evidence] [--color #RRGGBB] | tag update --tag NAME [--name N] [--color #RRGGBB] [--evidence|--no-evidence]
   preset list
 Add --json for machine-readable output. Columns: ${CARD_COLUMNS.join(", ")}.`;
 
@@ -282,13 +282,24 @@ export async function runBoardCli(
 
       case "tag": {
         if ((rest[0] ?? "list") === "create") {
-          const { tag } = board.tags.create(need(one(args, "name"), "--name"), has(args, "evidence"));
+          const { tag } = board.tags.create(need(one(args, "name"), "--name"), has(args, "evidence"), one(args, "color"));
           return out({ tag }, `Created tag ${tag.name}`);
+        }
+        if (rest[0] === "update") {
+          const ref = need(one(args, "tag"), "--tag");
+          const target = board.tags.list().tags.find((t) => t.id === ref || t.name.toLowerCase() === ref.toLowerCase());
+          if (!target) throw new Error(`Tag not found: ${ref}`);
+          const { tag } = board.tags.update(target.id, {
+            name: one(args, "name"),
+            color: one(args, "color"),
+            evidence: has(args, "evidence") ? true : has(args, "no-evidence") ? false : undefined,
+          });
+          return out({ tag }, `Updated tag ${tag.name}`);
         }
         const { tags } = board.tags.list();
         return out(
           { tags },
-          table(["NAME", "EVIDENCE", "ID"], tags.map((t) => [t.name, t.evidence, t.id]), "No tags."),
+          table(["NAME", "COLOR", "EVIDENCE", "ID"], tags.map((t) => [t.name, t.color || "auto", t.evidence, t.id]), "No tags."),
         );
       }
 

@@ -13,6 +13,7 @@ import { BoardError, toBoardError, type BoardService } from "../service";
 import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { postChat } from "../chat/post";
 import { loadHandoff } from "./handoff";
+import { linkPaseoProject } from "./link-project";
 import { ensurePresetModel, type ModelCatalog } from "./model";
 import type { PromptResolver } from "../prompts";
 import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug, type BriefLimits } from "./brief";
@@ -58,30 +59,10 @@ export interface DispatcherOptions {
 
 const COLUMN_ZH: Record<string, string> = { draft: "草稿箱", todo: "待办", in_progress: "进行中", verifying: "待验证", done: "已完成" };
 
-const normalizePath = (p: string) => p.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
-
 export function createDispatcher(options: DispatcherOptions) {
   const { board, tracker } = options;
   const { store } = board;
   const inflight = new Set<string>();
-
-  async function findPaseoProject(paseo: DispatchPaseo, project: Project) {
-    const { projects } = await paseo.projects.list();
-    const ref = project.paseoProjectId;
-    const found = ref
-      ? projects.find(
-          (p) =>
-            p.projectId === ref || p.projectRootPath === ref || p.projectDisplayName === ref,
-        )
-      : projects.find((p) => normalizePath(p.projectRootPath) === normalizePath(project.repoPath));
-    if (!found) {
-      throw new BoardError(
-        "invalid",
-        `项目 ${project.prefix} 还没有关联到 Paseo 项目（仓库路径：${project.repoPath || "未设置"}）`,
-      );
-    }
-    return found;
-  }
 
   /** Explicit override, else card pick -> master recommendation -> project default (see pickPresetId). */
   function pickPreset(card: CardView, project: Project, presetId?: string): Preset {
@@ -133,7 +114,7 @@ export function createDispatcher(options: DispatcherOptions) {
       /** The prompt the started agent actually received (shown in the group chat). */
       let usedPrompt = "";
       try {
-        const target = await findPaseoProject(paseo, project);
+        const target = (await linkPaseoProject(board, paseo, project)).paseoProject;
         const useWorktree = preset.environmentKind === "new-worktree" && target.projectKind === "git";
         const title = threadTitle(card);
         const workspace = await paseo.workspaces.create({

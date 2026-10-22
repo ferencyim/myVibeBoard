@@ -382,7 +382,12 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
     for (const p of pendingRows("tag")) {
       try {
         if (!bizRow("tag", p.rowId)) {
-          vibe.tags.create(String(val(p, "name")), asBool(val(p, "evidence")), p.rowId);
+          vibe.tags.create(
+            String(val(p, "name")),
+            asBool(val(p, "evidence")),
+            p.rowId,
+            typeof val(p, "color") === "string" ? (val(p, "color") as string) : "",
+          );
         } else {
           rawUpdate("tag", p, false);
         }

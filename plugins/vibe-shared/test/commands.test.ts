@@ -395,6 +395,29 @@ describe("presets and tags", () => {
     s.store.tags.delete(t.id);
     expect(() => s.store.tags.delete("tag_bug")).toThrow(/Built-in/);
   });
+
+  it("renames and recolors a tag in place: cards keep it, sync fields are stamped", () => {
+    const s = setup();
+    const p = s.store.projects.create({ name: "n", prefix: "AB", repoPath: "r" });
+    const t = s.store.tags.create("spike", false, undefined, "#ff0000");
+    expect(t.color).toBe("#ff0000");
+    const card = s.store.cards.create({ projectId: p.id, title: "c", tagIds: [t.id] });
+    const next = s.store.tags.update(t.id, { name: "experiment", color: "#00ff00", evidence: true });
+    expect(next).toMatchObject({ id: t.id, name: "experiment", color: "#00ff00", evidence: true });
+    expect(s.store.tags.list().filter((x) => !x.builtin)).toHaveLength(1);
+    expect(s.store.cards.get(card.id)?.tags).toEqual([t.id]);
+    const stamped = s.db
+      .prepare<{ column_name: string }>("SELECT column_name FROM sync_meta WHERE table_name='tag' AND row_id=?")
+      .all(t.id)
+      .map((r) => r.column_name)
+      .sort();
+    expect(stamped).toEqual(["color", "evidence", "name"]);
+    // Built-ins can be recolored too; names stay unique and non-empty.
+    expect(s.store.tags.update("tag_bug", { color: "#123456" }).color).toBe("#123456");
+    expect(() => s.store.tags.update(t.id, { name: "BUG" })).toThrow(/already exists/);
+    expect(() => s.store.tags.update(t.id, { name: "  " })).toThrow(/empty/);
+    expect(() => s.store.tags.update("nope", { color: "#000" })).toThrow(/not found/i);
+  });
 });
 
 describe("card events and plan versions", () => {
