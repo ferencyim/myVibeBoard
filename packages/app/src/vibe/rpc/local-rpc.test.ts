@@ -141,6 +141,28 @@ describe("local vibe-board RPC", () => {
     await expect(call(rpc, "vibe.cards.delete", { card: "ALP-4" })).rejects.toThrow("[invalid]");
   });
 
+  it("offline: picks the plan / execution models and marks tabs read (WP-105)", async () => {
+    const { card } = await call(rpc, "vibe.cards.update", {
+      card: "ALP-1",
+      plannerPresetId: "P1",
+      scoutPresetId: null,
+      planSeenAt: "2026-10-21T10:00:00.000Z",
+    });
+    expect(card).toMatchObject({
+      plannerPresetId: "P1",
+      scoutPresetId: null,
+      planSeenAt: "2026-10-21T10:00:00.000Z",
+      plan: null,
+      modelAcceptance: "",
+    });
+    const { event } = await call(rpc, "vibe.chat.send", {
+      card: "ALP-1",
+      text: "go on",
+      thread: "exec",
+    });
+    expect(event.body).toEqual({ text: "go on", thread: "exec" });
+  });
+
   it("adds notes only", async () => {
     const { event } = await call(rpc, "vibe.events.add", { card: "ALP-1", text: "offline note" });
     expect(event).toMatchObject({
@@ -164,7 +186,7 @@ describe("local vibe-board RPC", () => {
       type: "chat",
       authorKind: "user",
       author: "phone",
-      body: { text: "hi" },
+      body: { text: "hi", thread: "plan" },
     });
     const events = (await call(rpc, "vibe.events.list", { card: "ALP-1" })).events;
     expect(events.filter((e: any) => e.type === "chat")).toHaveLength(1);
