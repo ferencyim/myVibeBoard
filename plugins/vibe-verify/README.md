@@ -60,14 +60,16 @@ write this block.
 
 A `card.moved to=verifying` event starts `server/pipeline`:
 
-- `needs_evidence` cards (mode `evidence`): an independent, read-only verifier agent (a different provider than
-  the worker when possible; swap `pickVerifier`) first replies with a verify config (`VerifyConfigSchema`), the
+- The verifier agent runs on the card's verification model (WP-108: `resolveModel("verifier")`, card -> project ->
+  global default). Only when none is set anywhere does the old pick run (a different provider than the worker when
+  possible; `pickVerifier`), and the notes say so.
+- `needs_evidence` cards (mode `evidence`): the independent, read-only verifier agent first replies with a verify config (`VerifyConfigSchema`), the
   collectors of the project type run (`server/registry.ts`: web, backend, android, ios, desktop; Android leases go
   through the `device_lease` table), tests/lint run, then the verifier judges each check from the evidence.
   The verifier never writes: it answers in its reply. Read-only is enforced by the permission policy
   (`server/verifier/policy.ts`), a `git status` + HEAD snapshot around each round (a changed tree voids the
   evidence, conclusion `doubt`), and the board MCP for `VIBE_ROLE=verifier` (read + comment).
-- other cards (mode `tests_only`): only the project's tests and lint.
+- other cards (mode `tests_only`): the project's tests and lint, then the verifier judges each check from their logs.
 - Conclusion = fail > doubt > pass. `fail` sends the card back to `in_progress` (actor `verifier`) and the failing
   checks go to the worker session as its next prompt; `doubt`/`pass` leave the card in `verifying` for the user.
 
