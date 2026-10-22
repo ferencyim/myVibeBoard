@@ -4,10 +4,30 @@ import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
 /** Host-scoped defaults. A manual switch (RPC `master.switch`) overrides provider/model/thinking. */
+/** Settings keys of the card-flow triggers that WP-105 removed (the master left the card flow). */
+export const REMOVED_SETTING_KEYS = [
+  "debounceSeconds",
+  "autoAssessOnCreate",
+  "autoAssessOnEdit",
+  "autoAssessOnMoveToDraft",
+  "sweepDraftLimit",
+  "wakeOnSessionWaiting",
+  "proposalWindowSeconds",
+  "templateAssessDraft",
+  "templateSessionHelp",
+] as const;
+
 export const masterSettings = defineSettings({
   id: "preferences",
   scope: "host",
-  version: 1,
+  version: 2,
+  /** v1 -> v2 (WP-105): drop the card-flow trigger settings. */
+  migrate: (values) => {
+    if (!values || typeof values !== "object") return values;
+    const next: Record<string, unknown> = { ...(values as Record<string, unknown>) };
+    for (const key of REMOVED_SETTING_KEYS) delete next[key];
+    return next;
+  },
   schema: z.object({
     enabled: z.boolean().default(true),
     /** Default master subscription. Empty model = best match from the provider catalog. */
@@ -15,29 +35,19 @@ export const masterSettings = defineSettings({
     model: z.string().default(""),
     thinking: z.string().default(""),
     /**
-     * Permission mode of the master and the planning agents: "auto" = the provider's automatic
-     * mode (Claude auto, Codex auto-review), else a concrete Paseo modeId of the provider.
+     * Permission mode of the master: "auto" = the provider's automatic mode (Claude auto, Codex
+     * auto-review), else a concrete Paseo modeId of the provider.
      */
     permissionMode: z.string().default("auto"),
-    /** Quiet period after a draft was created or edited before the master looks at it. */
-    debounceSeconds: z.number().int().min(1).max(600).default(30),
     /** cwd of the master agent. Empty = <VIBE_HOME>/master. */
     workspaceDir: z.string().default(""),
     /** Alert when the master's provider has at most this much quota left (percent). */
     quotaLowPct: z.number().min(1).max(90).default(20),
     quotaCheckSeconds: z.number().int().min(30).max(3600).default(300),
-    /** On start, also assess drafts that have no up-to-date assessment (newest N, see sweepDraftLimit). */
+    /** On start, consolidate recently finished cards that have no memory update yet. */
     sweepOnStart: z.boolean().default(true),
 
-    // ---- triggers (WP-93) ----
-    /** Review a draft automatically after it was created / its owner fields were edited / it was moved back to draft. */
-    autoAssessOnCreate: z.boolean().default(true),
-    autoAssessOnEdit: z.boolean().default(true),
-    autoAssessOnMoveToDraft: z.boolean().default(true),
-    /** How many of the newest unreviewed drafts the start-up sweep queues. */
-    sweepDraftLimit: z.number().int().min(1).max(50).default(10),
-    /** A worker session asked a question (session.waiting): wake the master for advice. */
-    wakeOnSessionWaiting: z.boolean().default(true),
+    // ---- triggers (WP-93; WP-105 removed the draft review and worker-question wakes) ----
     /** A card reached done: the master consolidates project memory. */
     consolidateOnDone: z.boolean().default(true),
     /** At card done the master may also return an update of the project's requirements document. */
@@ -45,20 +55,18 @@ export const masterSettings = defineSettings({
 
     // ---- prompts (WP-93, moved to the prompt registry by WP-98) ----
     // COMPAT(prompt-registry): added 2026-10-21, remove after 2027-04-01
-    // These four were edited here before the shared prompt registry existed. They are only read once,
+    // These were edited here before the shared prompt registry existed. They are only read once,
     // on the first start after the upgrade, and copied into global overrides (server/prompts/migrate.ts);
     // after that the "Agent behaviour" page is the only place to edit them.
     rulesSupplement: z.string().default(""),
-    templateAssessDraft: z.string().default(""),
     templateCardDone: z.string().default(""),
-    templateSessionHelp: z.string().default(""),
 
     // ---- project context (WP-93) ----
     /** Max characters of the requirements document handed to the master in the project block. */
     requirementsExcerptChars: z.number().int().min(0).max(50_000).default(6000),
 
     // ---- advanced automation parameters (WP-98) ----
-    /** How long one question to the master may take (assessment, memory, advice). */
+    /** How long one question to the master may take (memory consolidation). */
     askTimeoutMinutes: z.number().int().min(1).max(120).default(5),
     /** How long one planning-session turn may take. */
     planTurnTimeoutMinutes: z.number().int().min(1).max(120).default(10),
@@ -70,8 +78,6 @@ export const masterSettings = defineSettings({
     maxPlanLoops: z.number().int().min(1).max(100).default(10),
     /** Extra asks after a reply failed validation (0 = take the first reply as it is). */
     jsonRepairRetries: z.number().int().min(0).max(5).default(1),
-    /** Accepting a master proposal edits the card; edits within this window are not re-assessed. */
-    proposalWindowSeconds: z.number().int().min(1).max(600).default(15),
     /** The start-up sweep consolidates cards that finished within this many hours. */
     sweepDoneWindowHours: z.number().int().min(1).max(720).default(48),
     /** Quiet period between two alerts of the same kind and subject. */
@@ -183,8 +189,8 @@ export const wakeRpc = defineRpc({
   input: z.object({
     /** Card key (PROD-12) or id. */
     card: z.string().min(1),
-    reason: z.enum(["assess_draft", "card_done"]).default("assess_draft"),
-    /** Skip the debounce and the "already assessed" check. */
+    reason: z.enum(["card_done"]).default("card_done"),
+    /** Skip the "already consolidated" check. */
     force: z.boolean().default(true),
   }),
   output: z.object({ queued: z.boolean(), message: z.string() }),

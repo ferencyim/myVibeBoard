@@ -54,7 +54,7 @@ describe("context block", () => {
   it("orders user directives, project instructions, then memory", () => {
     const { store } = project();
     const block = buildContextBlock(store)!;
-    expect(block).toContain("vibe_scout");
+    expect(block).not.toContain("vibe_scout"); // WP-105: no execution-phase scouting
     const at = (s: string) => block.indexOf(s);
     expect(at("Always reply in Chinese.")).toBeGreaterThan(0);
     expect(at("Always reply in Chinese.")).toBeLessThan(at("Goal: ship the harbor app."));

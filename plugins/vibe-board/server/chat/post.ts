@@ -1,7 +1,7 @@
 // Chat write-back helper: every automatic message goes through the command layer (addChat) with an
 // idempotency key, and a failed write-back never breaks the flow that triggered it.
 
-import type { AuthorKind, ChatKind } from "../vibe/contract";
+import type { AuthorKind, ChatKind, ChatThread } from "../vibe/contract";
 import type { VibeStore } from "../vibe/db";
 
 export interface PostChatInput {
@@ -10,6 +10,8 @@ export interface PostChatInput {
   author: string;
   text: string;
   kind?: ChatKind;
+  /** Conversation (WP-105); dispatch, executor and reviewer lines are "exec". */
+  thread?: ChatThread;
   sessionId?: string;
   agentId?: string;
   detail?: string;

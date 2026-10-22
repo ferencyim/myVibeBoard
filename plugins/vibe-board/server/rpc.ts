@@ -4,6 +4,7 @@ import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import * as rpc from "../shared/rpc";
 import type { ChatService } from "./chat";
+import type { FlowService } from "./flow";
 import type { Dispatcher } from "./dispatch";
 import { linkPaseoProject } from "./dispatch/link-project";
 import type { RequirementsService } from "./requirements";
@@ -68,8 +69,10 @@ export interface BoardRpcExtras {
   lifecycle?: Lifecycle;
   sync?: SyncService;
   replies?: ReplyService;
-  /** Project requirements document + manual review request. */
+  /** Project requirements document. */
   requirements?: RequirementsService;
+  /** 制定方案 / 立即执行 / executing model switch (WP-105). */
+  flow?: FlowService;
   /** Verification result for the card UI (WP-21). */
   verify?: VerifyService;
   /** Group chat: owner messages and accept / reject of the master's proposals (WP-92). */
@@ -142,16 +145,26 @@ export function registerBoardRpcs(
   server.handle(rpc.attachmentsDeleteRpc, (input) => board.attachments.delete(input.attachmentId));
   server.handle(rpc.sessionsListRpc, (input) => board.sessions.list(input.card));
 
-  const { dispatcher, lifecycle, sync, replies, verify, requirements, chat } = extras;
+  const { dispatcher, lifecycle, sync, replies, verify, requirements, chat, flow } = extras;
   if (chat) {
-    server.handle(rpc.chatSendRpc, (input) => chat.send(input.card, input.text, input.actor));
+    server.handle(rpc.chatSendRpc, (input) => chat.send(input.card, input.text, input.actor, input.thread));
     server.handle(rpc.proposalsAcceptRpc, (input) => chat.accept(input.eventId, input.actor));
     server.handle(rpc.proposalsRejectRpc, (input) => chat.reject(input.eventId, input.actor));
   }
   if (requirements) {
     server.handle(rpc.requirementsGetRpc, (input) => requirements.get(input.project));
     server.handle(rpc.requirementsSaveRpc, (input) => requirements.save(input.project, input.content));
-    server.handle(rpc.cardsRequestReviewRpc, (input) => requirements.requestReview(input.card));
+  }
+  if (flow) {
+    server.handle(rpc.planStartRpc, (input) => flow.planStart(input.card, input.actor));
+    server.handle(rpc.execStartRpc, async (input, { paseo }) => {
+      extras.onPaseo?.(paseo);
+      return flow.execStart(input.card);
+    });
+    server.handle(rpc.execSwitchRpc, async (input, { paseo }) => {
+      extras.onPaseo?.(paseo);
+      return flow.execSwitch(input.card, input.presetId);
+    });
   }
   if (verify) {
     server.handle(rpc.verifyGetRpc, (input) => verify.get(input.card, input.verificationId));

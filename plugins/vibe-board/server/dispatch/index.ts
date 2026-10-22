@@ -12,7 +12,6 @@ import { pickPresetId, type AgentSession, type CardView, type Preset, type Proje
 import { BoardError, toBoardError, type BoardService } from "../service";
 import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { postChat } from "../chat/post";
-import { loadHandoff } from "./handoff";
 import { linkPaseoProject } from "./link-project";
 import { ensurePresetModel, type ModelCatalog } from "./model";
 import type { PromptResolver } from "../prompts";
@@ -131,8 +130,6 @@ export function createDispatcher(options: DispatcherOptions) {
             : { kind: "directory", path: target.projectRootPath, projectId: target.projectId },
         });
         const events = store.events.list(card.id);
-        const handoff = loadHandoff(project, card, events);
-        const latestPlan = store.plans.list(card.id).at(-1);
         workspaceId = workspace.id;
         worktree = useWorktree ? workspace.directory : null;
 
@@ -159,8 +156,6 @@ export function createDispatcher(options: DispatcherOptions) {
             project,
             preset: current,
             events,
-            handoff,
-            latestPlan,
             extraInstructions: opts.extraInstructions,
           });
           const modeId = modeIdFor(current.provider, current.permissionMode);
@@ -238,6 +233,7 @@ export function createDispatcher(options: DispatcherOptions) {
         authorKind: "system",
         author: "dispatch",
         kind: "info",
+        thread: "exec",
         text: `已派发给「${usedPreset.name}」（${usedPreset.provider}/${usedPreset.model}）${fellBack}${worktree ? `，工作目录 ${worktree}` : ""}。`,
         agentId: startedId,
         sessionId: result.session.id,

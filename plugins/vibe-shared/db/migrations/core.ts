@@ -355,4 +355,27 @@ CREATE UNIQUE INDEX idx_prompt_override_scope ON prompt_override(key, COALESCE(p
 ALTER TABLE tag ADD COLUMN color TEXT NOT NULL DEFAULT '';
 `,
   },
+  {
+    version: 7,
+    name: "card_tabs",
+    sql: `
+-- WP-105: card tabs. Planning/scouting models next to the executor (preset_id) and reviewer;
+-- one plan per card (plan_json, PlanSnapshot) instead of the plan_version history; the acceptance
+-- the planning model last wrote; per-tab newest content (daemon) and read position (owner).
+ALTER TABLE card ADD COLUMN scout_preset_id TEXT;
+ALTER TABLE card ADD COLUMN planner_preset_id TEXT;
+ALTER TABLE card ADD COLUMN plan_json TEXT;
+ALTER TABLE card ADD COLUMN model_acceptance TEXT NOT NULL DEFAULT '';
+ALTER TABLE card ADD COLUMN plan_activity_at TEXT;
+ALTER TABLE card ADD COLUMN exec_activity_at TEXT;
+ALTER TABLE card ADD COLUMN verify_activity_at TEXT;
+ALTER TABLE card ADD COLUMN plan_seen_at TEXT;
+ALTER TABLE card ADD COLUMN exec_seen_at TEXT;
+ALTER TABLE card ADD COLUMN verify_seen_at TEXT;
+-- Old cards keep their newest plan version as the card's plan (plan_version stays as history).
+UPDATE card SET plan_json = (
+  SELECT pv.snapshot_json FROM plan_version pv WHERE pv.card_id = card.id ORDER BY pv.version DESC LIMIT 1
+);
+`,
+  },
 ];

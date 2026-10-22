@@ -1,22 +1,20 @@
-// Session-end consolidation (card done) and worker-help advice. Both are "ask the master, validate,
-// write back" flows like the draft assessment.
+// Session-end consolidation (card done): ask the master, validate, write the project memory back.
 
 import { existsSync } from "node:fs";
-import { buildDoneMessage, buildHelpMessage, buildProjectBlock, buildRepairMessage, requirementsExcerpt, DEFAULT_REQUIREMENTS_CHARS } from "../master/prompts";
-import { MemoryUpdateSchema, HelpSchema, type Help, type MemoryUpdate } from "../assess/schema";
+import { buildDoneMessage, buildProjectBlock, buildRepairMessage, requirementsExcerpt, DEFAULT_REQUIREMENTS_CHARS } from "../master/prompts";
+import { MemoryUpdateSchema, type MemoryUpdate } from "../assess/schema";
 import { parseReply } from "../assess/parse";
-import type { Assessor } from "../assess/assess";
 import { writeRequirementsDoc, type GitRunner, type VibeDb, type VibeStore } from "../vibe/db";
 import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import { defaultTuning, type TuningSource } from "../tuning";
 import type { MasterAsk } from "../types";
+import type { CardView, Project } from "../vibe/contract";
 import type { ApplyResult, MemoryPort } from "./files";
 
 export interface ConsolidateDeps {
   db: VibeDb;
   store: VibeStore;
   master: MasterAsk;
-  assessor: Assessor;
   memory: MemoryPort;
   /** Prompt texts (registry); built-in defaults when omitted. */
   prompts?: PromptPort;
@@ -84,6 +82,14 @@ export function createConsolidator(deps: ConsolidateDeps) {
       cardLimit: tuning().projectBlockCardLimit,
     });
 
+  function context(card: CardView) {
+    const project = store.projects.get(card.projectId) as Project;
+    const openCards = store.cards
+      .list({ projectId: card.projectId })
+      .filter((c) => c.id !== card.id && c.column !== "done");
+    return { project, tags: store.tags.list(), presets: store.presets.list(), openCards };
+  }
+
   /**
    * Write the master's requirementsUpdate to the project's document and commit only that file.
    * Never throws: a failure becomes a note on the card plus a reminder, and is not retried.
@@ -142,7 +148,7 @@ export function createConsolidator(deps: ConsolidateDeps) {
     if (!options.force && events.some((e) => e.type === "note" && marker(e) === "memory_update")) {
       return { status: "skipped", reason: "already_done" };
     }
-    const { project, tags, presets, openCards } = deps.assessor.context(card);
+    const { project, tags, presets, openCards } = context(card);
     if (!project.repoPath || !existsSync(project.repoPath)) return { status: "skipped", reason: "no_repo" };
 
     const message = buildDoneMessage({
@@ -195,55 +201,7 @@ export function createConsolidator(deps: ConsolidateDeps) {
     return { status: "updated", summary: update.summary, applied };
   }
 
-  async function advise(
-    cardRef: string,
-    question: unknown,
-  ): Promise<{ status: "advised"; help: Help } | { status: "skipped" | "failed"; reason: string }> {
-    const card = store.cards.get(cardRef);
-    if (!card) return { status: "skipped", reason: "not_found" };
-    const requestId = (question as { requestId?: string } | null)?.requestId;
-    const seen = store
-      .events.list(card.id)
-      .some((e) => (e.body as { kind?: string; requestId?: string } | null)?.kind === "help_advice" &&
-        (e.body as { requestId?: string }).requestId === requestId && requestId !== undefined);
-    if (seen) return { status: "skipped", reason: "already_advised" };
-
-    const { project, tags, presets, openCards } = deps.assessor.context(card);
-    const plan = store.plans.list(card.id).at(-1)?.snapshot;
-    const message = buildHelpMessage({
-      projectBlock: projectBlockOf({ project, tags, presets, openCards }),
-      prompts,
-      card,
-      question,
-      plan: plan ? [plan.description, ...plan.checks.map((c) => `- ${c.text}`)].filter(Boolean).join("\n") : "",
-    });
-    let parsed = parseReply(await deps.master.ask(message), HelpSchema);
-    for (let retry = 0; retry < tuning().jsonRepairRetries && !parsed.ok; retry++) {
-      parsed = parseReply(
-        await deps.master.ask(buildRepairMessage("session_help", parsed.error, prompts, card.projectId)),
-        HelpSchema,
-      );
-    }
-    if (!parsed.ok) return { status: "failed", reason: parsed.error };
-    const help = parsed.value;
-    store.events.add({
-      cardId: card.id,
-      type: "note",
-      authorKind: "agent",
-      author: "master",
-      body: {
-        kind: "help_advice",
-        requestId,
-        text:
-          `Advice for the worker's question (${help.confidence} confidence${help.needsOwner ? ", needs your decision" : ""}): ${help.summary}` +
-          (help.suggestedAnswer ? `\nSuggested answer: ${help.suggestedAnswer}` : ""),
-        advice: help,
-      },
-    });
-    return { status: "advised", help };
-  }
-
-  return { consolidate, advise };
+  return { consolidate };
 }
 
 export type Consolidator = ReturnType<typeof createConsolidator>;

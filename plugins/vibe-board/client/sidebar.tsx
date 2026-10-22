@@ -139,29 +139,9 @@ export function BoardSettingsScreen({ theme }: PluginSurfaceProps) {
             onChangeText={(text) => void settings.save({ ...values, briefRecentEvents: clampInt(text, 1, 50, values.briefRecentEvents) }, revision)}
           />
           <SettingsInput
-            label="派发说明里带的最近群聊条数（0-50）"
+            label="派发说明里带的执行对话最近条数（0-50）"
             initialValue={String(values.briefChatLimit)}
             onChangeText={(text) => void settings.save({ ...values, briefChatLimit: clampInt(text, 0, 50, values.briefChatLimit) }, revision)}
-          />
-          <SettingsInput
-            label="派发说明里规划交接摘要的最大字符数（500-100000）"
-            initialValue={String(values.briefHandoffMaxChars)}
-            onChangeText={(text) => void settings.save({ ...values, briefHandoffMaxChars: clampInt(text, 500, 100000, values.briefHandoffMaxChars) }, revision)}
-          />
-          <SettingsInput
-            label="探路兵结果缓存分钟数（0 为不缓存，0-240）"
-            initialValue={String(values.scoutCacheTtlMinutes)}
-            onChangeText={(text) => void settings.save({ ...values, scoutCacheTtlMinutes: clampInt(text, 0, 240, values.scoutCacheTtlMinutes) }, revision)}
-          />
-          <SettingsInput
-            label="探路兵回报最多行数（3-200）"
-            initialValue={String(values.scoutSummaryMaxLines)}
-            onChangeText={(text) => void settings.save({ ...values, scoutSummaryMaxLines: clampInt(text, 3, 200, values.scoutSummaryMaxLines) }, revision)}
-          />
-          <SettingsInput
-            label="探路兵单次调用最多任务数（1-64）"
-            initialValue={String(values.scoutMaxTasksPerCall)}
-            onChangeText={(text) => void settings.save({ ...values, scoutMaxTasksPerCall: clampInt(text, 1, 64, values.scoutMaxTasksPerCall) }, revision)}
           />
           <SettingsInput
             label="卡死检测轮询间隔（秒，5-600；重启后生效）"

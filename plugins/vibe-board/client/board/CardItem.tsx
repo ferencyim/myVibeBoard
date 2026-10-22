@@ -1,7 +1,7 @@
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import React from "react";
 import { Pressable, Text, View } from "react-native";
-import type { CardView, Preset, Tag } from "../../shared/vibe/contract";
+import { unreadTabsOf, type CardView, type Preset, type Tag } from "../../shared/vibe/contract";
 import { useHost } from "../common/ctx";
 import { SessionBadge } from "../badges/SessionBadge";
 import { PRIORITY_COLORS, tagColor, withAlpha } from "../common/colors";
@@ -47,6 +47,12 @@ export function CardItem({
       <Pressable accessibilityRole="button" onPress={onOpen} style={{ flex: 1, padding: 10, gap: 6 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{card.key}</Text>
+          {unreadTabsOf(card).length > 0 ? (
+            <View
+              accessibilityLabel="有未读内容"
+              style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.statusDanger }}
+            />
+          ) : null}
           {projectName ? (
             <Text style={{ color, fontSize: 11 }} numberOfLines={1}>
               {projectName}

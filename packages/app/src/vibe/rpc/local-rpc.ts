@@ -223,6 +223,18 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
     if (Array.isArray(i.refImages)) out.ref_images_json = JSON.stringify(i.refImages);
     if (typeof i.needsEvidence === "boolean") out.needs_evidence = i.needsEvidence ? 1 : 0;
     if (i.presetId !== undefined) out.preset_id = asString(i.presetId) ?? null;
+    // WP-105: models of the plan / execution tabs and the read positions of the tabs.
+    const nullable = {
+      reviewerPresetId: "reviewer_preset_id",
+      scoutPresetId: "scout_preset_id",
+      plannerPresetId: "planner_preset_id",
+      planSeenAt: "plan_seen_at",
+      execSeenAt: "exec_seen_at",
+      verifySeenAt: "verify_seen_at",
+    } as const;
+    for (const [key, column] of Object.entries(nullable)) {
+      if (i[key] !== undefined) out[column] = asString(i[key]) ?? null;
+    }
     return out;
   }
 
@@ -386,7 +398,9 @@ export function createLocalVibeRpc(replica: LocalReplica, options: LocalRpcOptio
     const card = cardOf(load(), String(i.card));
     const text = String(i.text ?? "");
     if (!text.trim()) throw new RpcError("invalid", "Message must not be blank");
-    return addUserEvent(card.id, "chat", asString(i.actor) ?? "user", { text });
+    // WP-105: plan or execution conversation (the daemon routes it after the sync).
+    const thread = i.thread === "exec" ? "exec" : "plan";
+    return addUserEvent(card.id, "chat", asString(i.actor) ?? "user", { text, thread });
   }
 
   function replySend(i: Input) {

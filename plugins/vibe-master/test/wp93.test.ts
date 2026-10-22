@@ -1,26 +1,23 @@
 // WP-93: kept history + hand-off, configurable triggers and prompts, project context, requirements
-// maintenance (real temp git repo) and the review request from the board.
+// maintenance (real temp git repo).
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { masterSettings } from "../shared/rpc";
-import { createAssessor } from "../server/assess/assess";
+import { REMOVED_SETTING_KEYS, masterSettings } from "../shared/rpc";
 import { MemoryUpdateSchema } from "../server/assess/schema";
 import { buildHandoff, HANDOFF_MAX_CHARS } from "../server/master/handoff";
-import { buildAssessMessage, buildDoneMessage, buildProjectBlock } from "../server/master/prompts";
+import { buildDoneMessage, buildProjectBlock } from "../server/master/prompts";
 import { masterPromptDefs } from "../server/prompts/defs";
 import { composeRules, defaultPromptPort } from "../server/prompts/port";
 import { renderPromptTemplate, unknownPromptPlaceholders } from "../server/vibe/contract";
 import { createConsolidator } from "../server/memory/consolidate";
 import { createFileMemoryPort } from "../server/memory/files";
 import { createMasterRuntime } from "../server/runtime";
-import { createQuotaReader } from "../server/subscription/quota";
-import { publishEvent } from "../server/vibe/db";
 import {
   ManualClock,
-  assessmentJson,
+  askMaster,
   defaultSettings,
   fakePaseo,
   setupBoard,
@@ -64,24 +61,31 @@ function runtimeFor(
 
 describe("settings upgrade", () => {
   it("fills every new field with its default for values stored by an older version", () => {
-    const old = masterSettings.schema.parse({ enabled: true, provider: "codex", debounceSeconds: 45, sweepOnStart: false });
+    const old = masterSettings.schema.parse({ enabled: true, provider: "codex", sweepOnStart: false });
     expect(old).toMatchObject({
       provider: "codex",
-      debounceSeconds: 45,
       sweepOnStart: false,
-      autoAssessOnCreate: true,
-      autoAssessOnEdit: true,
-      autoAssessOnMoveToDraft: true,
-      sweepDraftLimit: 10,
-      wakeOnSessionWaiting: true,
       consolidateOnDone: true,
       maintainRequirements: true,
       rulesSupplement: "",
-      templateAssessDraft: "",
       templateCardDone: "",
-      templateSessionHelp: "",
       requirementsExcerptChars: 6000,
     });
+  });
+
+  it("migrate drops the settings of the removed card-flow triggers and keeps the rest", () => {
+    const stored = {
+      enabled: false,
+      provider: "codex",
+      consolidateOnDone: false,
+      ...Object.fromEntries(REMOVED_SETTING_KEYS.map((key) => [key, "old"])),
+    };
+    expect(REMOVED_SETTING_KEYS).toContain("debounceSeconds");
+    expect(REMOVED_SETTING_KEYS).toContain("templateSessionHelp");
+    const migrated = masterSettings.migrate!(stored, 1) as Record<string, unknown>;
+    expect(migrated).toEqual({ enabled: false, provider: "codex", consolidateOnDone: false });
+    // a non-object value passes through untouched
+    expect(masterSettings.migrate!(null, 1)).toBeNull();
   });
 });
 
@@ -89,25 +93,19 @@ describe("templates", () => {
   it("renders {{placeholders}} once, blanks unknown ones and reports them", () => {
     expect(renderPromptTemplate("A {{x}} B {{ y.z }} C {{nope}}", { x: "1", "y.z": "2" })).toBe("A 1 B 2 C ");
     expect(renderPromptTemplate("{{x}}", { x: "$&$1" })).toBe("$&$1");
-    const assess = masterPromptDefs().find((d) => d.key === "master.wake.assess_draft")!;
-    expect(unknownPromptPlaceholders("{{card.key}} {{typo}} {{typo}} {{quota}}", assess.placeholders ?? [])).toEqual(["typo"]);
+    const done = masterPromptDefs().find((d) => d.key === "master.wake.card_done")!;
+    expect(unknownPromptPlaceholders("{{card.key}} {{typo}} {{typo}}", done.placeholders ?? [])).toEqual(["typo"]);
   });
 
   it("keeps the reply-format section whatever the owner wrote", () => {
     const board = setupBoard();
     const card = board.draft("Templated");
-    const base = { projectBlock: "PROJ", card, tagNames: [], quota: {}, hint: null };
+    const input = { projectBlock: "PROJ", card, events: [], verification: "", memory: "" };
     board.store.prompts.register(masterPromptDefs());
-    board.store.prompts.setOverride("master.wake.assess_draft", "Look at {{card.key}} only");
-    const custom = buildAssessMessage({ ...base, prompts: { resolve: board.store.prompts.resolve } });
+    board.store.prompts.setOverride("master.wake.card_done", "Look at {{card.key}} only");
+    const custom = buildDoneMessage({ ...input, prompts: { resolve: board.store.prompts.resolve } });
     expect(custom.startsWith(`Look at ${card.key} only\n\n`)).toBe(true);
-    expect(custom.endsWith("\n\n只回复 assess_draft JSON 对象。")).toBe(true);
-    expect(custom).toContain('"verdict"');
-    expect(custom).toContain('"proposal"');
-    const dflt = buildAssessMessage(base);
-    expect(dflt.startsWith("[wake:assess_draft]\nPROJ\n")).toBe(true);
-    expect(dflt).toContain(`编号：${card.key}`);
-    expect(dflt.endsWith("只回复 assess_draft JSON 对象。")).toBe(true);
+    expect(custom.endsWith("只回复 card_done JSON 对象。")).toBe(true);
   });
 
   it("only mentions requirementsUpdate when requirements maintenance is on", () => {
@@ -173,35 +171,29 @@ describe("project context", () => {
 describe("kept history and hand-off", () => {
   it("does not archive the replaced master, lists both sessions and hands the new one a board summary", async () => {
     const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, ({ provider }) => assessmentJson({ recommendation: { agent: provider, reason: "r" } }));
+    const { runtime, fake } = runtimeFor(board, () => "ok");
     const done = board.store.cards.create({ projectId: board.project.id, title: "Shipped feature" }, "user");
     board.store.cards.move(done.id, { to: "todo", actor: "user" });
     board.store.cards.dispatch({ cardId: done.id, agentId: "w1", provider: "claude", worktree: null });
     board.store.cards.move(done.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(done.id, { to: "done", actor: "user" });
-    const reviewed = board.draft("Reviewed draft");
-    runtime.triggers.assessNow(reviewed.id);
-    await runtime.queue.idle();
-    board.draft("Untouched draft");
+    const draft = board.draft("Untouched draft");
+    await askMaster(runtime, "first");
 
     await runtime.switchTo({ provider: "codex", thinking: "max" }, "owner picked Codex");
     expect(fake.agents).toHaveLength(2);
     expect(fake.agents[0]!.archived).toBe(false);
 
-    const next = board.draft("After the switch");
-    runtime.triggers.assessNow(next.id);
-    await runtime.queue.idle();
+    await askMaster(runtime, "after the switch");
     const first = fake.agents[1]!.prompts[0]!;
     expect(first).toContain("[handoff]");
-    expect(first.indexOf("[handoff]")).toBeLessThan(first.indexOf("[wake:assess_draft]"));
-    expect(first).toContain("Reviewed draft".slice(0, 0) + reviewed.key);
+    expect(first.indexOf("[handoff]")).toBeLessThan(first.indexOf("after the switch"));
+    expect(first).toContain(draft.key);
     expect(first).toContain("Shipped feature");
     expect(first).toContain("尚未审查");
     expect(first).toContain("owner picked Codex");
     // delivered once only
-    const another = board.draft("Another");
-    runtime.triggers.assessNow(another.id);
-    await runtime.queue.idle();
+    await askMaster(runtime, "another");
     expect(fake.agents[1]!.prompts[1]).not.toContain("[handoff]");
 
     const sessions = runtime.sessions();
@@ -221,9 +213,8 @@ describe("kept history and hand-off", () => {
 
   it("also keeps the old agent on a permission mode change", async () => {
     const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
-    runtime.triggers.assessNow(board.draft("A").id);
-    await runtime.queue.idle();
+    const { runtime, fake } = runtimeFor(board, () => "ok");
+    await askMaster(runtime);
     await runtime.setPermission("acceptEdits");
     expect(fake.agents).toHaveLength(2);
     expect(fake.agents[0]!.archived).toBe(false);
@@ -233,23 +224,19 @@ describe("kept history and hand-off", () => {
 
   it("the first master ever gets no hand-off", async () => {
     const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
-    runtime.triggers.assessNow(board.draft("A").id);
-    await runtime.queue.idle();
+    const { runtime, fake } = runtimeFor(board, () => "ok");
+    await askMaster(runtime);
     expect(fake.agents[0]!.prompts[0]).not.toContain("[handoff]");
     await runtime.dispose();
   });
 
   it("sends a changed rule supplement to a running agent once", async () => {
     const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
-    runtime.triggers.assessNow(board.draft("A").id);
-    await runtime.queue.idle();
+    const { runtime, fake } = runtimeFor(board, () => "ok");
+    await askMaster(runtime);
     board.store.prompts.setOverride("master.rules_supplement", "Always answer in Chinese.");
-    runtime.triggers.assessNow(board.draft("B").id);
-    await runtime.queue.idle();
-    runtime.triggers.assessNow(board.draft("C").id);
-    await runtime.queue.idle();
+    await askMaster(runtime);
+    await askMaster(runtime);
     const prompts = fake.agents[0]!.prompts;
     expect(prompts[1]).toContain("Always answer in Chinese.");
     expect(prompts[2]).not.toContain("Always answer in Chinese.");
@@ -275,66 +262,17 @@ describe("kept history and hand-off", () => {
 });
 
 describe("trigger switches", () => {
-  async function poll(runtime: ReturnType<typeof runtimeFor>["runtime"]) {
-    await runtime.triggers.consumer.poll();
-  }
-
-  it("each auto-review switch only silences its own event", async () => {
+  it("skips memory consolidation when switched off", async () => {
     const board = setupBoard();
-    const { runtime, settings } = runtimeFor(board, () => assessmentJson());
-    settings.autoAssessOnCreate = false;
-    const card = board.draft("No auto review on create");
-    await poll(runtime);
-    expect(runtime.triggers.debouncer.pending()).toEqual([]);
-
-    board.store.cards.update(card.id, { description: "edited" });
-    await poll(runtime);
-    expect(runtime.triggers.debouncer.pending()).toHaveLength(1);
-    runtime.triggers.debouncer.cancel(card.id);
-
-    settings.autoAssessOnEdit = false;
-    board.store.cards.update(card.id, { description: "edited again" });
-    await poll(runtime);
-    expect(runtime.triggers.debouncer.pending()).toEqual([]);
-
-    settings.autoAssessOnMoveToDraft = false;
-    board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    board.store.cards.move(card.id, { to: "draft", actor: "user" });
-    await poll(runtime);
-    expect(runtime.triggers.debouncer.pending()).toEqual([]);
-
-    settings.autoAssessOnMoveToDraft = true;
-    board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    board.store.cards.move(card.id, { to: "draft", actor: "user" });
-    await poll(runtime);
-    expect(runtime.triggers.debouncer.pending()).toHaveLength(1);
-    await runtime.dispose();
-  });
-
-  it("uses the configured debounce", async () => {
-    const board = setupBoard();
-    const { runtime, clock, fake } = runtimeFor(board, () => assessmentJson(), { debounceSeconds: 5 });
-    board.draft("Quick");
-    await poll(runtime);
-    clock.advance(5_000);
-    await runtime.queue.idle();
-    expect(fake.agents[0]!.prompts).toHaveLength(1);
-    await runtime.dispose();
-  });
-
-  it("skips memory consolidation and worker help when switched off", async () => {
-    const board = setupBoard();
-    const { runtime, fake, settings, clock } = runtimeFor(board, () => assessmentJson());
+    const { runtime, fake, settings, clock } = runtimeFor(board, () => "ok");
     clock.advance(Date.now() - clock.now()); // the sweep window compares with real board timestamps
     settings.consolidateOnDone = false;
-    settings.wakeOnSessionWaiting = false;
     const card = board.store.cards.create({ projectId: board.project.id, title: "Finished" }, "user");
     board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    const dispatched = board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
-    board.store.sessions.setState(dispatched.session.id, "waiting", { question: { requestId: "r1", title: "Which?" } });
+    board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
     board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(card.id, { to: "done", actor: "user" });
-    await poll(runtime);
+    await runtime.triggers.consumer.poll();
     await runtime.queue.idle();
     expect(fake.agents).toHaveLength(0);
     expect(runtime.triggers.sweep()).toBe(0);
@@ -344,65 +282,20 @@ describe("trigger switches", () => {
     await runtime.dispose();
   });
 
-  it("limits the start-up sweep to the configured number of drafts", async () => {
+  it("applies a done template override from the registry to the next wake", async () => {
     const board = setupBoard();
-    const { runtime, settings } = runtimeFor(board, () => assessmentJson());
-    for (let i = 0; i < 6; i++) board.draft(`Old ${i}`);
-    settings.sweepDraftLimit = 3;
-    expect(runtime.triggers.sweep()).toBe(3);
-    expect(runtime.sweep()).toBe(3);
-    settings.sweepOnStart = false;
-    expect(runtime.sweep()).toBe(0);
-    await runtime.dispose();
-  });
-
-  it("assesses at once on card.review_requested, ignoring the debounce, the auto switches and 'unchanged'", async () => {
-    const board = setupBoard();
-    const { runtime, settings, fake } = runtimeFor(board, () => assessmentJson());
-    settings.autoAssessOnCreate = false;
-    settings.autoAssessOnEdit = false;
-    const card = board.draft("Assess me");
-    // already assessed with the current content: a normal wake would be skipped as unchanged
-    runtime.triggers.assessNow(card.id);
-    await runtime.queue.idle();
-    expect(board.store.events.list(card.id).filter((e) => e.type === "evaluation")).toHaveLength(1);
-
-    publishEvent(board.db, {
-      type: "card.review_requested",
-      cardId: card.id,
-      projectId: board.project.id,
-      payload: { cardId: card.id, requestedBy: "user" },
-    });
-    await runtime.triggers.consumer.poll();
-    expect(runtime.triggers.debouncer.pending()).toEqual([]);
-    await runtime.queue.idle();
-    expect(board.store.events.list(card.id).filter((e) => e.type === "evaluation")).toHaveLength(2);
-    expect(fake.agents[0]!.prompts).toHaveLength(2);
-
-    // not a draft any more: nothing to review
+    const { runtime, fake } = runtimeFor(board, () => JSON.stringify({ summary: "m" }));
+    board.store.prompts.setOverride("master.wake.card_done", "CUSTOM {{card.key}}\n{{project}}");
+    const card = board.store.cards.create({ projectId: board.project.id, title: "Done" }, "user");
     board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    publishEvent(board.db, {
-      type: "card.review_requested",
-      cardId: card.id,
-      payload: { cardId: card.id, requestedBy: "user" },
-      dedupeKey: "again",
-    });
-    await runtime.triggers.consumer.poll();
-    await runtime.queue.idle();
-    expect(fake.agents[0]!.prompts).toHaveLength(2);
-    await runtime.dispose();
-  });
-
-  it("applies a template override from the registry to the next wake", async () => {
-    const board = setupBoard();
-    const { runtime, fake } = runtimeFor(board, () => assessmentJson());
-    board.store.prompts.setOverride("master.wake.assess_draft", "CUSTOM {{card.key}}\n{{project}}");
-    const card = board.draft("Custom");
-    runtime.triggers.assessNow(card.id);
+    board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
+    board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
+    board.store.cards.move(card.id, { to: "done", actor: "user" });
+    runtime.wake(card.key, "card_done", true);
     await runtime.queue.idle();
     const prompt = fake.agents[0]!.prompts[0]!;
     expect(prompt.startsWith(`CUSTOM ${card.key}\n## 项目 DEMO`)).toBe(true);
-    expect(prompt.endsWith("只回复 assess_draft JSON 对象。")).toBe(true);
+    expect(prompt.endsWith("只回复 card_done JSON 对象。")).toBe(true);
     await runtime.dispose();
   });
 });
@@ -427,14 +320,11 @@ describe("requirements maintenance", () => {
         return replies.shift() ?? "";
       },
     };
-    const quota = createQuotaReader({ getPaseo: () => null, tightPct: () => 20, clock: new ManualClock() });
-    const assessor = createAssessor({ db: board.db, store: board.store, master, quota });
     const failures: string[] = [];
     const consolidator = createConsolidator({
       db: board.db,
       store: board.store,
       master,
-      assessor,
       memory: createFileMemoryPort(),
       prompts: defaultPromptPort({ maintainRequirements: opts.maintain ?? true }),
       options: {

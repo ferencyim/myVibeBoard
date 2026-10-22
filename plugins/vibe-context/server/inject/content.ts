@@ -22,7 +22,7 @@ const MEMORY_ORDER: readonly ProjectMemoryFile[] = [
 
 
 export interface ContextOptions {
-  /** Texts of the frame and the scouting advice (registry); defaults to the registered defaults. */
+  /** Text of the frame (registry); defaults to the registered default. Execution-phase scouting was removed by WP-105. */
   prompts?: PromptResolver;
   /** Total tokens of memory file text to inline; files that do not fit are listed as pointers. */
   maxMemoryTokens?: number;
@@ -34,8 +34,6 @@ export function buildContextBlock(store: MemoryStore, options: ContextOptions = 
   let remaining = options.maxMemoryTokens ?? DEFAULT_MEMORY_TOKENS;
   const prompts = options.prompts ?? defaultPrompts;
   const parts: string[] = [CONTEXT_START, prompts.resolve("context.inject_frame")];
-
-  parts.push(prompts.resolve("context.scout_guidance"));
 
   const directives = store.readUserDirectives()?.trim();
   if (directives) parts.push("## 用户的指令", directives);

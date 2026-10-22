@@ -31,6 +31,7 @@ describe("failure classifier", () => {
 function fakePaseo(opts: { failProviders?: string[]; unavailable?: string[] } = {}) {
   const created: any[] = [];
   const sent: Array<{ agentId: string; text: string }> = [];
+  const archived: string[] = [];
   const paseo = {
     workspaces: {
       ref: () => ({
@@ -58,6 +59,7 @@ function fakePaseo(opts: { failProviders?: string[]; unavailable?: string[] } = 
           }),
         },
         send: async (text: string) => void sent.push({ agentId, text }),
+        archive: async () => void archived.push(agentId),
       }),
     },
     providers: {
@@ -66,7 +68,7 @@ function fakePaseo(opts: { failProviders?: string[]; unavailable?: string[] } = 
       }),
     },
   } as any;
-  return { paseo, created, sent };
+  return { paseo, created, sent, archived };
 }
 
 function setup(paseoOpts: Parameters<typeof fakePaseo>[0] = {}, withFallbacks = true) {
@@ -323,5 +325,64 @@ describe("dispatch failover (agent cannot start)", () => {
     const t = dispatchSetup(["claude"], true, false);
     await expect(t.dispatcher.dispatch(t.card.key)).rejects.toThrow(/selected model/);
     expect(t.created).toHaveLength(0);
+  });
+});
+
+describe("switchTo (WP-105 executor picker)", () => {
+  it("starts the chosen model in the same workspace with plan and exec chat, ends and archives the old agent", async () => {
+    const t = setup({}, false);
+    t.store.cards.setPlan(t.card.id, {
+      plan: { description: "PLAN: step one then two", checks: [], subCards: [], tags: [], recommendedPresetId: null },
+    });
+    t.store.events.add({ cardId: t.card.id, type: "chat", authorKind: "user", author: "user", body: { text: "EXEC-USER-LINE", thread: "exec" } });
+    t.store.events.add({ cardId: t.card.id, type: "chat", authorKind: "user", author: "user", body: { text: "PLAN-USER-LINE", thread: "plan" } });
+    const reassigner = createReassigner({
+      board: t.board,
+      getPaseo: () => t.fake.paseo,
+      tracker: t.tracker,
+      newAgentId: t.nextId,
+      log: () => {},
+    });
+    const out = await reassigner.switchTo(t.session.id, t.c.id);
+    expect(out.method).toBe("transcript");
+    expect(out.preset.id).toBe(t.c.id);
+    expect(out.session).toMatchObject({ agentId: "new-1", currentProvider: "codex", reassignedFromSessionId: t.session.id });
+    // started in the same workspace, on the chosen preset
+    expect(t.fake.created).toHaveLength(1);
+    const created = t.fake.created[0];
+    expect(created.config.provider).toBe("codex/gpt-5");
+    expect(created.env.VIBE_CARD_KEY).toBe(t.card.key);
+    // the brief: switch note, plan, exec chat, no plan chat
+    expect(created.prompt).toContain("「claude-main」（claude/opus）");
+    expect(created.prompt).toContain("「codex-fb」（codex/gpt-5）");
+    expect(created.prompt).toContain("PLAN: step one then two");
+    expect(created.prompt).toContain("EXEC-USER-LINE");
+    expect(created.prompt).not.toContain("PLAN-USER-LINE");
+    expect(created.prompt).toMatch(/转录文件在 .+\.md/);
+    // old session ended as reassigned, card switched, old agent archived
+    expect(t.store.sessions.get(t.session.id)).toMatchObject({ state: "ended" });
+    expect(eventTypes(t.runtime)).toContain("session.reassigned");
+    expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.c.id);
+    expect(t.fake.archived).toEqual(["old-agent"]);
+    expect(t.tracker.bind).toHaveBeenCalledWith("new-1");
+  });
+
+  it("refuses without a running worker or with an unknown preset", async () => {
+    const t = setup({}, false);
+    const reassigner = createReassigner({ board: t.board, getPaseo: () => t.fake.paseo, newAgentId: t.nextId, log: () => {} });
+    await expect(reassigner.switchTo(t.session.id, "no-such-preset")).rejects.toThrow(/找不到预设/);
+    t.store.sessions.setState(t.session.id, "ended", { outcome: "closed" });
+    await expect(reassigner.switchTo(t.session.id, t.c.id)).rejects.toThrow(/没有正在执行/);
+    expect(t.fake.created).toHaveLength(0);
+  });
+
+  it("releases the new agent id and keeps the old session when the new agent cannot start", async () => {
+    const t = setup({ failProviders: ["codex"] }, false);
+    const reassigner = createReassigner({ board: t.board, getPaseo: () => t.fake.paseo, tracker: t.tracker, newAgentId: t.nextId, log: () => {} });
+    await expect(reassigner.switchTo(t.session.id, t.c.id)).rejects.toThrow(/login expired/);
+    expect(t.tracker.release).toHaveBeenCalledWith("new-1");
+    expect(t.store.sessions.get(t.session.id)!.state).toBe("working");
+    expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.a.id);
+    expect(t.fake.archived).toEqual([]);
   });
 });

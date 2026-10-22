@@ -1,12 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createAssessor } from "../server/assess/assess";
 import { MemoryUpdateSchema } from "../server/assess/schema";
 import { createConsolidator } from "../server/memory/consolidate";
 import { createFileMemoryPort, parseMemory } from "../server/memory/files";
-import { createQuotaReader } from "../server/subscription/quota";
-import { ManualClock, setupBoard } from "./helpers";
+import { setupBoard } from "./helpers";
 
 const read = (repo: string, file: string) => readFileSync(join(repo, ".vibe", file), "utf8");
 const update = (over: Record<string, unknown>) => MemoryUpdateSchema.parse({ summary: "s", ...over });
@@ -90,11 +88,9 @@ describe("card done consolidation", () => {
         return replies.shift() ?? "";
       },
     };
-    const quota = createQuotaReader({ getPaseo: () => null, tightPct: () => 20, clock: new ManualClock() });
-    const assessor = createAssessor({ db: board.db, store: board.store, master, quota });
     return {
       prompts,
-      c: createConsolidator({ db: board.db, store: board.store, master, assessor, memory: createFileMemoryPort() }),
+      c: createConsolidator({ db: board.db, store: board.store, master, memory: createFileMemoryPort() }),
     };
   }
 

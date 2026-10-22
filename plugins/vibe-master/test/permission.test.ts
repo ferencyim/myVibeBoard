@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createMasterRuntime } from "../server/runtime";
 import { createPermissionResolver, isBoardMcpCall } from "../server/subscription/permission";
-import { ManualClock, MODES, assessmentJson, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
+import { askMaster, ManualClock, MODES, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
 
 function build(over: { mode?: string; provider?: string; modes?: typeof MODES } = {}) {
   const board = setupBoard();
-  const fake = fakePaseo(() => assessmentJson(), { modes: over.modes });
+  const fake = fakePaseo(() => "ok", { modes: over.modes });
   const settings = defaultSettings({ provider: over.provider ?? "claude", permissionMode: over.mode ?? "auto" });
   const runtime = createMasterRuntime({
     db: board.db,
@@ -46,7 +46,7 @@ describe("permission mode mapping", () => {
 describe("master permission mode", () => {
   it("starts the master and the planners in auto mode by default", async () => {
     const t = build();
-    t.runtime.triggers.assessNow(t.board.draft("A").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     expect(t.fake.agents[0]!.options.config.modeId).toBe("auto");
     const status = await t.runtime.status(false);
@@ -56,7 +56,7 @@ describe("master permission mode", () => {
 
   it("uses the Codex auto-review mode for a Codex master", async () => {
     const t = build({ provider: "codex" });
-    t.runtime.triggers.assessNow(t.board.draft("A").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     expect(t.fake.agents[0]!.options.config.modeId).toBe("auto-review");
     await t.runtime.dispose();
@@ -64,10 +64,10 @@ describe("master permission mode", () => {
 
   it("applies a settings change to the next ask by replacing the agent", async () => {
     const t = build();
-    t.runtime.triggers.assessNow(t.board.draft("A").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     t.settings.permissionMode = "acceptEdits";
-    t.runtime.triggers.assessNow(t.board.draft("B").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     expect(t.fake.agents.map((a) => a.options.config.modeId)).toEqual(["auto", "acceptEdits"]);
     expect(t.fake.agents[0]!.archived).toBe(false); // WP-93: the old conversation stays openable
@@ -77,7 +77,7 @@ describe("master permission mode", () => {
 
   it("switches a running master at once, keeps the batch going and can return to the settings", async () => {
     const t = build();
-    t.runtime.triggers.assessNow(t.board.draft("A").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
 
     const switched = await t.runtime.setPermission("bypassPermissions");
@@ -93,7 +93,7 @@ describe("master permission mode", () => {
     expect((await t.runtime.setPermission("bypassPermissions")).changed).toBe(false);
     expect(t.fake.agents).toHaveLength(2);
 
-    t.runtime.triggers.assessNow(t.board.draft("B").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     expect(t.fake.agents[1]!.prompts).toHaveLength(1); // the new agent carries on
 
@@ -105,7 +105,7 @@ describe("master permission mode", () => {
   it("only remembers the choice when no master is running yet", async () => {
     const t = build();
     expect(await t.runtime.setPermission("default")).toEqual({ changed: false, sessionId: null });
-    t.runtime.triggers.assessNow(t.board.draft("A").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     expect(t.fake.agents[0]!.options.config.modeId).toBe("default");
     await t.runtime.dispose();
@@ -126,7 +126,7 @@ describe("permission requests of the master", () => {
 
   it("approves board tools of the master and planners, alerts for the rest, ignores other agents", async () => {
     const t = build();
-    t.runtime.triggers.assessNow(t.board.draft("A").id);
+    await askMaster(t.runtime);
     await t.runtime.queue.idle();
     const masterId = t.fake.agents[0]!.id;
     const approved: string[] = [];

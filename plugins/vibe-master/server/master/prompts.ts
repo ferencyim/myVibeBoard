@@ -2,13 +2,11 @@
 //   static       MASTER_RULES (system prompt; identical for every wake)
 //   semi-static  per-project block (project, tag vocabulary, presets, open cards): deterministic
 //                order, no timestamps or counters, so wakes for the same project share a prefix
-//   dynamic      the card itself, quota numbers, the scheduler hint, the reply contract reminder
+//   dynamic      the card itself and the reply contract reminder
 
 import { readRequirementsDoc } from "../vibe/db";
 import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import type { CardEvent, CardView, Preset, Project, Tag } from "../vibe/contract";
-import type { SelectResult } from "../select";
-import type { QuotaMap } from "../subscription/quota";
 
 const clip = (text: string, max: number) => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -80,39 +78,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
   ].join("\n");
 }
 
-export function quotaLine(quota: QuotaMap): string {
-  const parts = Object.entries(quota)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, q]) => `${id} ${q.remainingPct === null ? "?" : `${q.remainingPct}%`} 剩余（${q.level}）`);
-  return parts.length ? parts.join("; ") : "未知";
-}
 
-export function buildAssessMessage(input: {
-  projectBlock: string;
-  card: CardView;
-  tagNames: string[];
-  quota: QuotaMap;
-  hint: SelectResult | null;
-  prompts?: PromptPort;
-}): string {
-  const { card } = input;
-  return (input.prompts ?? defaultPromptPort()).resolve("master.wake.assess_draft", {
-    projectId: card.projectId,
-    vars: {
-    project: input.projectBlock,
-    "card.key": card.key,
-    "card.title": card.title,
-    "card.priority": card.priority,
-    "card.tags": input.tagNames.join(", ") || "无",
-    "card.preset": card.presetId ?? "无",
-    "card.refImages": String(card.refImages.length),
-    "card.description": card.description || "（空）",
-    "card.acceptance": card.acceptance || "（空）",
-    quota: quotaLine(input.quota),
-    hint: input.hint ? `${input.hint.presetName ?? input.hint.provider ?? "无"}（${input.hint.reason}）` : "无",
-    },
-  });
-}
 
 export function buildRepairMessage(
   kind: string,
@@ -156,22 +122,3 @@ export function buildDoneMessage(input: {
   });
 }
 
-export function buildHelpMessage(input: {
-  projectBlock: string;
-  card: CardView;
-  question: unknown;
-  plan: string;
-  prompts?: PromptPort;
-}): string {
-  return (input.prompts ?? defaultPromptPort()).resolve("master.wake.session_help", {
-    projectId: input.card.projectId,
-    vars: {
-      project: input.projectBlock,
-      "card.key": input.card.key,
-      "card.title": input.card.title,
-      "card.acceptance": clip(input.card.acceptance, 800),
-      plan: input.plan || "（无）",
-      question: JSON.stringify(input.question ?? null, null, 2).slice(0, 2000),
-    },
-  });
-}

@@ -60,18 +60,6 @@ export function createRequirementsService(opts: { board: BoardService; db: VibeD
         throw toRequirementsError(error);
       }
     },
-    /** Publishes card.review_requested for a draft card; the master plugin consumes it. */
-    requestReview(ref: string) {
-      const card = board.cards.get(ref);
-      if (card.column !== "draft") throw new BoardError("invalid", "只有草稿箱里的卡片可以让总 agent 审查");
-      publishEvent(db, {
-        type: "card.review_requested",
-        cardId: card.id,
-        projectId: card.projectId,
-        payload: { cardId: card.id, requestedBy: "user" },
-      });
-      return { requested: true as const };
-    },
   };
 }
 

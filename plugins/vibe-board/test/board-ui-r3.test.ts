@@ -199,21 +199,3 @@ describe("requirements RPCs on a real git repo", () => {
     expect(readFileSync(join(repo, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe("a\n");
   });
 });
-
-describe("manual review request", () => {
-  it("publishes card.review_requested for a draft card only", () => {
-    const { service, board, runtime, project } = repoWithProject();
-    const { card } = board.cards.create({ project: project.id, title: "Idea" });
-    expect(service.requestReview(card.key)).toEqual({ requested: true });
-    const rows = runtime.db
-      .prepare<{ type: string; card_id: string; payload_json: string }>(
-        "SELECT type, card_id, payload_json FROM vibe_event WHERE type = 'card.review_requested'",
-      )
-      .all();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.card_id).toBe(card.id);
-    expect(JSON.parse(rows[0]!.payload_json)).toEqual({ cardId: card.id, requestedBy: "user" });
-    board.cards.move(card.key, { to: "todo" });
-    expect(() => service.requestReview(card.key)).toThrow(/草稿箱/);
-  });
-});

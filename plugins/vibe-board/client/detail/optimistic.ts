@@ -15,11 +15,21 @@ type CardPatch = {
   tagIds?: string[];
   presetId?: string | null;
   reviewerPresetId?: string | null;
+  scoutPresetId?: string | null;
+  plannerPresetId?: string | null;
   needsEvidence?: boolean;
   [other: string]: unknown;
 };
 
-const OPTIMISTIC_KEYS = ["priority", "tagIds", "presetId", "reviewerPresetId", "needsEvidence"] as const;
+const OPTIMISTIC_KEYS = [
+  "priority",
+  "tagIds",
+  "presetId",
+  "reviewerPresetId",
+  "scoutPresetId",
+  "plannerPresetId",
+  "needsEvidence",
+] as const;
 type OptimisticKey = (typeof OPTIMISTIC_KEYS)[number];
 
 interface Pending {

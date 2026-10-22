@@ -1,6 +1,6 @@
 // Pure helpers for dispatch: the seed prompt, worktree slug and permission-mode mapping.
 
-import type { CardEvent, CardView, PlanVersion, Preset, Project } from "../vibe/contract";
+import { chatThreadOf, type CardEvent, type CardView, type Preset, type Project } from "../vibe/contract";
 import { defaultPrompts, type PromptResolver } from "../prompts";
 
 const RECENT_EVENT_LIMIT = 5;
@@ -50,30 +50,20 @@ function section(title: string, body: string): string {
 export interface BriefLimits {
   recentEvents: number;
   chatLimit: number;
-  handoffMaxChars: number;
 }
 export const DEFAULT_BRIEF_LIMITS: BriefLimits = {
   recentEvents: RECENT_EVENT_LIMIT,
   chatLimit: 8,
-  handoffMaxChars: 8000,
 };
 
-/** Hand-off summary written by the card's planning session (vibe-master, WP-33). */
-export interface PlanHandoff {
-  /** Absolute path of `<repo>/.vibe/sessions/<KEY>-plan.md`, when it exists. */
-  path: string | null;
-  text: string;
-}
-
-const DISCUSSION_KINDS = new Set(["discussion", "discussion_research", "handoff", "handoff_request"]);
+/** Notes of the old planning hand-off (before WP-105) are not repeated. */
+const DISCUSSION_KINDS = new Set(["discussion", "discussion_research", "handoff", "handoff_request", "plan_updated"]);
 
 export interface BriefInput {
   card: CardView;
   project: Project;
   preset: Preset;
   events: readonly CardEvent[];
-  latestPlan?: PlanVersion;
-  handoff?: PlanHandoff | null;
   extraInstructions?: string;
   /** Prompt registry; default texts when omitted. */
   prompts?: PromptResolver;
@@ -88,16 +78,21 @@ const PROPOSAL_LIMIT = 5;
 const CHAT_CLIP = 600;
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
-/** Recent owner / master messages of the group chat: the agreed context after the hand-off summary. */
+const SPEAKER: Record<string, string> = { user: "用户", executor: "执行模型", reviewer: "复核模型" };
+
+/**
+ * Key messages of the execution conversation (owner, executor, reviewer; no system lines): what a
+ * new or switched executor needs to continue (WP-105).
+ */
 function chatLines(events: readonly CardEvent[], limit: number): string {
   if (limit <= 0) return "";
   return events
-    .filter((e) => e.type === "chat" && (e.authorKind === "user" || e.authorKind === "master"))
+    .filter((e) => e.type === "chat" && SPEAKER[e.authorKind] && chatThreadOf(e) === "exec")
     .slice(-limit)
     .map((e) => {
       const text = (e.body as { text?: unknown } | null)?.text;
       return typeof text === "string" && text.trim()
-        ? `- [${e.authorKind === "user" ? "用户" : "总 agent"}] ${clip(text.trim(), CHAT_CLIP)}`
+        ? `- [${SPEAKER[e.authorKind]}] ${clip(text.trim(), CHAT_CLIP)}`
         : "";
     })
     .filter(Boolean)
@@ -134,7 +129,7 @@ export function buildDispatchBrief(input: BriefInput): string {
     .map(eventLine)
     .filter(Boolean)
     .join("\n");
-  const plan = input.latestPlan?.snapshot;
+  const plan = card.plan;
   const adopted = adoptedLines(input.events);
   const chat = chatLines(input.events, limits.chatLimit);
   const contract = prompts.resolve("board.brief_contract", {
@@ -145,30 +140,24 @@ export function buildDispatchBrief(input: BriefInput): string {
     "card.key": card.key,
     "card.title": card.title,
     description: section("描述", card.description || "未提供描述。"),
-    acceptance: section("验收标准", card.acceptance),
+    acceptance: section("验收标准", card.acceptance || "未提供验收标准。"),
     referenceImages: section("参考图片", card.refImages.map((id) => `- 附件 ${id}`).join("\n")),
-    handoff: input.handoff
-      ? section(
-          "规划交接（从这里开始）",
-          [
-            "用户和规划会话已就下面的方案达成一致；请按此执行，有偏差时在卡片评论里说明。" +
-              (input.handoff.path ? ` 完整文件：${input.handoff.path}` : ""),
-            input.handoff.text.length > limits.handoffMaxChars
-              ? `${input.handoff.text.slice(0, limits.handoffMaxChars)}\n…（已截断，见文件）`
-              : input.handoff.text,
-          ].join("\n\n"),
-        )
-      : "",
     adopted: adopted ? section("已采纳的建议（已应用到卡片）", adopted) : "",
-    chat: chat ? section("群聊（最近）", chat) : "",
-    plan: plan
-      ? section(
-          "计划",
-          [plan.description, ...plan.checks.map((c) => `- [ ] ${c.text}`), plan.notes ?? ""]
-            .filter(Boolean)
-            .join("\n"),
-        )
-      : "",
+    chat: chat ? section("执行对话（最近）", chat) : "",
+    plan:
+      plan && plan.description.trim()
+        ? section(
+            "方案",
+            [
+              plan.description,
+              ...plan.checks.map((c) => `- [ ] ${c.text}`),
+              plan.files?.length ? `涉及文件：${plan.files.join(", ")}` : "",
+              plan.notes ?? "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          )
+        : "",
     notes: section("最近备注", notes),
     project: section("项目", `- 名称：${project.name}\n- 类型：${project.projectTypes.join(", ")}`),
     contract: section("回报约定", contract),

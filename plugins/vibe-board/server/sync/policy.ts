@@ -9,7 +9,7 @@ import { phonePolicy, type SyncPolicy } from "../vibe/sync";
 const PHONE_EVENT_TYPES = ["note", "chat"];
 
 /** User-fillable keys of a phone chat body; answers / fallback / key are routing bookkeeping. */
-const PHONE_CHAT_KEYS = ["text", "kind"];
+const PHONE_CHAT_KEYS = ["text", "kind", "thread"];
 
 /** A body_json value (stored as a JSON string) that a phone may send as a chat message. */
 export function isPhoneChatBody(value: unknown): boolean {

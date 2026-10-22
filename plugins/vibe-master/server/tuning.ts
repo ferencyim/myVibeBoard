@@ -10,7 +10,6 @@ export interface MasterTuning {
   maxResearchRounds: number;
   maxPlanLoops: number;
   jsonRepairRetries: number;
-  proposalWindowMs: number;
   sweepDoneWindowMs: number;
   alertCooldownMs: { quotaLow: number; urgent: number; routine: number };
   projectBlockCardLimit: number;
@@ -28,7 +27,6 @@ export const DEFAULT_TUNING: MasterTuning = {
   maxResearchRounds: 2,
   maxPlanLoops: 10,
   jsonRepairRetries: 1,
-  proposalWindowMs: 15_000,
   sweepDoneWindowMs: 48 * 60 * MIN,
   alertCooldownMs: { quotaLow: 6 * 60 * MIN, urgent: 10 * MIN, routine: 60 * MIN },
   projectBlockCardLimit: 40,
@@ -44,7 +42,6 @@ export function tuningOf(s: MasterSettings): MasterTuning {
     maxResearchRounds: s.maxResearchRounds,
     maxPlanLoops: s.maxPlanLoops,
     jsonRepairRetries: s.jsonRepairRetries,
-    proposalWindowMs: s.proposalWindowSeconds * 1000,
     sweepDoneWindowMs: s.sweepDoneWindowHours * 60 * MIN,
     alertCooldownMs: {
       quotaLow: s.alertCooldownQuotaLowMinutes * MIN,

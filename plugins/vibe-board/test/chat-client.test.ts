@@ -1,57 +1,72 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { describeEvent } from "../client/detail/events";
 import {
+  canExecute,
   chatItemsOf,
-  headerActions,
-  masterBusy,
-  planReady,
+  executingLabel,
+  presetsFor,
   proposalDiff,
-  routeHint,
+  reviewItemsOf,
+  runningWorkerOf,
+  waitingForReply,
   type MessageItem,
   type ProposalItem,
 } from "../client/planning/logic";
-import type { AgentSession, CardView } from "../shared/vibe/contract";
+import type { AgentSession, CardView, Preset } from "../shared/vibe/contract";
 import { chatEv, resetEvents } from "./chat-helpers";
 
 beforeEach(resetEvents);
 
 const card = (column: CardView["column"], extra: Partial<CardView> = {}) =>
   ({ column, title: "T", description: "D", acceptance: "A", ...extra }) as CardView;
-const sess = (role: string, state: string) => ({ role, state }) as AgentSession;
+const sess = (role: string, state: string, extra: Partial<AgentSession> = {}) =>
+  ({ role, state, ...extra }) as AgentSession;
 const msgs = (items: ReturnType<typeof chatItemsOf>) =>
   items.filter((i): i is MessageItem => i.kind === "message");
 
 describe("chatItemsOf", () => {
   it("labels authors, kinds and extras, and marks answered user messages", () => {
-    const u1 = chatEv("user", { text: "hi" });
+    const u1 = chatEv("user", { text: "hi", thread: "plan" });
     const m = chatEv("master", {
       text: "plan",
+      thread: "plan",
       answers: [u1.id],
       kind: "summary",
-      planVersion: 2,
-      ready: true,
       agentId: "ag1",
       detail: "long",
     });
-    const u2 = chatEv("user", { text: "more" });
-    const ex = chatEv("executor", { text: "working" });
-    const rv = chatEv("reviewer", { text: "bad", kind: "verdict", error: true });
-    const sc = chatEv("scout", { text: "found", kind: "info" });
-    const items = msgs(chatItemsOf([u1, m, u2, ex, rv, sc]));
-    expect(items.map((i) => i.label)).toEqual(["你", "总 agent", "你", "执行 agent", "复核", "探路兵"]);
-    expect(items.map((i) => i.answered)).toEqual([true, true, false, true, true, true]);
-    expect(items[1]).toMatchObject({
-      msgKindLabel: "总结",
-      planVersion: 2,
-      ready: true,
-      agentId: "ag1",
-      detail: "long",
-    });
-    expect(items[4]).toMatchObject({ msgKindLabel: "结论", error: true });
-    expect(items[5]!.msgKindLabel).toBe("说明");
+    const u2 = chatEv("user", { text: "more", thread: "plan" });
+    const sc = chatEv("scout", { text: "found", kind: "info", thread: "plan" });
+    const items = msgs(chatItemsOf([u1, m, u2, sc], "plan"));
+    expect(items.map((i) => i.label)).toEqual(["你", "规划模型", "你", "探路模型"]);
+    expect(items.map((i) => i.answered)).toEqual([true, true, false, true]);
+    expect(items[1]).toMatchObject({ msgKindLabel: "小结", agentId: "ag1", detail: "long" });
+    expect(items[3]!.msgKindLabel).toBe("说明");
   });
 
-  it("derives system rows from a whitelist of status and reject events", () => {
+  it("splits the two conversations by thread and classifies legacy rows", () => {
+    const planUser = chatEv("user", { text: "plan talk", thread: "plan" });
+    const execUser = chatEv("user", { text: "exec talk", thread: "exec" });
+    const legacyUser = chatEv("user", { text: "old owner message" });
+    const legacyMaster = chatEv("master", { text: "old master" });
+    const legacyExecutor = chatEv("executor", { text: "old executor" });
+    const legacyReviewer = chatEv("reviewer", { text: "old verdict", kind: "verdict", error: true });
+    const legacyDispatch = chatEv("system", { text: "dispatched" });
+    (legacyDispatch as { author: string }).author = "dispatch";
+    const legacySystem = chatEv("system", { text: "plain system" });
+    const events = [planUser, execUser, legacyUser, legacyMaster, legacyExecutor, legacyReviewer, legacyDispatch, legacySystem];
+    const text = (thread: "plan" | "exec") =>
+      chatItemsOf(events, thread).map((i) => (i.kind === "proposal" ? "proposal" : i.text));
+    expect(text("plan")).toEqual(["plan talk", "old owner message", "old master", "plain system"]);
+    expect(text("exec")).toEqual(["exec talk", "old executor", "old verdict", "dispatched"]);
+    expect(msgs(chatItemsOf(events, "exec")).find((i) => i.author === "reviewer")).toMatchObject({
+      msgKindLabel: "结论",
+      error: true,
+      label: "复核模型",
+    });
+  });
+
+  it("derives system rows from status and reject events in the execution thread only", () => {
     const events = [
       chatEv("system", { kind: "moved", from: "todo", to: "in_progress", reason: "派发" }, "status"),
       chatEv("system", { kind: "verification", text: "通过" }, "status"),
@@ -62,9 +77,9 @@ describe("chatItemsOf", () => {
       chatEv("user", { kind: "discussion", text: "old" }, "note"),
       chatEv("system", { score: 1 }, "evaluation"),
       chatEv("system", { text: "测试没过" }, "reject"),
-      chatEv("system", { text: "已转给执行 agent", kind: "info" }),
+      chatEv("system", { text: "已转给执行 agent", kind: "info", thread: "exec" }),
     ];
-    const items = chatItemsOf(events);
+    const items = chatItemsOf(events, "exec");
     expect(
       items.map((i) => (i.kind === "message" ? `m:${i.author}` : i.kind === "system" ? i.text : i.kind)),
     ).toEqual([
@@ -73,12 +88,13 @@ describe("chatItemsOf", () => {
       "没有 agent",
       "已合并",
       "退回：测试没过",
-      "m:system",
+      "已转给执行 agent",
     ]);
     expect(items[1]).toMatchObject({ link: "verification" });
+    expect(chatItemsOf(events, "plan")).toEqual([]);
   });
 
-  it("builds proposals with status labels and diffs", () => {
+  it("builds proposals (plan thread only) with status labels and diffs", () => {
     const mk = (status: string, before?: object) =>
       chatEv(
         "master",
@@ -91,7 +107,8 @@ describe("chatItemsOf", () => {
       mk("rejected"),
       mk("superseded", { title: "Older", acceptance: "meh" }),
     ];
-    const props = chatItemsOf(events) as ProposalItem[];
+    expect(chatItemsOf(events, "exec")).toEqual([]);
+    const props = chatItemsOf(events, "plan") as ProposalItem[];
     expect(props.map((p) => p.statusLabel)).toEqual(["待处理", "已采纳", "已拒绝", "已被新建议取代"]);
     const c = card("draft", { title: "Now", acceptance: "cur" });
     expect(proposalDiff(props[0]!, c)).toEqual([
@@ -102,59 +119,58 @@ describe("chatItemsOf", () => {
     expect(proposalDiff(props[2]!, c).map((d) => d.before)).toEqual([undefined, undefined]);
     expect(proposalDiff(props[3]!, c).map((d) => d.before)).toEqual(["Older", "meh"]);
   });
+
+  it("reviewItemsOf lists only the reviewer's messages", () => {
+    const events = [
+      chatEv("executor", { text: "done", thread: "exec" }),
+      chatEv("reviewer", { text: "fails", kind: "verdict", thread: "exec" }),
+      chatEv("user", { text: "ok", thread: "exec" }),
+      chatEv("reviewer", { text: "passes", kind: "verdict" }),
+    ];
+    expect(reviewItemsOf(events).map((i) => i.text)).toEqual(["fails", "passes"]);
+    expect(reviewItemsOf([])).toEqual([]);
+  });
 });
 
-describe("routing display", () => {
-  it("routeHint per column", () => {
-    expect(routeHint(card("draft"), [])).toContain("总 agent");
-    expect(routeHint(card("todo"), [sess("worker", "idle")])).toContain("总 agent");
-    for (const state of ["starting", "working", "waiting", "idle"]) {
-      expect(routeHint(card("in_progress"), [sess("worker", state)])).toBe("消息将发给执行 agent");
-    }
-    expect(routeHint(card("verifying"), [sess("worker", "idle")])).toBe("消息将发给执行 agent");
-    expect(routeHint(card("in_progress"), [sess("worker", "ended"), sess("planner", "idle")])).toBe(
-      "执行 agent 已不在，消息将发给总 agent",
-    );
-    expect(routeHint(card("verifying"), [])).toContain("已不在");
-    expect(routeHint(card("done"), [])).toBe("卡片已完成，发言只作记录");
+describe("conversation state", () => {
+  it("waitingForReply is true while an owner message has no answer", () => {
+    const u = chatEv("user", { text: "q", thread: "plan" });
+    expect(waitingForReply(chatItemsOf([u], "plan"))).toBe(true);
+    const a = chatEv("master", { text: "a", thread: "plan", answers: [u.id] });
+    expect(waitingForReply(chatItemsOf([u, a], "plan"))).toBe(false);
+    expect(waitingForReply([])).toBe(false);
   });
 
-  it("masterBusy counts only unanswered messages the master handles", () => {
-    const u = chatEv("user", { text: "q" });
-    const items = chatItemsOf([u]);
-    expect(masterBusy(items, card("draft"), [])).toBe(true);
-    expect(masterBusy(items, card("in_progress"), [sess("worker", "working")])).toBe(false);
-    expect(masterBusy(items, card("in_progress"), [])).toBe(true);
-    expect(masterBusy(items, card("done"), [])).toBe(false);
-    const fb = chatEv("system", { text: "转发失败", fallback: [u.id] });
-    expect(masterBusy(chatItemsOf([u, fb]), card("in_progress"), [sess("worker", "working")])).toBe(true);
-    const answered = chatEv("master", { text: "a", answers: [u.id] });
-    expect(masterBusy(chatItemsOf([u, answered]), card("draft"), [])).toBe(false);
+  it("presetsFor filters by purpose; a preset without purposes fits every job", () => {
+    const p = (id: string, roleHints: Preset["roleHints"]) => ({ id, roleHints }) as Preset;
+    const all = [p("any", []), p("w", ["worker"]), p("r", ["reviewer"]), p("multi", ["scout", "worker"])];
+    expect(presetsFor(all, "worker").map((x) => x.id)).toEqual(["any", "w", "multi"]);
+    expect(presetsFor(all, "reviewer").map((x) => x.id)).toEqual(["any", "r"]);
+    expect(presetsFor(all, "scout").map((x) => x.id)).toEqual(["any", "multi"]);
+    expect(presetsFor([], "worker")).toEqual([]);
   });
 
-  it("planReady until the owner speaks again or the reply failed", () => {
-    const u = chatEv("user", { text: "ok?" });
-    const ready = chatEv("master", { text: "ready", answers: [u.id], ready: true });
-    expect(planReady(chatItemsOf([u, ready]))).toBe(true);
-    expect(planReady(chatItemsOf([u, ready, chatEv("system", { text: "x" })]))).toBe(true);
-    expect(planReady(chatItemsOf([u, ready, chatEv("user", { text: "wait" })]))).toBe(false);
-    expect(planReady(chatItemsOf([u, chatEv("master", { text: "x", error: true, ready: true })]))).toBe(
-      false,
-    );
-    expect(planReady([])).toBe(false);
+  it("executingLabel names the running model, or nothing when no worker runs", () => {
+    const preset = { id: "p1", name: "codex-high", provider: "codex", model: "gpt-5" } as Preset;
+    const worker = sess("worker", "working", { currentProvider: "codex" });
+    expect(executingLabel([worker], [preset], { presetId: "p1" })).toBe("codex-high（codex/gpt-5） · 执行中");
+    // the card's preset no longer matches the provider that runs: show the provider
+    expect(executingLabel([worker], [preset], { presetId: "other" })).toBe("codex · 执行中");
+    expect(executingLabel([sess("worker", "waiting", { currentProvider: "codex" })], [preset], { presetId: "p1" })).toContain("等待你的回复");
+    expect(executingLabel([sess("worker", "ended")], [preset], { presetId: "p1" })).toBeNull();
+    expect(executingLabel([sess("planner", "working")], [preset], { presetId: "p1" })).toBeNull();
+    expect(runningWorkerOf([sess("worker", "ended"), worker])).toBe(worker);
   });
 
-  it("headerActions by column", () => {
-    expect(headerActions(card("draft")).map((a) => a.label)).toEqual(["让总 agent 审查"]);
-    expect(headerActions(card("todo")).map((a) => a.label)).toEqual(["立即执行"]);
-    expect(headerActions(card("in_progress"))).toEqual([]);
-    expect(headerActions(card("done"))).toEqual([]);
+  it("canExecute only for draft and todo cards", () => {
+    expect(["draft", "todo"].every((c) => canExecute(card(c as never)))).toBe(true);
+    expect(["in_progress", "verifying", "done"].some((c) => canExecute(card(c as never)))).toBe(false);
   });
 });
 
 describe("timeline descriptions", () => {
   it("describes chat and proposal events in one line", () => {
-    expect(describeEvent(chatEv("master", { text: "你好" }))).toBe("[总 agent] 你好");
+    expect(describeEvent(chatEv("master", { text: "你好" }))).toBe("[规划模型] 你好");
     expect(
       describeEvent(chatEv("master", { changes: {}, rationale: "更清晰", status: "accepted" }, "proposal")),
     ).toBe("修改建议（已采纳）：更清晰");

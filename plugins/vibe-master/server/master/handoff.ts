@@ -3,7 +3,7 @@
 // agent still gets full detail from the wake messages and `vibe_show`. The framing text is the
 // registered prompt `master.handoff_summary`; this module only fills its sections.
 
-import { contentHash, lastAssessmentMarker } from "../assess/assess";
+import { contentHash, lastAssessmentMarker } from "./assessments";
 import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import { DEFAULT_TUNING } from "../tuning";
 import type { CardView } from "../vibe/contract";

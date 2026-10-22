@@ -430,42 +430,13 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
 
       <Group theme={theme} title="触发：什么时候唤醒总 agent">
         <SettingsCard>
+          <Muted theme={theme}>
+            总 agent 不再参与卡片的方案、执行和验收：这些由卡片上选的模型完成。它只在卡片完成后整理项目记忆。
+          </Muted>
           <SettingsSwitch
-            label="新建草稿后自动审查"
-            value={values.autoAssessOnCreate}
-            onValueChange={(autoAssessOnCreate: boolean) => save({ ...values, autoAssessOnCreate })}
-          />
-          <SettingsSwitch
-            label="修改草稿后自动审查"
-            hint="只看标题、描述、验收标准、参考图和标签；总 agent 自己的回写不会触发。"
-            value={values.autoAssessOnEdit}
-            onValueChange={(autoAssessOnEdit: boolean) => save({ ...values, autoAssessOnEdit })}
-          />
-          <SettingsSwitch
-            label="卡片移回草稿后自动审查"
-            value={values.autoAssessOnMoveToDraft}
-            onValueChange={(autoAssessOnMoveToDraft: boolean) => save({ ...values, autoAssessOnMoveToDraft })}
-          />
-          <SettingsInput
-            label="防抖秒数（无编辑多久后才审查，1-600）"
-            hint="看板上的「让总 agent 审查」不受以上开关和防抖限制，立即审查。"
-            initialValue={String(values.debounceSeconds)}
-            onChangeText={(text) => save({ ...values, debounceSeconds: integer(text, 30, 1, 600) })}
-          />
-          <SettingsSwitch
-            label="启动时补扫未审查的草稿和未整理的完成卡"
+            label="启动时补扫未整理的完成卡"
             value={values.sweepOnStart}
             onValueChange={(sweepOnStart: boolean) => save({ ...values, sweepOnStart })}
-          />
-          <SettingsInput
-            label="补扫草稿数量（最新的 N 张，1-50）"
-            initialValue={String(values.sweepDraftLimit)}
-            onChangeText={(text) => save({ ...values, sweepDraftLimit: integer(text, 10, 1, 50) })}
-          />
-          <SettingsSwitch
-            label="执行会话求助时唤醒（给你提建议，不替你回答）"
-            value={values.wakeOnSessionWaiting}
-            onValueChange={(wakeOnSessionWaiting: boolean) => save({ ...values, wakeOnSessionWaiting })}
           />
           <SettingsSwitch
             label="卡片完成后整理项目记忆"
@@ -498,7 +469,7 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
       <Group theme={theme} title="提示词与规则">
         <View style={{ gap: 8 }}>
           <Muted theme={theme}>
-            总 agent 的系统规则、规则补充、唤醒消息、规划会话与交接文字都集中在「Agent 行为」页编辑，可按项目覆盖，也能恢复默认。这里不再重复编辑。
+            总 agent 的系统规则、规则补充、唤醒消息，以及规划会话、探路的提示词都集中在「Agent 行为」页编辑，可按项目覆盖，也能恢复默认。这里不再重复编辑。
           </Muted>
           {(navigation as CrossPluginNavigation | undefined)?.openPluginScreen ? (
             <Button
@@ -527,12 +498,12 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
             onChangeText={(text) => save({ ...values, planTurnTimeoutMinutes: integer(text, 10, 1, 120) })}
           />
           <SettingsInput
-            label="规划探路兵超时（分钟，1-120）"
+            label="探路超时（分钟，1-120）"
             initialValue={String(values.scoutTimeoutMinutes)}
             onChangeText={(text) => save({ ...values, scoutTimeoutMinutes: integer(text, 5, 1, 120) })}
           />
           <SettingsInput
-            label="每条用户消息最多探路轮数（0-10）"
+            label="规划会话每条消息最多请求探路的轮数（0-10）"
             initialValue={String(values.maxResearchRounds)}
             onChangeText={(text) => save({ ...values, maxResearchRounds: Math.round(Math.min(10, Math.max(0, Number(text) || 0))) })}
           />
@@ -545,11 +516,6 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
             label="回复格式不合规时的重试次数（0-5，0 为不重试）"
             initialValue={String(values.jsonRepairRetries)}
             onChangeText={(text) => save({ ...values, jsonRepairRetries: Math.round(Math.min(5, Math.max(0, Number(text) || 0))) })}
-          />
-          <SettingsInput
-            label="采纳建议后不重新审查的窗口（秒，1-600）"
-            initialValue={String(values.proposalWindowSeconds)}
-            onChangeText={(text) => save({ ...values, proposalWindowSeconds: integer(text, 15, 1, 600) })}
           />
           <SettingsInput
             label="启动补扫：多少小时内完成的卡要整理记忆（1-720）"

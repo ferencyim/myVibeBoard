@@ -60,6 +60,12 @@ const DISPLAY_COLUMNS: Record<string, readonly string[]> = {
     "plan_session_id",
     "created_at",
     "updated_at",
+    // WP-105: daemon-written plan, model criteria and unread activity
+    "plan_json",
+    "model_acceptance",
+    "plan_activity_at",
+    "exec_activity_at",
+    "verify_activity_at",
   ],
   preset: ["builtin", "created_at", "updated_at"],
   tag: ["builtin"],
@@ -413,6 +419,11 @@ export function createBridge({ db, vibe, node, store, log }: BridgeDeps) {
       else if (c === "preset_id") patch.presetId = v;
       else if (c === "suggested_preset_id") patch.suggestedPresetId = v;
       else if (c === "reviewer_preset_id") patch.reviewerPresetId = v;
+      else if (c === "scout_preset_id") patch.scoutPresetId = v;
+      else if (c === "planner_preset_id") patch.plannerPresetId = v;
+      else if (c === "plan_seen_at") patch.planSeenAt = v;
+      else if (c === "exec_seen_at") patch.execSeenAt = v;
+      else if (c === "verify_seen_at") patch.verifySeenAt = v;
       else if (c === "parent_card_id") patch.parentCardId = v;
     }
     const attempt = (fn: () => void) => {

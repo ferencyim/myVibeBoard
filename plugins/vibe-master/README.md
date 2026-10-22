@@ -15,36 +15,23 @@ npm ci && npm run typecheck && npm test
   catalog, configurable); the cwd is an empty scratch directory (`<VIBE_HOME>/master/workspace`).
   The static rules are the system prompt; the wake message is a deterministic per-project block (tags,
   presets, open cards) followed by the dynamic card/quota part, for prefix-cache hits.
-- **Wake-ups** come from the `vibe_event` bus only (`server/wake`): a new/edited draft (`card.created`,
-  `card.updated` owner fields, `card.moved -> draft`) is assessed after a 30 s quiet period (setting
-  `debounceSeconds`); `card.moved -> done` consolidates project memory; `session.waiting` of a worker
-  produces advice (never an answer). One serial queue; jobs that cannot run (no daemon handle yet,
-  quota exhausted) are parked and resumed on the next handle or switch. On start, drafts without a
-  current assessment (newest 10) and recently finished cards are swept.
-- **Draft assessment** (`server/assess`): the reply is parsed and validated with zod
-  (`AssessmentSchema`, one repair retry). Write-back, all through the vibe-shared command layer:
-  an `evaluation` card event (`body.assessment` JSON + readable `body.text`, emits `card.assessed`),
-  a **plan version whose `checks` are the verification checklist** (vibe-verify reads the latest plan
-  version) and `card.suggested_preset_id`. A content hash (title, description, acceptance, tags) makes
-  it idempotent; edits during the assessment drop the stale result. The master never moves a card
-  (state machine) and never edits the owner's fields.
-- **Sub-agent choice**: `server/select.ts` adapts presets to the scheduler's pure `selectAgent`
-  (`vibe-shared/contract/select.ts`: quota + priority + tier + track record from
-  `.vibe/workers/<provider>/MEMORY.md`). A recommendation on an exhausted provider (or a tight one for
-  non-high priority) is replaced and explained in the comment.
+- **Wake-ups** come from the `vibe_event` bus only (`server/wake`): `card.moved -> done` consolidates project
+  memory; scheduler and maintenance signals raise reminders. Since WP-105 the master takes **no part in the card
+  flow**: no draft review, no dispatch recommendation, no advice on worker questions, no acceptance. One serial
+  queue; jobs that cannot run (no daemon handle yet, quota exhausted) are parked and resumed on the next handle or
+  switch. On start, recently finished cards without a memory update are swept.
 - **Subscription switch** (RPC `master.switch`, screen, command palette, settings): starts the new
   agent first, then retires the old one (`session.switched` event); the queue and the board carry on
   unchanged, so the same cards are processed. The choice is kept in `<VIBE_HOME>/master/state.json`.
   "highest reasoning" = the last thinking option of the catalog.
-- **Permission mode** (WP-71, setting `permissionMode`, RPC `master.permission`, status screen, command palette): shared by
-  the master and the planning sessions. `auto` (default) = the provider's own automatic mode taken from the Paseo
+- **Permission mode** (WP-71, setting `permissionMode`, RPC `master.permission`, status screen, command palette): the
+  master's (planning sessions run read-only on their own preset, see below). `auto` (default) = the provider's own automatic mode taken from the Paseo
   mode catalog (`providers.listModes`): Claude `auto` (classifier), Codex `auto-review` (older Codex without it: `auto`,
   Default Permissions, still below Full Access); a provider without an automatic mode keeps its own default. Anything
   else is a concrete modeId of the provider (a mode the provider lacks falls back to auto). The UI shows the concrete
   mode in effect. A manual switch is kept in `state.json` and wins over the settings default until set back
   (`settings`). The plugin API has no in-place mode change, so a running master is replaced like a subscription switch
-  (new agent first, then the old one retires, same cards continue); a planner is replaced before its next turn by a
-  fresh one seeded with the whole discussion. The hook `agent.permission_requested` approves **only** calls of the
+  (new agent first, then the old one retires, same cards continue). The hook `agent.permission_requested` approves **only** calls of the
   `vibe-board` MCP server (Claude `mcp__vibe-board__*`, Codex `CodexMcpElicitation` with `serverName=vibe-board`) by
   the master and planners; any other request of those agents waits for the owner and raises a `master.alert`
   (`kind=permission_wait`, pushed like the others).
@@ -54,49 +41,40 @@ npm ci && npm run typecheck && npm test
   `scheduler.paused/resumed` are shown in the status.
 - **Maintenance events**: `maintenance.paused` (rule paused after repeated rejections) raises a
   `master.alert` of kind `maintenance_paused` (pushed like the others); `maintenance.triggered` is only
-  logged, the draft card a run creates goes through the normal draft assessment.
+  logged.
 - **Memory** (`server/memory`): on card done the master replies with a `MemoryUpdate` (state, decisions,
   lessons, index, archive); `files.ts` writes the same marker format vibe-context reads. Budget
   enforcement stays in vibe-context.
 
-## Draft discussion sessions (WP-33, `server/planning`)
+## Card planning sessions (WP-33, reworked by WP-105, `server/planning`)
 
-- **One planning session per card**: a separate Paseo agent (`role=planner` in `agent_session`, `card.plan_session_id`
-  points at it) on the master's current subscription and with the same rules (`plan_discussion` in
-  `skills/vibe-master/SKILL.md`). Scratch cwd `<VIBE_HOME>/master/planning/<KEY>`; its first message carries the
-  project block (open cards), project memory, the card, the latest plan version and the earlier discussion, so a lost
-  agent (daemon restart, archived) is replaced by a fresh one without losing the thread.
-- **The channel is the card**: the owner's message is a `note` event `{kind:"discussion", role:"user", text}`, the
-  planner answers with `{kind:"discussion", role:"planner", text, answers:[ids], ready?, planVersion?}`. The vibe-board
-  discussion tab (and the phone, through ordinary event sync, also offline) only writes/reads events; the planner polls
-  `card_event` (rowid cursor, 2 s). "Unanswered" is derived from `answers`, so restarts and late offline arrivals work.
-- **Every turn** the planner may ask for up to 3 read-only scouts (`research`): the plugin starts them in the project repo
-  (claude `plan` / codex `read-only` mode, label `role=scout`, archived afterwards, not board sessions), shows the findings
-  as `discussion_research` and feeds them back (max 2 rounds). A `plan` in the reply is saved as the next
-  `plan_version` (description, checks, sub-cards, tags from the vocabulary, recommended preset ->
-  `card.suggested_preset_id`); owner fields of the card stay untouched. While a planner is live the master does not
-  assess the card (so it does not overwrite the agreed plan).
-- **Hand-off** is the owner's act: the UI writes a `handoff_request` note, the planner answers with a `handoff` event
-  (summary + path) and writes `<repo>/.vibe/sessions/<KEY>-plan.md` (`vibe-context` `layout.sessionMd("<KEY>-plan")`), archives
-  its agent (`outcome=handed_off`), then the UI moves the card to todo as `user`. If the card is moved any other way, the
-  planner hands off late the same way. vibe-board's dispatch brief inlines the summary under "Planning hand-off".
-  The agent never moves a card, `ready: true` is only a hint in the UI.
+- **The plan tab of a card.** One planning session per card: a separate Paseo agent (`role=planner`,
+  `card.plan_session_id`) on the card's **planning model** (`card.planner_preset_id`, a preset the owner picks), in the
+  project repository in read-only mode (claude `plan`, codex `read-only`, else the provider's read-only mode). Its system
+  prompt is the registered `master.plan.system` (reply format in the fixed suffix), not the master rules.
+- **The channel is the card**: plan-thread `chat` events (`thread: "plan"`). 制定方案 is an owner message with
+  `action: "make_plan"`: when the card has a **scout model** (`card.scout_preset_id`) a read-only scout explores first
+  (`master.plan.explore`), then the planner gets the full context (`master.plan.start`). Later owner messages are
+  answers or change requests (`master.plan.turn`). The planner may ask the scout model for research (max 3 questions,
+  `maxResearchRounds` rounds). "Unanswered" is derived from `answers`, so restarts and late offline arrivals work.
+- **Write-back** (`cards.setPlan`): the card's single plan is overwritten (`plan_json`, a `plan_updated` note for the
+  timeline); acceptance criteria are written directly unless the owner edited them since the model last wrote them
+  (`model_acceptance`), then they become a pending proposal in the plan chat. Title/description changes are proposals.
+- **Switching the planning model** archives the old session; the new one starts with the plan conversation, the plan
+  and the criteria (all on the card). The session ends when the card is done or archived. No hand-off file: the
+  executor's brief reads the plan from the card.
 
 ## RPCs
 
 `master.status` (queue, session, target, switch history, providers with models/quota),
 `master.switch {provider, model?, thinking? ("max")}`, `master.permission {mode: auto|<modeId>|settings}`,
-`master.wake {card, reason}`.
+`master.wake {card, reason: "card_done"}`.
 
 ## Notes for other work packages
 
 - The plugin API hands out the daemon handle only inside hooks and RPC calls, so the master learns it
   from `agent.*`/`workspace.created` hooks or any `master.*` RPC (the UI polls `master.status`). Until
   then jobs wait in the queue.
-- WP-33 (planning sessions) can reuse the agent-creation pattern of `server/master/session.ts` and
-  the `MasterAsk` port; planning agents are separate sessions, not this one.
 - Memory: plugins cannot import vibe-context, so `server/memory/files.ts` duplicates the entry
   format. Proposal: move the memory core into `vibe-shared` and use the budgeted store here.
 
-Real end-to-end run of the discussion flow (isolated dev daemon + local codex, never part of `npm test`):
-see the header of `scripts/e2e-planning.mjs`.

@@ -8,19 +8,18 @@ import { createReassigner } from "../server/dispatch/reassign";
 import { BOARD_INSTRUCTIONS_MARKER, buildBoardInstructions } from "../server/mcp/instructions";
 import { injectBoard } from "../server/mcp/inject";
 import { CONTINUE_PROMPT } from "../server/lifecycle/watchdog";
-import { SCOUT_SYSTEM_PROMPT, createScoutService, trimSummary } from "../server/scout";
 import { BOARD_PROMPT_DEFS, createBoardPrompts, defaultPrompts } from "../server/prompts";
 import { registerBoardRpcs } from "../server/rpc";
 import { createBoardService, openBoardRuntime } from "../server/service";
 import { createSyncService } from "../server/sync";
 import * as rpc from "../shared/rpc";
-import { boardSettings } from "../shared/settings";
+import { REMOVED_BOARD_SETTING_KEYS, boardSettings } from "../shared/settings";
 import { setupBoard, tempDir } from "./helpers";
 
 const GOLDEN_BRIEF = [
   "# DEMO-1 · Fix it",
   "",
-  "下面的标题、描述和验收标准是卡片的当前内容，已包含用户采纳的全部改动，以它们为准：后文的计划或交接内容与之不一致时，按卡片执行。",
+  "下面的标题、描述、方案和验收标准是卡片的当前内容（方案由规划模型与用户在方案对话里商定），以它们为准。",
   "",
   "## 描述",
   "desc",
@@ -42,7 +41,7 @@ const GOLDEN_BRIEF = [
   "项目目标、规则和当前状态都在 `.vibe/` 目录（先读 `.vibe/INDEX.md` 和 `.vibe/PROJECT_STATE.md`；用户的规则在 `.vibe/instructions/`）。这些文件是权威依据，对你只读：需要修改时请在卡片评论里说明，不要自己改。",
   "",
   "## 回报约定",
-  "你是卡片 DEMO-1 的执行者。用 `vibe-board show DEMO-1`（MCP 工具 `vibe_show`）读取卡片。用 `vibe-board comment DEMO-1 --body \"...\"` 汇报进展或提问。用 `vibe-board attachment add DEMO-1 --file <path>` 上传结果文件。本轮结束前，把完成的工作提交到工作树分支（批准后看板会合并该分支，不会处理未提交的改动）。你不能移动卡片：本轮结束时若没有未解决的提问，看板会把卡片移到“验证中”（verifying）。",
+  "你是卡片 DEMO-1 的执行者。用 `vibe-board show DEMO-1`（MCP 工具 `vibe_show`）读取卡片。用 `vibe-board comment DEMO-1 --body \"...\"` 汇报进展或提问。用 `vibe-board attachment add DEMO-1 --file <path>` 上传结果文件。本轮结束前，把完成的工作提交到工作树分支（批准后看板会合并该分支，不会处理未提交的改动）。执行中需要用户决定时直接在回复里提问并停下等待，用户会在卡片的执行对话里回复你。你不能移动卡片：本轮结束时若没有未解决的提问，看板会把卡片移到“验证中”（verifying），先复核（如果选了复核模型）再做证据验证。",
   "",
   "## 预设指令",
   "Be careful.",
@@ -78,7 +77,8 @@ describe("prompt defaults", () => {
     expect(t.store.prompts.list().map((p) => p.key).sort()).toEqual(BOARD_PROMPT_DEFS.map((d) => d.key).sort());
     expect(BOARD_PROMPT_DEFS.every((d) => d.plugin === "vibe-board")).toBe(true);
     expect(defaultPrompts.resolve("board.watchdog_continue")).toBe(CONTINUE_PROMPT);
-    expect(SCOUT_SYSTEM_PROMPT).toContain("最多 20 行");
+    expect(t.store.prompts.list().map((p) => p.key).some((k) => k.startsWith("board.scout"))).toBe(false);
+    expect(defaultPrompts.resolve("board.switch_model", { vars: { from: "A", to: "B", transcriptPath: "/x.md" } })).toContain("B");
     expect(defaultPrompts.resolve("board.port_hint", { vars: { port: "4100" } })).toContain("端口 4100");
   });
 });
@@ -121,7 +121,7 @@ describe("brief through the registry", () => {
     const t = setup();
     for (let i = 1; i <= 4; i++) {
       t.store.events.add({ cardId: t.card.id, type: "note", authorKind: "agent", author: "w", body: { text: `note ${i}` } });
-      t.store.events.add({ cardId: t.card.id, type: "chat", authorKind: "user", author: "u", body: { text: `chat ${i}` } });
+      t.store.events.add({ cardId: t.card.id, type: "chat", authorKind: "user", author: "u", body: { text: `chat ${i}`, thread: "exec" } });
     }
     const events = t.store.events.list(t.card.id);
     const out = brief(t, { events, limits: { recentEvents: 2, chatLimit: 1 } });
@@ -129,10 +129,7 @@ describe("brief through the registry", () => {
     expect(out).not.toContain("note 2");
     expect(out).toContain("chat 4");
     expect(out).not.toContain("chat 3");
-    expect(brief(t, { events, limits: { chatLimit: 0 } })).not.toContain("群聊");
-    const handoff = { path: null, text: "y".repeat(900) };
-    expect(brief(t, { handoff, limits: { handoffMaxChars: 500 } })).toContain("（已截断，见文件）");
-    expect(brief(t, { handoff })).not.toContain("（已截断");
+    expect(brief(t, { events, limits: { chatLimit: 0 } })).not.toContain("执行对话（最近）");
   });
 
   it("settings defaults and ranges", () => {
@@ -140,14 +137,23 @@ describe("brief through the registry", () => {
     expect(v).toMatchObject({
       briefRecentEvents: 5,
       briefChatLimit: 8,
-      briefHandoffMaxChars: 8000,
-      scoutCacheTtlMinutes: 10,
-      scoutSummaryMaxLines: 20,
-      scoutMaxTasksPerCall: 16,
       watchdogPollSeconds: 30,
     });
     expect(boardSettings.schema.safeParse({ briefRecentEvents: 0 }).success).toBe(false);
-    expect(boardSettings.schema.safeParse({ scoutCacheTtlMinutes: 0 }).success).toBe(true);
+    expect(Object.keys(v)).not.toContain("scoutCacheTtlMinutes");
+    expect(Object.keys(v)).not.toContain("briefHandoffMaxChars");
+  });
+
+  it("settings version 2 migrates by dropping the removed scout and hand-off keys", async () => {
+    expect(boardSettings.version).toBe(2);
+    const stored: Record<string, unknown> = { finalizeMode: "pr", briefChatLimit: 3 };
+    for (const key of REMOVED_BOARD_SETTING_KEYS) stored[key] = 1;
+    const migrated = (await boardSettings.migrate!(stored, 1)) as Record<string, unknown>;
+    expect(Object.keys(migrated).sort()).toEqual(["briefChatLimit", "finalizeMode"]);
+    expect(migrated).toMatchObject({ finalizeMode: "pr", briefChatLimit: 3 });
+    expect(stored.scoutPreset).toBe(1); // the input is not mutated
+    expect(boardSettings.schema.parse(migrated)).toMatchObject({ finalizeMode: "pr", briefChatLimit: 3 });
+    expect(await boardSettings.migrate!(null, 1)).toBeNull();
   });
 });
 
@@ -208,45 +214,6 @@ describe("other prompt keys", () => {
     const conv = createReassigner({ board: t.board, getPaseo: () => paseo, prompts: t.prompts, convert: async () => "converted", log: () => {} });
     expect((await conv.reassign(two.session.id, failure)).reassigned).not.toBeNull();
     expect(sent).toContain(`GO ${two.c.key} after codex/quota`);
-  });
-
-  it("scout prompts are editable and the summary length follows the setting", async () => {
-    const t = setup();
-    t.store.prompts.setOverride("board.scout_how.locate", "FIND IT");
-    t.store.prompts.setOverride("board.scout_system", "SYS {{maxLines}}");
-    const created: any[] = [];
-    const prompts: string[] = [];
-    const paseo = {
-      agents: {
-        create: async (o: any) => {
-          created.push(o);
-          return {
-            run: async (p: string) => {
-              prompts.push(p);
-              return { status: "idle", lastMessage: ["a", "b", "c", "d", "e"].join("\n") };
-            },
-            archive: async () => {},
-          };
-        },
-      },
-    } as never;
-    t.store.cards.update(t.card.id, {});
-    const scout = createScoutService({
-      board: t.board,
-      getPaseo: () => paseo,
-      getConfig: () => ({ preset: "codex-high", maxParallel: 1, timeoutMs: 1000, summaryMaxLines: 3, cacheTtlMs: 0, maxTasksPerCall: 1 }),
-      headOf: async () => "h",
-      platform: "linux",
-      prompts: t.prompts,
-    });
-    const out = await scout.run(t.card.key, [{ goal: "where", paths: ["src", "lib"] }]);
-    expect(created[0].config.systemPrompt).toBe("SYS 3");
-    expect(prompts[0]).toBe("类型：locate。FIND IT\n目标：where\n限定范围：src, lib\n回复最多 3 行，并带 path:line 定位。");
-    expect(out.results[0]!.summary).toBe("a\nb\nc\n... (2 more lines cut)");
-    await expect(scout.run(t.card.key, [{ goal: "x" }, { goal: "y" }])).rejects.toThrow(/At most 1 tasks/);
-    await scout.run(t.card.key, [{ goal: "where", paths: ["src", "lib"] }]); // ttl 0: no cache hit
-    expect(created).toHaveLength(2);
-    expect(trimSummary("1\n2\n3", 2)).toBe("1\n2\n... (1 more lines cut)");
   });
 
   it("the instructions marker is always code-added and injectBoard uses the given text", () => {
