@@ -220,4 +220,14 @@ describe("rule editor logic", () => {
 
     expect(removeCustomRule(edited, "tidy").rules).toEqual({});
   });
+
+  it("round-trips a disabled rule and a project list through the stored table", () => {
+    const draft = { ...draftFromDef(builtin), enabled: false };
+    const config = applyRuleEdit(empty, target, draftToFields(draft).fields!, ["p1", "p2"]);
+    expect(config.rules["git-health"]).toEqual({ enabled: false, projects: ["p1", "p2"] });
+    const g = resolveGlobalRules(BUILTIN_RULES, JSON.parse(JSON.stringify(config)) as RulesConfig);
+    expect(g.errors).toEqual([]);
+    expect(g.rules[0]).toMatchObject({ scope: ["p1", "p2"], def: { enabled: false } });
+    expect(draftFromDef(g.rules[0]!.def).enabled).toBe(false);
+  });
 });
