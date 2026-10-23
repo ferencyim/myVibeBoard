@@ -1,6 +1,7 @@
 // "管理" dialog: projects, presets (with live quota) and tags.
 
 import { Modal, useToast } from "@getpaseo/plugin/client/react-native";
+import { SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -256,6 +257,7 @@ function PresetModelEditor({
   onChange: (change: Partial<PresetModelDraft>) => void;
 }) {
   const models = providers.find((p) => p.id === value.provider)?.models ?? [];
+  const customModel = !models.some((m) => m.id === value.model);
   return (
     <View style={{ gap: 10 }}>
       <Field label="Agent（provider）">
@@ -277,31 +279,30 @@ function PresetModelEditor({
           autoCapitalize="none"
         />
       </Field>
-      <Field label="模型（必填）">
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-          {models.map((m) => (
-            <Chip
-              key={m.id}
-              label={m.name}
-              selected={value.model === m.id}
-              onPress={() =>
-                patch({
-                  model: m.id,
-                  thinking: thinkingAfterModelChange(models, m.id, value.thinking),
-                })
-              }
-            />
-          ))}
-        </View>
-        <TextField
+      <View style={{ gap: 6 }}>
+        <SettingsSelect
+          label="模型（必填）"
           value={value.model}
-          onChangeText={(model) =>
+          options={[
+            ...models.map((m) => ({ value: m.id, label: m.name })),
+            ...(customModel && value.model ? [{ value: value.model, label: value.model }] : []),
+            { value: "", label: "手动输入模型 ID" },
+          ]}
+          onValueChange={(model) =>
             patch({ model, thinking: thinkingAfterModelChange(models, model, value.thinking) })
           }
-          placeholder="必填：点选上方模型或手动输入"
-          autoCapitalize="none"
         />
-      </Field>
+        {customModel ? (
+          <TextField
+            value={value.model}
+            onChangeText={(model) =>
+              patch({ model, thinking: thinkingAfterModelChange(models, model, value.thinking) })
+            }
+            placeholder="必填：输入模型 ID"
+            autoCapitalize="none"
+          />
+        ) : null}
+      </View>
       <Field label="思考强度">
         <Row>
           {thinkingChoices(models, value.model, value.thinking).map((o) => (
