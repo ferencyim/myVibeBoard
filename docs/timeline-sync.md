@@ -29,13 +29,21 @@ so forward catch-up uses the update watermark and retains `sourceSeqRanges`. Hyd
 does not replace the container's history. Public rows and source indexes live in separate SQLite
 tables, so a streamed update writes only its row. Inline images use durable upload references;
 delivery receipts retain context boundaries rather than copies of prompts. Assistant fragments
-coalesce for 50 ms, flush before terminal events and shutdown, and publish only after commit.
+coalesce across all members in a 300 ms conversation window and commit in one transaction.
+Only that member's terminal event, Stop, shutdown, or native reconciliation forces an early flush;
+unrelated member and non-projection events leave the window intact. WAL uses NORMAL for stream
+batches, while delivery/control receipts and terminal batches use FULL. Dispatch commits recovery
+intent before streaming starts, so native history can repair a lost stream suffix after a crash.
 Row updates omit the conversation snapshot; lifecycle changes publish snapshots separately.
 Each native source retains its highest sequence rather than a key for every fragment. Legacy
 records migrate independently, and corrupt records are retained and logged without blocking boot.
 Readers switch to row tables only after migration commits; a failed migration keeps its original
 record inaccessible rather than exposing an empty replacement. Recovery and shutdown synchronize
-with buffered streams so native replay cannot duplicate a partially committed batch.
+with buffered streams so native replay cannot duplicate a partially committed batch. Pending
+recovery members survive failed scans and restarts; successful scans leave the recovery set unless
+a delivery receipt is still unknown. Opening a tab does not reload settled or unused providers.
+Admission and recovery use SQL-filtered rows or exact source keys rather than loading all history;
+a missing image reference preserves the rest of the fetched page.
 See the [WP-111 contract](vibe/ROUND5-DESIGN.md#wp-111core-群聊任务会话宿主)
 for source identity, unknown delivery, and context cursor semantics.
 

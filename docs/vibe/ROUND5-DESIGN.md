@@ -32,7 +32,7 @@
 
 conversationId 是稳定、独立的宿主身份，**不是当前接手者的 agentId**。为复用 WP-110，task.workspace_id、anchor_agent_id 保留：anchor_agent_id 仍指首个规划 agent，作为现有 parent 树的稳定根，不再等同用户所见群聊。新增 task.conversation_id 关联容器；更换规划模型也不改容器或旧 anchor 身份。容器单独保存群聊历史，普通 provider hydrate/reload 只能改该成员的原始历史。
 
-规划 anchor 自身也是成员；探路、方案复核、主代理、复核、验证挂该 anchor，执行子代理挂主代理。**容器成员表才是任务停止/恢复的完整集合**，parent 用于复用原生关系与通知，不依赖它推断全部运行者。七角色、方案与授权规则仍归插件；宿主只管理会话、成员、消息来源和控制入口。创建时在目录/agent.created 可见前持久绑定成员（包括 anchor）；普通 root 自动开 tab、历史/深链及布局恢复均将任务成员映射到 conversation，不能靠事后关 tab 或归档来隐藏。
+规划 anchor 自身也是成员；探路、方案复核、主代理、复核、验证挂该 anchor，执行子代理挂主代理。**容器成员表才是任务停止/恢复的完整集合**，parent 用于复用原生关系与通知，不依赖它推断全部运行者。七角色、方案与授权规则仍归插件；宿主只管理会话、成员、消息来源和控制入口。创建时在目录/agent.created 可见前持久绑定成员（包括 anchor）；普通 root 自动开 tab、历史/深链及布局恢复均将任务成员映射到 conversation；任务在每台设备自动出现一个群聊 tab，成员不单独开 tab。用户关闭后记录本设备的关闭意图，后续 reconcile/重连不自动加回；显式打开清除关闭意图。不能靠事后关成员 tab 或归档来隐藏。
 
 ### 接手、消息与上下文
 

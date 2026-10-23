@@ -116,13 +116,16 @@ Task members belong to a stable conversation in addition to their parent relatio
 ordinary send/configuration/detach paths cannot bypass conversation admission. Task Stop and
 archive use the complete member index and wait for cancellation; an unknown result retains the
 control barrier. Workspace archive first archives every owned task conversation and aborts if
-cancellation is uncertain. Approval follow-ups keep replacement semantics and can resume the
+cancellation is uncertain, before setup, ordinary agent, or terminal teardown starts. Ordinary
+agent and terminal teardown failures are logged and the remaining archive work continues.
+Approval follow-ups keep replacement semantics and can resume the
 original member while the conversation is paused. Codex synthetic plan approvals retain their
 request identity across daemon restarts; replies load that original member before resolving the
 request. Provider RPC approvals tied to a dead process are not reconstructed as live requests.
-Closing a member detail sheet or task tab only
-closes that presentation; background member events do not reopen the tab. Task navigation opens it
-again, and archive remains explicit. The task tab, including restored member deep links, targets
+Task members automatically open one conversation tab on each device, including when discovered
+on a second device. Closing a member detail sheet or task tab only closes that presentation;
+a device-local persisted close choice prevents background events, reconnect, and layout restore
+from reopening the tab. Explicit task navigation opens it again, and archive remains explicit. The task tab, including restored member deep links, targets
 the conversation; archive retains its public
 history and worktree. Ordinary agents keep the lifecycle below.
 
