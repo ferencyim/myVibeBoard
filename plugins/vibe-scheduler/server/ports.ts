@@ -25,13 +25,16 @@ export interface PortAllocatorOptions {
 
 export function createPortAllocator(options: PortAllocatorOptions) {
   const isFree = options.isFree ?? isPortFree;
+  let base = options.base;
+  let span = options.span;
   const map = new Map<string, number>();
+  let recoveryError = false;
   if (options.file && existsSync(options.file)) {
     try {
       const raw = JSON.parse(readFileSync(options.file, "utf8")) as Record<string, number>;
       for (const [k, v] of Object.entries(raw)) if (Number.isInteger(v)) map.set(k, v);
     } catch {
-      // A corrupt file just means ports are re-allocated.
+      recoveryError = true;
     }
   }
   const save = () => {
@@ -41,20 +44,26 @@ export function createPortAllocator(options: PortAllocatorOptions) {
   };
 
   return {
+    recoveryBlocked: () => recoveryError,
+    configure(range: { base: number; span: number }) {
+      base = range.base;
+      span = range.span;
+    },
     get: (key: string) => map.get(key),
     all: () => Object.fromEntries(map),
     async allocate(key: string): Promise<number> {
+      if (recoveryError) throw new Error("端口租约文件不可读，暂停新分配，请先核对原生运行状态");
       const existing = map.get(key);
       if (existing !== undefined) return existing;
       const used = new Set(map.values());
-      for (let i = 0; i < options.span; i++) {
-        const port = options.base + i;
+      for (let i = 0; i < span; i++) {
+        const port = base + i;
         if (used.has(port) || !(await isFree(port))) continue;
         map.set(key, port);
         save();
         return port;
       }
-      throw new Error(`No free dev-server port in ${options.base}-${options.base + options.span - 1}`);
+      throw new Error(`No free dev-server port in ${base}-${base + span - 1}`);
     },
     release(key: string): void {
       if (map.delete(key)) save();

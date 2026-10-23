@@ -1,3 +1,4 @@
+import type { CollectorContext } from "../context";
 // iOS simulator evidence collector (WP-46), driven over SSH on a remote Mac.
 //
 // Flow: [sync .app | build on the Mac] -> simctl boot/install -> start recordVideo -> launch ->
@@ -11,7 +12,6 @@ import path from "node:path";
 import type {
   CollectResult,
   CollectorAvailability,
-  CollectorContext,
   EvidenceArtifact,
   EvidenceCollector,
   Judgement,
@@ -68,7 +68,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
     if (!configured) throw new Error("No ios section in .vibe/verify.json and no config option");
     return configured;
   };
-  const configField = (ctx: CollectorContext, field: "host" | "developerDir"): string | undefined => {
+  const configField = (
+    ctx: CollectorContext,
+    field: "host" | "developerDir",
+  ): string | undefined => {
     try {
       return typeof options.config === "object"
         ? options.config[field]
@@ -80,7 +83,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
   const resolveHost = (ctx: CollectorContext): string | undefined =>
     options.host ?? process.env.VIBE_MAC_HOST ?? configField(ctx, "host");
   const resolveDeveloperDir = (ctx: CollectorContext): string | undefined =>
-    options.developerDir || process.env.VIBE_MAC_DEVELOPER_DIR || configField(ctx, "developerDir") || undefined;
+    options.developerDir ||
+    process.env.VIBE_MAC_DEVELOPER_DIR ||
+    configField(ctx, "developerDir") ||
+    undefined;
   const newExec = (ctx: CollectorContext, host: string) =>
     new RemoteMacExecutor(ctx.runner, host, {
       sshPath: options.sshPath,
@@ -92,7 +98,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
   async function detect(ctx: CollectorContext): Promise<CollectorAvailability> {
     const host = resolveHost(ctx);
     if (!host) {
-      return { available: false, reason: "no Mac host configured (set the iOS Mac host, <MAC_HOST>)" };
+      return {
+        available: false,
+        reason: "no Mac host configured (set the iOS Mac host, <MAC_HOST>)",
+      };
     }
     let exec: RemoteMacExecutor;
     try {
@@ -138,7 +147,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
           : `Xcode is not usable on the Mac (xcodebuild -version failed${detail ? `: ${detail}` : ""}); if Xcode is installed elsewhere (e.g. an external disk) set ios.developerDir / VIBE_MAC_DEVELOPER_DIR`,
       };
     }
-    return { available: false, reason: "xcrun simctl not found on the Mac (Xcode command line tools?)" };
+    return {
+      available: false,
+      reason: "xcrun simctl not found on the Mac (Xcode command line tools?)",
+    };
   }
 
   async function collect(ctx: CollectorContext): Promise<CollectResult> {
@@ -148,7 +160,8 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
     if (!host) throw new Error("No Mac host configured for the iOS collector");
     const device = ctx.deviceId ?? config.device;
     if (!device) throw new Error("No simulator: set ios.device or ctx.deviceId");
-    if (!/^[A-Za-z0-9 ._()-]+$/.test(device)) throw new Error(`Invalid simulator name/UDID: ${device}`);
+    if (!/^[A-Za-z0-9 ._()-]+$/.test(device))
+      throw new Error(`Invalid simulator name/UDID: ${device}`);
     const exec = newExec(ctx, host);
     const state: RunState = { exec, device, bundleId: app.bundleId };
     states.set(ctx.verificationId, state);
@@ -164,7 +177,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
 
     /** Stamps a file already in outputDir as evidence (simulator => simulated). */
     const add = (kind: EvidenceKind, file: string, label: string): EvidenceArtifact => {
-      const a = { ...writeArtifact(ctx, kind, path.basename(file), readFileSync(file), label), simulated: true };
+      const a = {
+        ...writeArtifact(ctx, kind, path.basename(file), readFileSync(file), label),
+        simulated: true,
+      };
       artifacts.push(a);
       return a;
     };
@@ -172,7 +188,9 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
       const r = await p;
       if (r.exitCode !== 0) {
         const why = (r.stderr || r.stdout).trim().slice(0, 500);
-        throw new Error(`${what} failed (exit ${r.exitCode}${r.timedOut ? ", timed out" : ""}): ${why}`);
+        throw new Error(
+          `${what} failed (exit ${r.exitCode}${r.timedOut ? ", timed out" : ""}): ${why}`,
+        );
       }
       return r;
     };
@@ -197,7 +215,9 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
         notes.push("Built on the Mac.");
       }
     } else if (app.appPath) {
-      const local = path.isAbsolute(app.appPath) ? app.appPath : path.join(ctx.worktreePath, app.appPath);
+      const local = path.isAbsolute(app.appPath)
+        ? app.appPath
+        : path.join(ctx.worktreePath, app.appPath);
       if (!existsSync(local)) throw new Error(`.app not found: ${local}`);
       remoteApp = `${workDir}/${path.basename(local)}`;
       await must("scp .app", exec.put(local, remoteApp, { recursive: true }));
@@ -215,17 +235,30 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
       }
       if (r.exitCode === 0) state.bootedByUs = true;
     }
-    await must("simctl bootstatus", exec.exec(simctl("bootstatus", device), { timeoutMs: 240_000 }));
+    await must(
+      "simctl bootstatus",
+      exec.exec(simctl("bootstatus", device), { timeoutMs: 240_000 }),
+    );
     notes.push(
       `Simulator: ${device} (${alreadyBooted ? "already running" : "booted for this run"}; evidence marked simulated).`,
     );
     if (remoteApp) {
-      await must("simctl install", exec.exec(simctl("install", device, remoteApp), { timeoutMs: 180_000 }));
+      await must(
+        "simctl install",
+        exec.exec(simctl("install", device, remoteApp), { timeoutMs: 180_000 }),
+      );
     }
 
     // 4. recording
     if (record) {
-      const rec = simctl("io", device, "recordVideo", "--codec=h264", "--force", `${workDir}/flow.mp4`);
+      const rec = simctl(
+        "io",
+        device,
+        "recordVideo",
+        "--codec=h264",
+        "--force",
+        `${workDir}/flow.mp4`,
+      );
       const r = await exec.shell(
         `nohup ${rec.map(shQuote).join(" ")} </dev/null >${shQuote(`${workDir}/record.log`)} 2>&1 & echo $!`,
         { timeoutMs: 20_000 },
@@ -236,7 +269,9 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
         await sleep(500);
       } else {
         degraded = true;
-        notes.push("Could not start simctl recordVideo: no video, GIF built from screenshots only.");
+        notes.push(
+          "Could not start simctl recordVideo: no video, GIF built from screenshots only.",
+        );
       }
     }
 
@@ -250,7 +285,9 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
       try {
         await must(
           "screenshot",
-          exec.exec(simctl("io", device, "screenshot", "--type=png", remote), { timeoutMs: 60_000 }),
+          exec.exec(simctl("io", device, "screenshot", "--type=png", remote), {
+            timeoutMs: 60_000,
+          }),
         );
         await must("scp screenshot", exec.get(remote, local));
         add("screenshot", local, ctx.check ? `${ctx.check.text} - ${label}` : label);
@@ -344,7 +381,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
       .filter((l) => l.startsWith("/"));
     let crashIdx = 0;
     for (const remote of crashFiles) {
-      const local = path.join(ctx.outputDir, `${prefix}-crash-${++crashIdx}${path.extname(remote) || ".ips"}`);
+      const local = path.join(
+        ctx.outputDir,
+        `${prefix}-crash-${++crashIdx}${path.extname(remote) || ".ips"}`,
+      );
       try {
         await must("scp crash log", exec.get(remote, local));
         add("log", local, `crash report ${path.basename(remote)}`);
@@ -358,7 +398,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
     if (frames.length > 1) {
       try {
         const label = ctx.check ? `${ctx.check.text} - flow` : "flow";
-        artifacts.push({ ...writeArtifact(ctx, "gif", `${prefix}-flow.gif`, encodeGif(frames), label), simulated: true });
+        artifacts.push({
+          ...writeArtifact(ctx, "gif", `${prefix}-flow.gif`, encodeGif(frames), label),
+          simulated: true,
+        });
       } catch (e) {
         degraded = true;
         notes.push(`GIF could not be built: ${msg(e)}`);
@@ -381,7 +424,13 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
       crashReports: crashFiles.length,
     };
     artifacts.push({
-      ...writeArtifact(ctx, "report", `${prefix}-report.json`, JSON.stringify(report, null, 2), "ios run report"),
+      ...writeArtifact(
+        ctx,
+        "report",
+        `${prefix}-report.json`,
+        JSON.stringify(report, null, 2),
+        "ios run report",
+      ),
       simulated: true,
     });
     notes.push(...failures);
@@ -395,8 +444,10 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
     const { exec, device } = state;
     // Only what this run started: the recorder, the app, and the simulator if we booted it.
     try {
-      if (state.recordPid) await exec.shell(`kill -INT ${state.recordPid} 2>/dev/null; true`, { timeoutMs: 15_000 });
-      if (state.bundleId) await exec.exec(simctl("terminate", device, state.bundleId), { timeoutMs: 15_000 });
+      if (state.recordPid)
+        await exec.shell(`kill -INT ${state.recordPid} 2>/dev/null; true`, { timeoutMs: 15_000 });
+      if (state.bundleId)
+        await exec.exec(simctl("terminate", device, state.bundleId), { timeoutMs: 15_000 });
       if (state.bootedByUs) await exec.exec(simctl("shutdown", device), { timeoutMs: 60_000 });
     } catch {
       // best effort

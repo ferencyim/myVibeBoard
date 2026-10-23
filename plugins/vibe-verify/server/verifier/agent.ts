@@ -3,16 +3,18 @@
 // unit tests use a scripted fake, the plugin wires `createPaseoVerifierLauncher`.
 
 import { randomUUID } from "node:crypto";
-import type { PaseoApi } from "@getpaseo/client";
+import type { PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
 import { z } from "zod";
 import { defaultPrompts, type PromptResolver } from "../prompts";
 import {
   JudgementSchema,
   presetModels,
   isModelUnavailableError,
+  classifyFailure,
   type CardView,
   type Preset,
   type Project,
+  type TaskPresetSnapshot,
 } from "../vibe/contract";
 
 export interface VerifierRun {
@@ -33,13 +35,28 @@ export interface VerifierAgent {
 }
 
 export interface LaunchInput {
-  card: CardView;
-  project: Project;
+  card?: CardView;
+  task?: { workspaceId: string; anchorAgentId: string };
+  project: Pick<Project, "id">;
   provider: string;
   model?: string;
   thinking?: string;
   preset?: Preset;
+  snapshot?: TaskPresetSnapshot;
+  candidateIndex?: number;
+  acquire?: (
+    provider: string,
+    candidateIndex: number,
+  ) => Promise<{ bind(agentId: string): Promise<void>; release(): Promise<void> }>;
   onReplacement?: (agent: VerifierAgent) => void;
+  onCreated?: (selection: {
+    agentId: string;
+    provider: string;
+    model: string;
+    thinking?: string;
+    candidateIndex: number;
+  }) => void;
+  onStopped?: (agentId: string, outcome: "completed" | "failed") => void;
   cwd: string;
   workspaceId: string | null;
   outputDir: string;
@@ -87,7 +104,7 @@ export const VerdictSchema = z.object({
       note: z.string().default(""),
       /** Evidence file names (as listed in the prompt) that support the judgement. */
       evidence: z.array(z.string()).default([]),
-    })
+    }),
   ),
   summary: z.string().optional(),
 });
@@ -123,7 +140,7 @@ export type VerifierPaseo = Pick<PaseoApi, "workspaces" | "agents"> &
 /** Presets saved before the model became mandatory may have none: use the provider's default model. */
 export async function defaultModelOf(
   paseo: VerifierPaseo,
-  provider: string
+  provider: string,
 ): Promise<string | undefined> {
   try {
     const res = await paseo.providers?.listModels(provider);
@@ -144,84 +161,126 @@ export interface PaseoLauncherOptions {
   pollMs?: number;
 }
 
-function createSingleVerifierLauncher(
-  options: PaseoLauncherOptions
-): VerifierLauncher {
+async function resolveNativeModel(paseo: VerifierPaseo, input: LaunchInput) {
+  let model = input.model;
+  let note: string | undefined;
+  if (!model) {
+    model = await defaultModelOf(paseo, input.provider);
+    if (!model) {
+      throw new Error(`预设未指定模型，${input.provider} 也没有默认模型；请编辑预设选择模型`);
+    }
+    note = `预设未指定模型，使用 ${input.provider} 的默认模型 ${model}。`;
+  }
+
+  return { model, note };
+}
+function verifierStatus(status: string): VerifierRun["status"] {
+  if (status === "idle") return "idle";
+  if (status === "error") return "error";
+  return "timeout";
+}
+
+function nativeRequest(input: LaunchInput, agentId: string, spec: string, prompts: PromptResolver) {
+  return {
+    agentId,
+    title: `${input.task?.workspaceId ?? input.card?.key} ${
+      input.role === "reviewer" ? "代码复核" : "证据验证"
+    }`,
+    ...(input.task ? { parent: input.task.anchorAgentId } : {}),
+    labels: {
+      ...(input.task
+        ? { workspaceId: input.task.workspaceId }
+        : { cardKey: input.card!.key, cardId: input.card!.id }),
+      role: input.role ?? "verifier",
+    },
+    env: {
+      VIBE_ROLE: "verifier",
+      ...(input.task
+        ? { VIBE_WORKSPACE_ID: input.task.workspaceId }
+        : { VIBE_CARD_ID: input.card!.id, VIBE_CARD_KEY: input.card!.key }),
+      ...(input.snapshot?.runtimeEnv ? { VIBE_RUNTIME_ENV: input.snapshot.runtimeEnv } : {}),
+    },
+    config: {
+      provider: spec,
+      ...(input.task && input.provider === "claude" ? { modeId: "plan" } : {}),
+      ...(input.task && input.provider === "codex"
+        ? { options: { sandbox_mode: "read-only", approval_policy: "never" } }
+        : {}),
+      ...(input.thinking && input.thinking !== "default"
+        ? { thinkingOptionId: input.thinking }
+        : {}),
+      systemPrompt:
+        prompts.resolve(
+          input.role === "reviewer" ? "verify.reviewer_system" : "verify.verifier_system",
+          { projectId: input.project.id },
+        ) + (input.snapshot?.instructions ? "\n\n" + input.snapshot.instructions : ""),
+    },
+  };
+}
+
+async function recordActualModel(handle: PaseoAgentHandle, input: LaunchInput, agentId: string) {
+  if (input.task) {
+    await handle.refresh();
+    const actual = handle.current();
+    if (!actual?.model) throw new Error("无法核对验证会话实际模型，保留租约等待核对");
+    input.onCreated?.({
+      agentId,
+      provider: actual.provider,
+      model: actual.model,
+      thinking: actual.thinkingOptionId ?? undefined,
+      candidateIndex: input.candidateIndex ?? 0,
+    });
+  }
+}
+
+function createSingleVerifierLauncher(options: PaseoLauncherOptions): VerifierLauncher {
   return {
     async launch(input) {
+      if (!input.card && !input.task) throw new Error("验证缺少原生任务定位");
+      if (input.task && input.workspaceId !== input.task.workspaceId)
+        throw new Error("验证会话必须使用任务原生 workspace");
       const paseo = options.getPaseo();
-      if (!paseo)
-        throw new Error("Verification needs an active Paseo daemon connection");
+      if (!paseo) throw new Error("验证需要可用的 Paseo 原生连接");
       const agentId = (options.newAgentId ?? randomUUID)();
-      let model = input.model;
-      let note: string | undefined;
-      if (!model) {
-        model = await defaultModelOf(paseo, input.provider);
-        if (!model) {
-          throw new Error(
-            `The preset has no model and ${input.provider} offers no default model; edit the preset and pick one`
-          );
-        }
-        note = `The preset has no model; using ${input.provider}'s default model ${model}.`;
+      const { model, note } = await resolveNativeModel(paseo, input);
+      const spec = model.startsWith(`${input.provider}/`) ? model : `${input.provider}/${model}`;
+      const create = nativeRequest(input, agentId, spec, options.prompts ?? defaultPrompts);
+      const lease = await input.acquire?.(input.provider, input.candidateIndex ?? 0);
+      let handle;
+      try {
+        handle = input.workspaceId
+          ? await paseo.workspaces.ref(input.workspaceId).agents.create(create)
+          : await paseo.agents.create({ ...create, cwd: input.cwd });
+      } catch (error) {
+        await lease?.release();
+        throw error;
       }
-      const spec = model.startsWith(`${input.provider}/`)
-        ? model
-        : `${input.provider}/${model}`;
-      const create = {
-        agentId,
-        title: `${input.card.key} ${
-          input.role === "reviewer" ? "review" : "verify"
-        }`,
-        labels: {
-          cardKey: input.card.key,
-          cardId: input.card.id,
-          role: input.role ?? "verifier",
-        },
-        env: {
-          VIBE_ROLE: "verifier",
-          VIBE_CARD_ID: input.card.id,
-          VIBE_CARD_KEY: input.card.key,
-        },
-        config: {
-          provider: spec,
-          ...(input.thinking && input.thinking !== "default" ? { thinkingOptionId: input.thinking } : {}),
-          systemPrompt: (options.prompts ?? defaultPrompts).resolve(
-            input.role === "reviewer"
-              ? "verify.reviewer_system"
-              : "verify.verifier_system",
-            { projectId: input.project.id }
-          ),
-        },
-      };
-      const handle = input.workspaceId
-        ? await paseo.workspaces.ref(input.workspaceId).agents.create(create)
-        : await paseo.agents.create({ ...create, cwd: input.cwd });
+      await lease?.bind(agentId);
+      await recordActualModel(handle, input, agentId);
       const configured = options.roundTimeoutMs;
       const roundTimeout =
-        (typeof configured === "function" ? configured() : configured) ??
-        20 * 60_000;
+        (typeof configured === "function" ? configured() : configured) ?? 20 * 60_000;
 
+      let failed = false;
+      let closed = false;
       return {
         agentId,
         provider: input.provider,
         model,
         note,
         async run(prompt) {
-          let result = await handle.run(prompt, { timeoutMs: roundTimeout });
+          let result = await handle.run(prompt, {
+            timeoutMs: roundTimeout,
+            ...(input.task ? { sourceAgentId: input.task.anchorAgentId } : {}),
+          });
           // "permission": the round paused on a request; the policy hook answers it, then we resume.
           const deadline = Date.now() + roundTimeout;
           while (result.status === "permission" && Date.now() < deadline) {
             await new Promise((r) => setTimeout(r, options.pollMs ?? 500));
-            result = await handle.waitForFinish(
-              Math.max(1_000, deadline - Date.now())
-            );
+            result = await handle.waitForFinish(Math.max(1_000, deadline - Date.now()));
           }
-          const status =
-            result.status === "idle"
-              ? "idle"
-              : result.status === "error"
-              ? "error"
-              : "timeout";
+          const status = verifierStatus(result.status);
+          failed = status !== "idle";
           return {
             status,
             text: result.lastMessage ?? "",
@@ -229,7 +288,23 @@ function createSingleVerifierLauncher(
           };
         },
         async close() {
-          await handle.archive().catch(() => undefined);
+          if (closed) return;
+          if (!input.task) {
+            await handle.archive().catch(() => undefined);
+            closed = true;
+            return;
+          }
+          // A timeout does not prove that the native agent stopped. Keep its resource lease.
+          await handle.refresh();
+          if (
+            !handle.current() ||
+            handle.activeTurn ||
+            (handle.status !== "idle" && handle.status !== "error")
+          )
+            throw new Error("验证 agent 尚未停止，保留资源租约");
+          input.onStopped?.(agentId, failed ? "failed" : "completed");
+          await lease?.release();
+          closed = true;
         },
       };
     },
@@ -237,32 +312,39 @@ function createSingleVerifierLauncher(
 }
 
 /** A replacement receives earlier prompts and replies so evidence setup remains available. */
-export function createPaseoVerifierLauncher(
-  options: PaseoLauncherOptions
-): VerifierLauncher {
+export function createPaseoVerifierLauncher(options: PaseoLauncherOptions): VerifierLauncher {
   const single = createSingleVerifierLauncher(options);
   return {
     async launch(input) {
-      const candidates = input.preset
-        ? presetModels(input.preset)
-        : [{ provider: input.provider, model: input.model }];
+      const unavailable = (error: unknown) => {
+        if (!input.task) return isModelUnavailableError(error);
+        const message = error instanceof Error ? error.message : String(error);
+        const category = classifyFailure(message);
+        if (category !== "unavailable") return category !== "other";
+        return /provider[^.\n]{0,40}(?:unavailable|not (?:installed|available|found)|disabled)|service unavailable|temporarily unavailable|overloaded|rate[_ ]limit|\b(?:429|502|503|504|529)\b|econnrefused|econnreset|etimedout|network error|socket hang up|stream disconnected/i.test(
+          message,
+        );
+      };
+      const candidates =
+        input.snapshot?.models ??
+        (input.preset
+          ? presetModels(input.preset)
+          : [{ provider: input.provider, model: input.model }]);
       let index = 0;
       let current: VerifierAgent;
       const history: string[] = [];
       const exhausted = (error: unknown) =>
         new Error(
-          `预设中的模型均不可用：${
-            error instanceof Error ? error.message : String(error)
-          }`
+          `预设中的模型均不可用：${error instanceof Error ? error.message : String(error)}`,
         );
       const start = async (): Promise<VerifierAgent> => {
         for (;;) {
           const candidate = candidates[index];
           if (!candidate) throw exhausted("没有候选模型");
           try {
-            return await single.launch({ ...input, ...candidate });
+            return await single.launch({ ...input, ...candidate, candidateIndex: index });
           } catch (error) {
-            if (!isModelUnavailableError(error)) throw error;
+            if (!unavailable(error)) throw error;
             if (++index >= candidates.length) throw exhausted(error);
           }
         }
@@ -275,9 +357,13 @@ export function createPaseoVerifierLauncher(
         get provider() {
           return current.provider;
         },
-        get model() { return current.model; },
+        get model() {
+          return current.model;
+        },
         get note() {
-          return index > 0 ? `按预设顺序切换至 ${current.provider}/${current.model ?? ""}${current.note ? `：${current.note}` : ""}` : current.note;
+          return index > 0
+            ? `按预设顺序切换至 ${current.provider}/${current.model ?? ""}${current.note ? `：${current.note}` : ""}`
+            : current.note;
         },
         async run(prompt) {
           let nextPrompt = prompt;
@@ -293,14 +379,12 @@ export function createPaseoVerifierLauncher(
                 error: error instanceof Error ? error.message : String(error),
               };
             }
-            if (
-              result.status !== "error" ||
-              !isModelUnavailableError(result.error)
-            ) {
+            if (result.status !== "error" || !unavailable(result.error)) {
               history.push(`用户：${prompt}\n助手：${result.text}`);
               return result;
             }
-            if (result.text) history.push(`用户：${prompt}\n助手（模型不可用前的输出）：${result.text}`);
+            if (result.text)
+              history.push(`用户：${prompt}\n助手（模型不可用前的输出）：${result.text}`);
             await current.close();
             if (++index >= candidates.length)
               return { ...result, error: exhausted(result.error).message };
@@ -308,7 +392,7 @@ export function createPaseoVerifierLauncher(
             input.onReplacement?.(current);
             nextPrompt = history.length
               ? `以下为此前验证对话，请保留上下文继续。\n${history.join(
-                  "\n\n"
+                  "\n\n",
                 )}\n\n当前请求：\n${prompt}`
               : prompt;
           }

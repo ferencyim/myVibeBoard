@@ -142,4 +142,7 @@ export const ROLE_LABELS: Record<AgentSession["role"], string> = {
   worker: "主代理",
   verifier: "验证",
   subagent: "子代理",
+  scout: "探路",
+  plan_reviewer: "方案复核",
+  reviewer: "复核",
 };

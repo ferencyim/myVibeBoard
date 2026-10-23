@@ -1,15 +1,9 @@
+import type { CollectorContext } from "../collectors/context";
 // Check items (from the card) and the always-on automatic checks: tests and lint.
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type {
-  CardView,
-  CollectorContext,
-  EvidenceArtifact,
-  Judgement,
-  PlanVersion,
-  Runner,
-} from "../vibe/contract";
+import type { CardView, EvidenceArtifact, Judgement, PlanVersion, Runner } from "../vibe/contract";
 import { loadVerifyConfig, writeArtifact } from "../collectors/common";
 import { resolveTestCommand } from "../collectors/backend";
 
@@ -74,8 +68,12 @@ export async function runAutoChecks(
   options: AutoCheckOptions = {},
 ): Promise<AutoCheck[]> {
   const jobs = [
-    { kind: "tests" as const, text: "Tests pass", cmd: options.skipTests ? undefined : testCommand(ctx.worktreePath) },
-    { kind: "lint" as const, text: "Lint is clean", cmd: lintCommand(ctx.worktreePath) },
+    {
+      kind: "tests" as const,
+      text: "测试通过",
+      cmd: options.skipTests ? undefined : testCommand(ctx.worktreePath),
+    },
+    { kind: "lint" as const, text: "Lint 检查通过", cmd: lintCommand(ctx.worktreePath) },
   ];
   const results: AutoCheck[] = [];
   for (const job of jobs) {
@@ -99,7 +97,9 @@ export async function runAutoChecks(
       text: job.text,
       method: `auto: ${cmdline}`,
       judgement: passed ? "pass" : "fail",
-      note: run.timedOut ? `${cmdline} timed out` : `${cmdline} exited with ${run.exitCode} in ${run.durationMs}ms`,
+      note: run.timedOut
+        ? `${cmdline} 超时`
+        : `${cmdline} 退出码 ${run.exitCode}，耗时 ${run.durationMs}ms`,
       artifacts: [log],
     });
   }

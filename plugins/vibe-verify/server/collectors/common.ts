@@ -1,3 +1,4 @@
+import type { CollectorContext } from "./context";
 // Shared plumbing for the web/backend evidence collectors: artifact records, the project-level
 // verify config, the real (child_process) Runner and an injectable dev-server launcher.
 import { spawn, execFile } from "node:child_process";
@@ -5,13 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type {
-  CollectorContext,
-  EvidenceArtifact,
-  RunOptions,
-  RunResult,
-  Runner,
-} from "../vibe/contract/collector";
+import type { EvidenceArtifact, RunOptions, RunResult, Runner } from "../vibe/contract/collector";
 import type { EvidenceKind } from "../vibe/contract/enums";
 import { AndroidConfigSchema } from "./android/config";
 import { DesktopConfigSchema } from "./desktop/config";
@@ -244,7 +239,9 @@ export async function waitForUrl(url: string, timeoutMs: number): Promise<void> 
   throw new Error(`Server not ready at ${url} within ${timeoutMs}ms (${last})`);
 }
 
-export function createNodeServerLauncher(options: { readyTimeoutMs?: () => number } = {}): ServerLauncher {
+export function createNodeServerLauncher(
+  options: { readyTimeoutMs?: () => number } = {},
+): ServerLauncher {
   return {
     async start(spec, worktreePath) {
       const child = spawn(spec.command, spec.args, {
@@ -263,7 +260,10 @@ export function createNodeServerLauncher(options: { readyTimeoutMs?: () => numbe
       child.on("exit", (code) => (exited = code));
       try {
         if (spec.readyUrl) {
-          await waitForUrl(spec.readyUrl, spec.readyTimeoutMs ?? options.readyTimeoutMs?.() ?? 60_000);
+          await waitForUrl(
+            spec.readyUrl,
+            spec.readyTimeoutMs ?? options.readyTimeoutMs?.() ?? 60_000,
+          );
           if (exited !== undefined) throw new Error(`Server exited early (code ${exited})`);
         }
       } catch (e) {

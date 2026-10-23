@@ -34,7 +34,10 @@ export interface AgentResolveDeps {
 }
 
 /** Unattended "accept edits" style mode per provider (codex routes approvals to the auto reviewer). */
-export const UNATTENDED_MODE: Record<string, string> = { claude: "acceptEdits", codex: "auto-review" };
+export const UNATTENDED_MODE: Record<string, string> = {
+  claude: "acceptEdits",
+  codex: "auto-review",
+};
 
 export function modeFor(
   provider: string,
@@ -42,7 +45,8 @@ export function modeFor(
   unattended: Record<string, string> = UNATTENDED_MODE,
 ): string | undefined {
   const p = provider.toLowerCase();
-  if (mode === "full") return p === "claude" ? "bypassPermissions" : p === "codex" ? "full-access" : "auto";
+  if (mode === "full")
+    return p === "claude" ? "bypassPermissions" : p === "codex" ? "full-access" : "auto";
   if (mode === "auto") return "auto";
   return unattended[p];
 }
@@ -50,15 +54,23 @@ export function modeFor(
 const providerOf = (spec: string) => (spec.split("/")[0] ?? spec).toLowerCase();
 
 function presetSpec(preset: Pick<Preset, "provider" | "model">): string {
-  return preset.model.startsWith(`${preset.provider}/`) ? preset.model : `${preset.provider}/${preset.model}`;
+  return preset.model.startsWith(`${preset.provider}/`)
+    ? preset.model
+    : `${preset.provider}/${preset.model}`;
 }
 
-function fromPreset(preset: Preset, source: string, unattended?: Record<string, string>): ResolvedAgent {
+function fromPreset(
+  preset: Preset,
+  source: string,
+  unattended?: Record<string, string>,
+): ResolvedAgent {
   return {
     provider: preset.provider.toLowerCase(),
     spec: presetSpec(preset),
     modeId: modeFor(preset.provider, preset.permissionMode, unattended),
-    ...(preset.thinking && preset.thinking !== "default" ? { thinkingOptionId: preset.thinking } : {}),
+    ...(preset.thinking && preset.thinking !== "default"
+      ? { thinkingOptionId: preset.thinking }
+      : {}),
     source,
     preset,
   };
@@ -67,7 +79,7 @@ function fromPreset(preset: Preset, source: string, unattended?: Record<string, 
 export function resolveAgentCandidates(
   rule: Pick<MaintenanceRule, "agent" | "name">,
   project: Project,
-  deps: AgentResolveDeps
+  deps: AgentResolveDeps,
 ): ResolvedAgent[] {
   const resolved = resolveAgent(rule, project, deps);
   return resolved.preset
@@ -75,8 +87,8 @@ export function resolveAgentCandidates(
         fromPreset(
           withPresetModel(resolved.preset!, model),
           resolved.source,
-          deps.unattendedModes?.()
-        )
+          deps.unattendedModes?.(),
+        ),
       )
     : [resolved];
 }
@@ -93,27 +105,40 @@ function profileOf(preset: Preset): AgentProfile {
     id: preset.id,
     provider: preset.provider.toLowerCase(),
     tier: tierOf(preset),
-    strengths: preset.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
+    strengths: preset.name
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
     presetId: preset.id,
   };
 }
 
 /** Resolves an explicit `agent` value: preset name/id, `provider/model`, or a bare provider. */
-function fromText(text: string, presets: Preset[], project: Project, unattended?: Record<string, string>): ResolvedAgent {
+function fromText(
+  text: string,
+  presets: Preset[],
+  project: Project,
+  unattended?: Record<string, string>,
+): ResolvedAgent {
   const wanted = text.trim().toLowerCase();
   const named = presets.find((p) => p.id === text.trim() || p.name.toLowerCase() === wanted);
   if (named) return fromPreset(named, `preset ${named.name}`, unattended);
   if (wanted.includes("/")) {
     const same = presets.find((p) => presetSpec(p).toLowerCase() === wanted);
     if (same) return fromPreset(same, `preset ${same.name}`, unattended);
-    return { provider: providerOf(wanted), spec: text.trim(), modeId: modeFor(providerOf(wanted), null, unattended), source: "rule" };
+    return {
+      provider: providerOf(wanted),
+      spec: text.trim(),
+      modeId: modeFor(providerOf(wanted), null, unattended),
+      source: "rule",
+    };
   }
   // Bare provider ("codex"): borrow the model of a preset for that provider.
   const ofProvider = presets.filter((p) => p.provider.toLowerCase() === wanted);
   const chosen = ofProvider.find((p) => p.id === project.defaultPresets.worker) ?? ofProvider[0];
   if (chosen) return fromPreset(chosen, `preset ${chosen.name}`, unattended);
   throw new Error(
-    `Maintenance rule agent "${text}" is neither a preset nor provider/model; write a preset name or "${text}/<model>"`,
+    `维护规则模型「${text}」不是预设或 provider/model；请指定预设名称或「${text}/<model>」`,
   );
 }
 

@@ -34,7 +34,9 @@ export class ManualClock implements Clock {
   advance(ms: number): void {
     const target = this.t + ms;
     for (;;) {
-      const due = this.timers.filter((x) => x.at <= target).sort((a, b) => a.at - b.at || a.id - b.id)[0];
+      const due = this.timers
+        .filter((x) => x.at <= target)
+        .sort((a, b) => a.at - b.at || a.id - b.id)[0];
       if (!due) break;
       this.timers = this.timers.filter((x) => x !== due);
       this.t = due.at;
@@ -55,26 +57,59 @@ export function setupBoard() {
     repoPath,
     projectType: "web",
   });
-  const claude = store.presets.create({ name: "Claude Opus", provider: "claude", model: "opus-x", thinking: "high" });
-  const codex = store.presets.create({ name: "Codex Max", provider: "codex", model: "gpt-5-codex", thinking: "xhigh" });
-  const kimi = store.presets.create({ name: "Kimi", provider: "kimi", model: "kimi-k2", thinking: "default" });
+  const claude = store.presets.create({
+    name: "Claude Opus",
+    provider: "claude",
+    model: "opus-x",
+    thinking: "high",
+  });
+  const codex = store.presets.create({
+    name: "Codex Max",
+    provider: "codex",
+    model: "gpt-5-codex",
+    thinking: "xhigh",
+  });
+  const kimi = store.presets.create({
+    name: "Kimi",
+    provider: "kimi",
+    model: "kimi-k2",
+    thinking: "default",
+  });
   const draft = (title: string, extra: Partial<Parameters<typeof store.cards.create>[0]> = {}) =>
-    store.cards.create({ projectId: project.id, title, description: `${title} description`, ...extra });
+    store.cards.create({
+      projectId: project.id,
+      title,
+      description: `${title} description`,
+      ...extra,
+    });
   const eventTypes = () =>
-    db.prepare<{ type: string }>("SELECT type FROM vibe_event ORDER BY seq").all().map((r) => r.type);
+    db
+      .prepare<{ type: string }>("SELECT type FROM vibe_event ORDER BY seq")
+      .all()
+      .map((r) => r.type);
   return { db, store, project, repoPath, presets: { claude, codex, kimi }, draft, eventTypes };
 }
 export type Board = ReturnType<typeof setupBoard>;
 
 /** Gets the master agent going (creates or reuses it) with a plain question. */
-export async function askMaster(runtime: { session: { ask(prompt: string): Promise<string> } }, prompt = "ping"): Promise<string> {
+export async function askMaster(
+  runtime: { session: { ask(prompt: string): Promise<string> } },
+  prompt = "ping",
+): Promise<string> {
   return runtime.session.ask(prompt);
 }
 
 export const MODELS: Record<string, ModelInfoLike[]> = {
   claude: [
     { id: "sonnet-x", label: "Sonnet X", isDefault: true },
-    { id: "opus-x", label: "Opus X", thinkingOptions: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] },
+    {
+      id: "opus-x",
+      label: "Opus X",
+      thinkingOptions: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ],
+    },
   ],
   codex: [
     {
@@ -107,10 +142,12 @@ export const MODES: Record<string, Array<{ id: string; label: string }>> = {
   ],
 };
 
-export type Script = (ctx: { provider: string; agentId: string; prompt: string; index: number }) =>
-  | Promise<RunResult | string>
-  | RunResult
-  | string;
+export type Script = (ctx: {
+  provider: string;
+  agentId: string;
+  prompt: string;
+  index: number;
+}) => Promise<RunResult | string> | RunResult | string;
 
 export interface FakeAgent {
   id: string;
@@ -119,6 +156,7 @@ export interface FakeAgent {
   prompts: string[];
   /** timeoutMs of every run() call, in order. */
   timeouts: Array<number | undefined>;
+  sourceAgentIds: Array<string | undefined>;
   archived: boolean;
   /** The daemon stopped: the agent must be resumed before it takes a message. */
   closed?: boolean;
@@ -148,6 +186,7 @@ export function fakePaseo(
     async run(text, runOptions) {
       agent.prompts.push(text);
       agent.timeouts.push((runOptions as { timeoutMs?: number } | undefined)?.timeoutMs);
+      agent.sourceAgentIds.push(runOptions?.sourceAgentId);
       const out = await script({
         provider: agent.provider,
         agentId: agent.id,
@@ -156,7 +195,8 @@ export function fakePaseo(
       });
       return typeof out === "string" ? { status: "idle", lastMessage: out, error: null } : out;
     },
-    refresh: async () => (agent.archived ? null : { agent: { id: agent.id, status: agent.closed ? "closed" : "idle" } }),
+    refresh: async () =>
+      agent.archived ? null : { agent: { id: agent.id, status: agent.closed ? "closed" : "idle" } },
     archive: async () => {
       agent.archived = true;
       return { archivedAt: "now" };
@@ -190,6 +230,7 @@ export function fakePaseo(
           options: opts,
           prompts: [],
           timeouts: [],
+          sourceAgentIds: [],
           archived: false,
         };
         agents.push(agent);

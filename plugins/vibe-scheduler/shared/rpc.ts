@@ -93,3 +93,52 @@ export const removeDeviceRpc = defineRpc({
   input: z.object({ id: z.string() }),
   output: z.object({ ok: z.boolean() }),
 });
+
+// Native task orchestration uses this interface; legacy card RPCs are not admission inputs.
+export const taskResourceRpc = defineRpc({
+  name: "scheduler.task_resource",
+  input: z.object({
+    requestId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    action: z.enum(["acquire", "bind", "yield", "release", "freeze", "reconcile"]),
+    role: z
+      .enum([
+        "scout",
+        "planner",
+        "plan_reviewer",
+        "worker",
+        "subagent",
+        "reviewer",
+        "verifier",
+        "master",
+      ])
+      .optional(),
+    subtaskId: z.string().optional(),
+    agentId: z.string().optional(),
+    reservationId: z.string().optional(),
+    candidateIndex: z.number().int().min(0).optional(),
+    presetId: z.string().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    files: z.array(z.string()).optional(),
+    hostLease: z.boolean().optional(),
+  }),
+  output: z.object({
+    requestId: z.string(),
+    workspaceId: z.string(),
+    ok: z.boolean(),
+    reason: z.string(),
+    retryable: z.boolean().optional(),
+    reservationId: z.string().optional(),
+    presetId: z.string().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    port: z.number().optional(),
+    deviceIds: z.array(z.string()).optional(),
+  }),
+});
+export const taskTickRpc = defineRpc({
+  name: "scheduler.task_tick",
+  input: z.object({}),
+  output: z.record(z.string(), z.unknown()),
+});

@@ -56,7 +56,9 @@ export const ProjectSchema = z.object({
   /** Free-text project description (goal, stack); handed to agents as context. */
   description: z.string(),
   /** Requirements document, relative to the repository root (never absolute, never `..`). */
-  requirementsPath: z.string().refine(isSafeRepoRelativePath, "requirementsPath must be repo-relative"),
+  requirementsPath: z
+    .string()
+    .refine(isSafeRepoRelativePath, "requirementsPath must be repo-relative"),
   /** WP-108: default preset per model job; missing keys follow the global default. Replaces defaultPresetId. */
   defaultPresets: ModelDefaultsSchema,
   concurrencyLimit: z.number().int().nullable(),
@@ -97,7 +99,10 @@ export const CardSchema = z.object({
   planReviewerPresetId: z.string().nullable(),
   verifierPresetId: z.string().nullable(),
   /** WP-106: runtime state per subtask id of the plan. Daemon-written. */
-  subtaskRuns: z.record(z.string(), z.lazy(() => SubtaskRunSchema)),
+  subtaskRuns: z.record(
+    z.string(),
+    z.lazy(() => SubtaskRunSchema),
+  ),
   /** WP-105: the card's single plan (overwritten on re-planning); null = no plan yet. Daemon-written. */
   plan: z.lazy(() => PlanSnapshotSchema).nullable(),
   /** Acceptance criteria as last written by the planning model; differs from `acceptance` after a user edit. */
@@ -337,6 +342,12 @@ export const AgentSessionSchema = z.object({
   /** The Paseo agent id. */
   agentId: z.string(),
   workspaceId: z.string().nullable(),
+  projectId: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  thinking: z.string().nullable().optional(),
+  candidateIndex: z.number().int().nonnegative().nullable().optional(),
+  previousSessionId: z.string().nullable().optional(),
+  confirmedAt: Iso.nullable().optional(),
   role: SessionRoleSchema,
   currentProvider: z.string(),
   switchHistory: z.array(SwitchHistoryEntrySchema),
@@ -386,6 +397,15 @@ export const VerificationSchema = z.object({
   finishedAt: Iso.nullable(),
 });
 export type Verification = z.infer<typeof VerificationSchema>;
+
+/** Workspace verification never depends on a legacy card. */
+export const TaskVerificationSchema = VerificationSchema.extend({
+  cardId: z.null(),
+  workspaceId: z.string().min(1),
+  confirmedAt: Iso,
+  projectId: z.string().nullable(),
+});
+export type TaskVerification = z.infer<typeof TaskVerificationSchema>;
 
 export const VerificationItemSchema = z.object({
   id: z.string(),
@@ -452,6 +472,7 @@ export const DeviceSchema = z.object({
 export type Device = z.infer<typeof DeviceSchema>;
 
 export const DeviceLeaseSchema = z.object({
+  workspaceId: z.string().nullable().optional(),
   id: z.string(),
   deviceId: z.string(),
   cardId: z.string().nullable(),
@@ -465,6 +486,10 @@ export type DeviceLease = z.infer<typeof DeviceLeaseSchema>;
 // --- stats (owner: vibe-stats) --------------------------------------------------------------
 
 export const UsageEventSchema = z.object({
+  projectId: z.string().nullable().optional(),
+  workspaceId: z.string().nullable().optional(),
+  role: SessionRoleSchema.nullable().optional(),
+  agentId: z.string().nullable().optional(),
   id: z.number().int(),
   ts: Iso,
   provider: z.string(),
@@ -505,6 +530,7 @@ export const MaintenanceRuleSchema = z.object({
 export type MaintenanceRule = z.infer<typeof MaintenanceRuleSchema>;
 
 export const MaintenanceRunSchema = z.object({
+  workspaceIds: z.array(z.string()).optional(),
   id: z.string(),
   ruleId: z.string(),
   projectId: z.string(),

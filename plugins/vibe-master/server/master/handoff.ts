@@ -34,13 +34,20 @@ export function buildHandoff(input: {
   const recentDays = input.recentDays ?? DEFAULT_TUNING.handoffRecentDays;
   const maxChars = input.maxChars ?? DEFAULT_TUNING.handoffMaxChars;
   const since = new Date(input.nowMs - recentDays * 24 * 60 * 60_000).toISOString();
-  const cards = store.cards.list({}).filter((c) => !c.archivedAt);
-
-  const done = cards
-    .filter((c) => c.column === "done" && c.updatedAt >= since)
-    .sort((x, y) => y.updatedAt.localeCompare(x.updatedAt))
-    .slice(0, 8)
-    .map((c) => `- ${c.key} ${clip(c.title, 70)}（${day(c.updatedAt)}）`);
+  const done = store.tasks
+    .list({ phase: "completed" })
+    .filter((task) => task.confirmedAt && task.confirmedAt >= since)
+    .slice(-8)
+    .toReversed()
+    .map(
+      (task) =>
+        "- " +
+        task.workspaceId +
+        " " +
+        clip(task.plan?.goal ?? "", 70) +
+        "：" +
+        clip(task.summary, 160),
+    );
 
   const switches = input.switches.slice(-5).map((s) => `- ${day(s.at)} ${clip(s.text, 120)}`);
 

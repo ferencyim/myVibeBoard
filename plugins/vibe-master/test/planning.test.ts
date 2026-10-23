@@ -61,10 +61,15 @@ function setup(script: Script, options: { noPaseo?: boolean } = {}) {
     return board.store.cards.update(c.id, { plannerPresetId: board.presets.claude.id });
   };
   const chats = (cardId: string) =>
-    board.store.events.list(cardId).filter((e) => e.type === "chat").map((e) => ({
-      author: e.authorKind,
-      ...(e.body as { text: string; thread?: string; answers?: string[]; error?: boolean }),
-    }));
+    board.store.events
+      .list(cardId)
+      .filter((e) => e.type === "chat")
+      .map((e) =>
+        Object.assign(
+          { author: e.authorKind },
+          e.body as { text: string; thread?: string; answers?: string[]; error?: boolean },
+        ),
+      );
   return {
     ...board,
     fake,
@@ -128,7 +133,8 @@ describe("ordered preset models", () => {
 
   it("restores the actual candidate after restart when multiple candidates use one provider", async () => {
     const t = setup(({ agentId, index }) => {
-      if (agentId === "agent-1" || index > 1) return { status: "error", lastMessage: null, error: "model not found" };
+      if (agentId === "agent-1" || index > 1)
+        return { status: "error", lastMessage: null, error: "model not found" };
       return fence({ reply: "第二模型成功" });
     });
     t.store.presets.update(t.presets.claude.id, {
@@ -144,16 +150,26 @@ describe("ordered preset models", () => {
     const ref = t.fake.paseo.agents.ref;
     t.fake.paseo.agents.ref = (id) => ({
       ...ref(id),
-      refresh: async () => ({ agent: { status: "idle", labels: t.fake.agents.find((a) => a.id === id)!.options.labels } }),
+      refresh: async () => ({
+        agent: { status: "idle", labels: t.fake.agents.find((a) => a.id === id)!.options.labels },
+      }),
     });
     const restored = createPlanning({
-      db: t.db, store: t.store, getPaseo: () => t.fake.paseo, dataDir: tempDir("planning-restore-"),
-      clock: new ManualClock(), memory, enabled: () => true,
+      db: t.db,
+      store: t.store,
+      getPaseo: () => t.fake.paseo,
+      dataDir: tempDir("planning-restore-"),
+      clock: new ManualClock(),
+      memory,
+      enabled: () => true,
     });
     t.say(c.id, "继续");
     await restored.tick();
     expect(t.fake.agents).toHaveLength(2);
-    expect(t.chats(c.id).at(-1)).toMatchObject({ error: true, text: expect.stringContaining("所有模型均不可用") });
+    expect(t.chats(c.id).at(-1)).toMatchObject({
+      error: true,
+      text: expect.stringContaining("所有模型均不可用"),
+    });
   });
 
   it("reports exhausted candidates without overwriting the saved plan or conversation", async () => {
@@ -245,7 +261,12 @@ describe("plan thread", () => {
       answers: [first.id],
     });
     const second = t.say(c.id, "more");
-    t.store.cards.addChat({ cardId: c.id, authorKind: "user", text: "to the executor", thread: "exec" });
+    t.store.cards.addChat({
+      cardId: c.id,
+      authorKind: "user",
+      text: "to the executor",
+      thread: "exec",
+    });
     const state = threadState(t.store.events.list(c.id));
     expect(state.pending.map((m) => m.id)).toEqual([second.id]);
     expect(messagesOf(t.store.events.list(c.id))).toHaveLength(3);
@@ -254,10 +275,12 @@ describe("plan thread", () => {
   it("validates planner replies", () => {
     expect(PlanTurnSchema.safeParse({ reply: "ok" }).success).toBe(true);
     expect(PlanTurnSchema.safeParse({ reply: "" }).success).toBe(false);
-    expect(PlanTurnSchema.safeParse({ reply: "x", research: Array(4).fill({ question: "q" }) }).success).toBe(
-      false,
-    );
-    expect(PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p" }, acceptance: "a" }).success).toBe(true);
+    expect(
+      PlanTurnSchema.safeParse({ reply: "x", research: Array(4).fill({ question: "q" }) }).success,
+    ).toBe(false);
+    expect(
+      PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p" }, acceptance: "a" }).success,
+    ).toBe(true);
   });
 });
 
@@ -326,11 +349,16 @@ describe("制定方案", () => {
     let n = 0;
     const t = setup(({ prompt }) => {
       n++;
-      if (n === 1) return fence({ reply: "跟随系统吗？", plan: { text: "v1" }, acceptance: "1. 能切换" });
+      if (n === 1)
+        return fence({ reply: "跟随系统吗？", plan: { text: "v1" }, acceptance: "1. 能切换" });
       if (n === 2) {
         expect(prompt).toContain("[plan:turn]");
         expect(prompt).toContain("要跟随系统");
-        return fence({ reply: "已改", plan: { text: "v2 跟随系统" }, acceptance: "1. 能切换\n2. 跟随系统" });
+        return fence({
+          reply: "已改",
+          plan: { text: "v2 跟随系统" },
+          acceptance: "1. 能切换\n2. 跟随系统",
+        });
       }
       expect(prompt).toContain("[plan:start]"); // 制定方案 again: full context
       expect(prompt).toContain("v2 跟随系统");
@@ -369,13 +397,17 @@ describe("制定方案", () => {
     await t.planning.tick();
     expect(t.store.cards.get(c.id)!.acceptance).toBe("1. 我改过的");
     const proposal = t.store.events.list(c.id).find((e) => e.type === "proposal")!;
-    expect(proposal.body).toMatchObject({ status: "pending", changes: { acceptance: "1. 模型写的\n2. 新增" } });
+    expect(proposal.body).toMatchObject({
+      status: "pending",
+      changes: { acceptance: "1. 模型写的\n2. 新增" },
+    });
     expect(t.chats(c.id).at(-1)!.text).toContain("作为建议");
   });
 
   it("switching the planning model starts a new session that gets the conversation and the plan", async () => {
     const t = setup(({ provider, prompt }) => {
-      if (provider === "claude") return fence({ reply: "第一版", plan: { text: "旧方案 A" }, acceptance: "1. a" });
+      if (provider === "claude")
+        return fence({ reply: "第一版", plan: { text: "旧方案 A" }, acceptance: "1. a" });
       expect(prompt).toContain("[plan:start]");
       expect(prompt).toContain("旧方案 A");
       expect(prompt).toContain("1. a");
@@ -393,7 +425,10 @@ describe("制定方案", () => {
     const [first, second] = t.fake.agents;
     expect(first!.archived).toBe(true);
     expect(second!.provider).toBe("codex");
-    expect(t.store.sessions.list({ cardId: c.id, role: "planner" }).map((s) => s.state)).toEqual(["ended", "idle"]);
+    expect(t.store.sessions.list({ cardId: c.id, role: "planner" }).map((s) => s.state)).toEqual([
+      "ended",
+      "idle",
+    ]);
     expect(t.store.cards.get(c.id)!.plan?.description).toBe("新方案 B");
   });
 
@@ -440,6 +475,8 @@ describe("the master is out of the card flow", () => {
       return fence({ summary: "nothing new" });
     });
     const runtime = createMasterRuntime({
+      admitMaster: async () => async () => undefined,
+      admitMemory: async () => async () => undefined,
       db: board.db,
       store: board.store,
       getPaseo: () => fake.paseo,
@@ -452,8 +489,17 @@ describe("the master is out of the card flow", () => {
     });
     try {
       const c = board.draft("Flow");
-      board.store.cards.update(c.id, { description: "edited", plannerPresetId: board.presets.codex.id });
-      board.store.cards.addChat({ cardId: c.id, authorKind: "user", text: "制定", thread: "plan", action: "make_plan" });
+      board.store.cards.update(c.id, {
+        description: "edited",
+        plannerPresetId: board.presets.codex.id,
+      });
+      board.store.cards.addChat({
+        cardId: c.id,
+        authorKind: "user",
+        text: "制定",
+        thread: "plan",
+        action: "make_plan",
+      });
       board.store.cards.move(c.id, { to: "todo", actor: "user" });
       await runtime.planning.tick();
       await new Promise((r) => setTimeout(r, 100));
@@ -481,7 +527,10 @@ describe("subtasks in the plan (WP-106)", () => {
   });
 
   it("rejects subtask lists with unknown dependencies or cycles", () => {
-    const ok = PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p", subtasks: [sub("s1"), sub("s2", { dependsOn: ["s1"] })] } });
+    const ok = PlanTurnSchema.safeParse({
+      reply: "x",
+      plan: { text: "p", subtasks: [sub("s1"), sub("s2", { dependsOn: ["s1"] })] },
+    });
     expect(ok.success).toBe(true);
     expect(ok.success && ok.data.plan?.subtasks?.[0]?.dependsOn).toEqual([]);
     expect(
@@ -508,7 +557,13 @@ describe("subtasks in the plan (WP-106)", () => {
       if (n === 1) {
         return fence({
           reply: "拆成两个子任务",
-          plan: { text: "v1", subtasks: [sub("s1", { preset: t.presets.kimi.name }), sub("s2", { dependsOn: ["s1"], preset: "不存在" })] },
+          plan: {
+            text: "v1",
+            subtasks: [
+              sub("s1", { preset: t.presets.kimi.name }),
+              sub("s2", { dependsOn: ["s1"], preset: "不存在" }),
+            ],
+          },
         });
       }
       // The planner sees the current subtasks (the owner's version) as JSON.
@@ -524,22 +579,42 @@ describe("subtasks in the plan (WP-106)", () => {
       ["s2", null],
     ]);
 
-    t.store.cards.setSubtasks(c.id, [...first.plan!.subtasks!, { ...sub("s3"), dependsOn: [], presetId: null }]);
+    t.store.cards.setSubtasks(c.id, [
+      ...first.plan!.subtasks!,
+      { ...sub("s3"), dependsOn: [], presetId: null },
+    ]);
     t.makePlan(c.id);
     await t.planning.tick();
     const second = t.store.cards.get(c.id)!;
     expect(second.plan?.description).toBe("v2");
     expect(second.plan?.subtasks?.map((s) => s.id)).toEqual(["s1", "s2", "s3"]);
     const proposal = t.store.events.list(c.id).find((e) => e.type === "proposal")!;
-    expect((proposal.body as { changes: { subtasks: Array<{ id: string }> } }).changes.subtasks.map((s) => s.id)).toEqual(["s1"]);
+    expect(
+      (proposal.body as { changes: { subtasks: Array<{ id: string }> } }).changes.subtasks.map(
+        (s) => s.id,
+      ),
+    ).toEqual(["s1"]);
     expect(t.chats(c.id).at(-1)!.text).toContain("你改过子任务");
   });
 });
 
 describe("复核方案 (WP-108)", () => {
-  const oldPlan = { description: "旧方案：直接改表", checks: [], subCards: [], tags: [], recommendedPresetId: null };
+  const oldPlan = {
+    description: "旧方案：直接改表",
+    checks: [],
+    subCards: [],
+    tags: [],
+    recommendedPresetId: null,
+  };
   const reviewPlan = (t: ReturnType<typeof setup>, cardId: string) =>
-    t.store.cards.addChat({ cardId, authorKind: "user", author: "user", text: "请复核方案。", thread: "plan", action: "review_plan" });
+    t.store.cards.addChat({
+      cardId,
+      authorKind: "user",
+      author: "user",
+      text: "请复核方案。",
+      thread: "plan",
+      action: "review_plan",
+    });
 
   it("the plan reviewer's opinion goes to the plan conversation, then the planning model revises the plan", async () => {
     const t = setup(({ provider, prompt }) => {
@@ -585,7 +660,12 @@ describe("复核方案 (WP-108)", () => {
     reviewPlan(t, c.id);
     await t.planning.tick();
     expect(t.store.cards.get(c.id)!.plan?.description).toBe("方案 v3");
-    expect(t.chats(c.id).filter((m) => m.author === "reviewer").map((m) => m.text)).toEqual(["意见 1", "意见 2"]);
+    expect(
+      t
+        .chats(c.id)
+        .filter((m) => m.author === "reviewer")
+        .map((m) => m.text),
+    ).toEqual(["意见 1", "意见 2"]);
   });
 
   it("without a plan or a plan reviewer it says so; the planning model may come from the project default", async () => {
@@ -594,11 +674,18 @@ describe("复核方案 (WP-108)", () => {
     t.store.projects.update(t.project.id, { defaultPresets: { planner: t.presets.claude.id } });
     reviewPlan(t, bare.id);
     await t.planning.tick();
-    expect(t.chats(bare.id).at(-1)).toMatchObject({ author: "master", error: true, text: expect.stringContaining("还没有方案") });
+    expect(t.chats(bare.id).at(-1)).toMatchObject({
+      author: "master",
+      error: true,
+      text: expect.stringContaining("还没有方案"),
+    });
     t.store.cards.setPlan(bare.id, { plan: oldPlan });
     reviewPlan(t, bare.id);
     await t.planning.tick();
-    expect(t.chats(bare.id).at(-1)).toMatchObject({ error: true, text: expect.stringContaining("还没有方案复核模型") });
+    expect(t.chats(bare.id).at(-1)).toMatchObject({
+      error: true,
+      text: expect.stringContaining("还没有方案复核模型"),
+    });
     expect(t.fake.agents).toHaveLength(0);
   });
 });

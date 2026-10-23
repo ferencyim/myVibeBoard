@@ -11,6 +11,8 @@ import { createMasterSession } from "./master/session";
 import { createConsolidator } from "./memory/consolidate";
 import { createFileMemoryPort, type MemoryPort } from "./memory/files";
 import { createPlanning } from "./planning/planner";
+import { createTaskDispatcher } from "./dispatch/task";
+import { createTaskConsolidator } from "./memory/task";
 import { createDispatcher } from "./dispatch/dispatch";
 import { createPromptPort, rulesFor } from "./prompts/port";
 import { migrateLegacyPromptSettings } from "./prompts/migrate";
@@ -18,10 +20,13 @@ import { tuningOf } from "./tuning";
 import { createAlerts } from "./subscription/alerts";
 import { createPermissionResolver, isBoardMcpCall } from "./subscription/permission";
 import { createQuotaReader } from "./subscription/quota";
+import { createMasterResources } from "./subscription/resources";
+import type { MasterAgentHandle } from "./types";
+import type { MasterTarget } from "../shared/rpc";
 import { createStateFile } from "./subscription/state";
 import { resolveMasterPreset } from "./subscription/preset";
-import { MasterError, type MasterPaseo, type WakeJob } from "./types";
-import type { GitRunner, VibeDb, VibeStore } from "./vibe/db";
+import { MasterError, wakeTarget, type MasterPaseo, type WakeJob } from "./types";
+import { publishEvent, type GitRunner, type VibeDb, type VibeStore } from "./vibe/db";
 import { createWakeQueue } from "./wake/queue";
 import { createTriggers } from "./wake/triggers";
 
@@ -33,6 +38,9 @@ export interface RuntimeDeps {
   /** `<VIBE_HOME>/master`: state file and the default agent workspace. */
   dataDir: string;
   clock?: Clock;
+  /** Tests may supply an admission port; production always asks the scheduler. */
+  admitMemory?(workspaceId: string, files: string[]): Promise<() => Promise<void>>;
+  admitMaster?(agent: MasterAgentHandle, target: MasterTarget): Promise<() => Promise<void>>;
   memory?: MemoryPort;
   rules?: string;
   /** Injectable git for requirements commits (tests use a real temp repo by default). */
@@ -67,7 +75,11 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     tuning,
     log: (m) => log(m),
   });
+  const resources =
+    deps.admitMaster && deps.admitMemory ? null : createMasterResources({ db, log });
   const session = createMasterSession({
+    db,
+    admit: deps.admitMaster ?? ((agent, target) => resources!.acquire(agent, target)),
     store,
     getPaseo: deps.getPaseo,
     settings: deps.settings,
@@ -95,7 +107,38 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       requirementsChars: () => deps.settings().requirementsExcerptChars,
       maintainRequirements: () => deps.settings().maintainRequirements,
     },
-    onRequirementsFailure: (cardKey, message) => alerts.raise("requirements_failed", cardKey, message),
+    onRequirementsFailure: (cardKey, message) =>
+      alerts.raise("requirements_failed", cardKey, message),
+    git: deps.git,
+    log,
+  });
+  const taskConsolidator = createTaskConsolidator({
+    db,
+    store,
+    master: session,
+    memory,
+    prompts,
+    state,
+    async withWrite(task, files, action) {
+      const release = deps.admitMemory
+        ? await deps.admitMemory(task.workspaceId, files)
+        : await resources!.acquireFiles(task.workspaceId, files, await session.currentTarget());
+      try {
+        return await action();
+      } finally {
+        await release();
+      }
+    },
+    options: {
+      tuning,
+      requirementsChars: () => deps.settings().requirementsExcerptChars,
+      maintainRequirements: () => deps.settings().maintainRequirements,
+    },
+    async project(workspaceId) {
+      const workspace = await deps.getPaseo()?.workspaces?.ref(workspaceId).refresh();
+      return workspace ? store.projectConfigs.get(workspace.projectId) : undefined;
+    },
+    onRequirementsFailure: (key, message) => alerts.raise("requirements_failed", key, message),
     git: deps.git,
     log,
   });
@@ -118,17 +161,48 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   async function run(job: WakeJob): Promise<void> {
     if (!deps.settings().enabled) return;
-    const outcome = await consolidator.consolidate(job.cardId, { force: job.force });
-    log(`memory ${job.cardId}: ${outcome.status}`);
+    const outcome = await (job.kind === "task_done"
+      ? taskConsolidator.consolidate(job.workspaceId, { force: job.force })
+      : consolidator.consolidate(job.cardId, { force: job.force }));
+    log(`memory ${wakeTarget(job)}: ${outcome.status}`);
+    if (job.kind === "task_done" && outcome.status === "failed") {
+      const task = store.tasks.get(job.workspaceId);
+      const text = "项目记忆整理失败：" + outcome.error;
+      if (task && !task.summary.includes(text))
+        store.tasks.setSummary(task.workspaceId, [task.summary, text].filter(Boolean).join("\n\n"));
+    }
   }
 
+  const resourceRetries = new Set<() => void>();
   const queue = createWakeQueue({
     run,
     onFailure(job, error) {
-      log(`${job.kind} ${job.cardId} failed`, error);
+      log(`${job.kind} ${wakeTarget(job)} failed`, error);
+      if (job.kind === "task_done") {
+        const task = store.tasks.get(job.workspaceId);
+        const text =
+          "项目记忆整理暂未完成：" + (error instanceof Error ? error.message : String(error));
+        if (task && !task.summary.includes(text))
+          store.tasks.setSummary(
+            task.workspaceId,
+            [task.summary, text].filter(Boolean).join("\n\n"),
+          );
+      }
+      if (
+        error instanceof MasterError &&
+        error.kind === "unavailable" &&
+        error.retryable !== false
+      ) {
+        const stop = clock.setTimeout(() => {
+          resourceRetries.delete(stop);
+          queue.resume();
+        }, 5000);
+        resourceRetries.add(stop);
+      }
       // No daemon handle yet, or the subscription is out of quota: keep the job for the next
       // wake-up / switch. Anything else (bad reply, timeout) is dropped; an edit or manual wake retries.
-      return error instanceof MasterError && (error.kind === "unavailable" || error.kind === "quota")
+      return error instanceof MasterError &&
+        ((error.kind === "unavailable" && error.retryable !== false) || error.kind === "quota")
         ? "block"
         : "drop";
     },
@@ -147,15 +221,29 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     timeoutSeconds: () => deps.settings().dispatchTimeoutSeconds,
     log,
   });
+  const taskDispatcher = createTaskDispatcher({
+    db,
+    store,
+    master: session,
+    exclusive: (fn) => queue.exclusive(fn),
+    prompts,
+    tuning,
+    enabled: () => deps.settings().enabled && deps.settings().dispatch,
+    timeoutSeconds: () => deps.settings().dispatchTimeoutSeconds,
+    log,
+  });
   /** Tell the scheduler whether (and why not) it can ask the master. */
   function publishDispatchMode(): void {
     const s = deps.settings();
     const { preset } = currentPreset();
+    let reason = "";
+    if (!s.enabled) reason = "总 agent 已在设置中停用";
+    else if (!preset) reason = "没有为总 agent 选择预设";
     try {
       store.masterDispatch.publish({
         enabled: s.dispatch,
         available: s.enabled && !!preset,
-        reason: !s.enabled ? "总 agent 已在设置中停用" : preset ? "" : "没有为总 agent 选择预设",
+        reason,
         timeoutSeconds: s.dispatchTimeoutSeconds,
       });
     } catch (error) {
@@ -165,12 +253,69 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   publishDispatchMode();
 
   const triggers = createTriggers({
-    onDispatchWanted: (request) => void dispatcher.handle(request),
+    onMasterContinuation(request) {
+      void queue
+        .exclusive(async () => {
+          const live = session.liveSession();
+          if (!live || live.id !== request.sessionId || live.agentId !== request.agentId) {
+            publishEvent(db, {
+              type: "context.continuation_result",
+              payload: {
+                requestId: request.requestId,
+                workspaceId: null,
+                status: "deferred",
+                reason: "请求对应的总 agent 已被接续，不重复创建会话",
+              },
+              dedupeKey: "master_continuation:" + request.requestId,
+            });
+            return;
+          }
+          let continuationStatus: "continued" | "exhausted" | "paused" = "paused";
+          let reason = "";
+          try {
+            const why =
+              request.message +
+              (request.summary ? "\n接续摘要：" + request.summary.slice(0, 2000) : "");
+            const continued =
+              request.reason === "context"
+                ? await session.restart(why)
+                : await session.failover(why);
+            continuationStatus = continued ? "continued" : "exhausted";
+            reason = continued ? "总 agent 已保留原生历史并接续" : "总 agent 候选已耗尽";
+          } catch (error) {
+            reason = error instanceof Error ? error.message : String(error);
+          }
+          const next = session.liveSession();
+          publishEvent(db, {
+            type: "context.continuation_result",
+            payload: {
+              requestId: request.requestId,
+              workspaceId: null,
+              status: continuationStatus,
+              reason,
+              ...(next ? { agentId: next.agentId, sessionId: next.id } : {}),
+              candidateIndex: state.read().presetSelection?.index ?? 0,
+            },
+            dedupeKey: "master_continuation:" + request.requestId,
+          });
+        })
+        .then(() => {
+          queue.resume();
+          triggers.sweep();
+          return undefined;
+        })
+        .catch((error) => log("总 agent 接续失败", error));
+    },
+    onTaskDispatchWanted: (request) => void taskDispatcher.handle(request),
+    taskConsolidated: (id) => {
+      const task = store.tasks.get(id);
+      return !!task && taskConsolidator.has(task);
+    },
     onMaintenancePaused({ ruleName, rejections }) {
       alerts.raise(
         "maintenance_paused",
         ruleName,
-        `Maintenance rule "${ruleName}" was paused after ${rejections} rejected cards; resume it in the maintenance panel`,
+        `维护规则「${ruleName}」因连续 ${rejections} 次驳回而暂停，请在维护设置中恢复`,
       );
     },
     onScheduler(signal) {
@@ -243,7 +388,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   async function status(): Promise<MasterStatus> {
     const snap = queue.snapshot();
-    const keyOf = (cardId: string) => store.cards.get(cardId)?.key ?? null;
+    const keyOf = (job: WakeJob) =>
+      job.kind === "task_done" ? job.workspaceId : (store.cards.get(job.cardId)?.key ?? null);
     const record = state.read();
     let target = null;
     try {
@@ -254,10 +400,26 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     const { preset, source } = currentPreset();
     const live = session.liveSession();
     if (live?.agentId === record.agent?.agentId && record.agent) target = record.agent.target;
-    const history = store.sessions
-      .list({ role: "master" })
-      .flatMap((s) => s.switchHistory)
-      .sort((a, b) => a.at.localeCompare(b.at));
+    const sessions = store.sessions.list({ role: "master" });
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const history = [
+      ...sessions.flatMap((s) => s.switchHistory),
+      ...sessions.flatMap((s) => {
+        const previous = s.previousSessionId ? byId.get(s.previousSessionId) : undefined;
+        return previous && previous.currentProvider !== s.currentProvider
+          ? [
+              {
+                from: previous.currentProvider,
+                to: s.currentProvider,
+                at: s.startedAt,
+                reason:
+                  record.sessions?.[previous.id]?.switchReason ??
+                  record.sessions?.[previous.id]?.retiredReason,
+              },
+            ]
+          : [];
+      }),
+    ].sort((a, b) => a.at.localeCompare(b.at));
 
     let permission: MasterStatus["permission"] = null;
     if (target && deps.getPaseo()) {
@@ -296,16 +458,23 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       paseoReady: paseo !== null,
       target,
       preset: preset ? { id: preset.id, name: preset.name, migrated: source === "migrated" } : null,
-      dispatch: { enabled: dispatch.enabled, available: dispatch.available, reason: dispatch.reason },
+      dispatch: {
+        enabled: dispatch.enabled,
+        available: dispatch.available,
+        reason: dispatch.reason,
+      },
       permission,
       session: live
-        ? { sessionId: live.id, agentId: live.agentId, provider: live.currentProvider, state: live.state }
+        ? {
+            sessionId: live.id,
+            agentId: live.agentId,
+            provider: live.currentProvider,
+            state: live.state,
+          }
         : null,
       queue: {
-        running: snap.running
-          ? { kind: snap.running.kind, cardKey: keyOf(snap.running.cardId) }
-          : null,
-        pending: snap.pending.map((j) => ({ kind: j.kind, cardKey: keyOf(j.cardId), dueInSeconds: 0 })),
+        running: snap.running ? { kind: snap.running.kind, cardKey: keyOf(snap.running) } : null,
+        pending: snap.pending.map((j) => ({ kind: j.kind, cardKey: keyOf(j), dueInSeconds: 0 })),
         blocked: snap.blocked.length,
       },
       schedulerPaused,
@@ -326,6 +495,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     consolidator,
     planning,
     dispatcher,
+    taskDispatcher,
+    taskConsolidator,
     quota,
     alerts,
     status,
@@ -378,28 +549,32 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     ): Promise<"approved" | "alerted" | "ignored"> {
       const owner = store.sessions.getByAgent(agentId);
       if (owner?.role !== "master" && owner?.role !== "planner") return "ignored";
-      if (isBoardMcpCall(request)) {
+      if (owner.role === "planner" && isBoardMcpCall(request)) {
         await approve(request.id);
         return "approved";
       }
       alerts.raise(
         "permission_wait",
         owner.currentProvider,
-        `The ${owner.role} agent is waiting for your approval of ${request.name ?? request.kind}`,
+        `角色 ${owner.role} 的 agent 正在等待您批准 ${request.name ?? request.kind}`,
       );
       return "alerted";
     },
 
     wake(cardRef: string, reason: "card_done", force: boolean) {
-      const card = store.cards.get(cardRef);
-      if (!card) return { queued: false, message: `Card not found: ${cardRef}` };
-      queue.enqueue({ kind: "card_done", cardId: card.id, force });
-      return { queued: true, message: `Queued ${reason} for ${card.key}` };
+      const task = store.tasks.get(cardRef);
+      if (task) {
+        queue.enqueue({ kind: "task_done", workspaceId: task.workspaceId, force });
+        return { queued: true, message: `已排队整理任务 ${task.workspaceId}` };
+      }
+      return { queued: false, message: "旧卡片入口已停用，请使用原生 workspace 任务" };
     },
 
     async dispose(): Promise<void> {
       monitoring = false;
       stopMonitor?.();
+      for (const stop of resourceRetries) stop();
+      await resources?.stop();
       await planning.stop();
       await triggers.stop();
     },

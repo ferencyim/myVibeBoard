@@ -5,6 +5,7 @@ import { z } from "zod";
 import { PresetEnvironmentKindSchema, PresetPermissionModeSchema, type RoleHint } from "./enums";
 import { presetModels } from "./preset-models";
 import type { Preset } from "./model";
+import type { TaskPlan } from "./task";
 
 export const MODEL_ROLES = [
   "scout",
@@ -189,6 +190,7 @@ export const TaskRoleSnapshotSchema = z
     subagent: TaskPresetSnapshotSchema,
     reviewer: TaskPresetSnapshotSchema.nullable(),
     verifier: TaskPresetSnapshotSchema,
+    subtaskPresets: z.record(z.string(), TaskPresetSnapshotSchema).optional(),
   })
   .strict();
 export type TaskRoleSnapshot = z.infer<typeof TaskRoleSnapshotSchema>;
@@ -246,4 +248,42 @@ export function resolveTaskRoles(
     });
   }
   return TaskRoleSnapshotSchema.parse(result);
+}
+
+/** Freeze explicit subtask presets alongside the seven role selections before confirmation. */
+export function freezeTaskSubtaskPresets(
+  plan: TaskPlan,
+  roles: TaskRoleSnapshot,
+  getPreset: (id: string) => Preset | undefined,
+): TaskRoleSnapshot {
+  const frozen = TaskRoleSnapshotSchema.parse(roles);
+  const subtaskPresets: Record<string, TaskPresetSnapshot> = {};
+  for (const subtask of plan.subtasks) {
+    if (!subtask.presetId || subtask.presetId === frozen.subagent.presetId) continue;
+    const preset = getPreset(subtask.presetId);
+    if (!preset)
+      throw new Error("子任务 " + subtask.id + " 的预设不存在或不可用：" + subtask.presetId);
+    subtaskPresets[subtask.id] = TaskPresetSnapshotSchema.parse({
+      presetId: subtask.presetId,
+      source: "task",
+      models: presetModels(preset),
+      environmentKind: preset.environmentKind,
+      runtimeEnv: preset.runtimeEnv,
+      instructions: preset.instructions,
+    });
+  }
+  return TaskRoleSnapshotSchema.parse({ ...frozen, subtaskPresets });
+}
+
+/** Admission validates frozen inputs only; deleted or edited live presets cannot alter a run. */
+export function validateTaskSubtaskPresets(plan: TaskPlan, roles: TaskRoleSnapshot): void {
+  const frozen = TaskRoleSnapshotSchema.parse(roles);
+  for (const subtask of plan.subtasks) {
+    if (!subtask.presetId) continue;
+    const preset = frozen.subtaskPresets?.[subtask.id];
+    if (preset && preset.presetId !== subtask.presetId)
+      throw new Error("子任务 " + subtask.id + " 的预设快照与方案不匹配，请重新确认");
+    if (!preset && subtask.presetId !== frozen.subagent.presetId)
+      throw new Error("子任务 " + subtask.id + " 缺少自定预设快照，请重新确认");
+  }
 }

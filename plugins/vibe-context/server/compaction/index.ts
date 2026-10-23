@@ -1,5 +1,6 @@
 // Pre-expiry compaction wiring (WP-35): lifecycle hooks feed the scheduler, a timer runs it.
 
+import type { AgentSession } from "../vibe/contract";
 import { dirname } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -10,7 +11,12 @@ import { createMemoryStore } from "../memory/store";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "../vibe/db";
 import { detectNativeIdleCompaction } from "./native";
 import { expectSystemTurn, peekSystemTurn } from "./system-turn";
-import { createCompactionScheduler, type AgentInfo, type CompactionConfig, type CompactionHost } from "./scheduler";
+import {
+  createCompactionScheduler,
+  type AgentInfo,
+  type CompactionConfig,
+  type CompactionHost,
+} from "./scheduler";
 import { compactionSettings } from "./settings";
 
 export * from "../complexity";
@@ -20,6 +26,12 @@ export * from "./scheduler";
 export * from "./settings";
 
 export interface CompactionOptions {
+  runTaskTurn?: (
+    session: AgentSession,
+    workspaceId: string | null,
+    turn: () => ReturnType<CompactionHost["run"]>,
+  ) => ReturnType<CompactionHost["run"]>;
+  requestHandoff?: (session: AgentSession, prompt: string) => Promise<void>;
   /** Replaceable probe for native idle compaction in the installed Claude Code. */
   detectNative?: () => Promise<boolean>;
   log?: (message: string) => void;
@@ -32,7 +44,11 @@ export interface CompactionOptions {
 }
 
 /** A cold context keeps the exact model settings of the agent it replaces. */
-export async function handoffAgent(paseo: Pick<PaseoApi, "agents">, agent: AgentInfo, prompt: string): Promise<string> {
+export async function handoffAgent(
+  paseo: Pick<PaseoApi, "agents">,
+  agent: AgentInfo,
+  prompt: string,
+): Promise<string> {
   const snapshot = (await paseo.agents.ref(agent.id).refresh())?.agent;
   const provider = snapshot?.model ? `${snapshot.provider}/${snapshot.model}` : agent.provider;
   const thinkingOptionId = snapshot?.effectiveThinkingOptionId ?? snapshot?.thinkingOptionId;
@@ -83,24 +99,49 @@ export function registerCompaction(server: PluginServerContext, options: Compact
   const userHome = resolveVibeHome();
   const markerHome = options.dbPath ? dirname(options.dbPath) : userHome;
 
-  let paseo: PaseoApi | null = null;
+  let paseo: PaseoApi | null = (server as { paseo?: PaseoApi }).paseo ?? null;
   const handle = () => {
     if (!paseo) throw new Error("no Paseo handle yet");
     return paseo;
   };
   const host: CompactionHost = {
+    async describeIdleAgent(agentId) {
+      const snapshot = (await handle().agents.ref(agentId).refresh())?.agent;
+      if (!snapshot || snapshot.status !== "idle" || snapshot.activeTurn || snapshot.archivedAt)
+        return null;
+      return { id: agentId, provider: snapshot.provider, cwd: snapshot.cwd };
+    },
     async run(agentId, text) {
       // A turn that stops on an approval stays open: wait for the user, up to a bound.
       const agent = handle().agents.ref(agentId);
-      // Our own turn: tell vibe-board it is not the user continuing the chat.
-      expectSystemTurn(agentId, markerHome);
-      const deadline = Date.now() + (config.approvalWaitMinutes ?? 10) * 60_000;
-      let result = await agent.run(text);
-      while ((result.status === "permission" || result.status === "timeout") && Date.now() < deadline) {
-        result = await agent.waitForFinish(30_000);
+      const snapshot = (await agent.refresh())?.agent;
+      if (!snapshot || snapshot.status !== "idle" || snapshot.activeTurn || snapshot.archivedAt)
+        return { status: "permission" };
+      const execute = async () => {
+        const current = (await agent.refresh())?.agent;
+        if (!current || current.status !== "idle" || current.activeTurn || current.archivedAt)
+          return { status: "permission" as const };
+        // Our own turn: tell the task owner it is not the user continuing the chat.
+        expectSystemTurn(agentId, markerHome);
+        const deadline = Date.now() + (config.approvalWaitMinutes ?? 10) * 60_000;
+        let result = await agent.run(text, { sourceAgentId: agent.id });
+        while (
+          (result.status === "permission" || result.status === "timeout") &&
+          Date.now() < deadline
+        ) {
+          result = await agent.waitForFinish(30_000);
+        }
+        return result;
+      };
+      const session = store.sessions.getByAgent(agentId);
+      if (session && !session.cardId) {
+        if (!options.runTaskTurn || (snapshot.model && snapshot.model !== session.model))
+          return { status: "permission" };
+        return options.runTaskTurn(session, snapshot.workspaceId ?? null, execute);
       }
-      return result;
+      return execute();
     },
+    requestHandoff: options.requestHandoff,
     async handoff(agent, prompt) {
       return handoffAgent(handle(), agent, prompt);
     },
@@ -124,10 +165,14 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     config: () => ({ ...config, complexity: complexityValues }),
     usageDb: db,
     isSystemTurn: (agentId) => peekSystemTurn(agentId, markerHome),
-    buildContext: (cwd, maxMemoryTokens) =>
+    buildContext: (cwd, maxMemoryTokens, projectId) =>
       buildContextBlock(
         createMemoryStore({ projectRoot: cwd, userHome, contextWindowTokens: 200_000 }),
-        { maxMemoryTokens: maxMemoryTokens ?? options.defaultMemoryTokens?.(), prompts: options.prompts },
+        {
+          maxMemoryTokens: maxMemoryTokens ?? options.defaultMemoryTokens?.(),
+          prompts: options.prompts,
+          projectId,
+        },
       ),
     prompts: options.prompts,
     settleMs: options.settleMs,
@@ -136,8 +181,10 @@ export function registerCompaction(server: PluginServerContext, options: Compact
 
   const detect = options.detectNative ?? (() => detectNativeIdleCompaction());
   void detect().then((native) => {
-    if (native) log("vibe-context: Claude Code compacts idle sessions natively; claude is left to it");
+    if (native)
+      log("vibe-context: Claude Code compacts idle sessions natively; claude is left to it");
     scheduler.setNativeClaude(native);
+    return native;
   });
 
   const offs = [
@@ -168,9 +215,9 @@ export function registerCompaction(server: PluginServerContext, options: Compact
   };
   // The timer must not keep the daemon alive.
   const schedule = () => {
-    const handle = setTimeout(loop, intervalMs);
-    (handle as unknown as { unref?: () => void }).unref?.();
-    return handle;
+    const scheduled = setTimeout(loop, intervalMs);
+    (scheduled as unknown as { unref?: () => void }).unref?.();
+    return scheduled;
   };
   timer = schedule();
 

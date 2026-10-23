@@ -80,8 +80,9 @@ export default function contribute(server: PluginServerContext) {
     void runScan().catch(() => undefined);
   });
 
-  server.handle(overviewRpc, ({ period }, context) => {
+  server.handle(overviewRpc, async ({ period }, context) => {
     paseo = context.paseo;
+    await runScan();
     return computeOverview(db, period, new Date(), { files: fileCount, lastScanAt });
   });
 

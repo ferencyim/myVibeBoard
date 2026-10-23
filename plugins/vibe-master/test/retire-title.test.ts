@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { createMasterRuntime } from "../server/runtime";
-import { askMaster, choosePreset, ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir } from "./helpers";
+import {
+  askMaster,
+  choosePreset,
+  ManualClock,
+  defaultSettings,
+  fakePaseo,
+  setupBoard,
+  tempDir,
+} from "./helpers";
 
 function build(over: { noSetTitle?: boolean } = {}) {
   const board = setupBoard();
   const fake = fakePaseo(() => "ok", { noSetTitle: over.noSetTitle });
-  const settings = defaultSettings({ provider: "claude" });
+  const settings = defaultSettings({ provider: "claude", permissionMode: "auto" });
   const runtime = createMasterRuntime({
+    admitMaster: async () => async () => undefined,
+    admitMemory: async () => async () => undefined,
     db: board.db,
     store: board.store,
     getPaseo: () => fake.paseo,
