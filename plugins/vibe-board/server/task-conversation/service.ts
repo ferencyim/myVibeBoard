@@ -80,8 +80,18 @@ export function createTaskConversationService(options: TaskFlowOptions) {
   const verifications = createTaskVerificationCommands(store.db);
   const git = options.git ?? createTaskGitFinalizer();
   const queues = new Map<string, Promise<unknown>>();
-  const pendingHumanAcceptance = new Map<string, { requestId: string; source: TaskPlanSource }>();
-  const pendingHumanRows = new Map<string, TaskConversationRow>();
+  const accepting = new Map<string, { cancelled: boolean }>();
+  const remember = (values: string[], value: string) =>
+    [...values.filter((entry) => entry !== value), value].slice(-256);
+  function rememberRequest(workspaceId: string, requestId: string) {
+    const completed = task(workspaceId).control?.completedRequestIds;
+    store.tasks.updateControl(workspaceId, {
+      completedRequestIds: remember(
+        Array.isArray(completed) ? (completed as string[]) : [],
+        requestId,
+      ),
+    });
+  }
   const roleArtifact: Partial<Record<string, TaskArtifactKind>> = {
     planner: "plan",
     scout: "scout",
@@ -220,6 +230,8 @@ export function createTaskConversationService(options: TaskFlowOptions) {
     await publishPendingArtifacts(current.workspaceId);
   }
   async function stop(current: Task, reason: string) {
+    const active = accepting.get(current.workspaceId);
+    if (active) active.cancelled = true;
     store.tasks.updateControl(current.workspaceId, {
       currentStep: "stopping",
       blockingReason: reason,
@@ -274,7 +286,7 @@ export function createTaskConversationService(options: TaskFlowOptions) {
     )
       throw new Error("执行成员或子任务仍在运行，不能跳过写入者开始复核或验证");
   }
-  async function accept(current: Task, requestId: string, source?: TaskPlanSource) {
+  async function prepareAcceptance(current: Task, requestId: string, source?: TaskPlanSource) {
     if (current.phase !== "awaiting_acceptance" || !current.confirmedAt)
       throw new Error("只有本轮验证通过的待验收任务可通过");
     const native = await snapshot(current);
@@ -288,42 +300,57 @@ export function createTaskConversationService(options: TaskFlowOptions) {
     const recordedGit = current.control?.git as GitState | undefined;
     const previous =
       recordedGit?.verifiedCommit === verification.commitHash ? recordedGit : undefined;
+    const attempt = Number(current.control?.gitAttempt ?? 0) + 1;
+    const active = accepting.get(current.workspaceId)!;
     store.tasks.updateControl(current.workspaceId, {
       acceptanceSource: source ?? { conversationId: current.conversationId, sourceKey: requestId },
       acceptanceRequestId: requestId,
       verifiedCommit: verification.commitHash,
       currentStep: "git",
+      gitAttempt: attempt,
     });
-    const result = await git.finalize({
-      worktree: workspace.workspaceDirectory,
-      repoPath: project.repoPath,
-      verifiedCommit: verification.commitHash,
-      previous,
-      onProgress: async (state) => {
-        store.tasks.updateControl(current.workspaceId, { git: state });
-      },
-    });
-    const sourceRef = { conversationId: current.conversationId!, sourceKey: "git:" + requestId };
-    let milestonePhase: "completed" | "paused" | undefined;
-    if (result.status === "completed") milestonePhase = "completed";
-    if (result.status === "verification_required") milestonePhase = "paused";
-    store.taskArtifacts.record({
-      workspaceId: current.workspaceId,
-      kind: "git",
-      sourceKey: sourceRef.sourceKey,
-      confirmedAt: current.confirmedAt,
-      source: sourceRef,
-      summary: result.message,
-      data: { ...result },
-      phase: milestonePhase,
-      control: {
-        ...task(current.workspaceId).control,
-        git: result,
-        currentStep: "git",
-        blockingReason: result.status === "completed" ? null : result.message,
-      },
-    });
-    await publishPendingArtifacts(current.workspaceId);
+    // Git network operations run outside the workspace queue so Stop can preempt them.
+    return async () => {
+      const result = await git.finalize({
+        worktree: workspace.workspaceDirectory,
+        repoPath: project.repoPath,
+        verifiedCommit: verification.commitHash,
+        previous,
+        isCancelled: () =>
+          active.cancelled || task(current.workspaceId).confirmedAt !== current.confirmedAt,
+        onProgress: async (state) => {
+          store.tasks.updateControl(current.workspaceId, { git: state });
+        },
+      });
+      const sourceRef = {
+        conversationId: current.conversationId!,
+        sourceKey: "git:" + requestId + ":" + attempt,
+      };
+      let milestonePhase: "completed" | "paused" | undefined;
+      if (!active.cancelled && result.status === "completed") milestonePhase = "completed";
+      if (!active.cancelled && result.status === "verification_required") milestonePhase = "paused";
+      let blockingReason: string | null = result.status === "completed" ? null : result.message;
+      if (active.cancelled) blockingReason = "用户已停止 Git 收尾；请核对结果后重试";
+      store.taskArtifacts.record({
+        workspaceId: current.workspaceId,
+        kind: "git",
+        sourceKey: sourceRef.sourceKey,
+        confirmedAt: current.confirmedAt,
+        source: sourceRef,
+        summary: result.message,
+        data: { ...result },
+        phase: milestonePhase,
+        control: {
+          ...task(current.workspaceId).control,
+          git: result,
+          currentStep: active.cancelled ? "paused" : "git",
+          blockingReason,
+        },
+      });
+      await publishPendingArtifacts(current.workspaceId);
+      if (result.status === "completed") rememberRequest(current.workspaceId, requestId);
+      return { task: task(current.workspaceId), message: result.message };
+    };
   }
   async function confirmExecution(current: Task, input: TaskActionInput, completed: string[]) {
     if (
@@ -360,7 +387,7 @@ export function createTaskConversationService(options: TaskFlowOptions) {
           data: { plan: latest.plan },
         });
         store.tasks.updateControl(current.workspaceId, {
-          completedRequestIds: [...completed, input.requestId],
+          completedRequestIds: remember(completed, input.requestId),
           confirmingRequestId: null,
         });
         return confirmed;
@@ -454,6 +481,8 @@ export function createTaskConversationService(options: TaskFlowOptions) {
       : [];
     if (completed.includes(input.requestId))
       return { task: current, message: "本次操作已经处理，未重复运行" };
+    if (accepting.has(input.workspaceId) && input.action !== "stop")
+      throw new Error("Git 收尾正在进行，请等待结果或先停止任务");
     const native = await snapshot(current);
     if (input.action === "execute") await confirmExecution(current, input, completed);
     else if (input.action === "plan") await planTask(current, input);
@@ -465,12 +494,9 @@ export function createTaskConversationService(options: TaskFlowOptions) {
         continuationInFlightId: null,
       });
       await stop(current, input.reason ?? "用户停止任务");
-    } else if (input.action === "accept") await accept(current, input.requestId, input.source);
-    else if (input.action === "reject") await rejectTask(current, input);
+    } else if (input.action === "reject") await rejectTask(current, input);
     else await startEvidence(current, input, native);
-    store.tasks.updateControl(input.workspaceId, {
-      completedRequestIds: [...completed, input.requestId],
-    });
+    rememberRequest(input.workspaceId, input.requestId);
     return { task: task(input.workspaceId), message: "任务操作已受理" };
   }
   async function delegateImpl(input: {
@@ -540,7 +566,6 @@ export function createTaskConversationService(options: TaskFlowOptions) {
     if (!member) return;
     await turn?.release();
     if (turn && !turn.isCurrent()) return;
-    if (await finishHumanAcceptance(current, native)) return;
     if (["reviewer", "verifier"].includes(member.role)) return;
     const response = await handle(current).querySource({
       memberId: member.memberId,
@@ -567,7 +592,9 @@ export function createTaskConversationService(options: TaskFlowOptions) {
       await adviceCompleted(current, row, member.role);
     else if (member.role === "worker" || member.role === "subagent")
       await executionCompleted(current, row, member);
-    store.tasks.updateControl(current.workspaceId, { handledSources: [...handled, row.sourceKey] });
+    store.tasks.updateControl(current.workspaceId, {
+      handledSources: remember(handled, row.sourceKey),
+    });
   }
   function isMemberOutput(row: TaskConversationRow, member: TaskConversationMember) {
     return (
@@ -575,20 +602,6 @@ export function createTaskConversationService(options: TaskFlowOptions) {
       row.speaker?.backendAgentId === member.backendAgentId &&
       row.speaker.role === member.role
     );
-  }
-  async function finishHumanAcceptance(current: Task, native: TaskConversationSnapshot) {
-    const humanRow = pendingHumanRows.get(current.workspaceId);
-    if (humanRow) await authorizeHumanAcceptance(current, humanRow);
-    const pending = pendingHumanAcceptance.get(current.workspaceId);
-    if (
-      !pending ||
-      current.phase !== "awaiting_acceptance" ||
-      native.members.some((item) => busyMember(item.status))
-    )
-      return false;
-    pendingHumanAcceptance.delete(current.workspaceId);
-    await accept(current, pending.requestId, pending.source);
-    return true;
   }
   async function plannerCompleted(
     current: Task,
@@ -1259,56 +1272,46 @@ export function createTaskConversationService(options: TaskFlowOptions) {
       summary: delivery.summary,
     });
   }
-  /** Called only for newly subscribed canonical rows, never for history/recovery pages. */
-  async function onHumanMessage(input: {
-    workspaceId: string;
-    row: TaskConversationRow;
-    replayed?: boolean;
-  }) {
-    if (
-      input.replayed ||
-      input.row.kind !== "user" ||
-      input.row.text.trim() !== "通过" ||
-      !input.row.clientMessageId ||
-      input.row.clientMessageId.startsWith("task-flow:")
-    )
-      return false;
-    return serial(input.workspaceId, () =>
-      authorizeHumanAcceptance(task(input.workspaceId), input.row),
-    );
-  }
-  async function authorizeHumanAcceptance(current: Task, row: TaskConversationRow) {
-    if (current.phase !== "awaiting_acceptance") return false;
-    const previous = current.control?.handledAcceptanceSource;
-    if (previous === row.sourceKey) return false;
-    const canonical = await handle(current).querySource({ sourceKey: row.sourceKey });
-    const delivery = await handle(current).getDelivery({ clientMessageId: row.clientMessageId! });
-    if (
-      canonical.error ||
-      canonical.row?.kind !== "user" ||
-      canonical.row.text.trim() !== "通过" ||
-      canonical.row.clientMessageId !== row.clientMessageId ||
-      delivery.error
-    )
-      return false;
-    if (["prepared", "dispatching"].includes(delivery.delivery?.status ?? "")) {
-      pendingHumanRows.set(current.workspaceId, row);
-      return false;
+  async function acceptCommand(input: TaskActionInput) {
+    if (accepting.has(input.workspaceId))
+      throw new Error("Git 收尾正在进行，请等待结果或先停止任务");
+    accepting.set(input.workspaceId, { cancelled: false });
+    try {
+      const finish = await serial(input.workspaceId, async () => {
+        const current = task(input.workspaceId, input.conversationId);
+        if (
+          Array.isArray(current.control?.completedRequestIds) &&
+          current.control.completedRequestIds.includes(input.requestId)
+        )
+          return async () => ({ task: current, message: "本次操作已经处理，未重复运行" });
+        const recorded = current.control?.git as GitState | undefined;
+        if (
+          current.phase === "completed" &&
+          current.control?.acceptanceRequestId === input.requestId &&
+          recorded?.status === "completed"
+        ) {
+          await publishPendingArtifacts(current.workspaceId);
+          rememberRequest(current.workspaceId, input.requestId);
+          return async () => ({ task: task(current.workspaceId), message: recorded.message });
+        }
+        return prepareAcceptance(current, input.requestId, input.source);
+      });
+      return await finish();
+    } finally {
+      accepting.delete(input.workspaceId);
     }
-    pendingHumanRows.delete(current.workspaceId);
-    if (delivery.delivery?.status !== "accepted") return false;
-    const source = taskSource(current.conversationId!, canonical.row);
-    store.tasks.updateControl(current.workspaceId, { handledAcceptanceSource: source.sourceKey });
-    const requestId = "human-accept:" + source.sourceKey;
-    const native = await snapshot(current);
-    if (native.members.some((member) => busyMember(member.status)))
-      pendingHumanAcceptance.set(current.workspaceId, { requestId, source });
-    else await accept(current, requestId, source);
-    return true;
   }
   return {
     command: (input: TaskActionInput) => {
       const parsed = TaskActionInputSchema.parse(input);
+      if (parsed.action === "accept") return acceptCommand(parsed);
+      if (parsed.action === "stop") {
+        const active = accepting.get(parsed.workspaceId);
+        const completed = task(parsed.workspaceId, parsed.conversationId).control
+          ?.completedRequestIds;
+        if (active && !(Array.isArray(completed) && completed.includes(parsed.requestId)))
+          active.cancelled = true;
+      }
       return serial(parsed.workspaceId, () => commandImpl(parsed));
     },
     delegate: (input: Parameters<typeof delegateImpl>[0]) =>
@@ -1322,7 +1325,6 @@ export function createTaskConversationService(options: TaskFlowOptions) {
     },
     handleEvent,
     publishPendingArtifacts,
-    onHumanMessage,
     recoverCompletedSources: (workspaceId: string) =>
       serial(workspaceId, () => recoverCompletedSourcesImpl(workspaceId)),
   };

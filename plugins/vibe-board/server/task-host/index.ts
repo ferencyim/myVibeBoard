@@ -16,6 +16,7 @@ import { modeIdFor } from "../dispatch/brief";
 import { TASK_HOST_PROMPTS } from "./prompts";
 import { createTaskResources } from "./resources";
 import { snapshotPreset, nativeModelSnapshot, bootstrapPlannerSnapshot } from "./presets";
+import { assertTaskWorkspace } from "./workspace";
 
 type Recipient = PluginTaskConversationPrepareRequest["recipient"];
 type AdmissionRequest = Parameters<PluginTaskConversationHooks["admit"]>[0]["request"];
@@ -509,6 +510,8 @@ export function createTaskHost(options: {
     });
   }
   async function prepare(request: PluginTaskConversationPrepareRequest) {
+    const placement = api().workspaces.ref(request.workspaceId);
+    assertTaskWorkspace(await placement.refresh());
     const role = roleOf(request.recipient.role);
     const evidenceRole = ["reviewer", "verifier"].includes(role);
     let task = bindTask(request, role);

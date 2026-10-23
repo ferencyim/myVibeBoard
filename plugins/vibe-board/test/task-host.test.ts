@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginTaskConversationPrepareRequest } from "@getpaseo/plugin/server";
 import { openBoardRuntime } from "../server/service";
@@ -43,12 +43,18 @@ function setup(defaults = true) {
       source: { memberId: string; backendAgentId: string };
     },
   };
+  const workspace = {
+    workspaceKind: "worktree",
+    projectKind: "git",
+    workspaceDirectory: process.cwd(),
+    projectRootPath: process.cwd() + "/main",
+  };
   const paseo = {
     workspaces: {
       ref: () => ({
         directory: process.cwd(),
         projectId: "project",
-        refresh: async () => undefined,
+        refresh: async () => workspace,
       }),
     },
     taskConversations: {
@@ -82,7 +88,7 @@ function setup(defaults = true) {
       },
     },
   };
-  return { ...runtime, host, preset, context, request, members, canonical, sourceState };
+  return { ...runtime, host, preset, context, request, members, canonical, sourceState, workspace };
 }
 async function confirmHost(ctx: ReturnType<typeof setup>) {
   await ctx.host.hooks.prepare({ request: ctx.request }, ctx.context);
@@ -121,6 +127,64 @@ function barrier() {
 }
 
 describe("task conversation host", () => {
+  it.each(["checkout", "local_checkout", "directory"])(
+    "rejects %s workspaces before binding a task or freezing its model",
+    async (kind) => {
+      const ctx = setup();
+      ctx.workspace.workspaceKind = kind;
+      expect(await ctx.host.hooks.prepare({ request: ctx.request }, ctx.context)).toMatchObject({
+        ready: false,
+        reason: expect.stringContaining("附加 Git worktree"),
+      });
+      expect(ctx.store.tasks.list()).toEqual([]);
+    },
+  );
+  it("rejects a main checkout even when its native kind says worktree", async () => {
+    const ctx = setup();
+    ctx.workspace.projectRootPath = ctx.workspace.workspaceDirectory + "/.";
+    expect(await ctx.host.hooks.prepare({ request: ctx.request }, ctx.context)).toMatchObject({
+      ready: false,
+      reason: expect.stringContaining("项目主检出"),
+    });
+    expect(ctx.store.tasks.list()).toEqual([]);
+  });
+  it("polls resource responses only after the durable request sequence using a rowid range", async () => {
+    const ctx = setup();
+    const resources = createTaskResources(ctx.db, 1000);
+    for (let index = 0; index < 30; index++)
+      publishEvent(ctx.db, {
+        type: "scheduler.task_resource_result",
+        payload: {
+          requestId: "historical-" + index,
+          workspaceId: "workspace",
+          action: "freeze",
+          ok: true,
+          reason: "历史响应",
+        },
+      });
+    const statements = vi.spyOn(ctx.db, "prepare");
+    const pending = resources.request({ workspaceId: "workspace", action: "freeze" });
+    const request = ctx.db
+      .prepare<{ seq: number; payload_json: string }>(
+        "SELECT seq, payload_json FROM vibe_event WHERE type = 'scheduler.task_resource_request' ORDER BY seq DESC LIMIT 1",
+      )
+      .get()!;
+    expect(request.seq).toBeGreaterThan(30);
+    publishEvent(ctx.db, {
+      type: "scheduler.task_resource_result",
+      payload: { ...JSON.parse(request.payload_json), ok: true, reason: "当前响应" },
+    });
+    await expect(pending).resolves.toMatchObject({ ok: true, reason: "当前响应" });
+    const query = statements.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => sql.startsWith("SELECT payload_json") && sql.includes("json_extract"))!;
+    expect(query).toContain("seq > ?");
+    const plan = ctx.db
+      .prepare<{ detail: string }>("EXPLAIN QUERY PLAN " + query)
+      .all(request.seq, JSON.parse(request.payload_json).requestId);
+    expect(plan.map((row) => row.detail).join(" ")).toContain("rowid>?");
+    statements.mockRestore();
+  });
   it.each(["reviewer", "verifier"] as const)(
     "%s preparation excludes old confirmations and verification verdicts from current context",
     async (role) => {

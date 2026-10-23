@@ -12,9 +12,32 @@ import { TaskConversationPanel } from "./client/task-conversation/TaskConversati
 import { newCommandRequestId, TASK_ACTIONS } from "./client/task-conversation/logic";
 import { taskConversationCommandRpc } from "./shared/task-conversation";
 import { registerTaskRecipients } from "./client/task-conversation/recipients";
+import { ReportSummary } from "./client/task-conversation/ReportSummary";
+import {
+  reportSummarySchema,
+  summarizeTaskReport,
+} from "./client/task-conversation/report-summary";
 
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
+    client.addTimelineTransformer({
+      id: "task-report-summary",
+      query: { itemType: "assistant_message" },
+      transform(input) {
+        const report = summarizeTaskReport(input);
+        if (!report) return;
+        return {
+          items: [{ type: "plugin", kind: "task-report-summary", version: 1, data: report }],
+        };
+      },
+    }),
+    client.addTimelineRenderer({
+      kind: "task-report-summary",
+      version: 1,
+      schema: reportSummarySchema,
+      Component: ReportSummary,
+    }),
+    client.addFirstMessageOutboxOwner({ initialRole: "planner" }),
     registerTaskRecipients(client),
     client.addWorkspacePanel({
       id: "task-flow",

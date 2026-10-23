@@ -11,6 +11,7 @@ import {
 import type { VibeDb, VibeStore } from "./vibe/db";
 import { recipientFromPreset, type RecipientOptions } from "./task-host";
 import { latestTaskPlan } from "./task-conversation/source";
+import { assertTaskWorkspace } from "./task-host/workspace";
 
 const ROLE_LABELS: Record<ModelRole, string> = {
   scout: "探路",
@@ -125,7 +126,7 @@ export function createTaskPanelReader(options: {
     )
       throw new Error("任务会话不存在或不属于当前工作区");
     const workspace = paseo.workspaces.ref(input.workspaceId);
-    await workspace.refresh();
+    assertTaskWorkspace(await workspace.refresh());
     if (!workspace.directory) throw new Error("任务工作区目录不可用");
     let task = options.store.tasks.get(input.workspaceId);
     if (task && task.conversationId !== input.conversationId)

@@ -23,7 +23,6 @@ const mocks = vi.hoisted(() => {
     },
     flow: {
       onTurnCompleted: vi.fn(),
-      onHumanMessage: vi.fn(),
       recoverCompletedSources: vi.fn(),
       publishPendingArtifacts: vi.fn(),
       handleEvent: vi.fn(),

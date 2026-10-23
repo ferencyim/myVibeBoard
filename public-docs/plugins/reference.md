@@ -1406,6 +1406,8 @@ provider- or tool-specific recognition. Returning `undefined` keeps the original
 `items` replaces it; an empty array removes it. Item `data` must be JSON-compatible. The `phase`
 input is `"streaming"` for the live assistant message, running tool calls, and loading reasoning;
 it is `"complete"` for committed or fetched messages and finished tools or reasoning.
+`taskConversation` is optional input metadata containing `conversationId` and `ownerPluginId` for
+task group timelines. It is absent in ordinary agent timelines; use it to scope task-only transforms.
 Assistant and reasoning callbacks receive the full accumulated text on each update, including
 paragraph separators. Paseo invokes transformers before splitting native Markdown or grouping
 tools in Overview. A claimed assistant message remains one source item throughout streaming;
@@ -1756,6 +1758,19 @@ loaded. Conversation-only panels do not create standalone workspace tabs.
 Open one with `client.openPanel(id, { workspaceId, conversationId, anchorAgentId,
 location: "conversation" })`, or `openPanel(id, { location: "conversation" })` from its task slash
 context. Gate the task entry on `server_info.features.taskConversations`.
+
+### First-message outbox owner
+
+Register `client.addFirstMessageOutboxOwner({ initialRole: "planner" })` to route new-workspace
+first messages into your task conversation. The runtime installation ID becomes `ownerPluginId`;
+`initialRole` selects the first recipient. Return the registration's cleanup with your other
+contributions. Each plugin may register one owner. Multiple enabled owners on the same host
+produce a visible error and preserve the draft.
+
+The outbox persists the chosen owner with the first message, so reconnects use the same destination.
+Without a declaration, including after plugin teardown, new messages create ordinary agents.
+Task-owned entries require `server_info.features.taskConversations`; ordinary entries require only
+the creation lifecycle capability. Existing submitted entries continue checking their original receipt.
 
 The owning plugin supplies selector options with
 `client.setTaskConversationRecipients({ workspaceId, conversationId,

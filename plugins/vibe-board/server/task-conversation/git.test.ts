@@ -21,10 +21,14 @@ function fixture() {
   let mainBranch = "refs/heads/main";
   let treeChanged = false;
   let commonMismatch = false;
+  let taskIsMain = false;
+  let pushError = "模拟 Git 失败";
   const mutations: string[][] = [];
   const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
   const fail = (code = 1) => ({ code, stdout: "", stderr: "模拟 Git 失败" });
   const revParse = (cwd: string, args: string[]) => {
+    if (args.includes("--git-dir"))
+      return ok(taskIsMain ? "/repo/.git" : "/repo/.git/worktrees/task");
     if (args.includes("--git-common-dir"))
       return ok(cwd === "/task" && commonMismatch ? "/other/.git" : "/repo/.git");
     if (args.includes("FETCH_HEAD^{commit}")) return ok(remote);
@@ -64,7 +68,7 @@ function fixture() {
         return ok(`${remote}\trefs/heads/main\n`);
       case "push":
         mutations.push(args);
-        if (pushFails) return fail();
+        if (pushFails) return { code: 1, stdout: "", stderr: pushError };
         remote = main;
         return ok();
       default:
@@ -88,6 +92,8 @@ function fixture() {
         mainBranch: string;
         treeChanged: boolean;
         commonMismatch: boolean;
+        taskIsMain: boolean;
+        pushError: string;
       }>,
     ) {
       if (values.main !== undefined) main = values.main;
@@ -102,6 +108,8 @@ function fixture() {
       if (values.mainBranch !== undefined) mainBranch = values.mainBranch;
       if (values.treeChanged !== undefined) treeChanged = values.treeChanged;
       if (values.commonMismatch !== undefined) commonMismatch = values.commonMismatch;
+      if (values.taskIsMain !== undefined) taskIsMain = values.taskIsMain;
+      if (values.pushError !== undefined) pushError = values.pushError;
     },
   };
 }
@@ -168,6 +176,7 @@ describe("任务 Git 收尾", () => {
     [{ taskHead: other }, "commit_changed"],
     [{ mainBranch: "refs/heads/feature" }, "wrong_checkout"],
     [{ commonMismatch: true }, "wrong_repository"],
+    [{ taskIsMain: true }, "not_worktree"],
     [{ remote: other }, "origin_changed"],
   ] as const)("拒绝不安全状态 %j", async (values, reason) => {
     const f = fixture();
@@ -193,6 +202,88 @@ describe("任务 Git 收尾", () => {
     expect(f.mutations.filter((args) => args[0] === "merge")).toHaveLength(1);
     expect(f.mutations.filter((args) => args[0] === "push")).toHaveLength(2);
   });
+
+  it("拒绝任务目录与项目目录相同，Windows 路径忽略大小写和分隔符", async () => {
+    const f = fixture();
+    const path = process.platform === "win32" ? "D:\\repo\\main" : "/main";
+    const alias = process.platform === "win32" ? "d:/REPO/main/" : "/main/";
+    expect(
+      await createTaskGitFinalizer({ exec: f.exec }).finalize({
+        ...input,
+        repoPath: path,
+        worktree: alias,
+      }),
+    ).toMatchObject({ reason: "not_worktree" });
+    expect(f.mutations).toEqual([]);
+  });
+
+  it("push 失败展示脱敏且截断的 stderr 摘要", async () => {
+    const f = fixture();
+    f.set({
+      pushFails: true,
+      pushError:
+        "fatal https://alice:password@example.test/repo?access_token=secret denied " +
+        "x".repeat(1000),
+    });
+    const result = await createTaskGitFinalizer({ exec: f.exec }).finalize(input);
+    expect(result.message).toContain(
+      "fatal https://[凭据已移除]@example.test/repo?access_token=[凭据已移除] denied",
+    );
+    expect(result.message).not.toContain("alice");
+    expect(result.message).not.toContain("password");
+    expect(result.message).not.toContain("secret");
+    expect(result.message.length).toBeLessThan(700);
+  });
+
+  it.each(["target", "remote"] as const)(
+    "本地合并后 %s 变化仍保持 pending_push",
+    async (change) => {
+      const f = fixture();
+      const exec: GitExec = async (cwd, command, args) => {
+        const result = await f.exec(cwd, command, args);
+        if (change === "remote" && args[0] === "ls-remote")
+          return { ...result, stdout: `${other}\trefs/heads/main` };
+        return result;
+      };
+      const result = await createTaskGitFinalizer({ exec }).finalize({
+        ...input,
+        onProgress: (state) => {
+          if (change === "target" && state.status === "pending_push") f.set({ mainDirty: true });
+        },
+      });
+      expect(result).toMatchObject({
+        status: "pending_push",
+        localMerged: true,
+        reason: change === "target" ? "target_changed" : "remote_changed",
+      });
+      expect(f.mutations.filter((args) => args[0] === "push")).toHaveLength(0);
+    },
+  );
+
+  it.each(["fetch", "merged"] as const)(
+    "在 %s 后 Stop 在安全点阻止后续 Git 副作用",
+    async (when) => {
+      const f = fixture();
+      let cancelled = false;
+      const exec: GitExec = async (cwd, command, args) => {
+        const result = await f.exec(cwd, command, args);
+        if (when === "fetch" && args[0] === "fetch") cancelled = true;
+        return result;
+      };
+      const result = await createTaskGitFinalizer({ exec }).finalize({
+        ...input,
+        isCancelled: () => cancelled,
+        onProgress: (state) => {
+          if (when === "merged" && state.status === "pending_push") cancelled = true;
+        },
+      });
+      expect(result).toMatchObject({
+        reason: "cancelled",
+        status: when === "merged" ? "pending_push" : "blocked",
+      });
+      expect(f.mutations.map((args) => args[0])).toEqual(when === "merged" ? ["merge"] : []);
+    },
+  );
 
   it("push 成功但保存回执丢失，重启核对远端后不重复 push", async () => {
     const f = fixture();
@@ -292,4 +383,106 @@ describe("任务 Git 收尾", () => {
       reason: "git_check_failed",
     });
   });
+});
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+describe("真实隔离仓库 Git 收尾", () => {
+  function repository() {
+    const home = resolve(import.meta.dirname, "../../../../.dev/git-finalizer-tests");
+    mkdirSync(home, { recursive: true });
+    const root = mkdtempSync(join(home, "finalizer-"));
+    const main = join(root, "main");
+    const origin = join(root, "origin.git");
+    const command = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, {
+        cwd,
+        encoding: "utf8",
+        windowsHide: true,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
+      }).trim();
+    command(root, "init", "--bare", "--initial-branch=main", origin);
+    command(root, "init", "--initial-branch=main", main);
+    command(main, "config", "user.name", "Git Test");
+    command(main, "config", "user.email", "git-test@example.invalid");
+    writeFileSync(join(main, "base.txt"), "base\n");
+    command(main, "add", "base.txt");
+    command(main, "commit", "-m", "初始测试提交");
+    command(main, "remote", "add", "origin", origin);
+    command(main, "push", "origin", "main");
+    const first = join(root, "first");
+    command(main, "worktree", "add", "-b", "first", first);
+    writeFileSync(join(first, "first.txt"), "first\n");
+    command(first, "add", "first.txt");
+    command(first, "commit", "-m", "第一个任务");
+    const firstCommit = command(first, "rev-parse", "HEAD");
+    return { root, main, origin, first, firstCommit, command };
+  }
+
+  it("真实主检出作为任务目录时拒绝，不修改 main 或 origin", async () => {
+    const r = repository();
+    const before = r.command(r.main, "rev-parse", "HEAD");
+    const result = await createTaskGitFinalizer().finalize({
+      repoPath: r.main,
+      worktree: r.main,
+      verifiedCommit: before,
+    });
+    expect(result).toMatchObject({ status: "blocked", reason: "not_worktree" });
+    expect(r.command(r.main, "rev-parse", "HEAD")).toBe(before);
+    expect(r.command(r.origin, "rev-parse", "main")).toBe(before);
+  });
+
+  it("两个 finalizer 实例按 common-dir 串行完成两个任务的合并与 push", async () => {
+    const r = repository();
+    const second = join(r.root, "second");
+    r.command(r.main, "worktree", "add", "-b", "second", second, r.firstCommit);
+    writeFileSync(join(second, "second.txt"), "second\n");
+    r.command(second, "add", "second.txt");
+    r.command(second, "commit", "-m", "第二个任务");
+    const secondCommit = r.command(second, "rev-parse", "HEAD");
+    let unlock!: () => void;
+    const gate = new Promise<void>((done) => {
+      unlock = done;
+    });
+    let entered!: () => void;
+    const firstEntered = new Promise<void>((done) => {
+      entered = done;
+    });
+    const first = createTaskGitFinalizer().finalize({
+      repoPath: r.main,
+      worktree: r.first,
+      verifiedCommit: r.firstCommit,
+      onProgress: async (state) => {
+        if (state.status === "merging") {
+          entered();
+          await gate;
+        }
+      },
+    });
+    await firstEntered;
+    let secondRead!: () => void;
+    const readCommon = new Promise<void>((done) => {
+      secondRead = done;
+    });
+    const calls: string[] = [];
+    const exec: GitExec = async (cwd, command, args) => {
+      calls.push(args[0]);
+      const result = spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true });
+      if (args.includes("--git-common-dir")) secondRead();
+      return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+    };
+    const secondResult = createTaskGitFinalizer({ exec }).finalize({
+      repoPath: r.main,
+      worktree: second,
+      verifiedCommit: secondCommit,
+    });
+    await readCommon;
+    expect(calls).toEqual(["rev-parse"]);
+    unlock();
+    const results = await Promise.all([first, secondResult]);
+    expect(results.map((result) => result.status)).toEqual(["completed", "completed"]);
+    expect(r.command(r.main, "rev-parse", "HEAD")).toBe(secondCommit);
+    expect(r.command(r.origin, "rev-parse", "main")).toBe(secondCommit);
+  }, 30_000);
 });

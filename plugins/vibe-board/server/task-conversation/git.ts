@@ -28,6 +28,8 @@ export interface TaskGitFinalizeInput {
   previous?: GitState;
   /** 必须先持久化再返回；保存失败会阻止后续 Git 副作用。 */
   onProgress?: (state: GitState) => Promise<void> | void;
+  /** Stop 不等待外部 Git 命令；收尾在下一安全点停止副作用。 */
+  isCancelled?: () => boolean;
 }
 
 const nodeExec: GitExec = (cwd, command, args) =>
@@ -35,7 +37,13 @@ const nodeExec: GitExec = (cwd, command, args) =>
     execFile(
       command,
       args,
-      { cwd, windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 120_000 },
+      {
+        cwd,
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: 120_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
+      },
       (error, stdout, stderr) => {
         let code: number | null = 0;
         if (error) code = typeof error.code === "number" ? error.code : null;
@@ -49,6 +57,38 @@ const nodeExec: GitExec = (cwd, command, args) =>
   });
 
 const isCommit = (value: string) => /^(?:[\da-f]{40}|[\da-f]{64})$/i.test(value);
+
+function pathKey(path: string) {
+  const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function errorSummary(message: string) {
+  return message
+    .replace(/([a-z][a-z\d+.-]*:\/\/)[^\s/@]+@/gi, "$1[凭据已移除]@")
+    .replace(/([?&](?:access_token|token|password|secret|auth)=)[^\s&#]+/gi, "$1[凭据已移除]")
+    .replace(/(authorization:\s*)(?:[^\r\n]+)/gi, "$1[凭据已移除]")
+    .trim()
+    .slice(0, 600);
+}
+
+// 同一仓库的不同 finalizer 实例也共享锁；等待者在取得锁后重新检查全部状态。
+const repositoryLocks = new Map<string, Promise<void>>();
+async function withRepositoryLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const previous = repositoryLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((done) => {
+    release = done;
+  });
+  repositoryLocks.set(key, current);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (repositoryLocks.get(key) === current) repositoryLocks.delete(key);
+  }
+}
 
 function initialState(verifiedCommit: string, previous?: GitState): GitState {
   return {
@@ -94,7 +134,14 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
       "--path-format=absolute",
       "--git-common-dir",
     );
-    if (resolve(taskCommon) !== resolve(mainCommon)) {
+    const taskGitDir = await read(worktree, "rev-parse", "--path-format=absolute", "--git-dir");
+    if (pathKey(taskGitDir) === pathKey(taskCommon) || pathKey(worktree) === pathKey(repoPath)) {
+      return {
+        reason: "not_worktree",
+        message: "任务目录必须是独立的附加 Git worktree，不能使用项目主检出。",
+      };
+    }
+    if (pathKey(taskCommon) !== pathKey(mainCommon)) {
       return { reason: "wrong_repository", message: "任务 worktree 与项目 main 不属于同一仓库。" };
     }
     if (await read(worktree, "status", "--porcelain", "--untracked-files=all")) {
@@ -149,7 +196,9 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
     return { mode: "--no-ff", candidateTree };
   }
 
-  async function finalize(input: TaskGitFinalizeInput): Promise<GitState> {
+  // Git 检查与副作用必须按顺序执行，保留同一状态闭包便于审查安全点。
+  // oxlint-disable-next-line complexity
+  async function finalizeLocked(input: TaskGitFinalizeInput): Promise<GitState> {
     const { worktree, repoPath, verifiedCommit, previous, onProgress } = input;
     let state = initialState(verifiedCommit, previous);
     const save = async (patch: Partial<GitState>): Promise<GitState> => {
@@ -159,6 +208,14 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
     };
     const stop = (reason: string, message: string, verification = false) =>
       save({ status: verification ? "verification_required" : "blocked", reason, message });
+    const cancelled = () =>
+      save({
+        status: state.localMerged ? "pending_push" : "blocked",
+        reason: "cancelled",
+        message: state.localMerged
+          ? "已停止 Git 收尾；本地已合并，保留待推状态。"
+          : "已停止 Git 收尾。",
+      });
     if (!isCommit(verifiedCommit)) return stop("invalid_commit", "缺少本轮已验证的完整 commit。");
     if (previous && previous.verifiedCommit !== verifiedCommit) {
       return stop("verification_changed", "本轮验证 commit 已变化，需重新验证并通过。");
@@ -166,10 +223,13 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
 
     // 读取失败也必须停止，不能把 Git 错误当作干净树或不存在的远端。
     try {
+      if (input.isCancelled?.()) return cancelled();
       const unsafe = await inspectSafety(input);
       if (unsafe) return stop(unsafe.reason, unsafe.message, unsafe.verification);
+      if (input.isCancelled?.()) return cancelled();
       // 不更新工作区和分支；只取远端对象，使用本次 FETCH_HEAD，避免陈旧 tracking ref。
       await read(repoPath, "fetch", "--no-tags", "origin", "refs/heads/main");
+      if (input.isCancelled?.()) return cancelled();
       const originCommit = await read(repoPath, "rev-parse", "--verify", "FETCH_HEAD^{commit}");
       const main = await inspectCommit(repoPath);
       const targetTree = await read(worktree, "rev-parse", `${verifiedCommit}^{tree}`);
@@ -214,6 +274,7 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
         if (!(await unchanged(input, main))) {
           return stop("target_changed", "Git 收尾前仓库状态发生变化，已停止。");
         }
+        if (input.isCancelled?.()) return cancelled();
         const merged = await git(
           repoPath,
           "merge",
@@ -240,13 +301,14 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
           );
         }
       }
-      return await pushVerified(input, state, save, stop);
+      if (input.isCancelled?.()) return cancelled();
+      return await pushVerified(input, state, save);
     } catch (error) {
       // 持久化失败不能吞掉后继续 Git；此处只报告失败，不做任何补偿写操作。
       return save({
         status: state.localMerged ? "pending_push" : "blocked",
         reason: "git_check_failed",
-        message: `Git 收尾停止：${error instanceof Error ? error.message : String(error)}`,
+        message: `Git 收尾停止：${errorSummary(error instanceof Error ? error.message : String(error))}`,
       });
     }
   }
@@ -255,9 +317,10 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
     input: TaskGitFinalizeInput,
     state: GitState,
     save: (patch: Partial<GitState>) => Promise<GitState>,
-    stop: (reason: string, message: string, verification?: boolean) => Promise<GitState>,
   ) {
     const { repoPath } = input;
+    const stop = (reason: string, message: string) =>
+      save({ status: "pending_push", reason, message });
     if (!state.mergedCommit || !(await unchanged(input, state.mergedCommit))) {
       return stop("target_changed", "push 前仓库状态发生变化，已停止。");
     }
@@ -265,14 +328,16 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
     const remoteCommit = remote.split(/\s+/)[0];
     if (remoteCommit !== state.mergedCommit) {
       if (remoteCommit !== state.originCommit)
-        return stop("remote_changed", "push 前 origin main 已变化，请重新检查并通过。", true);
+        return stop("remote_changed", "push 前 origin main 已变化，请重新检查并通过。");
+      if (input.isCancelled?.())
+        return stop("cancelled", "已停止 Git 收尾；本地已合并，保留待推状态。");
       // 显式 commit refspec，避免并发移动 main 后误推未经验证的新 HEAD；绝不用 force。
       const push = await git(repoPath, "push", "origin", `${state.mergedCommit}:refs/heads/main`);
       if (push.code !== 0)
         return save({
           status: "pending_push",
           reason: "push_failed",
-          message: "本地已合并，push 未成功；可重试，不会重复合并。",
+          message: `本地已合并，push 未成功；可重试，不会重复合并。${push.stderr.trim() ? "\n" + errorSummary(push.stderr) : ""}`,
         });
     }
     const published = await read(repoPath, "ls-remote", "--exit-code", "origin", "refs/heads/main");
@@ -288,6 +353,33 @@ export function createTaskGitFinalizer(options: { exec?: GitExec } = {}) {
       reason: undefined,
       message: "已合入本地 main 并 push origin main；任务 workspace 和会话保留。",
     });
+  }
+
+  async function finalize(input: TaskGitFinalizeInput): Promise<GitState> {
+    if (
+      !isCommit(input.verifiedCommit) ||
+      (input.previous && input.previous.verifiedCommit !== input.verifiedCommit)
+    )
+      return finalizeLocked(input);
+    let common: string;
+    try {
+      common = await read(
+        input.worktree,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      );
+    } catch (error) {
+      const state: GitState = {
+        ...initialState(input.verifiedCommit, input.previous),
+        status: input.previous?.localMerged ? "pending_push" : "blocked",
+        reason: "git_check_failed",
+        message: `Git 收尾停止：${errorSummary(error instanceof Error ? error.message : String(error))}`,
+      };
+      await input.onProgress?.(state);
+      return state;
+    }
+    return withRepositoryLock(pathKey(common), () => finalizeLocked(input));
   }
 
   return { inspectCommit, finalize };

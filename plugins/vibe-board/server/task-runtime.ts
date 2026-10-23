@@ -51,12 +51,7 @@ export function registerTaskRuntime(
             .recoverCompletedSources(task.workspaceId)
             .catch((error) => console.error("任务已完成源恢复失败：", error));
         },
-        update: (message) => {
-          if (message.type !== "task.conversation.update" || !message.payload.row) return;
-          void flow
-            .onHumanMessage({ workspaceId: task.workspaceId, row: message.payload.row })
-            .catch((error) => console.error("任务验收消息处理失败：", error));
-        },
+        update: () => {},
       });
       void observation.ready.catch((error) => console.error("任务会话观察未就绪：", error));
     }

@@ -1120,42 +1120,122 @@ describe("统一任务动作与编排", () => {
     await expect(f.action("accept")).rejects.toThrow("最新验证");
     expect(f.finalize).not.toHaveBeenCalled();
   });
-  it("仅新accepted人类全文通过可验收，引用、模型输出及历史重放均不授权", async () => {
+  it("历史普通通过发言不能触发Git，只有显式任务命令授权", async () => {
     const f = fixture();
     await f.confirm();
-    f.store.tasks.setPhase("workspace", "verifying");
-    const verification = createTaskVerificationCommands(f.db);
-    const created = verification.create({
-      workspaceId: "workspace",
-      confirmedAt: f.store.tasks.get("workspace")!.confirmedAt!,
-      projectId: f.store.projects.list()[0]!.id,
-      commitHash: "a".repeat(40),
-      checks: f.plan.checks,
-    });
-    verification.finish(created.verification.id, "pass");
-    f.store.tasks.setPhase("workspace", "awaiting_acceptance");
+    f.verified();
     f.row.kind = "user";
-    f.row.sourceKey = "human:accept";
     f.row.text = "通过";
-    f.row.clientMessageId = "accept";
-    expect(
-      await f.service.onHumanMessage({ workspaceId: "workspace", row: f.row, replayed: true }),
-    ).toBe(false);
-    expect(
-      await f.service.onHumanMessage({
-        workspaceId: "workspace",
-        row: { ...f.row, kind: "assistant" },
-      }),
-    ).toBe(false);
-    expect(
-      await f.service.onHumanMessage({
-        workspaceId: "workspace",
-        row: { ...f.row, text: "我认为可以通过" },
-      }),
-    ).toBe(false);
+    f.fetch.mockResolvedValue({ error: null, page: { rows: [f.row], hasNewer: false } });
+    await f.service.recoverCompletedSources("workspace");
     expect(f.finalize).not.toHaveBeenCalled();
-    expect(await f.service.onHumanMessage({ workspaceId: "workspace", row: f.row })).toBe(true);
+    await f.action("accept");
     expect(f.finalize).toHaveBeenCalledTimes(1);
     expect(f.store.tasks.get("workspace")!.phase).toBe("completed");
+  });
+  it("Git网络等待不占用任务队列，Stop先完成并让Git在安全点取消", async () => {
+    const f = fixture();
+    await f.confirm();
+    f.verified();
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.finalize.mockImplementationOnce(async (input) => {
+      entered();
+      await hold;
+      expect(input.isCancelled?.()).toBe(true);
+      return {
+        status: "pending_push",
+        localMerged: true,
+        verifiedCommit: input.verifiedCommit,
+        message: "已停止",
+      };
+    });
+    const acceptance = f.action("accept");
+    await started;
+    await f.action("stop");
+    expect(f.store.tasks.get("workspace")!.phase).toBe("paused");
+    release();
+    await acceptance;
+    expect(f.store.tasks.get("workspace")!.phase).toBe("paused");
+    expect(f.store.tasks.get("workspace")!.control!.git).toMatchObject({ status: "pending_push" });
+    expect(f.store.tasks.get("workspace")!.control!.completedRequestIds).toContain("stop");
+  });
+  it("同requestId部分失败后重试保留两次Git沉淀且不抛不可改写", async () => {
+    const f = fixture();
+    await f.confirm();
+    f.verified();
+    f.finalize.mockResolvedValueOnce({
+      status: "pending_push",
+      verifiedCommit: "a".repeat(40),
+      localMerged: true,
+      message: "push失败",
+    });
+    await f.action("accept");
+    await f.action("accept");
+    expect(f.finalize).toHaveBeenCalledTimes(2);
+    expect(
+      f.store.taskArtifacts.list("workspace").filter((item) => item.kind === "git"),
+    ).toHaveLength(2);
+    expect(f.store.tasks.get("workspace")!.phase).toBe("completed");
+  });
+  it("旧Stop请求的重试不能取消后来的Git收尾", async () => {
+    const f = fixture();
+    await f.confirm();
+    await f.action("stop");
+    f.verified();
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.finalize.mockImplementationOnce(async (input) => {
+      entered();
+      await hold;
+      expect(input.isCancelled?.()).toBe(false);
+      return {
+        status: "completed",
+        localMerged: true,
+        verifiedCommit: input.verifiedCommit,
+        message: "完成",
+      };
+    });
+    const acceptance = f.action("accept");
+    await started;
+    await f.action("stop");
+    release();
+    await acceptance;
+    expect(f.store.tasks.get("workspace")!.phase).toBe("completed");
+  });
+  it("Git完成后群聊发布失败，同请求重试只补发布，不重复Git", async () => {
+    const f = fixture();
+    await f.confirm();
+    f.verified();
+    f.publish.mockRejectedValueOnce(new Error("群聊暂不可用"));
+    await expect(f.action("accept")).rejects.toThrow("群聊暂不可用");
+    expect(f.store.tasks.get("workspace")!.phase).toBe("completed");
+    await f.action("accept");
+    expect(f.finalize).toHaveBeenCalledTimes(1);
+    expect(f.store.taskArtifacts.pendingPublish("workspace")).toHaveLength(0);
+    expect(f.store.tasks.get("workspace")!.control!.completedRequestIds).toContain("accept");
+  });
+  it("control处理记录裁剪且保留最近请求", async () => {
+    const f = fixture();
+    f.store.tasks.updateControl("workspace", {
+      completedRequestIds: Array.from({ length: 256 }, (_, i) => "old" + i),
+    });
+    await f.action("stop");
+    const completed = f.store.tasks.get("workspace")!.control!.completedRequestIds as string[];
+    expect(completed).toHaveLength(256);
+    expect(completed).not.toContain("old0");
+    expect(completed.at(-1)).toBe("stop");
   });
 });

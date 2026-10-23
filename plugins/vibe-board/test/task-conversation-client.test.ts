@@ -16,8 +16,160 @@ import {
   TASK_ACTIONS,
 } from "../client/task-conversation/logic";
 import { TaskArtifactSchema, TaskSchema } from "../shared/vibe/contract";
+import {
+  findReportEvidence,
+  summarizeReport,
+  summarizeTaskReport,
+} from "../client/task-conversation/report-summary";
 
 const timestamp = "2026-10-23T12:00:00.000Z";
+
+describe("群聊验证与复核摘要", () => {
+  it("普通会话、其它插件群聊和流式输出保持原样，仅本插件已完成群聊报告转换", () => {
+    const input = {
+      item: { text: '{"summary":"无问题","issues":[],"verdict":"pass"}' },
+      phase: "complete" as const,
+    };
+    expect(summarizeTaskReport(input)).toBeUndefined();
+    expect(
+      summarizeTaskReport({
+        ...input,
+        taskConversation: { conversationId: "other", ownerPluginId: "other" },
+      }),
+    ).toBeUndefined();
+    const taskConversation = { conversationId: "conversation", ownerPluginId: "vibe-board" };
+    expect(summarizeTaskReport({ ...input, taskConversation, phase: "streaming" })).toBeUndefined();
+    expect(summarizeTaskReport({ ...input, taskConversation })?.conclusion).toBe("通过");
+  });
+  it("逐项中文展示验证结论与证据，原始 JSON 和附加说明完整保留", () => {
+    const raw =
+      '本次独立验证\n```json\n{"summary":"共两项","items":[{"check":1,"judgement":"pass","note":"日志通过","evidence":["test.log"]},{"check":2,"judgement":"doubt","note":"缺设备","evidence":[]}]}\n```';
+    expect(summarizeReport(raw, "row-1")).toEqual({
+      rawText: raw,
+      messageId: "row-1",
+      title: "模型验证结论",
+      conclusion: "存疑",
+      summary: "共两项",
+      checks: [
+        { label: "检查项 1 · 通过", note: "日志通过", evidence: ["test.log"] },
+        { label: "检查项 2 · 存疑", note: "缺设备", evidence: [] },
+      ],
+    });
+  });
+
+  it("复核按严重问题保守展示，保留文件行号；无问题时显示通过", () => {
+    const report = summarizeReport(
+      JSON.stringify({
+        verdict: "pass",
+        summary: "存在缺陷",
+        issues: [{ severity: "severe", file: "src/a.ts", line: 12, text: "会丢数据" }],
+      }),
+    );
+    expect(report?.conclusion).toBe("发现严重问题");
+    expect(report?.checks[0]).toEqual({
+      label: "问题 1 · 严重",
+      note: "会丢数据\n位置：src/a.ts:12",
+      evidence: [],
+    });
+    expect(summarizeReport('{"verdict":"pass","summary":"无问题","issues":[]}')?.conclusion).toBe(
+      "通过",
+    );
+  });
+
+  it("不吞掉普通 JSON、配置、损坏输出或多个报告", () => {
+    for (const raw of [
+      '{"items":[]}',
+      '{"backend":{"requests":[]}}',
+      '{"summary":"未完成","items":[',
+      "普通文本",
+      '```json\n{"summary":"a","items":[]}\n```\n```json\n{"summary":"b","items":[]}\n```',
+    ])
+      expect(summarizeReport(raw)).toBeUndefined();
+  });
+
+  it("旧报告跨页精确找源，再按该轮沉淀打开证据；不误用同名新报告", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        error: null,
+        page: {
+          rows: [{ id: "new", sourceKey: "new-source" }],
+          hasOlder: true,
+          startCursor: { epoch: "epoch", seq: 20 },
+        },
+      })
+      .mockResolvedValueOnce({
+        error: null,
+        page: {
+          rows: [{ id: "old", sourceKey: "old-source" }],
+          hasOlder: false,
+          startCursor: { epoch: "epoch", seq: 2 },
+        },
+      });
+    const paseo = {
+      taskConversations: {
+        ref: () => ({
+          refresh: async () => ({ ownerPluginId: "vibe-board", workspaceId: "workspace" }),
+          fetch,
+        }),
+      },
+    } as unknown as Parameters<typeof findReportEvidence>[0]["paseo"];
+    const makeArtifact = (sourceKey: string, id: string) =>
+      TaskArtifactSchema.parse({
+        workspaceId: "workspace",
+        kind: "verification",
+        sourceKey,
+        confirmedAt: null,
+        source: { conversationId: "conversation", sourceKey },
+        summary: "验证",
+        data: { evidence: [{ id, path: "D:/evidence/" + id + "/test.log" }] },
+        createdAt: timestamp,
+        published: null,
+      });
+    const readArtifacts = vi.fn(async () => [
+      makeArtifact("new-source", "new-file"),
+      makeArtifact("old-source", "old-file"),
+    ]);
+    expect(
+      await findReportEvidence({
+        paseo,
+        conversationId: "conversation",
+        messageId: "old",
+        name: "test.log",
+        readArtifacts,
+      }),
+    ).toBe("old-file");
+    expect(fetch).toHaveBeenNthCalledWith(2, {
+      direction: "before",
+      cursor: { epoch: "epoch", seq: 20 },
+      limit: 500,
+    });
+    expect(readArtifacts).toHaveBeenCalledWith("workspace");
+  });
+
+  it("证据名称不唯一或缺少本轮沉淀时明确报错", async () => {
+    const paseo = {
+      taskConversations: {
+        ref: () => ({
+          refresh: async () => ({ ownerPluginId: "vibe-board", workspaceId: "workspace" }),
+          fetch: async () => ({
+            error: null,
+            page: { rows: [{ id: "row", sourceKey: "source" }] },
+          }),
+        }),
+      },
+    } as unknown as Parameters<typeof findReportEvidence>[0]["paseo"];
+    await expect(
+      findReportEvidence({
+        paseo,
+        conversationId: "conversation",
+        messageId: "row",
+        name: "test.log",
+        readArtifacts: async () => [],
+      }),
+    ).rejects.toThrow("此轮证据尚未沉淀");
+  });
+});
 function snapshot(): TaskConversationPanelSnapshot {
   return TaskConversationPanelSchema.parse({
     task: null,

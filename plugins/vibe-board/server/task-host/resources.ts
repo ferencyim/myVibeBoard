@@ -24,14 +24,17 @@ export function createTaskResources(db: VibeDb, timeoutMs = 10_000) {
   const releasing = new Map<string, Promise<void>>();
   async function request(input: Omit<Request, "requestId">): Promise<Result> {
     const requestId = randomUUID();
-    publishEvent(db, { type: "scheduler.task_resource_request", payload: { ...input, requestId } });
+    const requestSeq = publishEvent(db, {
+      type: "scheduler.task_resource_request",
+      payload: { ...input, requestId },
+    });
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const row = db
         .prepare<{ payload_json: string }>(
-          "SELECT payload_json FROM vibe_event WHERE type = 'scheduler.task_resource_result' AND json_extract(payload_json, '$.requestId') = ? ORDER BY seq DESC LIMIT 1",
+          "SELECT payload_json FROM vibe_event WHERE seq > ? AND type = 'scheduler.task_resource_result' AND json_extract(payload_json, '$.requestId') = ? ORDER BY seq DESC LIMIT 1",
         )
-        .get(requestId);
+        .get(requestSeq, requestId);
       if (row)
         return EVENT_PAYLOADS["scheduler.task_resource_result"].parse(JSON.parse(row.payload_json));
       await delay(40);

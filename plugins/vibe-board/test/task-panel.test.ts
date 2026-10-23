@@ -37,13 +37,19 @@ function setup() {
     createdAt: "2026-10-23T00:00:00Z",
     updatedAt: "2026-10-23T00:00:00Z",
   };
+  const workspace = {
+    workspaceKind: "worktree",
+    projectKind: "git",
+    workspaceDirectory: process.cwd(),
+    projectRootPath: process.cwd() + "/main",
+  };
   const paseo = {
     taskConversations: { ref: () => ({ refresh: async () => conversation }) },
     workspaces: {
       ref: () => ({
         directory: process.cwd(),
         projectId: "project",
-        refresh: async () => undefined,
+        refresh: async () => workspace,
       }),
     },
   } as unknown as PaseoApi;
@@ -51,6 +57,7 @@ function setup() {
   return {
     ...runtime,
     conversation,
+    workspace,
     paseo,
     read: createTaskPanelReader({ ...runtime, resolveRecipient: host.resolveRecipient }),
   };
@@ -68,6 +75,26 @@ it("binds an existing container and offers full presets across seven roles witho
   ).toMatchObject({ sandbox_mode: "read-only", approval_policy: "never" });
   expect(result.members).toEqual([]);
   expect(result.suggestedRecipientId).toBe("planner:default");
+});
+it.each(["checkout", "local_checkout", "directory"])(
+  "rejects %s workspaces before binding a task",
+  async (kind) => {
+    const ctx = setup();
+    ctx.workspace.workspaceKind = kind;
+    await expect(
+      ctx.read({ workspaceId: "workspace", conversationId: "conversation" }, ctx.paseo),
+    ).rejects.toThrow("附加 Git worktree");
+    expect(ctx.store.tasks.list()).toEqual([]);
+  },
+);
+it("rejects a main checkout incorrectly declared as a worktree", async () => {
+  const ctx = setup();
+  const samePath = ctx.workspace.workspaceDirectory.replace(/\\/g, "/") + "/.";
+  ctx.workspace.projectRootPath = process.platform === "win32" ? samePath.toUpperCase() : samePath;
+  await expect(
+    ctx.read({ workspaceId: "workspace", conversationId: "conversation" }, ctx.paseo),
+  ).rejects.toThrow("项目主检出");
+  expect(ctx.store.tasks.list()).toEqual([]);
 });
 it("rejects foreign conversation/workspace or owner before exposing task data", async () => {
   const ctx = setup();
