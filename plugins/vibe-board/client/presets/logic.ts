@@ -2,6 +2,7 @@
 
 import {
   DEFAULT_REQUIREMENTS_PATH,
+  presetModels,
   ROLE_HINTS,
   isSafeRepoRelativePath,
   type ModelDefaults,
@@ -85,13 +86,18 @@ export const ROLE_HINT_LABELS: Record<RoleHint, string> = {
   verifier: "验证",
 };
 
+export type PresetModelDraft = Pick<Preset, "provider" | "model" | "thinking" | "permissionMode">;
+
+export const EMPTY_MODEL_DRAFT: PresetModelDraft = {
+  provider: "",
+  model: "",
+  thinking: "",
+  permissionMode: "accept-edits",
+};
+
 export interface PresetDraft {
   name: string;
-  provider: string;
-  model: string;
-  /** Thinking level id; "" = default (not specified). */
-  thinking: string;
-  permissionMode: PresetPermissionMode;
+  models: PresetModelDraft[];
   environmentKind: PresetEnvironmentKind;
   baseBranch: string;
   runtimeEnv: string;
@@ -103,10 +109,7 @@ export interface PresetDraft {
 
 export const EMPTY_PRESET_DRAFT: PresetDraft = {
   name: "",
-  provider: "",
-  model: "",
-  thinking: "",
-  permissionMode: "accept-edits",
+  models: [{ ...EMPTY_MODEL_DRAFT }],
   environmentKind: "new-worktree",
   baseBranch: "",
   runtimeEnv: "",
@@ -118,10 +121,7 @@ export const EMPTY_PRESET_DRAFT: PresetDraft = {
 export function presetToDraft(p: Preset): PresetDraft {
   return {
     name: p.name,
-    provider: p.provider,
-    model: p.model,
-    thinking: p.thinking,
-    permissionMode: p.permissionMode,
+    models: presetModels(p).map((model) => ({ ...model })),
     environmentKind: p.environmentKind,
     baseBranch: p.baseBranch ?? "",
     runtimeEnv: p.runtimeEnv ?? "",
@@ -131,6 +131,19 @@ export function presetToDraft(p: Preset): PresetDraft {
   };
 }
 
+/** Move a candidate one place while keeping every model's settings together. */
+export function movePresetModel(
+  models: readonly PresetModelDraft[],
+  index: number,
+  direction: -1 | 1,
+): PresetModelDraft[] {
+  const target = index + direction;
+  const next = [...models];
+  if (index < 0 || index >= next.length || target < 0 || target >= next.length) return next;
+  [next[index], next[target]] = [next[target]!, next[index]!];
+  return next;
+}
+
 /** Toggle `id` in the ordered chain: selecting appends (order = click order), selecting again removes. */
 export function toggleFallback(chain: readonly string[], id: string): string[] {
   return chain.includes(id) ? chain.filter((x) => x !== id) : [...chain, id];
@@ -138,12 +151,16 @@ export function toggleFallback(chain: readonly string[], id: string): string[] {
 
 /** Draft -> RPC payload (blank optional strings become null). */
 export function draftToPayload(d: PresetDraft) {
+  const models = d.models.map((m) => ({
+    ...m,
+    provider: m.provider.trim(),
+    model: m.model.trim(),
+    thinking: m.thinking.trim(),
+  }));
   return {
     name: d.name.trim(),
-    provider: d.provider.trim(),
-    model: d.model.trim(),
-    thinking: d.thinking.trim(),
-    permissionMode: d.permissionMode,
+    ...models[0]!,
+    models,
     environmentKind: d.environmentKind,
     baseBranch: d.baseBranch.trim() || null,
     runtimeEnv: d.runtimeEnv.trim() || null,
@@ -308,8 +325,11 @@ export function projectDraftToPayload(d: ProjectDraft) {
 
 export function validateDraft(d: PresetDraft): string | null {
   if (!d.name.trim()) return "请填写预设名称";
-  if (!d.provider.trim()) return "请选择 agent（provider）";
-  if (!d.model.trim()) return "请选择模型";
+  if (!d.models.length) return "请至少添加一个候选模型";
+  for (const [index, model] of d.models.entries()) {
+    if (!model.provider.trim()) return `请选择第 ${index + 1} 个候选的 agent（provider）`;
+    if (!model.model.trim()) return `请选择第 ${index + 1} 个候选的模型`;
+  }
   return null;
 }
 

@@ -7,6 +7,9 @@ import {
   sessionsRpc,
   statusRpc,
   wakeRpc,
+  promptsListRpc,
+  promptsSetRpc,
+  promptsClearRpc,
   type MasterSettings,
 } from "./shared/rpc";
 import { createMasterRuntime } from "./server/runtime";
@@ -95,6 +98,26 @@ export default function contribute(server: PluginServerContext) {
     onPaseo(api);
     const upper = input.card.toUpperCase();
     return master.wake(CARD_KEY_PATTERN.test(upper) ? upper : input.card, input.reason, input.force);
+  });
+
+  const masterPrompt = (key: string) => {
+    if (!store.prompts.list().some((prompt) => prompt.key === key && prompt.role === "master")) {
+      throw new Error("只能在总 agent 面板修改总 agent 的提示词");
+    }
+  };
+  server.handle(promptsListRpc, ({ projectId }) => ({
+    prompts: store.prompts.list({ projectId: projectId ?? null }).filter((prompt) => prompt.role === "master"),
+    projects: store.projects.list(false).map(({ id, name, prefix }) => ({ id, name, prefix })),
+  }));
+  server.handle(promptsSetRpc, ({ key, text, projectId }) => {
+    masterPrompt(key);
+    store.prompts.setOverride(key, text, { projectId: projectId ?? null });
+    return { ok: true as const };
+  });
+  server.handle(promptsClearRpc, ({ key, projectId }) => {
+    masterPrompt(key);
+    store.prompts.clearOverride(key, { projectId: projectId ?? null });
+    return { ok: true as const };
   });
 
   // Hosts that expose the handle and push at start-up (server.paseo / server.notify) need no hook

@@ -93,6 +93,7 @@ export const SYNC_TABLES: readonly SyncTableSpec[] = [
       "model",
       "thinking",
       "permission_mode",
+        "models_json",
       "environment_kind",
       "base_branch",
       "runtime_env",

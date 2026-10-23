@@ -258,6 +258,18 @@ export const PlanVersionSchema = z.object({
 });
 export type PlanVersion = z.infer<typeof PlanVersionSchema>;
 
+export const PresetModelSchema = z.object({
+  provider: z.string().trim().min(1),
+  // COMPAT: old presets used an empty model to request the provider's catalog default.
+  model: z.string(),
+  thinking: z.string(),
+  permissionMode: PresetPermissionModeSchema,
+});
+export type PresetModel = z.infer<typeof PresetModelSchema>;
+export const PresetModelInputSchema = PresetModelSchema.extend({
+  model: z.string().trim().min(1),
+});
+
 export const PresetSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
@@ -265,6 +277,8 @@ export const PresetSchema = z.object({
   model: z.string(),
   thinking: z.string(),
   permissionMode: PresetPermissionModeSchema,
+  /** Ordered candidates; omitted by older replicas. Top-level fields mirror the first. */
+  models: z.array(PresetModelSchema).min(1).optional(),
   environmentKind: PresetEnvironmentKindSchema,
   baseBranch: z.string().nullable(),
   /** Runtime environment the agent runs in (e.g. android-emulator, web-dev-server). */

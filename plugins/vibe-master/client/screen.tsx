@@ -6,16 +6,39 @@ import {
   type PluginSidebarItemProps,
   type PluginSurfaceProps,
 } from "@getpaseo/plugin/client";
-import { SettingsCard, SettingsInput, SettingsSection, SettingsSelect, SettingsSwitch, SidebarRow } from "@getpaseo/plugin/client/ui";
+import {
+  SettingsCard,
+  SettingsInput,
+  SettingsSection,
+  SettingsSelect,
+  SettingsSwitch,
+  SidebarRow,
+} from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { masterSettings, permissionRpc, sessionsRpc, statusRpc, type PresetChoice } from "../shared/rpc";
+import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  masterSettings,
+  permissionRpc,
+  sessionsRpc,
+  statusRpc,
+  type PresetChoice,
+} from "../shared/rpc";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
-import { dispatchLabel, presetChoices, quotaLabel, sessionDetail, sessionTitle, targetLabel } from "./format";
+import { MasterPrompts } from "./prompts";
+import {
+  dispatchLabel,
+  presetChoices,
+  presetModelLabel,
+  quotaLabel,
+  sessionDetail,
+  sessionTitle,
+  targetLabel,
+} from "./format";
 
 /** Modes a provider may offer; one the provider lacks falls back to auto. */
 const PERMISSION_CHOICES = [
+  { label: "跟随预设", value: "preset" },
   { label: "自动（推荐）", value: "auto" },
   { label: "每步都询问（Claude: default）", value: "default" },
   { label: "自动接受文件修改（Claude）", value: "acceptEdits" },
@@ -24,7 +47,15 @@ const PERMISSION_CHOICES = [
   { label: "绕过权限（Claude）", value: "bypassPermissions" },
 ] as const;
 
-function Section({ theme, title, children }: { theme: PluginTheme; title: string; children: ReactNode }) {
+function Section({
+  theme,
+  title,
+  children,
+}: {
+  theme: PluginTheme;
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <View
       style={{
@@ -36,7 +67,9 @@ function Section({ theme, title, children }: { theme: PluginTheme; title: string
         gap: 8,
       }}
     >
-      <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>{title}</Text>
+      <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>
+        {title}
+      </Text>
       {children}
     </View>
   );
@@ -52,7 +85,8 @@ function levelColor(theme: PluginTheme, level: PresetChoice["level"]): string {
   return theme.colors.foregroundMuted;
 }
 
-export function MasterScreen({ theme, navigation }: PluginScreenProps) {
+export function MasterScreen(props: PluginScreenProps) {
+  const { theme, navigation } = props;
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
   const permissionCall = useRpc(permissionRpc);
@@ -86,9 +120,15 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
+      contentContainerStyle={{ padding: 16, gap: 12 }}
+    >
+      <MasterConfiguration {...props} />
       {status.error ? (
-        <Text style={{ color: theme.colors.statusDanger }}>无法加载总 agent：{formatRpcError(status.error)}</Text>
+        <Text style={{ color: theme.colors.statusDanger }}>
+          无法加载总 agent：{formatRpcError(status.error)}
+        </Text>
       ) : null}
       {error ? <Text style={{ color: theme.colors.statusDanger }}>{error}</Text> : null}
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
@@ -99,12 +139,16 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
               {s.preset ? `${s.preset.name}（${targetLabel(s.target)}）` : "尚未选择预设"}
             </Text>
             <Muted theme={theme}>
-              {s.preset ? (s.preset.migrated ? "沿用旧设置匹配到的预设，请在设置里确认" : "设置里选的预设") : "请在总 agent 设置里选一个预设"}
+              {s.preset
+                ? s.preset.migrated
+                  ? "沿用旧设置匹配到的预设，请在上方确认"
+                  : "上方选择的预设"
+                : "请在上方选一个预设"}
               {s.session ? ` - 会话${s.session.state}` : " - 尚无会话"}
               {s.paseoReady ? "" : " - 等待 daemon"}
             </Muted>
             <Muted theme={theme}>{dispatchLabel(s.dispatch)}</Muted>
-            {!s.enabled ? <Muted theme={theme}>总 agent 已在设置中停用。</Muted> : null}
+            {!s.enabled ? <Muted theme={theme}>总 agent 已停用，可在上方启用。</Muted> : null}
             {s.lastAlert ? (
               <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
                 {s.lastAlert.message}（{s.lastAlert.at.slice(11, 16)} UTC）
@@ -137,16 +181,30 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
                 {navigation ? (
                   <Pressable
                     onPress={() => navigation.openAgent({ agentId: row.agentId })}
-                    style={{ borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 12, paddingVertical: 6 }}
+                    style={{
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: theme.colors.border,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                    }}
                   >
                     <Text style={{ color: theme.colors.foreground }}>打开</Text>
                   </Pressable>
                 ) : null}
               </View>
             ))}
-            {sessions.data && sessions.data.sessions.length === 0 ? <Muted theme={theme}>还没有总 agent 会话。</Muted> : null}
-            {sessions.error ? <Muted theme={theme}>无法加载会话列表：{formatRpcError(sessions.error)}</Muted> : null}
-            {!navigation ? <Muted theme={theme}>当前客户端不支持从插件打开会话，请在会话列表中按标题 Vibe Master 查找。</Muted> : null}
+            {sessions.data && sessions.data.sessions.length === 0 ? (
+              <Muted theme={theme}>还没有总 agent 会话。</Muted>
+            ) : null}
+            {sessions.error ? (
+              <Muted theme={theme}>无法加载会话列表：{formatRpcError(sessions.error)}</Muted>
+            ) : null}
+            {!navigation ? (
+              <Muted theme={theme}>
+                当前客户端不支持从插件打开会话，请在会话列表中按标题 Vibe Master 查找。
+              </Muted>
+            ) : null}
           </Section>
 
           <Section theme={theme} title="队列">
@@ -172,14 +230,21 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
                 {!s.permission.modeId ? "（provider 默认）" : ""}
               </Text>
               <Muted theme={theme}>
-                {s.permission.source === "switched" ? "你手动切换的模式" : "设置里的默认模式"}。对总 agent 和规划会话生效；运行中的会话会以新模式重启，卡片不受影响。
+                {s.permission.source === "switched" ? "你手动切换的模式" : "设置里的默认模式"}。对总
+                agent 生效；运行中的总 agent 会以新模式重建，卡片不受影响。
               </Muted>
               {[
                 { id: "auto", label: "自动（provider 的自动审批模式）" },
                 ...s.permission.options.map((o) => ({ id: o.id, label: o.label })),
-                ...(s.permission.source === "switched" ? [{ id: "settings", label: "跟随设置默认值" }] : []),
+                ...(s.permission.source === "switched"
+                  ? [{ id: "settings", label: "跟随设置默认值" }]
+                  : []),
               ].map((option) => {
-                const active = option.id !== "settings" && (option.id === "auto" ? s.permission!.auto : option.id === s.permission!.modeId && !s.permission!.auto);
+                const active =
+                  option.id !== "settings" &&
+                  (option.id === "auto"
+                    ? s.permission!.auto
+                    : option.id === s.permission!.modeId && !s.permission!.auto);
                 return (
                   <Pressable
                     key={option.id}
@@ -274,11 +339,13 @@ function PresetPicker({
   loaded: boolean;
   onChange(presetId: string): void;
 }) {
-  const choices = presetChoices(presets, selectedId);
+  const choices = presetChoices(presets);
   return (
     <View style={{ gap: 6, padding: 12 }}>
       <Text style={{ color: theme.colors.foreground, fontSize: 14 }}>模型（预设）</Text>
-      <Muted theme={theme}>总 agent 用这个预设的 provider、模型和思考档位；换预设后旧会话保留可看，新会话带交接摘要。</Muted>
+      <Muted theme={theme}>
+        按预设内的模型顺序使用，不可用时自动切换下一个。换预设后旧会话保留，新会话带交接摘要。
+      </Muted>
       {loaded && !selectedId ? (
         <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
           还没有选预设：选之前总 agent 不工作，派发会回落到调度器规则。
@@ -312,20 +379,30 @@ function PresetPicker({
               <Text style={{ color: theme.colors.foreground, fontSize: 14 }} numberOfLines={1}>
                 {p.name}
               </Text>
-              <Muted theme={theme}>
-                {p.provider} / {p.model || "默认模型"}
-              </Muted>
+              <Muted theme={theme}>{presetModelLabel(p)}</Muted>
             </View>
             <Text style={{ color: levelColor(theme, p.level), fontSize: 12 }}>{quotaLabel(p)}</Text>
           </Pressable>
         );
       })}
-      {loaded && choices.length === 0 ? <Muted theme={theme}>还没有预设，请先在看板的「管理」里添加。</Muted> : null}
+      {loaded && choices.length === 0 ? (
+        <Muted theme={theme}>还没有预设，请先在看板的「管理」里添加。</Muted>
+      ) : null}
     </View>
   );
 }
 
-const Button = ({ theme, label, onPress, disabled }: { theme: PluginTheme; label: string; onPress(): void; disabled?: boolean }) => (
+const Button = ({
+  theme,
+  label,
+  onPress,
+  disabled,
+}: {
+  theme: PluginTheme;
+  label: string;
+  onPress(): void;
+  disabled?: boolean;
+}) => (
   <Pressable
     disabled={disabled}
     onPress={onPress}
@@ -342,17 +419,33 @@ const Button = ({ theme, label, onPress, disabled }: { theme: PluginTheme; label
   </Pressable>
 );
 
-/** Host navigation to another plugin's screen (a fork addition; absent on older hosts). */
-type CrossPluginNavigation = {
-  openPluginScreen?: (input: { pluginId: string; screenId: string }) => void;
-};
-
 export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) {
+  const nav = navigation as
+    | { openPluginScreen?: (input: { pluginId: string; screenId: string }) => void }
+    | undefined;
+  return (
+    <SettingsSection title="总 agent">
+      <Muted theme={theme}>总 agent 的预设、自动化、权限和提示词均在总 agent 面板中设置。</Muted>
+      {nav?.openPluginScreen ? (
+        <Button
+          theme={theme}
+          label="打开总 agent 面板"
+          onPress={() => nav.openPluginScreen!({ pluginId: "vibe-master", screenId: "main" })}
+        />
+      ) : (
+        <Muted theme={theme}>请从侧栏打开「总 agent」。</Muted>
+      )}
+    </SettingsSection>
+  );
+}
+
+function MasterConfiguration(props: PluginSurfaceProps) {
+  const { theme } = props;
   const settings = useSettings(masterSettings);
   const statusCall = useRpc(statusRpc);
   const queryClient = useQueryClient();
   const status = useQuery({
-    queryKey: ["vibe-master", "status-presets"],
+    queryKey: ["vibe-master", "status"],
     queryFn: () => statusCall({}),
     staleTime: 10_000,
     retry: false,
@@ -379,7 +472,11 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
     <SettingsSection title="总 agent 设置">
       <Group theme={theme} title="基础" initiallyOpen>
         <SettingsCard>
-          <SettingsSwitch label="启用总 agent" value={values.enabled} onValueChange={(enabled: boolean) => save({ ...values, enabled })} />
+          <SettingsSwitch
+            label="启用总 agent"
+            value={values.enabled}
+            onValueChange={(enabled: boolean) => save({ ...values, enabled })}
+          />
           <PresetPicker
             theme={theme}
             presets={status.data?.presets ?? []}
@@ -399,7 +496,7 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
             onValueChange={(dispatch: boolean) => save({ ...values, dispatch })}
           />
           <SettingsSelect
-            label="总 agent 与规划会话的权限模式（自动 = provider 的自动审批模式）"
+            label="权限模式（跟随预设 = 使用当前候选模型的权限）"
             value={values.permissionMode}
             options={PERMISSION_CHOICES}
             onValueChange={(permissionMode: string) => save({ ...values, permissionMode })}
@@ -415,7 +512,8 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
       <Group theme={theme} title="触发：什么时候唤醒总 agent">
         <SettingsCard>
           <Muted theme={theme}>
-            总 agent 不参与卡片的方案、执行和验收：这些由卡片上选的模型完成。它只做两件事：决定先派发哪些待办卡（上面的派发开关），以及卡片完成后整理项目记忆。
+            总 agent
+            不参与卡片的方案、执行和验收：这些由卡片上选的模型完成。它只做两件事：决定先派发哪些待办卡（上面的派发开关），以及卡片完成后整理项目记忆。
           </Muted>
           <SettingsSwitch
             label="启动时补扫未整理的完成卡"
@@ -431,7 +529,9 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
             label="维护需求文档（卡片完成时允许总 agent 更新并提交）"
             hint="只提交需求文档这一个文件，不推送；仓库忙或文件被忽略时只在卡片上记一条备注并提醒。"
             value={values.maintainRequirements}
-            onValueChange={(maintainRequirements: boolean) => save({ ...values, maintainRequirements })}
+            onValueChange={(maintainRequirements: boolean) =>
+              save({ ...values, maintainRequirements })
+            }
           />
         </SettingsCard>
       </Group>
@@ -444,29 +544,19 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
             initialValue={String(values.requirementsExcerptChars)}
             onChangeText={(text) => {
               const n = Number(text);
-              save({ ...values, requirementsExcerptChars: Number.isFinite(n) ? Math.round(Math.min(50_000, Math.max(0, n))) : 6000 });
+              save({
+                ...values,
+                requirementsExcerptChars: Number.isFinite(n)
+                  ? Math.round(Math.min(50_000, Math.max(0, n)))
+                  : 6000,
+              });
             }}
           />
         </SettingsCard>
       </Group>
 
       <Group theme={theme} title="提示词与规则">
-        <View style={{ gap: 8 }}>
-          <Muted theme={theme}>
-            总 agent 的系统规则、规则补充、唤醒消息，以及规划会话、探路的提示词都集中在「Agent 行为」页编辑，可按项目覆盖，也能恢复默认。这里不再重复编辑。
-          </Muted>
-          {(navigation as CrossPluginNavigation | undefined)?.openPluginScreen ? (
-            <Button
-              theme={theme}
-              label="打开「Agent 行为」页"
-              onPress={() =>
-                (navigation as CrossPluginNavigation).openPluginScreen!({ pluginId: "vibe-board", screenId: "behaviour" })
-              }
-            />
-          ) : (
-            <Muted theme={theme}>在侧栏的「Agent 行为」入口中打开。</Muted>
-          )}
-        </View>
+        <MasterPrompts {...props} />
       </Group>
 
       <Group theme={theme} title="高级：自动化参数">
@@ -474,27 +564,40 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
           <SettingsInput
             label="总 agent 选择派发的超时（秒，10-600）"
             initialValue={String(values.dispatchTimeoutSeconds)}
-            onChangeText={(text) => save({ ...values, dispatchTimeoutSeconds: integer(text, 120, 10, 600) })}
+            onChangeText={(text) =>
+              save({ ...values, dispatchTimeoutSeconds: integer(text, 120, 10, 600) })
+            }
           />
           <SettingsInput
             label="向总 agent 提问的超时（分钟，1-120）"
             initialValue={String(values.askTimeoutMinutes)}
-            onChangeText={(text) => save({ ...values, askTimeoutMinutes: integer(text, 5, 1, 120) })}
+            onChangeText={(text) =>
+              save({ ...values, askTimeoutMinutes: integer(text, 5, 1, 120) })
+            }
           />
           <SettingsInput
             label="规划会话单回合超时（分钟，1-120）"
             initialValue={String(values.planTurnTimeoutMinutes)}
-            onChangeText={(text) => save({ ...values, planTurnTimeoutMinutes: integer(text, 10, 1, 120) })}
+            onChangeText={(text) =>
+              save({ ...values, planTurnTimeoutMinutes: integer(text, 10, 1, 120) })
+            }
           />
           <SettingsInput
             label="探路超时（分钟，1-120）"
             initialValue={String(values.scoutTimeoutMinutes)}
-            onChangeText={(text) => save({ ...values, scoutTimeoutMinutes: integer(text, 5, 1, 120) })}
+            onChangeText={(text) =>
+              save({ ...values, scoutTimeoutMinutes: integer(text, 5, 1, 120) })
+            }
           />
           <SettingsInput
             label="规划会话每条消息最多请求探路的轮数（0-10）"
             initialValue={String(values.maxResearchRounds)}
-            onChangeText={(text) => save({ ...values, maxResearchRounds: Math.round(Math.min(10, Math.max(0, Number(text) || 0))) })}
+            onChangeText={(text) =>
+              save({
+                ...values,
+                maxResearchRounds: Math.round(Math.min(10, Math.max(0, Number(text) || 0))),
+              })
+            }
           />
           <SettingsInput
             label="规划会话一次处理最多连续回合数（1-100）"
@@ -504,37 +607,57 @@ export function MasterSettingsScreen({ theme, navigation }: PluginSurfaceProps) 
           <SettingsInput
             label="回复格式不合规时的重试次数（0-5，0 为不重试）"
             initialValue={String(values.jsonRepairRetries)}
-            onChangeText={(text) => save({ ...values, jsonRepairRetries: Math.round(Math.min(5, Math.max(0, Number(text) || 0))) })}
+            onChangeText={(text) =>
+              save({
+                ...values,
+                jsonRepairRetries: Math.round(Math.min(5, Math.max(0, Number(text) || 0))),
+              })
+            }
           />
           <SettingsInput
             label="启动补扫：多少小时内完成的卡要整理记忆（1-720）"
             initialValue={String(values.sweepDoneWindowHours)}
-            onChangeText={(text) => save({ ...values, sweepDoneWindowHours: integer(text, 48, 1, 720) })}
+            onChangeText={(text) =>
+              save({ ...values, sweepDoneWindowHours: integer(text, 48, 1, 720) })
+            }
           />
           <SettingsInput
             label="额度偏低提醒的冷却（分钟，1-1440）"
             initialValue={String(values.alertCooldownQuotaLowMinutes)}
-            onChangeText={(text) => save({ ...values, alertCooldownQuotaLowMinutes: integer(text, 360, 1, 1440) })}
+            onChangeText={(text) =>
+              save({ ...values, alertCooldownQuotaLowMinutes: integer(text, 360, 1, 1440) })
+            }
           />
           <SettingsInput
             label="额度报错 / 等待批准提醒的冷却（分钟，1-1440）"
             initialValue={String(values.alertCooldownUrgentMinutes)}
-            onChangeText={(text) => save({ ...values, alertCooldownUrgentMinutes: integer(text, 10, 1, 1440) })}
+            onChangeText={(text) =>
+              save({ ...values, alertCooldownUrgentMinutes: integer(text, 10, 1, 1440) })
+            }
           />
           <SettingsInput
             label="维护暂停 / 需求文档失败提醒的冷却（分钟，1-1440）"
             initialValue={String(values.alertCooldownRoutineMinutes)}
-            onChangeText={(text) => save({ ...values, alertCooldownRoutineMinutes: integer(text, 60, 1, 1440) })}
+            onChangeText={(text) =>
+              save({ ...values, alertCooldownRoutineMinutes: integer(text, 60, 1, 1440) })
+            }
           />
           <SettingsInput
             label="项目块里列出的其它未完成卡片数量（0-200）"
             initialValue={String(values.projectBlockCardLimit)}
-            onChangeText={(text) => save({ ...values, projectBlockCardLimit: Math.round(Math.min(200, Math.max(0, Number(text) || 0))) })}
+            onChangeText={(text) =>
+              save({
+                ...values,
+                projectBlockCardLimit: Math.round(Math.min(200, Math.max(0, Number(text) || 0))),
+              })
+            }
           />
           <SettingsInput
             label="交接摘要的最大字符数（500-30000）"
             initialValue={String(values.handoffMaxChars)}
-            onChangeText={(text) => save({ ...values, handoffMaxChars: integer(text, 3500, 500, 30000) })}
+            onChangeText={(text) =>
+              save({ ...values, handoffMaxChars: integer(text, 3500, 500, 30000) })
+            }
           />
           <SettingsInput
             label="交接摘要回看的天数（1-60）"

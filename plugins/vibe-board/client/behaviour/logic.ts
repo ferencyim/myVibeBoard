@@ -41,12 +41,31 @@ export const SOURCE_LABELS = { default: "默认", global: "全局覆盖", projec
  * A plugin with a settings page gets one line here (pluginId + the page's screen id).
  */
 export const AUTOMATION_LINKS = [
-  { pluginId: "vibe-master", screenId: "preferences", label: "总 agent：预设、派发、超时、重试等" },
-  { pluginId: "vibe-board", screenId: "preferences", label: "Vibe Board：派发、卡死检测、探路兵、brief 限值" },
-  { pluginId: "vibe-verify", screenId: "preferences", label: "验证与复核：自动退回、严重度映射、超时与摘录" },
-  { pluginId: "vibe-context", screenId: "preferences", label: "上下文与压缩：缓存 TTL、压缩命令、记忆预算、复杂度分级" },
-  { pluginId: "switch-provider", screenId: "preferences", label: "切换 provider：压缩历史的上限与摘要文字（该插件独立安装，文字在它自己的设置页里编辑）" },
-  { pluginId: "vibe-maintain", screenId: "preferences", label: "自动维护：触发间隔、超时、权限模式" },
+  {
+    pluginId: "vibe-board",
+    screenId: "preferences",
+    label: "Vibe Board：派发、卡死检测、探路兵、brief 限值",
+  },
+  {
+    pluginId: "vibe-verify",
+    screenId: "preferences",
+    label: "验证与复核：自动退回、严重度映射、超时与摘录",
+  },
+  {
+    pluginId: "vibe-context",
+    screenId: "preferences",
+    label: "上下文与压缩：缓存 TTL、压缩命令、记忆预算、复杂度分级",
+  },
+  {
+    pluginId: "switch-provider",
+    screenId: "preferences",
+    label: "切换 provider：压缩历史的上限与摘要文字（该插件独立安装，文字在它自己的设置页里编辑）",
+  },
+  {
+    pluginId: "vibe-maintain",
+    screenId: "preferences",
+    label: "自动维护：触发间隔、超时、权限模式",
+  },
   { pluginId: "vibe-scheduler", screenId: "preferences", label: "调度器：并发、资源与派发超时" },
   { pluginId: "vibe-stats", screenId: "preferences", label: "统计" },
 ] as const;
@@ -62,12 +81,19 @@ export interface RoleGroup {
 
 /** Known roles first (fixed order), unknown ones after; empty groups are omitted. */
 export function groupByRole(prompts: readonly BehaviourPrompt[]): RoleGroup[] {
-  const roles = [...PROMPT_ROLES, ...[...new Set(prompts.map((p) => p.role))].filter((r) => !(PROMPT_ROLES as readonly string[]).includes(r))];
+  const roles = [
+    ...PROMPT_ROLES,
+    ...[...new Set(prompts.map((p) => p.role))].filter(
+      (r) => !(PROMPT_ROLES as readonly string[]).includes(r),
+    ),
+  ];
   return roles
     .map((role) => ({
       role,
       label: ROLE_LABELS[role] ?? role,
-      prompts: prompts.filter((p) => p.role === role).sort((a, b) => a.order - b.order || a.key.localeCompare(b.key)),
+      prompts: prompts
+        .filter((p) => p.role === role)
+        .sort((a, b) => a.order - b.order || a.key.localeCompare(b.key)),
     }))
     .filter((g) => g.prompts.length > 0);
 }

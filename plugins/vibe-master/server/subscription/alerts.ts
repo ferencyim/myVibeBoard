@@ -1,13 +1,11 @@
-// "Only remind" alerts (quota low / quota error). They are published on the vibe_event bus as a
-// `master.alert` event; server/notify turns it into a push. The master is never switched
-// automatically; the owner decides.
+// Alerts are published on vibe_event; server/notify turns them into pushes.
 
 import { publishEvent, type VibeDb } from "../vibe/db";
 import type { Clock } from "../clock";
 import { defaultTuning, type TuningSource } from "../tuning";
 import type { MasterStateFile } from "./state";
 
-export type AlertKind = "quota_low" | "quota_error" | "maintenance_paused" | "permission_wait" | "requirements_failed";
+export type AlertKind = "provider_error" | "quota_low" | "quota_error" | "maintenance_paused" | "permission_wait" | "requirements_failed";
 
 export interface Alerts {
   /** `subject` is the provider for quota alerts and the rule name for maintenance alerts. */
@@ -16,6 +14,7 @@ export interface Alerts {
 
 /** Which cooldown group (settings) an alert kind belongs to. */
 const COOLDOWN_GROUP = {
+  provider_error: "urgent",
   quota_low: "quotaLow",
   quota_error: "urgent",
   maintenance_paused: "routine",

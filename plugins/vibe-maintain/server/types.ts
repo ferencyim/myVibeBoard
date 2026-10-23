@@ -41,7 +41,10 @@ export interface CheckContext {
   /** Why the rule fired (and, for event triggers, what changed). */
   trigger: { reason: string; detail?: string[] };
   /** Persistent integer cursors of this rule (e.g. file read offsets). */
-  cursor: { get(key: string): number | undefined; set(key: string, value: number): void };
+  cursor: {
+    get(key: string): number | undefined;
+    set(key: string, value: number): void;
+  };
   /** True while a not-done maintenance card with this dedupe key exists. */
   hasOpenCard(dedupeKey: string): boolean;
 }
@@ -52,7 +55,11 @@ export type CheckRegistry = Record<string, CheckFn>;
 
 /** Optional read-only sub agent that turns the deterministic findings into a short action plan. */
 export interface SubAgentRunner {
-  run(input: { rule: MaintenanceRule; project: Project; prompt: string }): Promise<string | null>;
+  run(input: {
+    rule: MaintenanceRule;
+    project: Project;
+    prompt: string;
+  }): Promise<string | null>;
 }
 
 /** Starts the worker for a "fix" rule in its own worktree. The engine has already created the card. */
@@ -66,5 +73,13 @@ export interface FixLauncher {
     rule: MaintenanceRule;
     project: Project;
     prompt: string;
-  }): Promise<{ workspaceId: string; worktree: string | null }>;
+  }): Promise<{
+    workspaceId: string;
+    worktree: string | null;
+    agentId?: string;
+    provider?: string;
+    presetId?: string;
+    model?: string;
+    modelIndex?: number;
+  }>;
 }

@@ -285,6 +285,13 @@ import to any other code file in the plugin root is also rejected; move it into 
 or `shared/`. These are compile errors naming the importing file and boundary rule. Top-level React
 Native calls such as `StyleSheet.create` belong in `client/`.
 
+In this fork, shared client components live in `plugins/vibe-shared/client/`.
+Consumers opt in through `vibe.shared.client` and run `npm run vibe:sync-shared`
+to copy them into their own `client/vibe/` directory. A relative import from
+another plugin, or placing a React component in `shared/`, fails real plugin
+compilation even when TypeScript accepts it. Validate changes by loading the
+plugin in an isolated daemon as well as running the static checks.
+
 The scaffold omits `"DOM"` from `tsconfig.json` and does not use `/// <reference lib="dom" />`, so
 browser globals are not available across the plugin. Put sanctioned web-only APIs in
 `client/web.ts`, declare only the globals that module uses, gate each export with

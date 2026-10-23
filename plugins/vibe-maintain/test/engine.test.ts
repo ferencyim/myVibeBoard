@@ -429,6 +429,30 @@ ${extra}`;
     expect(JSON.stringify(run.findings)).toContain("no daemon");
   });
 
+  it("records the actual maintenance fallback session and model index for later runtime failures", async () => {
+    let presetId = "";
+    const fixLauncher: FixLauncher = {
+      provider: () => "codex",
+      launch: async () => ({ workspaceId: "ws", worktree: null, agentId: "fallback-worker", provider: "claude", presetId, model: "second", modelIndex: 1 }),
+    };
+    const h = setup({ yml: rule("    output: fix\n"), engine: { fixLauncher, newId: () => "initial-worker" } });
+    presetId = h.store.presets.create({ name: "维护", provider: "codex", model: "first", models: [
+      { provider: "codex", model: "first", thinking: "", permissionMode: "auto" },
+      { provider: "claude", model: "second", thinking: "", permissionMode: "auto" },
+      { provider: "opencode", model: "third", thinking: "", permissionMode: "auto" },
+    ] }).id;
+    writeFileSync(join(h.repo, "dirty.txt"), "dirty\n");
+    await h.engine.tick();
+    h.complete(1);
+    await h.engine.tick();
+    const card = h.maintenanceCards()[0]!;
+    const active = h.store.sessions.getByAgent("fallback-worker")!;
+    expect(active).toMatchObject({ currentProvider: "claude", role: "worker", workspaceId: "ws" });
+    expect(h.store.cards.get(card.id)?.presetId).toBe(presetId);
+    expect(h.store.sessions.getByAgent("initial-worker")?.state).toBe("ended");
+    expect(h.store.events.list(card.id).map((e) => e.body)).toContainEqual({ kind: "model_selected", sessionId: active.id, presetId, modelIndex: 1, provider: "claude", model: "second" });
+  });
+
   it("runNow ignores thresholds, the cap and a pause", async () => {
     const h = setup({ yml: rule("") });
     writeFileSync(join(h.repo, "dirty.txt"), "dirty\n");

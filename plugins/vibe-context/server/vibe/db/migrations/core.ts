@@ -446,4 +446,38 @@ ALTER TABLE project DROP COLUMN default_preset_id;
 DELETE FROM sync_meta WHERE table_name = 'project' AND column_name = 'default_preset_id';
 `,
   },
+  {
+    version: 10,
+    name: "preset_model_candidates",
+    sql: `
+ALTER TABLE preset ADD COLUMN models_json TEXT NOT NULL DEFAULT '[]';
+WITH RECURSIVE chain(root, id, position, visited) AS (
+  SELECT id, id, '', json_array(id) FROM preset
+  UNION ALL
+  SELECT chain.root, child.id, chain.position || printf('%010d.', link.key),
+         json_insert(chain.visited, '$[#]', child.id)
+  FROM chain
+  JOIN preset parent ON parent.id = chain.id
+  JOIN json_each(COALESCE(parent.fallback_preset_ids_json, '[]')) link
+  JOIN preset child ON child.id = link.value
+  WHERE NOT EXISTS (SELECT 1 FROM json_each(chain.visited) WHERE value = child.id)
+), candidates AS (
+  SELECT chain.root, chain.position,
+    json_object('provider', p.provider, 'model', p.model,
+                'thinking', p.thinking, 'permissionMode', p.permission_mode) candidate
+  FROM chain JOIN preset p ON p.id = chain.id
+), unique_candidates AS (
+  SELECT root, candidate, MIN(position) position FROM candidates GROUP BY root, candidate
+)
+UPDATE preset SET models_json = (
+  SELECT json_group_array(json(candidate)) FROM (
+    SELECT candidate FROM unique_candidates WHERE root = preset.id ORDER BY position
+  )
+);
+INSERT OR REPLACE INTO sync_meta (table_name, row_id, column_name, hlc, device_id)
+  SELECT 'preset', id, 'models_json', updated_hlc,
+         COALESCE((SELECT device_id FROM sync_meta WHERE table_name = 'preset' AND row_id = preset.id LIMIT 1), '')
+  FROM preset;
+`,
+  },
 ];

@@ -23,6 +23,8 @@ export interface MasterAlert {
 }
 
 export interface MasterStateData {
+  /** Candidate progress survives restarts; changing the preset or candidates resets it. */
+  presetSelection?: { key: string; index: number; exhausted?: boolean };
   /** Set by a manual permission switch; overrides the settings default until switched back. */
   permissionMode?: string;
   agent?: MasterAgentRecord;

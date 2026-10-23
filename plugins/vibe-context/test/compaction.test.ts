@@ -1,13 +1,14 @@
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   compareVersions,
   createCompactionScheduler,
   detectNativeIdleCompaction,
   marginSeconds,
   skipReason,
+  handoffAgent,
   type AgentInfo,
   type CompactionConfig,
   type CompactionHost,
@@ -95,6 +96,18 @@ function setup(provider = "codex", opts: SetupOptions = {}) {
 }
 
 describe("trigger rules", () => {
+  it("creates a cold agent with the existing model, thinking and permission mode", async () => {
+    const create = vi.fn(async () => ({ id: "new-agent" }));
+    const paseo = { agents: { ref: () => ({ refresh: async () => ({ agent: {
+      provider: "codex", model: "gpt-5", thinkingOptionId: null, effectiveThinkingOptionId: "high", currentModeId: "auto",
+    } }) }), create } };
+    expect(await handoffAgent(paseo as any, { id: "old-agent", provider: "codex", cwd: "D:/repo" }, "handoff prompt")).toBe("new-agent");
+    expect(create).toHaveBeenCalledWith({
+      config: { provider: "codex/gpt-5", thinkingOptionId: "high", modeId: "auto" },
+      cwd: "D:/repo", prompt: "handoff prompt",
+    });
+  });
+
   it("margin is 3 min for a 1 h TTL and 1 min for 5 min", () => {
     expect(marginSeconds(3600)).toBe(180);
     expect(marginSeconds(300)).toBe(60);
@@ -202,6 +215,31 @@ describe("scheduler (fake clock)", () => {
     expect(s.store.sessions.get(s.session.id)?.state).toBe("ended");
     expect(s.store.sessions.getByAgent("agent-1-next")?.cardId).toBe(s.card.id);
     expect(s.events()).toEqual([{ sessionId: s.session.id, strategy: "handoff" }]);
+  });
+
+  it("preserves the active candidate index in a cold handoff", async () => {
+    const s = setup("kimi");
+    const selection = { kind: "model_selected", sessionId: s.session.id, presetId: "preset", modelIndex: 1, provider: "kimi", model: "k2" };
+    s.store.events.add({ cardId: s.card.id, type: "status", authorKind: "system", author: "failover", body: selection });
+    s.clock.advance(250);
+    expect(await s.scheduler.tick()).toEqual([{ sessionId: s.session.id, action: "handoff" }]);
+    const next = s.store.sessions.getByAgent("agent-1-next")!;
+    expect(s.store.events.list(s.card.id).map((e) => e.body).filter((b: any) => b?.kind === "model_selected")).toEqual([
+      selection, { ...selection, sessionId: next.id },
+    ]);
+  });
+
+  it("updates a handed-off sub-agent's run without changing its task progress", async () => {
+    const s = setup("kimi");
+    s.store.sessions.setState(s.session.id, "ended");
+    const sub = s.store.sessions.start({ cardId: s.card.id, agentId: "sub-agent", role: "subagent", provider: "kimi" });
+    s.store.sessions.setState(sub.id, "idle");
+    s.store.cards.setSubtaskRun(s.card.id, "s1", { sessionId: sub.id, agentId: "sub-agent", presetId: "preset", status: "running", attempts: 2 });
+    s.scheduler.onTurnEnded({ ...s.agent, id: "sub-agent" });
+    s.clock.advance(250);
+    expect(await s.scheduler.tick()).toContainEqual({ sessionId: sub.id, action: "handoff" });
+    const next = s.store.sessions.getByAgent("sub-agent-next")!;
+    expect(s.store.cards.get(s.card.id)!.subtaskRuns.s1).toMatchObject({ sessionId: next.id, agentId: "sub-agent-next", presetId: "preset", status: "running", attempts: 2 });
   });
 
   it("leaves claude to Claude Code when native idle compaction exists", async () => {

@@ -355,6 +355,7 @@ const MODEL_COLUMNS: Record<string, string> = {
   }
 
   const PRESET_KEYS: Record<string, string> = {
+    models_json: "models",
     name: "name",
     provider: "provider",
     model: "model",

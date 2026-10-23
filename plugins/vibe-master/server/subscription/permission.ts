@@ -69,7 +69,12 @@ export function createPermissionResolver(getPaseo: () => { providers: ModesApi }
         auto,
         options,
       });
-      const wanted = (requested || AUTO).trim();
+      const semantic: Record<string, Record<string, string>> = {
+        claude: { "accept-edits": "acceptEdits", full: "bypassPermissions" },
+        codex: { "accept-edits": "auto", full: "full-access" },
+      };
+      const wanted = semantic[provider]?.[requested] ?? (requested || AUTO).trim();
+      if (semantic[provider]?.[requested] && (!catalog || catalog.some((m) => m.id === wanted))) return done(wanted, false);
       if (wanted && wanted !== AUTO && (!catalog || catalog.some((m) => m.id === wanted))) {
         return done(wanted, false);
       }

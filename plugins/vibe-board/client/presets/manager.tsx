@@ -9,6 +9,7 @@ import {
   PRESET_PERMISSION_MODES,
   PROJECT_TYPES,
   ROLE_HINTS,
+  presetModels,
   type ModelDefaults,
   type Preset,
   type Project,
@@ -22,6 +23,8 @@ import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
 import {
   ENVIRONMENT_LABELS,
   EMPTY_PRESET_DRAFT,
+  EMPTY_MODEL_DRAFT,
+  movePresetModel,
   PERMISSION_LABELS,
   PROJECT_TYPE_LABELS,
   ROLE_HINT_LABELS,
@@ -32,12 +35,12 @@ import {
   projectToDraft,
   thinkingAfterModelChange,
   thinkingChoices,
-  toggleFallback,
   toggleProjectType,
   toggleRoleHint,
   validateDraft,
   validateProjectDraft,
   type PresetDraft,
+  type PresetModelDraft,
   type ProjectDraft,
   type ProviderUsageLike,
 } from "./logic";
@@ -243,10 +246,96 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
   );
 }
 
+function PresetModelEditor({
+  value,
+  providers,
+  onChange: patch,
+}: {
+  value: PresetModelDraft;
+  providers: Awaited<ReturnType<BoardApi["providersCatalog"]>>["providers"];
+  onChange: (change: Partial<PresetModelDraft>) => void;
+}) {
+  const models = providers.find((p) => p.id === value.provider)?.models ?? [];
+  return (
+    <View style={{ gap: 10 }}>
+      <Field label="Agent（provider）">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          {providers.map((p) => (
+            <Chip
+              key={p.id}
+              label={`${p.id}${p.available ? "" : "（不可用）"}`}
+              selected={value.provider === p.id}
+              onPress={() => patch({ provider: p.id, model: "", thinking: "" })}
+            />
+          ))}
+        </View>
+        <Muted>其它 provider（上面的目录里没有时在这里手填 id）</Muted>
+        <TextField
+          value={value.provider}
+          onChangeText={(provider) => patch({ provider, model: "", thinking: "" })}
+          placeholder="provider id，例如 codex"
+          autoCapitalize="none"
+        />
+      </Field>
+      <Field label="模型（必填）">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          {models.map((m) => (
+            <Chip
+              key={m.id}
+              label={m.name}
+              selected={value.model === m.id}
+              onPress={() =>
+                patch({
+                  model: m.id,
+                  thinking: thinkingAfterModelChange(models, m.id, value.thinking),
+                })
+              }
+            />
+          ))}
+        </View>
+        <TextField
+          value={value.model}
+          onChangeText={(model) =>
+            patch({ model, thinking: thinkingAfterModelChange(models, model, value.thinking) })
+          }
+          placeholder="必填：点选上方模型或手动输入"
+          autoCapitalize="none"
+        />
+      </Field>
+      <Field label="思考强度">
+        <Row>
+          {thinkingChoices(models, value.model, value.thinking).map((o) => (
+            <Chip
+              key={o.id || "default"}
+              label={o.label}
+              selected={value.thinking === o.id}
+              onPress={() => patch({ thinking: o.id })}
+            />
+          ))}
+        </Row>
+      </Field>
+      <Field label="权限模式">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          {PRESET_PERMISSION_MODES.map((m) => (
+            <Chip
+              key={m}
+              label={PERMISSION_LABELS[m]}
+              selected={value.permissionMode === m}
+              onPress={() => patch({ permissionMode: m })}
+            />
+          ))}
+        </View>
+      </Field>
+    </View>
+  );
+}
+
 function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
   const toast = useToast();
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [draft, setDraft] = useState<PresetDraft>(EMPTY_PRESET_DRAFT);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const catalog = useQuery({
     queryKey: queryKey("providers-catalog"),
     queryFn: () => api.providersCatalog({}),
@@ -254,19 +343,23 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
     retry: false,
   });
   const providers = catalog.data?.providers ?? [];
-  const models = providers.find((p) => p.id === draft.provider)?.models ?? [];
   const patch = (p: Partial<PresetDraft>) => setDraft((d) => ({ ...d, ...p }));
 
   const save = async () => {
     const problem = validateDraft(draft);
-    if (problem) return toast.error(problem);
+    if (problem) return setSaveError(problem);
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
     try {
       if (editing === "new") await api.presetsCreate(draftToPayload(draft));
       else if (editing) await api.presetsUpdate({ presetId: editing, ...draftToPayload(draft) });
       setEditing(null);
       refresh();
     } catch (e) {
-      toast.error(errorMessage(e));
+      setSaveError(errorMessage(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -276,32 +369,49 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
         <Field label="名称">
           <TextField value={draft.name} onChangeText={(name) => patch({ name })} />
         </Field>
-        <Field label="Agent（provider）">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {providers.map((p) => (
-              <Chip
-                key={p.id}
-                label={`${p.id}${p.available ? "" : "（不可用）"}`}
-                selected={draft.provider === p.id}
-                onPress={() => patch({ provider: p.id, model: "", thinking: "" })}
+        {catalog.isPending ? <Muted>正在加载 provider 和模型目录…</Muted> : null}
+        {catalog.error ? <Muted>{errorMessage(catalog.error)}</Muted> : null}
+        <Field label="候选模型（按顺序尝试，不可用时自动切换下一个）">
+          {draft.models.map((candidate, index) => (
+            <View key={index} style={{ gap: 8, paddingVertical: 8 }}>
+              <Row>
+                <Text style={{ fontWeight: "600" }}>候选 {index + 1}</Text>
+                <Btn
+                  small
+                  label="上移"
+                  disabled={index === 0}
+                  onPress={() => patch({ models: movePresetModel(draft.models, index, -1) })}
+                />
+                <Btn
+                  small
+                  label="下移"
+                  disabled={index === draft.models.length - 1}
+                  onPress={() => patch({ models: movePresetModel(draft.models, index, 1) })}
+                />
+                <Btn
+                  small
+                  label="删除候选"
+                  variant="danger"
+                  disabled={draft.models.length === 1}
+                  onPress={() => patch({ models: draft.models.filter((_, i) => i !== index) })}
+                />
+              </Row>
+              <PresetModelEditor
+                value={candidate}
+                providers={providers}
+                onChange={(change) =>
+                  patch({
+                    models: draft.models.map((m, i) => (i === index ? { ...m, ...change } : m)),
+                  })
+                }
               />
-            ))}
-          </View>
-          <Muted>其它 provider（上面的目录里没有时在这里手填 id）</Muted>
-          <TextField value={draft.provider} onChangeText={(provider) => patch({ provider })} placeholder="provider id，例如 codex" autoCapitalize="none" />
-        </Field>
-        <Field label="模型（必填）">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {models.map((m) => (
-              <Chip
-                key={m.id}
-                label={m.name}
-                selected={draft.model === m.id}
-                onPress={() => patch({ model: m.id, thinking: thinkingAfterModelChange(models, m.id, draft.thinking) })}
-              />
-            ))}
-          </View>
-          <TextField value={draft.model} onChangeText={(model) => patch({ model, thinking: thinkingAfterModelChange(models, model, draft.thinking) })} placeholder="必填：点选上方模型或手动输入" autoCapitalize="none" />
+            </View>
+          ))}
+          <Btn
+            label="添加候选模型"
+            icon="Plus"
+            onPress={() => patch({ models: [...draft.models, { ...EMPTY_MODEL_DRAFT }] })}
+          />
         </Field>
         <Field label="用途（可多选，都不选表示不指定）">
           <Row>
@@ -315,57 +425,49 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
             ))}
           </Row>
         </Field>
-        <Field label="思考强度">
-          <Row>
-            {thinkingChoices(models, draft.model, draft.thinking).map((o) => (
-              <Chip key={o.id || "default"} label={o.label} selected={draft.thinking === o.id} onPress={() => patch({ thinking: o.id })} />
-            ))}
-          </Row>
-        </Field>
-        <Field label="权限模式">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {PRESET_PERMISSION_MODES.map((m) => (
-              <Chip key={m} label={PERMISSION_LABELS[m]} selected={draft.permissionMode === m} onPress={() => patch({ permissionMode: m })} />
-            ))}
-          </View>
-        </Field>
         <Field label="运行环境">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {PRESET_ENVIRONMENT_KINDS.map((k) => (
-              <Chip key={k} label={ENVIRONMENT_LABELS[k]} selected={draft.environmentKind === k} onPress={() => patch({ environmentKind: k })} />
+              <Chip
+                key={k}
+                label={ENVIRONMENT_LABELS[k]}
+                selected={draft.environmentKind === k}
+                onPress={() => patch({ environmentKind: k })}
+              />
             ))}
           </View>
         </Field>
         <Field label="基础分支">
-          <TextField value={draft.baseBranch} onChangeText={(baseBranch) => patch({ baseBranch })} placeholder="main" autoCapitalize="none" />
+          <TextField
+            value={draft.baseBranch}
+            onChangeText={(baseBranch) => patch({ baseBranch })}
+            placeholder="main"
+            autoCapitalize="none"
+          />
         </Field>
         <Field label="运行时环境（如 android-emulator）">
-          <TextField value={draft.runtimeEnv} onChangeText={(runtimeEnv) => patch({ runtimeEnv })} autoCapitalize="none" />
+          <TextField
+            value={draft.runtimeEnv}
+            onChangeText={(runtimeEnv) => patch({ runtimeEnv })}
+            autoCapitalize="none"
+          />
         </Field>
         <Field label="附加指令">
-          <TextField multiline value={draft.instructions} onChangeText={(instructions) => patch({ instructions })} />
+          <TextField
+            multiline
+            value={draft.instructions}
+            onChangeText={(instructions) => patch({ instructions })}
+          />
         </Field>
-        <Field label="失败时改派到（按点选顺序依次尝试；额度耗尽、登录失效、agent 不可用时在同一 worktree 继续）">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {presets
-              .filter((p) => p.id !== editing)
-              .map((p) => {
-                const order = draft.fallbackPresetIds.indexOf(p.id);
-                return (
-                  <Chip
-                    key={p.id}
-                    label={order >= 0 ? `${order + 1}. ${p.name}` : p.name}
-                    selected={order >= 0}
-                    onPress={() => patch({ fallbackPresetIds: toggleFallback(draft.fallbackPresetIds, p.id) })}
-                  />
-                );
-              })}
-          </View>
-          {presets.length <= 1 ? <Muted>先创建其它预设，才能选作备选。</Muted> : null}
-        </Field>
+        {saveError ? <Muted>{saveError}</Muted> : null}
         <View style={{ flexDirection: "row", gap: 8 }}>
-          <Btn variant="primary" label="保存" onPress={save} />
-          <Btn label="取消" onPress={() => setEditing(null)} />
+          <Btn
+            variant="primary"
+            label={saving ? "正在保存…" : "保存"}
+            disabled={saving}
+            onPress={save}
+          />
+          <Btn label="取消" disabled={saving} onPress={() => setEditing(null)} />
         </View>
       </View>
     );
@@ -380,18 +482,24 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
           <View style={{ flex: 1 }}>
             <Text style={{ fontWeight: "600" }}>{p.name}</Text>
             <Muted>
-              {p.provider} / {p.model}
-              {p.roleHints.length ? `  [${p.roleHints.map((h) => ROLE_HINT_LABELS[h]).join("/")}]` : ""}
-              {p.fallbackPresetIds?.length
-                ? `  →  ${p.fallbackPresetIds.map((id) => presets.find((x) => x.id === id)?.name ?? "?").join(" → ")}`
+              {presetModels(p)
+                .map((m) => `${m.provider} / ${m.model}`)
+                .join(" → ")}
+              {p.roleHints.length
+                ? `  [${p.roleHints.map((h) => ROLE_HINT_LABELS[h]).join("/")}]`
                 : ""}
             </Muted>
           </View>
-          <QuotaBadge provider={p.provider} usage={usage} />
+          <View style={{ gap: 4 }}>
+            {[...new Set(presetModels(p).map((m) => m.provider))].map((provider) => (
+              <QuotaBadge key={provider} provider={provider} usage={usage} />
+            ))}
+          </View>
           <Btn
             small
             label="编辑"
             onPress={() => {
+              setSaveError(null);
               setDraft(presetToDraft(p));
               setEditing(p.id);
             }}
@@ -419,6 +527,7 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
         icon="Plus"
         label="新建预设"
         onPress={() => {
+          setSaveError(null);
           setDraft(EMPTY_PRESET_DRAFT);
           setEditing("new");
         }}

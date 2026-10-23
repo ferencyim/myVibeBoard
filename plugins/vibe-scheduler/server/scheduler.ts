@@ -11,7 +11,7 @@ import type { CardView, DeviceKind, Preset, Project } from "./vibe/contract";
 import { publishEvent, type DeviceLeases, type VibeDb, type createVibeStore } from "./vibe/db";
 import { quotaFor } from "./quota";
 import { topSessions, type ResourceSnapshot } from "./resources";
-import { PRIORITY_RANK, pickPresetId, takesSlot, type Priority, type ProviderQuota } from "./vibe/contract";
+import { PRIORITY_RANK, pickPresetId, presetModels, withPresetModel, takesSlot, type Priority, type ProviderQuota } from "./vibe/contract";
 import type { PortAllocator } from "./ports";
 import { findOverlap } from "./overlap";
 
@@ -222,7 +222,9 @@ export function createScheduler(deps: SchedulerDeps) {
     const project = store.projects.get(card.projectId);
     // Same order as vibe-board's dispatcher: card, master recommendation, project default, global default.
     const presetId = pickPresetId(card, project, (id) => !!store.presets.get(id), store.modelDefaults.global());
-    const preset = presetId ? store.presets.get(presetId) : undefined;
+    const savedPreset = presetId ? store.presets.get(presetId) : undefined;
+    const candidate = savedPreset && presetModels(savedPreset).find((m) => quotaFor(quota, m.provider).level !== "exhausted");
+    const preset = savedPreset && candidate ? withPresetModel(savedPreset, candidate) : savedPreset;
     if (!project || !preset) return no("没有主代理模型（请在卡片上选择，或在项目/全局设置默认模型）");
     const provider = preset.provider;
     const providerLimit = effectiveLimit(config, provider, null);

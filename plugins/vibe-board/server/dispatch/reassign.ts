@@ -28,11 +28,12 @@ import { subtasksOf, type AgentSession, type CardView, type Preset, type Subtask
 import type { BoardService } from "../service";
 import type { AgentTracker } from "./index";
 import { ensurePresetModel } from "./model";
+import { modelCandidates, recordModelSelection } from "./candidates";
 import { buildDispatchBrief, modeIdFor, providerSpec, type BriefLimits } from "./brief";
 import { defaultPrompts, type PromptResolver } from "../prompts";
 import { buildSubtaskBrief } from "../subtasks/brief";
 import { postChat } from "../chat/post";
-import type { FailureCategory } from "../lifecycle/error-class";
+import { classifyFailure, isReassignable, type FailureCategory } from "../lifecycle/error-class";
 
 export type ReassignPaseo = Pick<PaseoApi, "agents" | "workspaces"> &
   Partial<Pick<PaseoApi, "providers">>;
@@ -141,6 +142,16 @@ export function createReassigner(deps: ReassignDeps) {
   function candidatesFor(card: CardView, subtaskId?: string): Preset[] {
     const current = subtaskId ? card.subtaskRuns[subtaskId]?.presetId : card.presetId;
     if (!current) return [];
+    const selected = presetById(current);
+    if (selected?.models?.length) {
+      const sessionId = subtaskId
+        ? card.subtaskRuns[subtaskId]?.sessionId
+        : store.sessions.list({ cardId: card.id, role: "worker" }).at(-1)?.id;
+      const selection = store.events.list(card.id).map((e) => e.body as {
+        kind?: string; sessionId?: string; modelIndex?: number; presetId?: string;
+      } | null).reverse().find((b) => b?.kind === "model_selected" && b.sessionId === sessionId && b.presetId === current);
+      return modelCandidates(selected, store.presets.list()).slice((selection?.modelIndex ?? 0) + 1);
+    }
     const tried = new Set([current, ...history(card, subtaskId)]);
     const roots = [current, ...[...tried].filter((id) => id !== current).reverse()];
     const out: Preset[] = [];
@@ -279,6 +290,7 @@ export function createReassigner(deps: ReassignDeps) {
   }
 
   async function reassign(sessionId: string, failure: Failure): Promise<ReassignResult> {
+    if (!isReassignable(failure.category)) return { reassigned: null, reason: "task failure does not switch models", attempts: [] };
     const old = store.sessions.get(sessionId);
     if (!old || old.state === "ended") return { reassigned: null, reason: "session already ended", attempts: [] };
     if ((old.role !== "worker" && old.role !== "subagent") || !old.cardId) {
@@ -296,7 +308,7 @@ export function createReassigner(deps: ReassignDeps) {
     inflight.add(old.id);
     const attempts: string[] = [];
     try {
-      for (const candidate of candidates) {
+      for (const [offset, candidate] of candidates.entries()) {
         let preset: Preset;
         try {
           const resolved = await ensurePresetModel(paseo, candidate);
@@ -335,6 +347,7 @@ export function createReassigner(deps: ReassignDeps) {
         } catch (error) {
           attempts.push(`${preset.name}: ${error instanceof Error ? error.message : String(error)}`);
           log(`fallback ${preset.name} could not start`, error);
+          if (!isReassignable(classifyFailure(error instanceof Error ? error.message : String(error)))) break;
           continue;
         }
         const fromPresetId = subtask ? (card.subtaskRuns[subtask.id]?.presetId ?? null) : card.presetId;
@@ -346,6 +359,8 @@ export function createReassigner(deps: ReassignDeps) {
           reason: `${failure.category}: ${failure.message}`.slice(0, 500),
           presetId: preset.id,
         });
+        const ordered = modelCandidates(presetById(preset.id) ?? preset, store.presets.list());
+        recordModelSelection(board, card.id, to.id, preset, preset.models?.length ? ordered.length - candidates.length + offset : 0);
         store.events.add({
           cardId: card.id,
           type: "status",
@@ -431,16 +446,27 @@ export function createReassigner(deps: ReassignDeps) {
     const from = presetById(card.presetId ?? "");
     inflight.add(old.id);
     try {
-      const resolved = await ensurePresetModel(paseo, target);
-      const preset = resolved.preset;
       const label = (p: Preset | undefined, provider: string) =>
         p ? `「${p.name}」（${p.provider}/${p.model}）` : provider;
-      const started = await start(paseo, old, card, preset, (transcriptPath) =>
-        prompts.resolve("board.switch_model", {
-          projectId: card.projectId,
-          vars: { from: label(from, old.currentProvider), to: label(preset, preset.provider), transcriptPath },
-        }),
-      );
+      let chosen: { preset: Preset; started: Awaited<ReturnType<typeof start>>; index: number } | undefined;
+      const candidates = modelCandidates(target, store.presets.list());
+      for (const [index, candidate] of candidates.entries()) {
+        try {
+          const preset = (await ensurePresetModel(paseo, candidate)).preset;
+          const started = await start(paseo, old, card, preset, (transcriptPath) =>
+            prompts.resolve("board.switch_model", {
+              projectId: card.projectId,
+              vars: { from: label(from, old.currentProvider), to: label(preset, preset.provider), transcriptPath },
+            }),
+          );
+          chosen = { preset, started, index };
+          break;
+        } catch (error) {
+          if (!isReassignable(classifyFailure(error instanceof Error ? error.message : String(error))) || index + 1 >= candidates.length) throw error;
+        }
+      }
+      if (!chosen) throw new Error("所有候选模型均不可用");
+      const { preset, started, index } = chosen;
       const { to } = store.sessions.recordReassign({
         fromSessionId: old.id,
         agentId: started.agentId,
@@ -449,6 +475,7 @@ export function createReassigner(deps: ReassignDeps) {
         reason: "switched by the owner",
         presetId: preset.id,
       });
+      recordModelSelection(board, card.id, to.id, preset, index);
       await tracker?.bind(started.agentId);
       if (started.method === "converted") {
         await paseo.agents

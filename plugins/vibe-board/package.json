@@ -1,6 +1,7 @@
 {
   "name": "@vibe/board",
   "version": "0.1.0",
+  "private": true,
   "description": "myVibeBoard kanban board plugin: five-column cards, events, plans, board MCP and CLI on the shared vibe.db.",
   "license": "Apache-2.0",
   "bin": {
@@ -35,7 +36,6 @@
     "vitest": "^4.1.11",
     "zod": "^4.4.3"
   },
-  "private": true,
   "vibe": {
     "shared": {
       "shared": [
@@ -46,6 +46,9 @@
         "contract",
         "db",
         "sync"
+      ],
+      "client": [
+        "prompts"
       ]
     }
   }

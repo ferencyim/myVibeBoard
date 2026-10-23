@@ -9,18 +9,6 @@
     "test": "vitest run",
     "gen:rules": "node scripts/gen-rules.mjs"
   },
-  "vibe": {
-    "shared": {
-      "shared": [
-        "contract",
-        "ui"
-      ],
-      "server": [
-        "contract",
-        "db"
-      ]
-    }
-  },
   "devDependencies": {
     "@getpaseo/client": "^0.12.0",
     "@getpaseo/plugin": "0.12.0",
@@ -32,5 +20,20 @@
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "zod": "^4.4.3"
+  },
+  "vibe": {
+    "shared": {
+      "shared": [
+        "contract",
+        "ui"
+      ],
+      "server": [
+        "contract",
+        "db"
+      ],
+      "client": [
+        "prompts"
+      ]
+    }
   }
 }

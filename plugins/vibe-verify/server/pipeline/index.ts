@@ -222,6 +222,20 @@ export function createPipeline(deps: PipelineDeps) {
         project: input.project,
         provider: preset.provider,
         model: preset.model || undefined,
+        preset,
+        onReplacement: (next) => {
+          if (sessionId && board.sessions.get(sessionId)?.state !== "ended")
+            board.sessions.setState(sessionId, "ended", { outcome: "failed" });
+          reviewerAgentId = next.agentId;
+          sessionId = board.sessions.start({
+            cardId: card.id,
+            agentId: next.agentId,
+            workspaceId: worker?.workspaceId ?? null,
+            role: "verifier",
+            provider: next.provider,
+          }).id;
+          notes.push(`复核模型不可用，按预设顺序切换至 ${next.provider}/${next.model ?? ""}`);
+        },
         cwd: input.worktree,
         workspaceId: worker?.workspaceId ?? null,
         outputDir: input.outputDir,
@@ -238,8 +252,8 @@ export function createPipeline(deps: PipelineDeps) {
       }).id;
       publish("review.started", {
         reviewerPresetId: preset.id,
-        provider: preset.provider,
-        model: preset.model || undefined,
+        provider: agent.provider,
+        model: agent.model ?? (preset.model || undefined),
         sessionId,
         commitHash: input.commitHash,
       });
@@ -270,7 +284,7 @@ export function createPipeline(deps: PipelineDeps) {
       if (result.status !== "idle" || !parsed?.success) {
         const why =
           result.status !== "idle"
-            ? `reviewer round ended with status ${result.status}`
+            ? `reviewer round ended with status ${result.status}${result.error ? `: ${result.error}` : ""}`
             : "no valid review result";
         doubt(`Review could not be completed: ${why}`);
         finish("issues", [`Review could not be completed: ${why}`], "", sessionId, why);
@@ -456,6 +470,22 @@ export function createPipeline(deps: PipelineDeps) {
             project,
             provider: choice.provider,
             model: choice.model,
+            preset: chosen ?? board.presets.list().find((p) => p.provider === choice.provider && (p.model || undefined) === choice.model),
+            onReplacement: (next) => {
+              if (verifierSessionId && board.sessions.get(verifierSessionId)?.state !== "ended")
+                board.sessions.setState(verifierSessionId, "ended", {
+                  outcome: "failed",
+                });
+              verify.setVerifier(vid, next.agentId);
+              verifierSessionId = board.sessions.start({
+                cardId: card.id,
+                agentId: next.agentId,
+                workspaceId: worker?.workspaceId ?? null,
+                role: "verifier",
+                provider: next.provider,
+              }).id;
+              notes.push(`验证模型不可用，按预设顺序切换至 ${next.provider}/${next.model ?? ""}`);
+            },
             cwd: worktree,
             workspaceId: worker?.workspaceId ?? null,
             outputDir,

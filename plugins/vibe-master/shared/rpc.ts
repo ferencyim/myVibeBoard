@@ -2,6 +2,33 @@
 
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
+import { PromptDefSchema } from "./vibe/contract";
+
+const promptScope = z.string().min(1).nullable().optional();
+export const promptsListRpc = defineRpc({
+  name: "vibe.prompts.list",
+  input: z.object({ projectId: promptScope }),
+  output: z.object({
+    prompts: z.array(PromptDefSchema.extend({
+      globalOverride: z.string().nullable(),
+      projectOverride: z.string().nullable(),
+      source: z.enum(["default", "global", "project"]),
+      effectiveText: z.string(),
+      overriddenProjects: z.array(z.string()),
+    })),
+    projects: z.array(z.object({ id: z.string(), name: z.string(), prefix: z.string() })),
+  }),
+});
+export const promptsSetRpc = defineRpc({
+  name: "vibe.prompts.set",
+  input: z.object({ key: z.string().min(1), text: z.string(), projectId: promptScope }),
+  output: z.object({ ok: z.literal(true) }),
+});
+export const promptsClearRpc = defineRpc({
+  name: "vibe.prompts.clear",
+  input: z.object({ key: z.string().min(1), projectId: promptScope }),
+  output: z.object({ ok: z.literal(true) }),
+});
 
 /** Settings keys of the card-flow triggers that WP-105 removed (the master left the card flow). */
 export const REMOVED_SETTING_KEYS = [
@@ -48,10 +75,10 @@ export const masterSettings = defineSettings({
     /** How long one dispatch question to the master may take. */
     dispatchTimeoutSeconds: z.number().int().min(10).max(600).default(120),
     /**
-     * Permission mode of the master: "auto" = the provider's automatic mode (Claude auto, Codex
+     * Permission mode of the master: "preset" follows the current candidate; "auto" uses the provider's automatic mode (Claude auto, Codex
      * auto-review), else a concrete Paseo modeId of the provider.
      */
-    permissionMode: z.string().default("auto"),
+    permissionMode: z.string().default("preset"),
     /** cwd of the master agent. Empty = <VIBE_HOME>/master. */
     workspaceDir: z.string().default(""),
     /** Alert when the master's provider has at most this much quota left (percent). */
@@ -113,6 +140,16 @@ export const PresetChoiceSchema = z.object({
   provider: z.string(),
   model: z.string(),
   thinking: z.string(),
+  models: z
+    .array(
+      z.object({
+        provider: z.string(),
+        model: z.string(),
+        thinking: z.string(),
+        permissionMode: z.string().optional(),
+      }),
+    )
+    .optional(),
   roleHints: z.array(z.string()),
   remainingPct: z.number().nullable(),
   level: z.enum(["ok", "tight", "exhausted", "unknown"]),
@@ -127,7 +164,7 @@ const Target = z.object({
 export type MasterTarget = z.infer<typeof Target>;
 
 const PermissionInfo = z.object({
-  /** The setting value: "auto" or a modeId. */
+  /** The setting value: "preset", "auto" or a modeId. */
   setting: z.string(),
   source: z.enum(["settings", "switched"]),
   /** Concrete mode in effect for the provider; null = the provider's own default. */

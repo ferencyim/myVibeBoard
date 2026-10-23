@@ -12,7 +12,7 @@ npm ci && npm run typecheck && npm test
 
 - **One long-lived master agent** (a normal Paseo agent, `VIBE_ROLE=master`, recorded in
   `agent_session` with `role=master`, no card). WP-109: it runs on an **agent preset** chosen in the
-  settings (`presetId`; provider, model and thinking come from the preset, like the models picked on a card).
+  master panel (`presetId`; provider, model and thinking follow the preset's ordered model candidates).
   An owner who never picked one keeps working through the matching preset of the old `provider/model/thinking`
   settings (shown as "migrated" until confirmed); with no preset the master reports `unavailable` and its jobs
   are parked. The cwd is an empty scratch directory (`<VIBE_HOME>/master/workspace`).
@@ -32,7 +32,7 @@ npm ci && npm run typecheck && npm test
   failure, dispatches by its own rules for a while and writes the reason on each card it admits. The master publishes
   `{enabled, available, reason, timeoutSeconds}` to `vibe_meta['master.dispatch']` (`store.masterDispatch`) on start and on
   every settings change, so the scheduler knows without calling the plugin.
-- **Preset switch** (settings page; no RPC): `runtime.onSettingsChanged` starts the new agent first, then retires the old
+- **Preset switch** (master panel; no RPC): `runtime.onSettingsChanged` starts the new agent first, then retires the old
   one (`session.switched` event); the queue and the board carry on unchanged, so the same cards are processed.
 - **Permission mode** (WP-71, setting `permissionMode`, RPC `master.permission`, status screen, command palette): the
   master's (planning sessions run read-only on their own preset, see below). `auto` (default) = the provider's own automatic mode taken from the Paseo
@@ -45,9 +45,10 @@ npm ci && npm run typecheck && npm test
   `vibe-board` MCP server (Claude `mcp__vibe-board__*`, Codex `CodexMcpElicitation` with `serverName=vibe-board`) by
   the master and planners; any other request of those agents waits for the owner and raises a `master.alert`
   (`kind=permission_wait`, pushed like the others).
-- **Quota**: low quota (own `listUsage` check, or `scheduler.quota_low` for the master's provider) and
-  quota errors only publish a reminder: a `master.alert` bus event (`kind` quota_low|quota_error);
-  `server/notify` pushes it to the phone. It never switches by itself.
+- **Model availability**: low quota raises a reminder; exhausted quota, login failures and unavailable models
+  advance through the selected preset's ordered candidates. Progress survives restarts. A replacement receives
+  the hand-off summary, and previous conversations stay openable. Exhausting all candidates raises a `provider_error`
+  alert instead of retrying the list. Ordinary task errors keep the current model.
   `scheduler.paused/resumed` are shown in the status.
 - **Maintenance events**: `maintenance.paused` (rule paused after repeated rejections) raises a
   `master.alert` of kind `maintenance_paused` (pushed like the others); `maintenance.triggered` is only

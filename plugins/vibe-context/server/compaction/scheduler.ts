@@ -70,7 +70,7 @@ export interface CompactionConfig {
 }
 
 export interface SchedulerOptions {
-  store: Pick<VibeStore, "sessions" | "events">;
+  store: Pick<VibeStore, "sessions" | "events" | "cards">;
   host: CompactionHost;
   config: () => CompactionConfig;
   /** Project goals + PROJECT_STATE.md block for a working directory (server/inject). */
@@ -220,6 +220,21 @@ export function createCompactionScheduler(options: SchedulerOptions) {
         role: s.role,
         provider: s.currentProvider,
       });
+      if (s.cardId) {
+        // A cold context preserves the current model, including its place in the fallback order.
+        const selection = store.events.list(s.cardId).map((event) => event.body as {
+          kind?: string; sessionId?: string;
+        } | null).reverse().find((body) => body?.kind === "model_selected" && body.sessionId === s.id);
+        if (selection) store.events.add({
+          cardId: s.cardId, type: "status", authorKind: "system", author: "context",
+          body: { ...selection, sessionId: next.id },
+        });
+        if (s.role === "subagent") {
+          const card = store.cards.get(s.cardId);
+          const subtaskId = Object.entries(card?.subtaskRuns ?? {}).find(([, run]) => run.sessionId === s.id)?.[0];
+          if (subtaskId) store.cards.setSubtaskRun(s.cardId, subtaskId, { sessionId: next.id, agentId: newAgentId });
+        }
+      }
       if (options.usageDb && options.config().complexity?.enabled) {
         // The new session inherits the complexity (a "long" one as "multi": its context is fresh)
         // and the early-compaction count; its turn counting starts at zero.

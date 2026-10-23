@@ -55,6 +55,23 @@ function setup() {
 }
 
 describe("phone sync endpoint", () => {
+  it("syncs candidate ordering and preserves backups when an older phone edits the first model", async () => {
+    const t = setup();
+    const first = { provider: "claude", model: "opus", thinking: "high", permissionMode: "auto" as const };
+    const backup = { provider: "codex", model: "gpt", thinking: "medium", permissionMode: "accept-edits" as const };
+    const preset = t.store.presets.create({ name: "ordered", ...first, models: [first, backup] });
+    const p = t.phone();
+    await p.syncNow();
+    expect(JSON.parse(String(p.row("preset", preset.id)?.models_json))).toEqual([first, backup]);
+    t.clock.ms += 1000;
+    p.client.write("preset", preset.id, { model: "sonnet" });
+    await p.syncNow();
+    expect(t.store.presets.get(preset.id)?.models).toEqual([{ ...first, model: "sonnet" }, backup]);
+    t.clock.ms += 1000;
+    p.client.write("preset", preset.id, { models_json: JSON.stringify([backup, first]) });
+    await p.syncNow();
+    expect(t.store.presets.get(preset.id)).toMatchObject({ ...backup, models: [backup, first] });
+  });
   it("first contact is a snapshot with business rows, seed tags and read-only tables", async () => {
     const t = setup();
     const card = t.store.cards.create({ projectId: t.project.id, title: "Existing", column: "todo" });

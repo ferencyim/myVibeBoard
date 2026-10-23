@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import contribute from "../index.server";
 import { permissionRpc, sessionsRpc, statusRpc, wakeRpc } from "../shared/rpc";
+import { promptsListRpc, promptsSetRpc, promptsClearRpc } from "../../vibe-board/shared/rpc";
 import { fakePaseo, setupBoard, tempDir, tick } from "./helpers";
 import { createVibeStore, migrateOwner, openVibeDb, publishEvent } from "../server/vibe/db";
 
@@ -83,7 +84,7 @@ describe("plugin entry", () => {
     const fake = fakePaseo(() => CONSOLIDATED);
     const { server, handlers, hooks } = fakeServer();
     const cleanup = contribute(server);
-    expect([...handlers.keys()].sort()).toEqual([permissionRpc.name, sessionsRpc.name, statusRpc.name, wakeRpc.name].sort());
+    expect([...handlers.keys()].sort()).toEqual([permissionRpc.name, sessionsRpc.name, statusRpc.name, wakeRpc.name, promptsListRpc.name, promptsSetRpc.name, promptsClearRpc.name].sort());
     expect(hooks.has("agent.created")).toBe(true);
 
     // seed a project and a draft in the same vibe.db the plugin opened
@@ -96,6 +97,15 @@ describe("plugin entry", () => {
 
     // before any hook/RPC the plugin has no daemon handle
     const context = { paseo: fake.paseo };
+    const promptList = promptsListRpc.output.parse(await handlers.get(promptsListRpc.name)!({}, context));
+    expect(promptList.prompts.length).toBeGreaterThan(0);
+    expect(promptList.prompts.every((prompt) => prompt.role === "master")).toBe(true);
+    const key = promptList.prompts[0]!.key;
+    expect(await handlers.get(promptsSetRpc.name)!({ key, text: "总 agent 测试规则" }, context)).toEqual({ ok: true });
+    expect(store.prompts.list().find((prompt) => prompt.key === key)?.globalOverride).toBe("总 agent 测试规则");
+    expect(await handlers.get(promptsClearRpc.name)!({ key }, context)).toEqual({ ok: true });
+    expect(store.prompts.list().find((prompt) => prompt.key === key)?.globalOverride).toBeNull();
+    expect(() => handlers.get(promptsSetRpc.name)!({ key: "master.plan.system", text: "不可写" }, context)).toThrow("只能在总 agent 面板");
     const first = (await handlers.get("master.status")!({}, context)) as { paseoReady: boolean; preset: { name: string } | null };
     expect(first.paseoReady).toBe(true);
     expect(first.preset?.name).toBe("Claude Opus"); // the legacy provider setting still finds its preset

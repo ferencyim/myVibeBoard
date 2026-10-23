@@ -10,7 +10,7 @@ import { createMemoryStore } from "../memory/store";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "../vibe/db";
 import { detectNativeIdleCompaction } from "./native";
 import { expectSystemTurn, peekSystemTurn } from "./system-turn";
-import { createCompactionScheduler, type CompactionConfig, type CompactionHost } from "./scheduler";
+import { createCompactionScheduler, type AgentInfo, type CompactionConfig, type CompactionHost } from "./scheduler";
 import { compactionSettings } from "./settings";
 
 export * from "../complexity";
@@ -29,6 +29,23 @@ export interface CompactionOptions {
   prompts?: PromptResolver;
   /** Memory tokens inlined when no tight budget applies (setting); default 6000. */
   defaultMemoryTokens?: () => number;
+}
+
+/** A cold context keeps the exact model settings of the agent it replaces. */
+export async function handoffAgent(paseo: Pick<PaseoApi, "agents">, agent: AgentInfo, prompt: string): Promise<string> {
+  const snapshot = (await paseo.agents.ref(agent.id).refresh())?.agent;
+  const provider = snapshot?.model ? `${snapshot.provider}/${snapshot.model}` : agent.provider;
+  const thinkingOptionId = snapshot?.effectiveThinkingOptionId ?? snapshot?.thinkingOptionId;
+  const created = await paseo.agents.create({
+    config: {
+      provider,
+      ...(thinkingOptionId ? { thinkingOptionId } : {}),
+      ...(snapshot?.currentModeId ? { modeId: snapshot.currentModeId } : {}),
+    },
+    cwd: agent.cwd,
+    prompt,
+  });
+  return created.id;
 }
 
 export function registerCompaction(server: PluginServerContext, options: CompactionOptions = {}) {
@@ -85,15 +102,7 @@ export function registerCompaction(server: PluginServerContext, options: Compact
       return result;
     },
     async handoff(agent, prompt) {
-      // The SDK wants "provider/model"; take the model from the agent being replaced.
-      const snapshot = (await handle().agents.ref(agent.id).refresh())?.agent;
-      const provider = snapshot?.model ? `${snapshot.provider}/${snapshot.model}` : agent.provider;
-      const created = await handle().agents.create({
-        config: { provider },
-        cwd: agent.cwd,
-        prompt,
-      });
-      return created.id;
+      return handoffAgent(handle(), agent, prompt);
     },
     async archive(agentId) {
       await handle().agents.ref(agentId).archive();

@@ -17,6 +17,8 @@ import {
 } from "../client/board/logic";
 import {
   draftToPayload,
+  EMPTY_PRESET_DRAFT,
+  movePresetModel,
   presetToDraft,
   quotaFor,
   validateDraft,
@@ -239,14 +241,39 @@ describe("quota display (providers.listUsage)", () => {
 });
 
 describe("preset persistence round trip", () => {
-  it("draft -> create RPC -> list -> draft is lossless", () => {
-    const { board } = setupBoard();
-    const draft = {
-      name: "Fast",
+  it("reorders candidates with their settings and mirrors the first model in the payload", () => {
+    const first = {
       provider: "claude",
       model: "sonnet",
       thinking: "low",
       permissionMode: "auto" as const,
+    };
+    const second = {
+      provider: "codex",
+      model: "gpt",
+      thinking: "high",
+      permissionMode: "full" as const,
+    };
+    const models = movePresetModel([first, second], 1, -1);
+    expect(models).toEqual([second, first]);
+    expect(draftToPayload({ ...EMPTY_PRESET_DRAFT, name: "P", models })).toMatchObject({
+      ...second,
+      models: [second, first],
+    });
+    expect(movePresetModel(models, 0, -1)).toEqual(models);
+    expect(validateDraft({ ...EMPTY_PRESET_DRAFT, name: "P", models: [] })).toBe(
+      "请至少添加一个候选模型",
+    );
+  });
+
+  it("draft -> create RPC -> list -> draft is lossless", () => {
+    const { board } = setupBoard();
+    const draft = {
+      name: "Fast",
+      models: [
+        { provider: "claude", model: "sonnet", thinking: "low", permissionMode: "auto" as const },
+        { provider: "codex", model: "gpt", thinking: "high", permissionMode: "full" as const },
+      ],
       environmentKind: "project-default" as const,
       baseBranch: "main",
       runtimeEnv: "",
@@ -255,7 +282,9 @@ describe("preset persistence round trip", () => {
       roleHints: ["scout" as const],
     };
     expect(validateDraft(draft)).toBeNull();
-    expect(validateDraft({ ...draft, model: " " })).not.toBeNull();
+    expect(
+      validateDraft({ ...draft, models: [draft.models[0]!, { ...draft.models[1]!, model: " " }] }),
+    ).toBe("请选择第 2 个候选的模型");
     const { preset } = board.presets.create(draftToPayload(draft));
     const listed = board.presets.list().presets.find((p) => p.id === preset.id)!;
     expect(presetToDraft(listed)).toEqual(draft);

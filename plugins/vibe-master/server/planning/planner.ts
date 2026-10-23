@@ -28,7 +28,18 @@ import type { Alerts } from "../subscription/alerts";
 import { isQuotaError } from "../subscription/quota";
 import { providerSpec, resolveTarget } from "../subscription/target";
 import { MasterError, type MasterAgentHandle, type MasterPaseo } from "../types";
-import { resolveModel, type AgentSession, type CardView, type ModelRole, type PlanSnapshot, type Preset, type Project } from "../vibe/contract";
+import {
+  isModelUnavailableError,
+  presetModels,
+  withPresetModel,
+  resolveModel,
+  type AgentSession,
+  type CardView,
+  type ModelRole,
+  type PlanSnapshot,
+  type Preset,
+  type Project,
+} from "../vibe/contract";
 import type { VibeDb, VibeStore } from "../vibe/db";
 import {
   buildRepairMessage,
@@ -99,6 +110,8 @@ interface Live {
   agent: MasterAgentHandle;
   session: AgentSession;
   presetId: string;
+  modelIndex: number;
+  modelsHash: string;
   /** The system prompt was delivered (as system prompt or in the first message). */
   systemSent: boolean;
   systemHash: string;
@@ -181,16 +194,71 @@ export function createPlanning(deps: PlanningDeps) {
 
   // ---------- agent lifecycle ----------
 
-  async function spawn(card: CardView, preset: Preset): Promise<Live> {
+  const exhausted = (preset: Preset, error: unknown) =>
+    new MasterError("agent", `预设「${preset.name}」内所有模型均不可用：${errorText(error)}`);
+
+  function switched(card: CardView, preset: Preset, index: number, error: unknown) {
+    const model = presetModels(preset)[index]!;
+    store.cards.addChat({
+      cardId: card.id,
+      authorKind: "system",
+      author: "model-failover",
+      thread: "plan",
+      kind: "summary",
+      text: `预设「${preset.name}」的模型不可用，自动尝试 ${model.provider}/${model.model || "默认模型"}：${errorText(error)}`,
+    });
+  }
+
+  async function candidates<T>(
+    card: CardView,
+    preset: Preset,
+    run: (model: Preset) => Promise<T>,
+  ): Promise<T> {
+    const models = presetModels(preset);
+    for (const [index, model] of models.entries()) {
+      try {
+        return await run(withPresetModel(preset, model));
+      } catch (error) {
+        if (!isModelUnavailableError(error)) throw error;
+        if (index + 1 === models.length) throw exhausted(preset, error);
+        switched(card, preset, index + 1, error);
+      }
+    }
+    throw exhausted(preset, "候选列表为空");
+  }
+
+  async function spawnFrom(card: CardView, preset: Preset, start = 0): Promise<Live> {
+    for (let index = start; index < presetModels(preset).length; index++) {
+      try {
+        return await spawn(card, preset, index);
+      } catch (error) {
+        if (!isModelUnavailableError(error)) throw error;
+        if (index + 1 === presetModels(preset).length) throw exhausted(preset, error);
+        switched(card, preset, index + 1, error);
+      }
+    }
+    throw exhausted(preset, "候选列表已耗尽");
+  }
+
+  async function spawn(card: CardView, preset: Preset, modelIndex = 0): Promise<Live> {
     const paseo = deps.getPaseo();
     if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
-    const target = await targetOf(paseo, preset);
+    const target = await targetOf(
+      paseo,
+      withPresetModel(preset, presetModels(preset)[modelIndex]!),
+    );
     const modeId = await readOnlyModeOf(paseo, target.provider);
     const system = systemText(card.projectId);
     const created = await paseo.agents.create({
       cwd: cwdOf(card, store.projects.get(card.projectId)),
       title: `方案 ${card.key} · ${card.title}`.slice(0, 80),
-      labels: { role: "planner", card: card.key, preset: preset.name },
+      labels: {
+        role: "planner",
+        card: card.key,
+        preset: preset.name,
+        vibePresetId: preset.id,
+        vibeModel: JSON.stringify(presetModels(preset)[modelIndex]),
+      },
       env: { VIBE_ROLE: "planner", VIBE_CARD_ID: card.id, VIBE_CARD_KEY: card.key },
       config: {
         provider: providerSpec(target),
@@ -210,6 +278,8 @@ export function createPlanning(deps: PlanningDeps) {
       agent: created,
       session,
       presetId: preset.id,
+      modelIndex,
+      modelsHash: hashText(JSON.stringify(presetModels(preset))),
       systemSent: target.provider === "claude",
       systemHash: hashText(system),
       fresh: true,
@@ -224,22 +294,41 @@ export function createPlanning(deps: PlanningDeps) {
     const live = liveOf(card.id);
     const cached = handles.get(card.id);
     if (live && cached && cached.sessionId === live.id) {
-      if (cached.presetId === preset.id) return { ...cached, session: live, fresh: false };
+      if (
+        cached.presetId === preset.id &&
+        cached.modelsHash === hashText(JSON.stringify(presetModels(preset)))
+      ) {
+        return { ...cached, session: live, fresh: false };
+      }
       // The owner picked another planning model: the new session starts from what the card holds.
       log(`planner for ${card.key}: planning model changed, restarting on ${preset.name}`);
       await archive(card, "model_changed");
-      return spawn(card, preset);
+      return spawnFrom(card, preset);
     }
     const paseo = deps.getPaseo();
     if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
     if (live) {
-      // After a restart nothing records the preset: keep the agent while the provider matches.
       const candidate = paseo.agents.ref(live.agentId);
-      if (live.currentProvider === preset.provider && (await reviveAgent(candidate))) {
+      const snapshot = (await candidate.refresh().catch(() => null)) as {
+        agent?: { labels?: Record<string, string> };
+      } | null;
+      const labels = snapshot?.agent?.labels;
+      const models = presetModels(preset);
+      // Legacy sessions have no candidate label; provider alone identifies only a single candidate.
+      const modelIndex = labels?.vibeModel
+        ? labels.vibePresetId === preset.id
+          ? models.findIndex((m) => JSON.stringify(m) === labels.vibeModel)
+          : -1
+        : models.filter((m) => m.provider === live.currentProvider).length === 1
+          ? models.findIndex((m) => m.provider === live.currentProvider)
+          : -1;
+      if (modelIndex >= 0 && (await reviveAgent(candidate))) {
         const entry = {
           agent: candidate,
           sessionId: live.id,
           presetId: preset.id,
+          modelIndex,
+          modelsHash: hashText(JSON.stringify(models)),
           systemSent: true,
           systemHash: hashText(systemText(card.projectId)),
         };
@@ -248,7 +337,7 @@ export function createPlanning(deps: PlanningDeps) {
       }
       await archive(card, live.currentProvider === preset.provider ? "lost" : "model_changed");
     }
-    return spawn(card, preset);
+    return spawnFrom(card, preset);
   }
 
   async function archive(card: Pick<CardView, "id">, outcome: string): Promise<void> {
@@ -319,7 +408,12 @@ export function createPlanning(deps: PlanningDeps) {
         reply = await ask(live, card, buildRepairMessage(parsed.error, prompts, card.projectId));
         parsed = parseReply(reply, PlanTurnSchema);
       } catch (error) {
-        if (!(error instanceof MasterError) || error.kind === "unavailable") throw error;
+        if (
+          !(error instanceof MasterError) ||
+          error.kind === "unavailable" ||
+          isModelUnavailableError(error)
+        )
+          throw error;
         break;
       }
     }
@@ -334,7 +428,7 @@ export function createPlanning(deps: PlanningDeps) {
     project: Project | undefined,
     requests: readonly { question: string; scope?: string }[],
   ): Promise<ResearchItem[]> {
-    const preset = presetOf(card.scoutPresetId);
+    const preset = modelOf(card, "scout");
     const paseo = deps.getPaseo();
     const why = !preset
       ? "这张卡片没有选择探路模型，请自己阅读代码"
@@ -346,32 +440,37 @@ export function createPlanning(deps: PlanningDeps) {
     if (why || !preset || !paseo || !project) return requests.map((r) => ({ ...r, ok: false, answer: why ?? "" }));
     return Promise.all(
       requests.map(async (r): Promise<ResearchItem> => {
-        let agent: MasterAgentHandle | null = null;
         try {
-          const target = await targetOf(paseo, preset);
-          const modeId = await readOnlyModeOf(paseo, target.provider);
-          agent = await paseo.agents.create({
-            cwd: project.repoPath,
-            title: `探路 ${card.key}`,
-            labels: { role: "scout", card: card.key, preset: preset.name },
-            env: { VIBE_ROLE: "scout", VIBE_CARD_KEY: card.key },
-            config: {
-              provider: providerSpec(target),
-              ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
-              ...(modeId ? { modeId } : {}),
-            },
+          return await candidates(card, preset, async (candidate): Promise<ResearchItem> => {
+            let agent: MasterAgentHandle | null = null;
+            try {
+              const target = await targetOf(paseo, candidate);
+              const modeId = await readOnlyModeOf(paseo, target.provider);
+              agent = await paseo.agents.create({
+                cwd: project.repoPath,
+                title: `探路 ${card.key}`,
+                labels: { role: "scout", card: card.key, preset: preset.name },
+                env: { VIBE_ROLE: "scout", VIBE_CARD_KEY: card.key },
+                config: {
+                  provider: providerSpec(target),
+                  ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
+                  ...(modeId ? { modeId } : {}),
+                },
+              });
+              const out = await agent.run(
+                buildScoutMessage({ card, question: r.question, scope: r.scope, prompts }),
+                { timeoutMs: tuning().scoutTimeoutMs },
+              );
+              const answer = out.lastMessage?.trim();
+              if (out.status === "idle" && answer)
+                return { ...r, ok: true, answer: answer.slice(0, 4000) };
+              throw new MasterError("agent", out.error ?? `scout ended with status ${out.status}`);
+            } finally {
+              await agent?.archive().catch(() => undefined);
+            }
           });
-          const out = await agent.run(
-            buildScoutMessage({ card, question: r.question, scope: r.scope, prompts }),
-            { timeoutMs: tuning().scoutTimeoutMs },
-          );
-          const answer = out.lastMessage?.trim();
-          if (answer) return { ...r, ok: true, answer: answer.slice(0, 4000) };
-          return { ...r, ok: false, answer: out.error ?? `scout ended with status ${out.status}` };
         } catch (error) {
           return { ...r, ok: false, answer: errorText(error) };
-        } finally {
-          await agent?.archive().catch(() => undefined);
         }
       }),
     );
@@ -383,30 +482,35 @@ export function createPlanning(deps: PlanningDeps) {
   async function reviewPlan(card: CardView, project: Project | undefined, reviewer: Preset): Promise<string> {
     const paseo = deps.getPaseo();
     if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
-    let agent: MasterAgentHandle | null = null;
-    try {
-      const target = await targetOf(paseo, reviewer);
-      const modeId = await readOnlyModeOf(paseo, target.provider);
-      agent = await paseo.agents.create({
-        cwd: cwdOf(card, project),
-        title: `方案复核 ${card.key}`.slice(0, 80),
-        labels: { role: "plan_reviewer", card: card.key, preset: reviewer.name },
-        env: { VIBE_ROLE: "reviewer", VIBE_CARD_ID: card.id, VIBE_CARD_KEY: card.key },
-        config: {
-          provider: providerSpec(target),
-          ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
-          ...(modeId ? { modeId } : {}),
-        },
-      });
-      const out = await agent.run(buildPlanReviewMessage({ card, presets: store.presets.list(), prompts }), {
-        timeoutMs: tuning().planTurnTimeoutMs,
-      });
-      const text = out.lastMessage?.trim();
-      if (out.status === "idle" && text) return text;
-      throw new MasterError("agent", out.error ?? `方案复核会话结束状态：${out.status}`);
-    } finally {
-      await agent?.archive().catch(() => undefined);
-    }
+    return candidates(card, reviewer, async (candidate) => {
+      let agent: MasterAgentHandle | null = null;
+      try {
+        const target = await targetOf(paseo, candidate);
+        const modeId = await readOnlyModeOf(paseo, target.provider);
+        agent = await paseo.agents.create({
+          cwd: cwdOf(card, project),
+          title: `方案复核 ${card.key}`.slice(0, 80),
+          labels: { role: "plan_reviewer", card: card.key, preset: reviewer.name },
+          env: { VIBE_ROLE: "reviewer", VIBE_CARD_ID: card.id, VIBE_CARD_KEY: card.key },
+          config: {
+            provider: providerSpec(target),
+            ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
+            ...(modeId ? { modeId } : {}),
+          },
+        });
+        const out = await agent.run(
+          buildPlanReviewMessage({ card, presets: store.presets.list(), prompts }),
+          {
+            timeoutMs: tuning().planTurnTimeoutMs,
+          },
+        );
+        const text = out.lastMessage?.trim();
+        if (out.status === "idle" && text) return text;
+        throw new MasterError("agent", out.error ?? `方案复核会话结束状态：${out.status}`);
+      } finally {
+        await agent?.archive().catch(() => undefined);
+      }
+    });
   }
 
   function postScout(card: CardView, items: ResearchItem[], key: string): void {
@@ -506,14 +610,14 @@ export function createPlanning(deps: PlanningDeps) {
       live = await ensure(card, preset);
       const makePlan = pending.some((m) => m.makePlan);
       let findings = "";
-      if (makePlan && card.scoutPresetId) {
+      if (makePlan && modelOf(card, "scout")) {
         const items = await research(card, project, [{ question: exploreQuestion(card, prompts) }]);
         postScout(card, items, `explore:${answers[0]}`);
         findings = renderResearch(items);
       }
       const events = store.events.list(card.id);
-      const prompt =
-        live.fresh || makePlan
+      const buildPrompt = (full: boolean) =>
+        full
           ? buildStartMessage({
               projectBlock: project
                 ? buildProjectBlock({
@@ -537,11 +641,34 @@ export function createPlanning(deps: PlanningDeps) {
               prompts,
             })
           : buildTurnMessage(pending, prompts, card.projectId);
-      let result = await askTurn(live, card, prompt);
-      for (let round = 0; round < tuning().maxResearchRounds && result.research.length > 0; round++) {
+      const context: string[] = [];
+      const askPlan = async (prompt: string): Promise<PlanTurn> => {
+        let message = prompt;
+        for (;;) {
+          try {
+            const result = await askTurn(live!, card, message);
+            context.push(prompt, JSON.stringify(result));
+            return result;
+          } catch (error) {
+            if (!isModelUnavailableError(error)) throw error;
+            const next = live!.modelIndex + 1;
+            await archive(card, "model_unavailable");
+            if (next >= presetModels(preset).length) throw exhausted(preset, error);
+            switched(card, preset, next, error);
+            live = await spawnFrom(card, preset, next);
+            message = [buildPrompt(true), ...context, prompt].join("\n\n");
+          }
+        }
+      };
+      let result = await askPlan(buildPrompt(live.fresh || makePlan));
+      for (
+        let round = 0;
+        round < tuning().maxResearchRounds && result.research.length > 0;
+        round++
+      ) {
         const items = await research(card, project, result.research);
         postScout(card, items, `research:${answers[0]}:${round + 1}`);
-        result = await askTurn(live, card, buildResultsMessage(items, prompts, card.projectId));
+        result = await askPlan(buildResultsMessage(items, prompts, card.projectId));
       }
       const current = store.cards.get(card.id) ?? card;
       const note = apply(current, result);

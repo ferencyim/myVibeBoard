@@ -177,16 +177,15 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       if (signal.kind === "paused") schedulerPaused = true;
       else if (signal.kind === "resumed") schedulerPaused = false;
       else if (signal.kind === "quota_low") {
-        // Reassign or wait is decided per draft from fresh quota numbers; the owner is reminded
-        // when it is the master's own provider (never an automatic switch).
         quota.invalidate();
         const own = ownProvider();
         if (own && own.toLowerCase() === signal.provider.toLowerCase()) {
           alerts.raise(
             "quota_low",
             signal.provider,
-            `${signal.remainingPct === null ? "little" : `${signal.remainingPct}%`} quota left (${signal.level}); switch the master subscription if needed`,
+            `总 agent 剩余额度 ${signal.remainingPct ?? "未知"}%（${signal.level}）`,
           );
+          if (signal.level === "exhausted") void switchExhausted(signal.provider);
         }
       }
     },
@@ -201,7 +200,19 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     log,
   });
 
-  // ---- quota monitor: remind only, never switch ----
+  async function switchExhausted(provider: string): Promise<void> {
+    try {
+      await queue.exclusive(async () => {
+        if (ownProvider()?.toLowerCase() !== provider.toLowerCase()) return;
+        await session.failover(`${provider} 额度已耗尽`);
+      });
+      queue.resume();
+    } catch (error) {
+      log("总 agent 额度切换失败", error);
+    }
+  }
+
+  // Quota warnings remind; an exhausted subscription advances to the next preset candidate.
   let stopMonitor: (() => void) | null = null;
   let monitoring = false;
   async function checkQuota(): Promise<void> {
@@ -213,8 +224,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     alerts.raise(
       "quota_low",
       provider,
-      `${q.remainingPct === null ? "little" : `${q.remainingPct}%`} quota left (${q.level}); switch the master subscription if needed`,
+      `总 agent 剩余额度 ${q.remainingPct ?? "未知"}%（${q.level}）`,
     );
+    if (q.level === "exhausted") await switchExhausted(provider);
   }
   function startQuotaMonitor(): void {
     if (monitoring) return;
@@ -241,6 +253,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     }
     const { preset, source } = currentPreset();
     const live = session.liveSession();
+    if (live?.agentId === record.agent?.agentId && record.agent) target = record.agent.target;
     const history = store.sessions
       .list({ role: "master" })
       .flatMap((s) => s.switchHistory)
@@ -270,6 +283,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       provider: p.provider,
       model: p.model,
       thinking: p.thinking,
+      models: p.models,
       roleHints: [...p.roleHints],
       remainingPct: levels[p.provider.toLowerCase()]?.remainingPct ?? null,
       level: levels[p.provider.toLowerCase()]?.level ?? "unknown",

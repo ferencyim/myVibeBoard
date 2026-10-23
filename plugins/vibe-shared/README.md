@@ -37,9 +37,14 @@ Additive and nullable; shared by the round-2 work packages.
 
 - `card.reviewer_preset_id` (`reviewerPresetId`, synced both ways): `cards.setReviewer(id, presetId | null)`
   (validates the preset; also settable via `cards.update` / `cards.create`).
-- `preset.fallback_preset_ids_json` (`fallbackPresetIds: string[] | null`, ordered failover chain) and
+- `preset.fallback_preset_ids_json` (`fallbackPresetIds: string[] | null`, legacy failover chain) and
   `preset.role_hint` (`roleHint`, e.g. `scout` | `worker` | `reviewer`), both synced; `presets.create/update`
   accept them. Deleting a preset scrubs it from cards' reviewer and other presets' chains.
+  Core migration 10 copies these chains into ordered `preset.models_json` candidates, removing
+  duplicate candidates and cycles. New clients edit `models`; legacy single-model edits replace
+  only the first candidate. Top-level provider/model/thinking/permissionMode mirror that candidate
+  for older phones. `presetModels` reads either snapshot format; `withPresetModel` selects a runtime
+  candidate without changing preset identity or preset-level settings.
 - `PlanSnapshot.files?: string[]` - globs the plan touches (scheduler conflict check).
 - `agent_session.stalled_since`, `complexity` (`short|multi|long`), `reassigned_from_session_id`
   (`last_activity_at` already existed). **No `stalled` session state**: stalling is a marker, so the

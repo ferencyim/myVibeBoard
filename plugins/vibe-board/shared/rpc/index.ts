@@ -24,6 +24,7 @@ import {
   PlanVersionSchema,
   PresetEnvironmentKindSchema,
   PresetPermissionModeSchema,
+  PresetModelInputSchema,
   PresetSchema,
   ProjectSchema,
   ProjectTypeSchema,
@@ -90,6 +91,7 @@ const projectFields = {
 export const PRESET_ROLE_HINTS = ROLE_HINTS;
 
 const presetFields = {
+  models: z.array(PresetModelInputSchema).min(1),
   name: nonBlank,
   provider: nonBlank,
   model: nonBlank,
@@ -495,6 +497,7 @@ export const presetsListRpc = defineRpc({
 export const presetsCreateRpc = defineRpc({
   name: "vibe.presets.create",
   input: z.object({
+    models: presetFields.models.optional(),
     name: presetFields.name,
     provider: presetFields.provider,
     model: presetFields.model,
@@ -514,6 +517,7 @@ export const presetsCreateRpc = defineRpc({
 export const presetsUpdateRpc = defineRpc({
   name: "vibe.presets.update",
   input: z.object({
+    models: presetFields.models.optional(),
     presetId: z.string(),
     name: presetFields.name.optional(),
     provider: presetFields.provider.optional(),

@@ -628,6 +628,23 @@ export function createMaintenanceEngine(options: EngineOptions) {
         project,
         prompt,
       });
+      if (launched.presetId)
+        store.cards.update(card.id, { presetId: launched.presetId });
+      let activeSession = session;
+      if (launched.agentId && launched.agentId !== agentId) {
+        activeSession = store.sessions.recordReassign({
+          fromSessionId: session.id,
+          agentId: launched.agentId,
+          workspaceId: launched.workspaceId,
+          provider: launched.provider ?? provider,
+          reason: "维护预设首选模型不可用，按顺序切换",
+          presetId: launched.presetId,
+        }).to;
+      }
+      if (launched.presetId) store.events.add({
+        cardId: card.id, type: "status", authorKind: "system", author: "failover",
+        body: { kind: "model_selected", sessionId: activeSession.id, presetId: launched.presetId, modelIndex: launched.modelIndex ?? 0, provider: launched.provider ?? provider, model: launched.model },
+      });
       if (launched.worktree) store.cards.update(card.id, { worktree: launched.worktree });
     } catch (error) {
       store.sessions.setState(session.id, "ended", { outcome: "launch_failed" });

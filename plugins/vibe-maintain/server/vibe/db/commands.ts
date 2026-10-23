@@ -31,6 +31,7 @@ import {
 } from "../contract/enums";
 import { type Hlc, tickHlc } from "../contract/hlc";
 import { newId } from "../contract/ids";
+import { presetModels } from "../contract/preset-models";
 import {
   AgentSessionSchema,
   CardEventSchema,
@@ -39,6 +40,7 @@ import {
   PlanSnapshotSchema,
   PlanVersionSchema,
   PresetSchema,
+  PresetModelInputSchema,
   ProjectSchema,
   ProposalChangesSchema,
   ProposalEventBodySchema,
@@ -53,6 +55,7 @@ import {
   type PlanSnapshot,
   type PlanVersion,
   type Preset,
+  type PresetModel,
   type ProposalChanges,
   type ProposalEventBody,
   type Project,
@@ -141,6 +144,7 @@ export type UpdateProjectInput = Partial<Omit<CreateProjectInput, "prefix">> & {
 };
 
 export interface CreatePresetInput {
+  models?: PresetModel[];
   /** Sync materialization: keep the id a replica generated offline. */
   id?: string;
   name: string;
@@ -379,6 +383,7 @@ const PROJECT_FIELDS: FieldMap = {
   color: ["color", asIs],
 };
 const PRESET_FIELDS: FieldMap = {
+  models: ["models_json", asJson],
   name: ["name", asIs],
   provider: ["provider", asIs],
   model: ["model", asIs],
@@ -816,23 +821,53 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     return decodeRow(PresetSchema, row);
   }
 
+  function legacyPresetModels(first: PresetModel, fallbackIds: string[]): PresetModel[] {
+    const models = [first];
+    const visited = new Set<string>();
+    const seen = new Set([JSON.stringify(first)]);
+    function append(id: string): void {
+      if (visited.has(id)) return;
+      visited.add(id);
+      const preset = presets.get(id);
+      if (!preset) return;
+      for (const candidate of presetModels(preset)) {
+        const key = JSON.stringify(candidate);
+        if (!seen.has(key)) {
+          seen.add(key);
+          models.push(candidate);
+        }
+      }
+      for (const next of preset.fallbackPresetIds ?? []) append(next);
+    }
+    for (const id of fallbackIds) append(id);
+    return models;
+  }
+
   const presets = {
     create(rawInput: CreatePresetInput): Preset {
       const input = normalizePresetInput(rawInput);
+      const candidates = input.models ?? legacyPresetModels({
+        provider: input.provider,
+        model: input.model,
+        thinking: input.thinking ?? "",
+        permissionMode: input.permissionMode ?? "accept-edits",
+      }, input.fallbackPresetIds ?? []);
+      const models = PresetModelInputSchema.array().min(1).parse(candidates);
+      const first = models[0]!;
       return write((hlc) => {
         const id = input.id ?? newId(now().getTime());
         try {
           db.prepare(
             `INSERT INTO preset (id, name, provider, model, thinking, permission_mode, environment_kind, base_branch,
-               runtime_env, instructions, fallback_preset_ids_json, role_hint, role_hints_json, builtin, created_at, updated_at, updated_hlc)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               runtime_env, instructions, fallback_preset_ids_json, role_hint, role_hints_json, builtin, created_at, updated_at, updated_hlc, models_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             id,
             input.name,
-            input.provider,
-            input.model,
-            input.thinking ?? "",
-            input.permissionMode ?? "accept-edits",
+            first.provider,
+            first.model,
+            first.thinking,
+            first.permissionMode,
             input.environmentKind ?? "project-default",
             input.baseBranch ?? null,
             input.runtimeEnv ?? null,
@@ -844,6 +879,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             iso(),
             iso(),
             hlc,
+            JSON.stringify(models),
           );
         } catch (error) {
           if (String(error).includes("UNIQUE"))
@@ -862,8 +898,22 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     update(id: string, rawPatch: UpdatePresetInput): Preset {
       const patch = normalizePresetInput(rawPatch);
       return write((hlc) => {
-        mustPreset(id);
+        const current = mustPreset(id);
         const { builtin: _ignored, ...rest } = patch;
+        const editsModel = ["provider", "model", "thinking", "permissionMode"].some(
+          (field) => Object.hasOwn(patch, field),
+        );
+        if (patch.models !== undefined) {
+          const models = PresetModelInputSchema.array().min(1).parse(patch.models);
+          Object.assign(rest, models[0], { models });
+        } else if (editsModel || patch.fallbackPresetIds !== undefined) {
+          const models = [...presetModels(current)];
+          models[0] = PresetModelInputSchema.parse({ ...models[0], ...rest });
+          const candidates = patch.fallbackPresetIds === undefined
+            ? models
+            : legacyPresetModels(models[0], patch.fallbackPresetIds ?? []);
+          Object.assign(rest, models[0], { models: candidates });
+        }
         patchRow("preset", id, PRESET_FIELDS, rest, hlc);
         return mustPreset(id);
       });

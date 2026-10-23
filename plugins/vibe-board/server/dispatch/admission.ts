@@ -31,10 +31,11 @@ export function startAdmissionConsumer(options: AdmissionOptions): EventConsumer
     onError: options.onError,
     async handler(event) {
       if (event.type !== "scheduler.admitted") return;
-      const { cardId, presetId, port } = event.payload as {
+      const { cardId, presetId, port, provider } = event.payload as {
         cardId: string;
         presetId?: string | null;
         port?: number;
+        provider?: string;
       };
       const card = board.store.cards.get(cardId);
       // Idempotent: a replayed event, a user dispatch or a move since admission means nothing to do.
@@ -42,6 +43,7 @@ export function startAdmissionConsumer(options: AdmissionOptions): EventConsumer
       try {
         await dispatcher.dispatch(cardId, {
           ...(presetId ? { presetId } : {}),
+          ...(provider ? { provider } : {}),
           force: true, // the scheduler already admitted it
           ...(port
             ? {

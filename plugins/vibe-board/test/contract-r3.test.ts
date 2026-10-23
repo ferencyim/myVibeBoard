@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { presetsCreateRpc, projectsCreateRpc, projectsUpdateRpc } from "../shared/rpc";
+import { presetsCreateRpc, presetsListRpc, presetsUpdateRpc, projectsCreateRpc, projectsUpdateRpc } from "../shared/rpc";
 import { setupBoard } from "./helpers";
 
 describe("round 3 contract through the board RPCs", () => {
+  it("lists migrated legacy presets whose empty model requests the provider default", () => {
+    const { board, runtime: { store, db } } = setupBoard();
+    const candidate = { provider: "claude", model: "opus", thinking: "high", permissionMode: "auto" as const };
+    const preset = store.presets.create({ name: "legacy", ...candidate });
+    db.prepare("UPDATE preset SET model = '', models_json = ? WHERE id = ?").run(
+      JSON.stringify([{ ...candidate, model: "" }]), preset.id,
+    );
+    const output = presetsListRpc.output.parse(board.presets.list());
+    expect(output.presets.find((item) => item.id === preset.id)).toMatchObject({
+      model: "", models: [{ ...candidate, model: "" }],
+    });
+    expect(presetsUpdateRpc.input.safeParse({ presetId: preset.id, models: [{ ...candidate, model: "" }] }).success).toBe(false);
+  });
+  it("accepts ordered model candidates and rejects empty or incomplete candidates", () => {
+    const candidate = { provider: "codex", model: "gpt", thinking: "high", permissionMode: "auto" };
+    const input = { name: "n", provider: "claude", model: "opus", models: [candidate] };
+    expect(presetsCreateRpc.input.parse(input).models).toEqual([candidate]);
+    expect(presetsUpdateRpc.input.parse({ presetId: "p", models: [candidate] }).models).toEqual([candidate]);
+    expect(presetsCreateRpc.input.safeParse({ ...input, models: [] }).success).toBe(false);
+    expect(presetsUpdateRpc.input.safeParse({ presetId: "p", models: [{ ...candidate, model: " " }] }).success).toBe(false);
+    const { board } = setupBoard();
+    const { preset } = board.presets.create(presetsCreateRpc.input.parse(input));
+    expect(preset).toMatchObject({ ...candidate, models: [candidate] });
+  });
   it("project RPC schemas accept projectTypes / description / requirementsPath and reject bad values", () => {
     const base = { name: "P", prefix: "PP" };
     expect(projectsCreateRpc.input.safeParse({ ...base, projectTypes: ["web", "android"], description: "d", requirementsPath: "docs/R.md" }).success).toBe(true);

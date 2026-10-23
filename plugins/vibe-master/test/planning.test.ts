@@ -10,7 +10,15 @@ import { messagesOf, threadState } from "../server/planning/thread";
 import { createMasterRuntime } from "../server/runtime";
 import type { MasterPaseo } from "../server/types";
 import type { MemoryPort } from "../server/memory/files";
-import { ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir, type Script } from "./helpers";
+import { presetModels } from "../server/vibe/contract";
+import {
+  ManualClock,
+  defaultSettings,
+  fakePaseo,
+  setupBoard,
+  tempDir,
+  type Script,
+} from "./helpers";
 
 const fence = (value: unknown) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
 const memory: MemoryPort = {
@@ -70,6 +78,158 @@ function setup(script: Script, options: { noPaseo?: boolean } = {}) {
     },
   };
 }
+
+describe("ordered preset models", () => {
+  const chain = (t: ReturnType<typeof setup>, first = t.presets.claude, second = t.presets.codex) =>
+    t.store.presets.update(first.id, { models: [...presetModels(first), ...presetModels(second)] });
+
+  it("continues the planning conversation on the next model after quota failure and keeps using it", async () => {
+    const t = setup(({ provider, index, prompt }) => {
+      if (provider === "claude" && index === 1)
+        return fence({ reply: "旧回复", plan: { text: "原方案" } });
+      if (provider === "claude")
+        return { status: "error", lastMessage: "部分输出", error: "usage limit reached" };
+      expect(prompt).toContain("原方案");
+      expect(prompt).toContain("旧回复");
+      expect(prompt).toContain("保留数据");
+      return fence({ reply: "已继续", plan: { text: "更新后的方案" } });
+    });
+    chain(t);
+    const c = t.card("Failover");
+    t.makePlan(c.id);
+    await t.planning.tick();
+    t.say(c.id, "保留数据");
+    await t.planning.tick();
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude", "codex"]);
+    expect(t.fake.agents[0]!.archived).toBe(true);
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("更新后的方案");
+    expect(t.chats(c.id).some((m) => m.text.includes("自动尝试 codex/gpt-5-codex"))).toBe(true);
+    t.say(c.id, "继续保留数据");
+    await t.planning.tick();
+    expect(t.fake.agents).toHaveLength(2);
+    expect(t.fake.agents[1]!.prompts).toHaveLength(2);
+  });
+
+  it("tries the next candidate when agent creation fails", async () => {
+    const t = setup(() => fence({ reply: "成功" }));
+    chain(t);
+    const create = t.fake.paseo.agents.create;
+    t.fake.paseo.agents.create = async (options) => {
+      if (String(options.config.provider).startsWith("claude/"))
+        throw new Error("provider unavailable");
+      return create(options);
+    };
+    const c = t.card("Creation");
+    t.makePlan(c.id);
+    await t.planning.tick();
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["codex"]);
+    expect(t.chats(c.id).at(-1)).toMatchObject({ text: "成功" });
+  });
+
+  it("restores the actual candidate after restart when multiple candidates use one provider", async () => {
+    const t = setup(({ agentId, index }) => {
+      if (agentId === "agent-1" || index > 1) return { status: "error", lastMessage: null, error: "model not found" };
+      return fence({ reply: "第二模型成功" });
+    });
+    t.store.presets.update(t.presets.claude.id, {
+      models: [
+        ...presetModels(t.presets.claude),
+        { ...presetModels(t.presets.claude)[0]!, model: "second-model" },
+      ],
+    });
+    const c = t.card("Restore candidate");
+    t.makePlan(c.id);
+    await t.planning.tick();
+    expect(t.fake.agents).toHaveLength(2);
+    const ref = t.fake.paseo.agents.ref;
+    t.fake.paseo.agents.ref = (id) => ({
+      ...ref(id),
+      refresh: async () => ({ agent: { status: "idle", labels: t.fake.agents.find((a) => a.id === id)!.options.labels } }),
+    });
+    const restored = createPlanning({
+      db: t.db, store: t.store, getPaseo: () => t.fake.paseo, dataDir: tempDir("planning-restore-"),
+      clock: new ManualClock(), memory, enabled: () => true,
+    });
+    t.say(c.id, "继续");
+    await restored.tick();
+    expect(t.fake.agents).toHaveLength(2);
+    expect(t.chats(c.id).at(-1)).toMatchObject({ error: true, text: expect.stringContaining("所有模型均不可用") });
+  });
+
+  it("reports exhausted candidates without overwriting the saved plan or conversation", async () => {
+    const t = setup(() => ({ status: "error", lastMessage: null, error: "model not found" }));
+    chain(t);
+    const c = t.card("Exhausted");
+    t.store.cards.setPlan(c.id, {
+      plan: {
+        description: "保留的方案",
+        checks: [],
+        subCards: [],
+        tags: [],
+        recommendedPresetId: null,
+      },
+    });
+    t.say(c.id, "调整方案");
+    await t.planning.tick();
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude", "codex"]);
+    expect(t.store.cards.get(c.id)!.plan?.description).toBe("保留的方案");
+    expect(t.chats(c.id)[0]!.text).toBe("调整方案");
+    expect(t.chats(c.id).at(-1)).toMatchObject({
+      error: true,
+      text: expect.stringContaining("所有模型均不可用"),
+    });
+  });
+
+  it("does not switch models for an ordinary task error", async () => {
+    const t = setup(() => ({
+      status: "error",
+      lastMessage: null,
+      error: "Tests failed: unexpected value",
+    }));
+    chain(t);
+    const c = t.card("Task error");
+    t.makePlan(c.id);
+    await t.planning.tick();
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude"]);
+    expect(t.chats(c.id).at(-1)).toMatchObject({
+      error: true,
+      text: expect.stringContaining("Tests failed"),
+    });
+  });
+
+  it("scouts and reviews a plan on their next models after authentication errors", async () => {
+    const t = setup(({ provider, prompt }) => {
+      if (provider === "kimi")
+        return { status: "error", lastMessage: "不能视为成功", error: "401 unauthorized" };
+      if (provider === "codex")
+        return prompt.includes("方案复核模型") ? "复核：补充回滚" : "探路结果：数据在 src/data.ts";
+      return fence({ reply: "规划完成", plan: { text: "完整方案" } });
+    });
+    chain(t, t.presets.kimi, t.presets.codex);
+    const c = t.card("Auxiliary failover");
+    t.store.cards.update(c.id, {
+      scoutPresetId: t.presets.kimi.id,
+      planReviewerPresetId: t.presets.kimi.id,
+    });
+    t.makePlan(c.id);
+    await t.planning.tick();
+    expect(t.chats(c.id).find((m) => m.author === "scout")!.text).toContain("数据在 src/data.ts");
+    t.store.cards.addChat({
+      cardId: c.id,
+      authorKind: "user",
+      text: "复核方案",
+      thread: "plan",
+      action: "review_plan",
+    });
+    await t.planning.tick();
+    expect(t.chats(c.id).find((m) => m.author === "reviewer")!.text).toBe("复核：补充回滚");
+    expect(t.fake.agents.filter((a) => a.provider === "kimi")).toHaveLength(2);
+    expect(t.fake.agents.filter((a) => a.provider === "codex")).toHaveLength(2);
+    expect(t.fake.agents.filter((a) => a.provider !== "claude").every((a) => a.archived)).toBe(
+      true,
+    );
+  });
+});
 
 describe("plan thread", () => {
   it("only plan-thread owner messages are pending for the planner", () => {
@@ -324,11 +484,19 @@ describe("subtasks in the plan (WP-106)", () => {
     const ok = PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p", subtasks: [sub("s1"), sub("s2", { dependsOn: ["s1"] })] } });
     expect(ok.success).toBe(true);
     expect(ok.success && ok.data.plan?.subtasks?.[0]?.dependsOn).toEqual([]);
-    expect(PlanTurnSchema.safeParse({ reply: "x", plan: { text: "p", subtasks: [sub("s1", { dependsOn: ["s9"] })] } }).success).toBe(false);
     expect(
       PlanTurnSchema.safeParse({
         reply: "x",
-        plan: { text: "p", subtasks: [sub("s1", { dependsOn: ["s2"] }), sub("s2", { dependsOn: ["s1"] })] },
+        plan: { text: "p", subtasks: [sub("s1", { dependsOn: ["s9"] })] },
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanTurnSchema.safeParse({
+        reply: "x",
+        plan: {
+          text: "p",
+          subtasks: [sub("s1", { dependsOn: ["s2"] }), sub("s2", { dependsOn: ["s1"] })],
+        },
       }).success,
     ).toBe(false);
   });

@@ -213,7 +213,7 @@ describe("starting sub-agents", () => {
     expect(t.fake.created[0].config.provider).toBe("gemini/m");
     // s2's default model (claude) cannot start: its fallback (codex) takes it.
     t.store.cards.setSubtaskRun(t.card.id, "s1", { status: "done" });
-    expect(await t.service.start(t.card.key, "s2")).toMatchObject({ started: true, model: "cheap-fb" });
+    expect(await t.service.start(t.card.key, "s2")).toMatchObject({ started: true, model: "cheap" });
     expect(t.fake.created[1].config.provider).toBe("codex/m");
   });
 });
@@ -277,7 +277,7 @@ describe("sub-agent outcomes reach the main agent", () => {
     await t.failed("sub-1", "Claude AI usage limit reached");
     await flush();
     const run = t.run("s1")!;
-    expect(run.presetId).toBe(t.cheapFb.id);
+    expect(run.presetId).toBe(t.cheap.id);
     expect(run.sessionId).not.toBe(first);
     expect(run.status).toBe("running");
     expect(t.now().presetId).toBe(t.main.id);

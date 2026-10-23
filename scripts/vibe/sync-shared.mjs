@@ -5,7 +5,9 @@
 //
 // Consumers: plugins/<p> whose package.json has `vibe.shared`
 // ({ "shared": ["contract","sync"], "server": ["db"] }) get plugins/<p>/shared/vibe/<sub>
-// and plugins/<p>/server/vibe/<sub>; packages/app/src/vibe/generated/<sub> (contract+sync)
+// and plugins/<p>/server/vibe/<sub>. Client modules declared as client: ["prompts"] come from
+// vibe-shared/client/<sub> and stay under plugins/<p>/client/vibe/<sub>.
+// packages/app/src/vibe/generated/<sub> (contract+sync)
 // is synced once packages/app/src/vibe exists. Target roots are generated-only: any file
 // in them that is not a copy is drift (and is removed in write mode).
 import {
@@ -60,13 +62,13 @@ function generatedContent(sourceFile) {
 function planTargets(root) {
   const sourceRoot = path.join(root, SHARED_PACKAGE_DIR);
   const targets = [];
-  const add = (targetDir, subdirs) => {
+  const add = (targetDir, subdirs, sourcePrefix = "") => {
     const files = new Map();
     for (const sub of subdirs) {
-      const sourceDir = path.join(sourceRoot, sub);
+      const sourceDir = path.join(sourceRoot, sourcePrefix, sub);
       if (!existsSync(sourceDir)) {
         throw new Error(
-          `Missing source directory ${SHARED_PACKAGE_DIR}/${sub} (needed by ${path.relative(root, targetDir)})`,
+          `Missing source directory ${SHARED_PACKAGE_DIR}/${sourcePrefix ? `${sourcePrefix}/` : ""}${sub} (needed by ${path.relative(root, targetDir)})`,
         );
       }
       for (const relative of listFiles(sourceDir)) {
@@ -79,9 +81,10 @@ function planTargets(root) {
     targets.push({ dir: targetDir, files });
   };
   for (const plugin of listVibePlugins(root)) {
-    const { shared, server } = plugin.pkg.vibe.shared ?? {};
+    const { shared, server, client } = plugin.pkg.vibe.shared ?? {};
     if (shared?.length) add(path.join(plugin.dir, "shared/vibe"), shared);
     if (server?.length) add(path.join(plugin.dir, "server/vibe"), server);
+    if (client?.length) add(path.join(plugin.dir, "client/vibe"), client, "client");
   }
   if (existsSync(path.join(root, "packages/app/src/vibe"))) {
     add(path.join(root, "packages/app/src/vibe/generated"), APP_SUBDIRS);

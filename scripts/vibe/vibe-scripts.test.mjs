@@ -54,6 +54,38 @@ test("sync-shared writes copies with banner, skips tests, then --check passes", 
   assert.deepEqual(syncShared({ root, check: true }).drift, []);
 });
 
+test("sync-shared keeps opted-in client components inside each consumer client tree", () => {
+  const root = fixtureRoot();
+  put(
+    root,
+    "plugins/vibe-shared/client/prompts/editor.tsx",
+    'import { TextInput } from "@getpaseo/plugin/client/react-native";\n',
+  );
+  put(root, "plugins/vibe-shared/client/prompts/editor.test.tsx", "test only\n");
+  for (const name of ["board", "master"]) {
+    createPlugin({ root, name });
+    put(
+      root,
+      `plugins/vibe-${name}/package.json`,
+      JSON.stringify({ vibe: { shared: { client: ["prompts"] } } }),
+    );
+  }
+  syncShared({ root });
+  for (const name of ["board", "master"]) {
+    const target = path.join(root, `plugins/vibe-${name}/client/vibe/prompts/editor.tsx`);
+    assert.match(readFileSync(target, "utf8"), /GENERATED FROM plugins\/vibe-shared/);
+    assert.ok(!existsSync(path.join(root, `plugins/vibe-${name}/shared/vibe/prompts/editor.tsx`)));
+    assert.ok(
+      !existsSync(path.join(root, `plugins/vibe-${name}/client/vibe/prompts/editor.test.tsx`)),
+    );
+  }
+  assert.ok(!existsSync(path.join(root, "plugins/vibe-demo/client/vibe/prompts/editor.tsx")));
+  assert.deepEqual(syncShared({ root, check: true }).drift, []);
+  put(root, "plugins/vibe-master/client/vibe/prompts/stray.tsx", "extra\n");
+  syncShared({ root });
+  assert.ok(!existsSync(path.join(root, "plugins/vibe-master/client/vibe/prompts/stray.tsx")));
+});
+
 test("sync-shared --check reports changed, missing and extra files; write mode repairs them", () => {
   const root = fixtureRoot();
   syncShared({ root });

@@ -157,7 +157,7 @@ describe("preset switching", () => {
     expect(t.fake.agents).toHaveLength(1);
     expect(t.fake.agents[0]!.archived).toBe(false);
     expect(t.board.store.sessions.list({ role: "master", states: ["idle"] })).toHaveLength(1);
-    await expect(askMaster(t.runtime)).rejects.toThrow(/not logged in/);
+    await expect(askMaster(t.runtime)).rejects.toThrow(/所有模型均不可用/);
     await choosePreset(t, t.board.presets.claude.id);
     await askMaster(t.runtime);
     expect(t.fake.agents[0]!.prompts).toHaveLength(2);
@@ -189,7 +189,76 @@ describe("preset switching", () => {
 });
 
 describe("quota", () => {
-  it("only reminds on a quota error: no switch, the job is kept and runs after the owner switches", async () => {
+  function ordered(t: ReturnType<typeof build>) {
+    const preset = t.board.store.presets.update(t.board.presets.claude.id, {
+      models: [
+        { provider: "claude", model: "opus-x", thinking: "high", permissionMode: "auto" },
+        { provider: "codex", model: "gpt-5-codex", thinking: "xhigh", permissionMode: "accept-edits" },
+        { provider: "kimi", model: "kimi-k2", thinking: "", permissionMode: "auto" },
+      ],
+    });
+    t.settings.presetId = preset.id;
+    return preset;
+  }
+
+  it("retries the same request in order with handoff and persists the actual active model", async () => {
+    const t = build(({ provider }) => provider === "claude"
+      ? { status: "error", lastMessage: null, error: "quota exhausted" }
+      : "continued");
+    ordered(t);
+    t.settings.permissionMode = "preset";
+    expect(await askMaster(t.runtime, "finish the memory update")).toBe("continued");
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude", "codex"]);
+    expect(t.fake.agents[1]!.prompts[0]).toContain("finish the memory update");
+    expect(t.fake.agents[1]!.prompts[0]).toContain("本次更换原因");
+    expect(t.fake.agents[1]!.options.config.modeId).toBe("auto");
+    expect(t.fake.agents[0]!.archived).toBe(false);
+    expect(t.runtime.sessions().find((s) => s.provider === "claude")).toMatchObject({ state: "ended", current: false });
+    expect((await t.runtime.status()).target).toMatchObject({ provider: "codex", model: "gpt-5-codex" });
+    const again = createMasterRuntime({
+      db: t.board.db, store: t.board.store, getPaseo: () => t.fake.paseo,
+      settings: () => t.settings, dataDir: t.dataDir, clock: t.clock, log: () => undefined,
+    });
+    await askMaster(again);
+    expect(t.fake.agents).toHaveLength(2);
+    expect((await again.status()).target?.provider).toBe("codex");
+    await again.dispose();
+    await t.runtime.dispose();
+  });
+
+  it("skips an unavailable binary and an expired login during startup", async () => {
+    const t = build(() => "ok", { failCreate: (p) => p === "claude" ? "provider not installed" : p === "codex" ? "not logged in" : null });
+    ordered(t);
+    expect(await askMaster(t.runtime)).toBe("ok");
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["kimi"]);
+    expect((await t.runtime.status()).target?.provider).toBe("kimi");
+    await t.runtime.dispose();
+  });
+
+  it("stops without looping when every candidate fails, then resets when the preset changes", async () => {
+    const t = build(() => ({ status: "error", lastMessage: null, error: "invalid api key" }));
+    ordered(t);
+    await expect(askMaster(t.runtime)).rejects.toThrow(/所有模型均不可用/);
+    expect(t.fake.agents).toHaveLength(3);
+    await expect(askMaster(t.runtime)).rejects.toThrow(/所有模型均不可用/);
+    expect(t.fake.agents).toHaveLength(3);
+    await choosePreset(t, t.board.presets.codex.id);
+    expect((await t.runtime.status()).target?.provider).toBe("codex");
+    expect(t.runtime.state.read().presetSelection?.exhausted).toBeUndefined();
+    await t.runtime.dispose();
+  });
+
+  it("moves to the next candidate when the quota monitor confirms exhaustion", async () => {
+    const t = build(() => "ok", { usage: [usageOf("claude", 0), usageOf("codex", 70)] });
+    ordered(t);
+    await askMaster(t.runtime);
+    await t.runtime.checkQuota();
+    expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude", "codex"]);
+    expect((await t.runtime.status()).target?.provider).toBe("codex");
+    await t.runtime.dispose();
+  });
+
+  it("stops after the sole candidate exhausts quota and resumes after a preset change", async () => {
     let limited = true;
     const t = build(({ provider }) =>
       provider === "claude" && limited
@@ -206,7 +275,7 @@ describe("quota", () => {
     expect(t.board.store.sessions.list({ role: "master" })[0]!.state).toBe("error");
     const status = await t.runtime.status();
     expect(status.queue.blocked).toBe(1);
-    expect(status.lastAlert?.kind).toBe("quota_error");
+    expect(status.lastAlert?.kind).toBe("provider_error");
 
     limited = false;
     await choosePreset(t, t.board.presets.codex.id);
@@ -216,7 +285,7 @@ describe("quota", () => {
     await t.runtime.dispose();
   });
 
-  it("does not block on non-quota failures and raises no reminder", async () => {
+  it("does not block on non-provider failures and raises no reminder", async () => {
     const t = build(() => ({ status: "error", lastMessage: null, error: "network down" }));
     const card = doneCard(t.board, "Plain failure");
     t.runtime.wake(card.key, "card_done", true);

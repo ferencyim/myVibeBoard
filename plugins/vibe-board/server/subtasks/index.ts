@@ -37,6 +37,7 @@ import type { AgentTracker } from "../dispatch";
 import { modeIdFor, providerSpec } from "../dispatch/brief";
 import { ensurePresetModel, type ModelCatalog } from "../dispatch/model";
 import { subtaskOfSession } from "../dispatch/reassign";
+import { modelCandidates, recordModelSelection } from "../dispatch/candidates";
 import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { postChat } from "../chat/post";
 import { clip } from "../chat/format";
@@ -174,12 +175,19 @@ export function createSubtaskService(options: SubtaskServiceOptions) {
     starting.add(lock);
     try {
       const failover = (await (options.failoverEnabled?.() ?? true)) !== false;
-      const queue = [first];
+      const queue = modelCandidates(first, store.presets.list()).slice(0, failover ? undefined : 1);
+      let usedIndex = 0;
       let agentId = "";
       let used: Preset = first;
       let prompt = "";
       for (let i = 0; i < queue.length; i++) {
-        const { preset } = await ensurePresetModel(paseo, queue[i]!);
+        let preset: Preset;
+        try {
+          preset = (await ensurePresetModel(paseo, queue[i]!)).preset;
+        } catch (error) {
+          if (i + 1 >= queue.length) throw new Error(`所有候选模型均不可用：${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
         prompt = buildSubtaskBrief({ card, subtask, extra, prompts });
         const id = (options.newAgentId ?? randomUUID)();
         tracker?.expect(id);
@@ -214,18 +222,14 @@ export function createSubtaskService(options: SubtaskServiceOptions) {
           }
           agentId = id;
           used = preset;
+          usedIndex = i;
           break;
         } catch (error) {
           tracker?.release(id);
           const message = error instanceof Error ? error.message : String(error);
           const category = classifyFailure(message);
-          if (i === 0 && failover && isReassignable(category)) {
-            for (const fid of first.fallbackPresetIds ?? []) {
-              const next = presetById(fid);
-              if (next && !queue.some((q) => q.id === next.id)) queue.push(next);
-            }
-          }
-          if (i + 1 >= queue.length) throw error;
+          if (!isReassignable(category)) throw error;
+          if (i + 1 >= queue.length) throw new Error(`所有候选模型均不可用：${message}`);
           store.events.add({
             cardId: card.id,
             type: "status",
@@ -263,8 +267,9 @@ export function createSubtaskService(options: SubtaskServiceOptions) {
         startedAt: now().toISOString(),
         finishedAt: null,
       });
+      recordModelSelection(board, card.id, session.id, used, usedIndex);
       await tracker?.bind(agentId);
-      const fellBack = used.id !== first.id ? `（「${first.name}」无法启动，已用备用预设）` : "";
+      const fellBack = usedIndex > 0 ? `（首选模型无法启动，已自动切换）` : "";
       postChat(
         store,
         {

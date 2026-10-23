@@ -155,7 +155,8 @@ describe("brief: plan, acceptance and execution conversation (WP-105)", () => {
 describe("dispatch", () => {
   it("completes a preset without a model from the provider catalog and notes it on the card", async () => {
     const t = setup();
-    t.store.presets.update(t.preset.id, { model: "" });
+    // Simulate a legacy row saved before explicit candidate models were required.
+    vi.spyOn(t.store.presets, "list").mockReturnValue([{ ...t.preset, model: "", models: undefined }]);
     (t.fake.paseo as any).providers = {
       listModels: async () => ({ models: [{ id: "other", isDefault: false }, { id: "gpt-5-codex", isDefault: true }] }),
     };
@@ -167,7 +168,7 @@ describe("dispatch", () => {
 
   it("fails clearly when a model-less preset's provider has no default model", async () => {
     const t = setup();
-    t.store.presets.update(t.preset.id, { model: "" });
+    vi.spyOn(t.store.presets, "list").mockReturnValue([{ ...t.preset, model: "", models: undefined }]);
     (t.fake.paseo as any).providers = { listModels: async () => ({ models: [] }) };
     await expect(t.dispatcher.dispatch("DEMO-1")).rejects.toThrow(/没有填模型/);
     expect(t.fake.calls.agent).toHaveLength(0);

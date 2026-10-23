@@ -6,6 +6,7 @@ import { createReassigner, renderTranscript } from "../server/dispatch/reassign"
 import { registerLifecycle } from "../server/lifecycle";
 import { classifyFailure, isReassignable } from "../server/lifecycle/error-class";
 import { eventTypes, setupBoard, tempDir } from "./helpers";
+import { createCompactionScheduler } from "../../vibe-context/server/compaction";
 
 describe("failure classifier", () => {
   it.each([
@@ -101,6 +102,73 @@ function setup(paseoOpts: Parameters<typeof fakePaseo>[0] = {}, withFallbacks = 
 const failure = { message: "Claude AI usage limit reached", category: "quota" as const };
 
 describe("reassigner", () => {
+  it("continues after the active candidate following a cold context handoff", async () => {
+    const t = setup({}, false);
+    t.board.presets.update(t.a.id, { models: [
+      { provider: "claude", model: "opus", thinking: "", permissionMode: "auto" },
+      { provider: "codex", model: "gpt-5", thinking: "", permissionMode: "auto" },
+      { provider: "gemini", model: "pro", thinking: "", permissionMode: "auto" },
+    ] });
+    const r = createReassigner({ board: t.board, getPaseo: () => t.fake.paseo, newAgentId: t.nextId, log: () => {} });
+    const first = await r.reassign(t.session.id, failure);
+    const session = first.reassigned!;
+    t.store.sessions.setState(session.id, "idle");
+    let now = 0;
+    const scheduler = createCompactionScheduler({
+      store: t.store, now: () => now, config: () => ({ enabled: true, ttlSeconds: {}, compactProviders: [] }),
+      buildContext: () => "context", pollMs: 0,
+      host: { run: async () => ({ status: "idle" }), handoff: async () => "cold-agent", archive: async () => {} },
+    });
+    scheduler.onTurnEnded({ id: session.agentId, provider: "codex", cwd: t.worktree });
+    now = 250_000;
+    expect(await scheduler.tick()).toEqual([{ sessionId: session.id, action: "handoff" }]);
+    const cold = t.store.sessions.getByAgent("cold-agent")!;
+    const second = await r.reassign(cold.id, failure);
+    expect(second.reassigned?.currentProvider).toBe("gemini");
+    expect(t.fake.created.map((a) => a.config.provider)).toEqual(["codex/gpt-5", "gemini/pro"]);
+  });
+
+  it("honors the candidate index recorded by a maintenance worker", async () => {
+    const t = setup({}, false);
+    t.board.presets.update(t.a.id, { models: [
+      { provider: "claude", model: "opus", thinking: "", permissionMode: "auto" },
+      { provider: "codex", model: "gpt-5", thinking: "", permissionMode: "auto" },
+      { provider: "gemini", model: "pro", thinking: "", permissionMode: "auto" },
+    ] });
+    t.store.events.add({ cardId: t.card.id, type: "status", authorKind: "system", author: "maintain", body: {
+      kind: "model_selected", sessionId: t.session.id, presetId: t.a.id, modelIndex: 1, provider: "codex", model: "gpt-5",
+    } });
+    const r = createReassigner({ board: t.board, getPaseo: () => t.fake.paseo, newAgentId: t.nextId, log: () => {} });
+    expect((await r.reassign(t.session.id, failure)).reassigned?.currentProvider).toBe("gemini");
+    expect(t.fake.created.map((a) => a.config.provider)).toEqual(["gemini/pro"]);
+  });
+
+  it("uses ordered models within one preset, persists progress across restarts, and stops after the last model", async () => {
+    const t = setup({}, false);
+    t.board.presets.update(t.a.id, { models: [
+      { provider: "claude", model: "opus", thinking: "", permissionMode: "accept-edits" },
+      { provider: "codex", model: "gpt-5", thinking: "high", permissionMode: "auto" },
+      { provider: "codex", model: "gpt-5-next", thinking: "low", permissionMode: "accept-edits" },
+    ] });
+    const create = () => createReassigner({ board: t.board, getPaseo: () => t.fake.paseo, newAgentId: t.nextId, log: () => {} });
+    const first = await create().reassign(t.session.id, failure);
+    expect(first.reassigned).toMatchObject({ currentProvider: "codex" });
+    expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.a.id);
+    expect(t.fake.created[0].config).toMatchObject({ provider: "codex/gpt-5", thinkingOptionId: "high" });
+    const second = await create().reassign(first.reassigned!.id, failure);
+    expect(second.reassigned).toMatchObject({ currentProvider: "codex" });
+    expect(t.fake.created[1].config.provider).toBe("codex/gpt-5-next");
+    expect(await create().reassign(second.reassigned!.id, failure)).toMatchObject({ reassigned: null, attempts: [] });
+    expect(t.fake.created).toHaveLength(2);
+  });
+
+  it("keeps ordinary task failures on the selected model", async () => {
+    const t = setup();
+    const r = createReassigner({ board: t.board, getPaseo: () => t.fake.paseo });
+    expect(await r.reassign(t.session.id, { message: "Tests failed", category: "other" })).toMatchObject({ reassigned: null });
+    expect(t.fake.created).toHaveLength(0);
+  });
+
   it("continues on the first fallback in the same workspace, records it and hands off a transcript", async () => {
     const t = setup();
     const reassigner = createReassigner({
@@ -125,7 +193,7 @@ describe("reassigner", () => {
     expect(readFileSync(path, "utf8")).toContain("working on it");
 
     expect(t.store.sessions.get(t.session.id)).toMatchObject({ state: "ended" });
-    expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.c.id);
+    expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.a.id);
     expect(eventTypes(t.runtime)).toContain("session.reassigned");
     const events = t.store.events.list(t.card.id);
     expect(events.some((e) => e.type === "switch_agent")).toBe(true);
@@ -311,8 +379,34 @@ describe("dispatch failover (agent cannot start)", () => {
     expect(result.session.currentProvider).toBe("codex");
     const card = t.store.cards.get(t.card.id)!;
     expect(card.column).toBe("in_progress");
-    expect(card.presetId).toBe(t.fb.id);
+    expect(card.presetId).toBe(t.main.id);
     expect(t.store.events.list(t.card.id).some((e) => (e.body as any)?.kind === "failover")).toBe(true);
+  });
+
+  it("skips consecutive unavailable candidates without changing the preset and persists the final position", async () => {
+    const t = dispatchSetup(["claude", "codex"], false);
+    t.board.presets.update(t.main.id, { models: [
+      { provider: "claude", model: "opus", thinking: "", permissionMode: "auto" },
+      { provider: "codex", model: "gpt-5", thinking: "high", permissionMode: "auto" },
+      { provider: "gemini", model: "pro", thinking: "", permissionMode: "accept-edits" },
+    ] });
+    const result = await t.dispatcher.dispatch(t.card.id);
+    expect(result.card.presetId).toBe(t.main.id);
+    expect(t.created.map((a) => a.config.provider)).toEqual(["gemini/pro"]);
+    expect(t.store.events.list(t.card.id).map((e) => e.body).filter((b: any) => b?.kind === "model_selected")).toEqual([
+      expect.objectContaining({ sessionId: result.session.id, presetId: t.main.id, modelIndex: 2 }),
+    ]);
+  });
+
+  it("respects the provider admitted by the scheduler", async () => {
+    const t = dispatchSetup([], false);
+    t.board.presets.update(t.main.id, { models: [
+      { provider: "claude", model: "opus", thinking: "", permissionMode: "auto" },
+      { provider: "codex", model: "gpt-5", thinking: "high", permissionMode: "auto" },
+    ] });
+    const result = await t.dispatcher.dispatch(t.card.id, { provider: "codex" });
+    expect(result.session.currentProvider).toBe("codex");
+    expect(t.created.map((a) => a.config.provider)).toEqual(["codex/gpt-5"]);
   });
 
   it("fails as before without a fallback or for a non-reassignable error", async () => {
@@ -329,6 +423,19 @@ describe("dispatch failover (agent cannot start)", () => {
 });
 
 describe("switchTo (WP-105 executor picker)", () => {
+  it("tries the selected preset's next model when its first model cannot start", async () => {
+    const t = setup({ failProviders: ["codex"] }, false);
+    t.board.presets.update(t.c.id, { models: [
+      { provider: "codex", model: "gpt-5", thinking: "", permissionMode: "auto" },
+      { provider: "gemini", model: "pro", thinking: "", permissionMode: "accept-edits" },
+    ] });
+    const r = createReassigner({ board: t.board, getPaseo: () => t.fake.paseo, newAgentId: t.nextId, log: () => {} });
+    const out = await r.switchTo(t.session.id, t.c.id);
+    expect(out.session.currentProvider).toBe("gemini");
+    expect(t.store.cards.get(t.card.id)!.presetId).toBe(t.c.id);
+    expect(r.candidatesFor(t.store.cards.get(t.card.id)!)).toEqual([]);
+  });
+
   it("starts the chosen model in the same workspace with plan and exec chat, ends and archives the old agent", async () => {
     const t = setup({}, false);
     t.store.cards.setPlan(t.card.id, {

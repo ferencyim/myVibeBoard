@@ -15,6 +15,7 @@ import {
 import { createScheduler, DEFAULT_CONFIG, type SchedulerConfig } from "./scheduler";
 import {
   mergeProfiles,
+  presetModels,
   parseWorkerHistory,
   selectAgent,
   type AgentProfile,
@@ -200,7 +201,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   /** Entry for the master agent (WP-32) through the `scheduler.selectAgent` RPC. */
   async function select(task: TaskNeeds, repoPath?: string) {
     // Providers come from what exists: the usage catalog and the presets in use.
-    const providerIds = [...Object.keys(quota), ...store.presets.list().map((p) => p.provider)];
+    const providerIds = [...Object.keys(quota), ...store.presets.list().flatMap((p) => presetModels(p).map((m) => m.provider))];
     const profiles = mergeProfiles(settings.agentProfiles, providerIds);
     const running = scheduler.status().running.byProvider;
     const devicesFree: Record<string, number> = {};

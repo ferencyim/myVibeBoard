@@ -87,6 +87,34 @@ describe("sub-agents (WP-106)", () => {
 });
 
 describe("quota-aware admission", () => {
+  it("admits on the next model's provider when the preset's first provider is exhausted", async () => {
+    const t = setup({ usage: usage(["claude", 98]) });
+    const preset = t.preset("claude");
+    t.store.presets.update(preset.id, {
+      models: [
+        {
+          provider: "claude",
+          model: "first",
+          thinking: "",
+          permissionMode: "auto",
+        },
+        {
+          provider: "codex",
+          model: "second",
+          thinking: "",
+          permissionMode: "auto",
+        },
+      ],
+    });
+    t.card("ordered fallback", "high", preset.id);
+    const result = await t.runtime.tickOnce();
+    expect(
+      result.admitted.map((a) => ({
+        presetId: a.presetId,
+        provider: a.provider,
+      }))
+    ).toEqual([{ presetId: preset.id, provider: "codex" }]);
+  });
   it("when quota is tight, high priority gets the strong provider first and low waits", async () => {
     const t = setup({ usage: usage(["claude", 80]) }); // 20% left <= tight 25%
     const claude = t.preset("claude");

@@ -8,6 +8,8 @@
 
 import {
   selectAgent,
+  presetModels,
+  withPresetModel,
   type AgentProfile,
   type MaintenanceRule,
   type Preset,
@@ -19,7 +21,9 @@ export interface ResolvedAgent {
   /** `provider/model` as the SDK expects it. */
   spec: string;
   modeId?: string;
+  thinkingOptionId?: string;
   source: string;
+  preset?: Preset;
 }
 
 export interface AgentResolveDeps {
@@ -54,8 +58,27 @@ function fromPreset(preset: Preset, source: string, unattended?: Record<string, 
     provider: preset.provider.toLowerCase(),
     spec: presetSpec(preset),
     modeId: modeFor(preset.provider, preset.permissionMode, unattended),
+    ...(preset.thinking && preset.thinking !== "default" ? { thinkingOptionId: preset.thinking } : {}),
     source,
+    preset,
   };
+}
+
+export function resolveAgentCandidates(
+  rule: Pick<MaintenanceRule, "agent" | "name">,
+  project: Project,
+  deps: AgentResolveDeps
+): ResolvedAgent[] {
+  const resolved = resolveAgent(rule, project, deps);
+  return resolved.preset
+    ? presetModels(resolved.preset).map((model) =>
+        fromPreset(
+          withPresetModel(resolved.preset!, model),
+          resolved.source,
+          deps.unattendedModes?.()
+        )
+      )
+    : [resolved];
 }
 
 function tierOf(preset: Pick<Preset, "model" | "thinking">): 1 | 2 | 3 {

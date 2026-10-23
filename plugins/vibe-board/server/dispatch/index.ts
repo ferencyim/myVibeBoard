@@ -14,6 +14,7 @@ import { classifyFailure, isReassignable } from "../lifecycle/error-class";
 import { postChat } from "../chat/post";
 import { linkPaseoProject } from "./link-project";
 import { ensurePresetModel, type ModelCatalog } from "./model";
+import { modelCandidates, recordModelSelection } from "./candidates";
 import type { PromptResolver } from "../prompts";
 import { buildDispatchBrief, modeIdFor, providerSpec, threadTitle, worktreeSlug, type BriefLimits } from "./brief";
 
@@ -28,6 +29,8 @@ export interface AgentTracker {
 
 export interface DispatchOptions {
   presetId?: string;
+  /** Scheduler already skipped exhausted providers before admitting this candidate. */
+  provider?: string;
   extraInstructions?: string;
   /** Skip the admission gate (manual "dispatch now" from the UI). */
   force?: boolean;
@@ -107,6 +110,7 @@ export function createDispatcher(options: DispatcherOptions) {
       if (!project) throw new BoardError("not_found", `找不到项目：${card.projectId}`);
       const preset = pickPreset(card, project, opts.presetId);
       let usedPreset = preset;
+      let usedIndex = 0;
 
       let workspaceId = "";
       let worktree: string | null = null;
@@ -136,9 +140,18 @@ export function createDispatcher(options: DispatcherOptions) {
         // The chosen preset first; when the agent cannot start for a provider-side reason
         // (login expired, model unknown, provider missing, ...) its fallbackPresetIds in order.
         const failover = (await (options.failoverEnabled?.() ?? true)) !== false;
-        const queue = [preset];
+        const ordered = modelCandidates(preset, store.presets.list());
+        const firstIndex = opts.provider ? ordered.findIndex((p) => p.provider === opts.provider) : 0;
+        if (firstIndex < 0) throw new BoardError("invalid", "调度器选中的 provider 已不在预设中，请重新派发");
+        const queue = ordered.slice(firstIndex, failover ? undefined : firstIndex + 1);
         for (let i = 0; i < queue.length; i++) {
-          const resolved = await ensurePresetModel(paseo, queue[i]!);
+          let resolved;
+          try {
+            resolved = await ensurePresetModel(paseo, queue[i]!);
+          } catch (error) {
+            if (i + 1 >= queue.length) throw new Error(`所有候选模型均不可用：${error instanceof Error ? error.message : String(error)}`);
+            continue;
+          }
           const current = resolved.preset;
           if (resolved.note) {
             store.events.add({
@@ -185,19 +198,15 @@ export function createDispatcher(options: DispatcherOptions) {
             });
             agentId = id;
             usedPreset = current;
+            usedIndex = firstIndex + i;
             usedPrompt = prompt;
             break;
           } catch (error) {
             tracker?.release(id);
             const message = error instanceof Error ? error.message : String(error);
             const category = classifyFailure(message);
-            if (i === 0 && failover && isReassignable(category)) {
-              for (const fid of preset.fallbackPresetIds ?? []) {
-                const next = store.presets.list().find((p) => p.id === fid);
-                if (next && !queue.some((q) => q.id === next.id)) queue.push(next);
-              }
-            }
-            if (i + 1 >= queue.length) throw error;
+            if (!isReassignable(category)) throw error;
+            if (i + 1 >= queue.length) throw new Error(`所有候选模型均不可用：${message}`);
             store.events.add({
               cardId: card.id,
               type: "status",
@@ -227,8 +236,9 @@ export function createDispatcher(options: DispatcherOptions) {
         worktree,
         presetId: usedPreset.id,
       });
+      recordModelSelection(board, card.id, result.session.id, usedPreset, usedIndex);
       await tracker?.bind(startedId);
-      const fellBack = usedPreset.id !== preset.id ? `（首选预设「${preset.name}」无法启动，已用备用预设）` : "";
+      const fellBack = usedIndex > 0 ? `（首选模型无法启动，已自动切换）` : "";
       postChat(store, {
         cardId: card.id,
         authorKind: "system",
