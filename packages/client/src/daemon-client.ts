@@ -1011,10 +1011,11 @@ export class DaemonConnectionError extends Error {
   }
 }
 
-class DaemonRpcError extends Error {
+export class DaemonRpcError extends Error {
   readonly requestId: string;
   readonly requestType?: string;
   readonly code?: string;
+  readonly serverMessage: string;
 
   constructor(params: { requestId: string; error: string; requestType?: string; code?: string }) {
     const parts = [params.error];
@@ -1022,6 +1023,7 @@ class DaemonRpcError extends Error {
     if (params.code) parts.push(`code=${params.code}`);
     super(parts.join(" "));
     this.name = "DaemonRpcError";
+    this.serverMessage = params.error;
     this.requestId = params.requestId;
     this.requestType = params.requestType;
     this.code = params.code;

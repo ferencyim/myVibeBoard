@@ -3,7 +3,11 @@ import pino from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginTaskConversationPrepareRequest } from "@getpaseo/plugin/server";
 import type { TaskConversationRecipient } from "@getpaseo/protocol/messages";
-import type { AgentManager, CreateAgentOptions } from "../agent/agent-manager.js";
+import type {
+  AgentManager,
+  AgentManagerEvent,
+  CreateAgentOptions,
+} from "../agent/agent-manager.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import type {
   AgentPromptInput,
@@ -18,13 +22,27 @@ import { TaskConversationStore } from "./store.js";
 import { TASK_CONVERSATION_ID_LABEL, TASK_CONVERSATION_MEMBER_ID_LABEL } from "./identity.js";
 
 const services = new Set<TaskConversationService>();
+
+function assistantEvent(
+  agentId: string,
+  seq: number,
+  text: string,
+  messageId = "one",
+): AgentManagerEvent {
+  return {
+    type: "agent_stream",
+    agentId,
+    epoch: "native",
+    seq,
+    event: { type: "timeline", item: { type: "assistant_message", text, messageId } },
+  };
+}
 const recipient: TaskConversationRecipient = {
   role: "planner",
   config: { provider: "claude", cwd: tmpdir(), model: "cheap-test-model" },
 };
 
-function fixture() {
-  const store = new TaskConversationStore({ filePath: ":memory:" });
+function fixture(store = new TaskConversationStore({ filePath: ":memory:" })) {
   const agents = new Map<string, { config: AgentSessionConfig; runtimeInfo: { model?: string } }>();
   const prepareRequests: PluginTaskConversationPrepareRequest[] = [];
   const controls = {
@@ -36,7 +54,7 @@ function fixture() {
   };
   let service!: TaskConversationService;
   const manager = {
-    subscribe: vi.fn(() => () => undefined),
+    subscribe: vi.fn((_listener: (event: AgentManagerEvent) => void) => () => undefined),
     getAgent: vi.fn((agentId: string) => agents.get(agentId)),
     hasInFlightRun: vi.fn((_agentId: string) => false),
     createAgent: vi.fn(
@@ -60,6 +78,25 @@ function fixture() {
         };
       })();
     }),
+    replaceAgentRun: vi.fn(
+      async (agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions) => {
+        service.assertAgentMutation(agentId, "replace");
+        return manager.streamAgent(agentId, prompt, options);
+      },
+    ),
+    cancelAgentRun: vi.fn(async (_agentId: string) => ({ status: "canceled" })),
+    getTimelineRows: vi.fn(
+      async (
+        _agentId: string,
+      ): Promise<
+        Array<{
+          turnId?: string;
+          seq: number;
+          item: { type: string; clientMessageId?: string; text?: string };
+        }>
+      > => [],
+    ),
+    fetchTimeline: vi.fn((_agentId: string) => ({ epoch: "native-epoch" })),
   };
   const before = vi.fn(async (name: string, request: unknown) => {
     if (name === "task.conversation.prepare") {
@@ -98,6 +135,17 @@ async function createConversation(service: TaskConversationService) {
   });
 }
 
+async function* terminalBeforeReceipt(
+  store: TaskConversationStore,
+  conversationId: string,
+): AsyncGenerator<AgentStreamEvent> {
+  // A short provider turn can project its terminal state before the send receipt commits.
+  store.update(conversationId, (record) => {
+    record.snapshot.members[0]!.status = "idle";
+  });
+  yield { type: "turn_started", provider: "claude", turnId: "already-finished" };
+}
+
 afterEach(async () => {
   for (const service of services) {
     await service.close();
@@ -106,6 +154,369 @@ afterEach(async () => {
 });
 
 describe("TaskConversationService", () => {
+  it("accepts trusted MCP injection while retaining the admitted member identity", async () => {
+    const { service, controls } = fixture();
+    controls.onCreate = (config) => ({
+      ...config,
+      mcpServers: { host: { type: "stdio", command: "host-plugin" } },
+    });
+    const conversation = await createConversation(service);
+    const first = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "mcp-one",
+      text: "首条",
+    });
+    const second = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "mcp-two",
+      text: "继续",
+    });
+    expect(first.status).toBe("accepted");
+    expect(second.backendAgentId).toBe(first.backendAgentId);
+    expect(
+      service.resolve({ conversationId: conversation.conversationId })!.members[0]!.config
+        .mcpServers,
+    ).toHaveProperty("host");
+  });
+
+  it.each(["Agent not found", "Agent already has an active run", "synchronous failure"])(
+    "rejects known pre-provider failures and excludes the marked message from later context: %s",
+    async (message) => {
+      const { service, manager, prepareRequests } = fixture();
+      const conversation = await createConversation(service);
+      const pushedText: string[] = [];
+      const release = service.subscribe(conversation.conversationId, (update) => {
+        if (update.row) pushedText.push(update.row.text);
+      });
+      manager.streamAgent.mockImplementationOnce(() => {
+        throw new Error(message);
+      });
+      const result = await service.send({
+        conversationId: conversation.conversationId,
+        recipient,
+        clientMessageId: "not-sent",
+        text: "不能进入上下文",
+      });
+      expect(result.status).toBe("rejected");
+      expect(pushedText.at(-1)).toBe("[未投递] 不能进入上下文");
+      expect(service.fetch({ conversationId: conversation.conversationId }).rows[0]!.text).toBe(
+        "[未投递] 不能进入上下文",
+      );
+      await service.send({
+        conversationId: conversation.conversationId,
+        recipient,
+        clientMessageId: "next",
+        text: "可继续",
+      });
+      expect(prepareRequests[1]!.publicContext).toEqual([]);
+      release();
+    },
+  );
+
+  it("reconciles an unknown in-process member repeatedly and only clears it on explicit stopped rejection", async () => {
+    const { service, manager, controls } = fixture();
+    const conversation = await createConversation(service);
+    controls.receiptUnknown = true;
+    const delivery = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "unknown",
+      text: "等待核对",
+    });
+    expect(delivery.status).toBe("unknown");
+    await service.stop({
+      conversationId: conversation.conversationId,
+      memberId: delivery.memberId,
+    });
+    expect(
+      service.getDelivery({
+        conversationId: conversation.conversationId,
+        clientMessageId: "unknown",
+      })!.status,
+    ).toBe("unknown");
+    await expect(
+      service.stop({
+        conversationId: conversation.conversationId,
+        memberId: delivery.memberId,
+        reconcileDelivery: { clientMessageId: "unknown", resolution: "accepted" },
+      }),
+    ).rejects.toThrow("no confirmed provider receipt");
+    await service.stop({
+      conversationId: conversation.conversationId,
+      memberId: delivery.memberId,
+      reconcileDelivery: { clientMessageId: "unknown", resolution: "rejected" },
+    });
+    expect(manager.getTimelineRows).toHaveBeenCalledTimes(3);
+    expect(
+      service.getDelivery({
+        conversationId: conversation.conversationId,
+        clientMessageId: "unknown",
+      })!.status,
+    ).toBe("rejected");
+    controls.receiptUnknown = false;
+    expect(
+      (
+        await service.send({
+          conversationId: conversation.conversationId,
+          recipient,
+          clientMessageId: "retry-new",
+          text: "确认后新发",
+        })
+      ).status,
+    ).toBe("accepted");
+  });
+
+  it("accepts native receipts during explicit member reconciliation without resending", async () => {
+    const { service, manager, controls } = fixture();
+    const conversation = await createConversation(service);
+    await service.publish({
+      conversationId: conversation.conversationId,
+      sourceKey: "prior-context",
+      kind: "artifact",
+      text: "此前公开上下文",
+    });
+    controls.receiptUnknown = true;
+    const delivery = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "receipt",
+      text: "有原始回执",
+    });
+    manager.getTimelineRows.mockResolvedValue([
+      { seq: 1, turnId: "native-turn", item: { type: "user_message", clientMessageId: "receipt" } },
+    ]);
+    await service.stop({
+      conversationId: conversation.conversationId,
+      memberId: delivery.memberId,
+      reconcileDelivery: { clientMessageId: "receipt", resolution: "accepted" },
+    });
+    expect(
+      service.getDelivery({
+        conversationId: conversation.conversationId,
+        clientMessageId: "receipt",
+      })!.status,
+    ).toBe("accepted");
+    expect(manager.streamAgent).toHaveBeenCalledTimes(1);
+    expect(
+      service.resolve({ conversationId: conversation.conversationId })!.members[0]!
+        .seenConversationSeq,
+    ).toBe(delivery.throughSeq);
+    expect(delivery.throughSeq).toBeGreaterThan(0);
+  });
+
+  it.each(["active", "paused"] as const)(
+    "replaces an existing member run after approval while task is %s",
+    async (status) => {
+      const { service, manager, store } = fixture();
+      const conversation = await createConversation(service);
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient,
+        clientMessageId: "approval-initial",
+        text: "需要审批",
+      });
+      store.update(conversation.conversationId, (record) => {
+        record.snapshot.status = status;
+      });
+      manager.hasInFlightRun.mockReturnValue(true);
+      await service.continuePermission(delivery.backendAgentId, "批准后接续", "approval");
+      expect(manager.replaceAgentRun).toHaveBeenCalledTimes(1);
+      expect(
+        service.getDelivery({
+          conversationId: conversation.conversationId,
+          clientMessageId: `permission:${delivery.backendAgentId}:approval`,
+        })!.status,
+      ).toBe("accepted");
+      expect(service.resolve({ conversationId: conversation.conversationId })!.status).toBe(
+        "active",
+      );
+      expect(() =>
+        service.assertAgentRun(delivery.backendAgentId, manager.streamAgent.mock.calls[1]![2]),
+      ).toThrow("route_required");
+    },
+  );
+
+  it("recovers prepared deliveries as rejected without starting providers", async () => {
+    const original = fixture();
+    const conversation = await createConversation(original.service);
+    await original.service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "prepared",
+      text: "重启前尚未派发",
+    });
+    original.store.update(conversation.conversationId, (record) => {
+      record.deliveries.prepared!.status = "prepared";
+      record.snapshot.members[0]!.status = "idle";
+    });
+    const recovered = fixture(original.store);
+    // Both services use this in-memory store; close it once in afterEach.
+    services.delete(original.service);
+    expect(
+      recovered.service.getDelivery({
+        conversationId: conversation.conversationId,
+        clientMessageId: "prepared",
+      })!.status,
+    ).toBe("rejected");
+    expect(recovered.manager.streamAgent).not.toHaveBeenCalled();
+    expect(
+      recovered.service.fetch({ conversationId: conversation.conversationId }).rows[0]!.text,
+    ).toContain("[未投递]");
+  });
+
+  it("preserves a terminal member state projected before dispatch acknowledgement", async () => {
+    const { service, manager, store } = fixture();
+    const conversation = await createConversation(service);
+    manager.streamAgent.mockImplementationOnce((agentId, _prompt, options) => {
+      service.assertAgentRun(agentId, options);
+      return terminalBeforeReceipt(store, conversation.conversationId);
+    });
+    expect(
+      (
+        await service.send({
+          conversationId: conversation.conversationId,
+          recipient,
+          clientMessageId: "fast",
+          text: "短回复",
+        })
+      ).status,
+    ).toBe("accepted");
+    expect(
+      service.resolve({ conversationId: conversation.conversationId })!.members[0]!.status,
+    ).toBe("idle");
+  });
+
+  it("isolates a failed member reconciliation and continues checking other members", async () => {
+    const { service, manager, store } = fixture();
+    const conversation = await createConversation(service);
+    const one = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "recover-one",
+      text: "第一成员",
+    });
+    const two = await service.send({
+      conversationId: conversation.conversationId,
+      recipient: { ...recipient, role: "worker" },
+      clientMessageId: "recover-two",
+      text: "第二成员",
+    });
+    store.update(conversation.conversationId, (record) => {
+      record.deliveries[one.clientMessageId]!.status = "unknown";
+      record.deliveries[two.clientMessageId]!.status = "unknown";
+    });
+    manager.getTimelineRows.mockRejectedValueOnce(new Error("单个成员记录损坏"));
+    manager.getTimelineRows.mockResolvedValueOnce([
+      {
+        seq: 1,
+        turnId: "recovered-two",
+        item: { type: "user_message", clientMessageId: two.clientMessageId },
+      },
+    ]);
+    await service.stop({ conversationId: conversation.conversationId });
+    expect(
+      service.getDelivery({
+        conversationId: conversation.conversationId,
+        clientMessageId: one.clientMessageId,
+      })!.status,
+    ).toBe("unknown");
+    expect(
+      service.getDelivery({
+        conversationId: conversation.conversationId,
+        clientMessageId: two.clientMessageId,
+      })!.status,
+    ).toBe("accepted");
+    expect(manager.getTimelineRows).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps archived conversations archived during startup recovery", async () => {
+    const original = fixture();
+    const conversation = await createConversation(original.service);
+    await original.service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "archived",
+      text: "已归档",
+    });
+    original.store.update(conversation.conversationId, (record) => {
+      record.snapshot.status = "archived";
+      record.snapshot.members[0]!.status = "running";
+    });
+    const recovered = fixture(original.store);
+    services.delete(original.service);
+    expect(recovered.service.resolve({ conversationId: conversation.conversationId })!.status).toBe(
+      "archived",
+    );
+    expect(recovered.manager.streamAgent).not.toHaveBeenCalled();
+  });
+
+  it("closes recovered output after a settled stop and does not pause it on the next startup", async () => {
+    const original = fixture();
+    const conversation = await createConversation(original.service);
+    const delivery = await original.service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "recover-stop",
+      text: "崩溃前的请求",
+    });
+    const sourceTurnId = original.store.get(conversation.conversationId)!.deliveries[
+      delivery.clientMessageId
+    ]!.sourceTurnId!;
+    original.store.update(conversation.conversationId, (record) => {
+      record.snapshot.members[0]!.status = "running";
+      original.store.append(record, {
+        sourceKey: `assistant:${delivery.memberId}:${sourceTurnId}`,
+        kind: "assistant",
+        text: "部分",
+        source: {
+          memberId: delivery.memberId,
+          backendAgentId: delivery.backendAgentId,
+          sourceTurnId,
+        },
+        completed: false,
+      });
+    });
+    const recovered = fixture(original.store);
+    services.delete(original.service);
+    recovered.manager.getAgent.mockReturnValue({
+      config: recipient.config,
+      runtimeInfo: { model: recipient.config.model },
+    });
+    recovered.manager.getTimelineRows.mockResolvedValue([
+      {
+        seq: 1,
+        turnId: sourceTurnId,
+        item: { type: "user_message", clientMessageId: delivery.clientMessageId },
+      },
+      {
+        seq: 2,
+        turnId: sourceTurnId,
+        item: { type: "assistant_message", text: "部分以及恢复的完整正文" },
+      },
+    ]);
+    const stopped = await recovered.service.stop({
+      conversationId: conversation.conversationId,
+      memberId: delivery.memberId,
+    });
+    expect(stopped.members[0]!.status).toBe("idle");
+    expect(
+      recovered.service
+        .fetch({ conversationId: conversation.conversationId })
+        .rows.find((row) => row.kind === "assistant"),
+    ).toMatchObject({ text: "部分以及恢复的完整正文", completed: true });
+    recovered.store.update(conversation.conversationId, (record) => {
+      record.snapshot.status = "active";
+    });
+    const restarted = fixture(recovered.store);
+    services.delete(recovered.service);
+    expect(restarted.service.resolve({ conversationId: conversation.conversationId })!.status).toBe(
+      "active",
+    );
+    expect(restarted.manager.streamAgent).not.toHaveBeenCalled();
+  });
+
   it("reserves task identity labels while preserving ordinary labels and parent relationships", () => {
     const { service } = fixture();
     for (const label of [TASK_CONVERSATION_ID_LABEL, TASK_CONVERSATION_MEMBER_ID_LABEL]) {
@@ -240,13 +651,6 @@ describe("TaskConversationService", () => {
         },
       }),
     ],
-    [
-      "mcp",
-      (config: AgentSessionConfig): AgentSessionConfig => ({
-        ...config,
-        mcpServers: { unexpected: { type: "stdio", command: "unexpected" } },
-      }),
-    ],
   ])("rejects ordinary creation hooks changing admitted %s", async (_name, transform) => {
     const { service, manager, controls } = fixture();
     const conversation = await createConversation(service);
@@ -372,7 +776,7 @@ describe("TaskConversationService", () => {
       input.clientMessageId
     ]!;
     expect(privateReceipt).toHaveProperty("requestFingerprint");
-    expect(privateReceipt).toHaveProperty("prompt");
+    expect(privateReceipt).not.toHaveProperty("prompt");
     expect(privateReceipt).toHaveProperty("sourceTurnId");
     const retry = await service.send(input);
     for (const response of [first, duplicate, retry, service.getDelivery(input)]) {
@@ -488,4 +892,235 @@ describe("TaskConversationService", () => {
       service.assertAgentLabels(accepted.backendAgentId, { "paseo.parent-agent-id": "other" }),
     ).toThrow("task_conversation_control_required");
   });
+});
+
+describe("TaskConversationService streaming durability", () => {
+  it("coalesces fragments, separates messages and pushes only durable changed rows", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, store, manager } = fixture();
+      const conversation = await createConversation(service);
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient,
+        clientMessageId: "stream",
+        text: "长流",
+      });
+      const updates: { conversation?: unknown; row?: { text: string; completed?: boolean } }[] = [];
+      const release = service.subscribe(conversation.conversationId, (update) =>
+        updates.push(update),
+      );
+      const emit = manager.subscribe.mock.calls[0]![0];
+      const write = vi.spyOn(store, "update");
+      for (let seq = 1; seq <= 100; seq++) emit(assistantEvent(delivery.backendAgentId, seq, "字"));
+      emit(assistantEvent(delivery.backendAgentId, 100, "重复不得显示"));
+      expect(write).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(updates.filter((update) => update.row)).toHaveLength(1);
+      const changed = updates.find((update) => update.row)!;
+      expect(changed.conversation).toBeUndefined();
+      expect(changed.row?.text).toBe("字".repeat(100));
+      expect(service.fetch({ conversationId: conversation.conversationId }).rows.at(-1)?.text).toBe(
+        "字".repeat(100),
+      );
+      emit(assistantEvent(delivery.backendAgentId, 1, "旧回放"));
+      emit(assistantEvent(delivery.backendAgentId, 101, "下一段", "two"));
+      emit({
+        type: "agent_stream",
+        agentId: delivery.backendAgentId,
+        event: { type: "turn_completed", provider: "claude", turnId: "turn-1" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        service.fetch({ conversationId: conversation.conversationId }).rows.at(-1),
+      ).toMatchObject({ text: "字".repeat(100) + "\n\n下一段", completed: true });
+      expect(
+        Object.keys(store.get(conversation.conversationId)!.sources).filter((key) =>
+          key.startsWith("fragment:"),
+        ),
+      ).toEqual([]);
+      release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes queued chunks on close and skips ordinary events without loading history", async () => {
+    const { service, store, manager } = fixture();
+    const conversation = await createConversation(service);
+    const delivery = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "stream-close",
+      text: "流",
+    });
+    const emit = manager.subscribe.mock.calls[0]![0];
+    const find = vi.spyOn(store, "find");
+    for (let seq = 0; seq < 100; seq++) emit(assistantEvent(`ordinary-${seq}`, seq, "普通"));
+    expect(find).not.toHaveBeenCalled();
+    emit(assistantEvent(delivery.backendAgentId, 1, "关闭前正文"));
+    const published: string[] = [];
+    const release = service.subscribe(conversation.conversationId, (update) => {
+      if (update.row) published.push(update.row.text);
+    });
+    await service.close();
+    services.delete(service);
+    expect(published).toEqual(["关闭前正文"]);
+    release();
+  });
+});
+
+describe("Task conversation recovery boundaries", () => {
+  it("does not duplicate overlapping buffered chunks during native reconciliation", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, manager, controls, store } = fixture();
+      const conversation = await createConversation(service);
+      controls.receiptUnknown = true;
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient,
+        clientMessageId: "overlap",
+        text: "核对输出",
+      });
+      Object.assign(manager.getAgent(delivery.backendAgentId)!, {
+        activeForegroundTurnId: "native-turn",
+      });
+      manager.fetchTimeline.mockReturnValue({ epoch: "native" });
+      const emit = manager.subscribe.mock.calls[0]![0];
+      emit(assistantEvent(delivery.backendAgentId, 1, "A"));
+      await vi.advanceTimersByTimeAsync(50);
+      manager.getTimelineRows.mockImplementationOnce(async () => {
+        emit(assistantEvent(delivery.backendAgentId, 2, "B"));
+        emit(assistantEvent(delivery.backendAgentId, 3, "C"));
+        return [
+          {
+            seq: 0,
+            turnId: "native-turn",
+            item: { type: "user_message", clientMessageId: "overlap" },
+          },
+          { seq: 2, turnId: "native-turn", item: { type: "assistant_message", text: "AB" } },
+        ];
+      });
+      const release = service.subscribe(conversation.conversationId, () => undefined);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(
+        store.querySource(conversation.conversationId, {
+          sourceKey: `assistant:${delivery.memberId}:native-turn`,
+        })?.text,
+      ).toBe("ABC");
+      emit(assistantEvent(delivery.backendAgentId, 2, "B"));
+      emit(assistantEvent(delivery.backendAgentId, 4, "D"));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(
+        store.querySource(conversation.conversationId, {
+          sourceKey: `assistant:${delivery.memberId}:native-turn`,
+        })?.text,
+      ).toBe("ABCD");
+      release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps indexed ownership guards when damaged metadata cannot be loaded", async () => {
+    const { service, manager, store } = fixture();
+    const conversation = await createConversation(service);
+    const delivery = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "ownership",
+      text: "成员",
+    });
+    vi.spyOn(store, "find").mockReturnValue(null);
+    expect(() => service.assertAgentRun(delivery.backendAgentId)).toThrow("route_required");
+    expect(() => service.assertAgentMutation(delivery.backendAgentId, "stop")).toThrow(
+      "control_required",
+    );
+    expect(() =>
+      service.assertAgentCreation(delivery.backendAgentId, recipient.config, {}),
+    ).toThrow("admission_required");
+    expect(() =>
+      service.assertAgentLabels(delivery.backendAgentId, { "paseo.parent-agent-id": "forged" }),
+    ).toThrow("control_required");
+    expect(manager.streamAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Task conversation shutdown recovery", () => {
+  it("waits for in-flight native reconciliation before closing its durable store", async () => {
+    const { service, manager, controls, store } = fixture();
+    const conversation = await createConversation(service);
+    controls.receiptUnknown = true;
+    await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "closing-recovery",
+      text: "核对后关闭",
+    });
+    let finish!: () => void;
+    manager.getTimelineRows.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve([]);
+        }),
+    );
+    const release = service.subscribe(conversation.conversationId, () => undefined);
+    await vi.waitFor(() => expect(manager.getTimelineRows).toHaveBeenCalledTimes(1));
+    const close = vi.spyOn(store, "close");
+    const closing = service.close();
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+    finish();
+    await closing;
+    expect(close).toHaveBeenCalledTimes(1);
+    services.delete(service);
+    release();
+  });
+});
+
+it("keeps original durable plan approval visible while its member closes and resumes", async () => {
+  const { service, store, manager } = fixture();
+  const conversation = await createConversation(service);
+  const delivery = await service.send({
+    conversationId: conversation.conversationId,
+    recipient,
+    clientMessageId: "durable-plan",
+    text: "计划",
+  });
+  const plan = {
+    id: "original-plan-request",
+    provider: "codex",
+    name: "CodexPlanApproval",
+    kind: "plan" as const,
+    input: { plan: "只输出标记" },
+  };
+  store.update(conversation.conversationId, (record) => {
+    record.snapshot.status = "paused";
+    record.snapshot.members[0]!.pendingPermissions = [plan];
+  });
+  const emit = manager.subscribe.mock.calls[0]![0];
+  for (const lifecycle of ["closed", "initializing"] as const) {
+    emit({
+      type: "agent_state",
+      agent: {
+        ...manager.getAgent(delivery.backendAgentId),
+        id: delivery.backendAgentId,
+        lifecycle,
+        pendingPermissions: new Map(),
+      },
+    } as unknown as AgentManagerEvent);
+    await vi.waitFor(() =>
+      expect(
+        service.resolve({ conversationId: conversation.conversationId })!.members[0]!.status,
+      ).toBe(lifecycle),
+    );
+    expect(
+      service.resolve({ conversationId: conversation.conversationId })!.members[0]!
+        .pendingPermissions,
+    ).toEqual([plan]);
+  }
+  await expect(service.preparePermissionResponse(delivery.backendAgentId)).resolves.toBeUndefined();
+  expect(manager.streamAgent).toHaveBeenCalledTimes(1);
 });

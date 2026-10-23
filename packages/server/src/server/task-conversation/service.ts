@@ -82,6 +82,47 @@ function ownSet<T>(record: Record<string, T>, key: string, value: T): void {
     writable: true,
   });
 }
+function mergeAssistantFragments(
+  previous: AgentManagerEvent | undefined,
+  event: AgentManagerEvent,
+): AgentManagerEvent | null {
+  if (previous?.type !== "agent_stream" || event.type !== "agent_stream") return null;
+  if (previous.event.type !== "timeline" || event.event.type !== "timeline") return null;
+  if (
+    previous.event.item.type !== "assistant_message" ||
+    event.event.item.type !== "assistant_message"
+  )
+    return null;
+  if (
+    previous.agentId !== event.agentId ||
+    previous.epoch !== event.epoch ||
+    previous.event.item.messageId !== event.event.item.messageId
+  )
+    return null;
+  return {
+    ...event,
+    event: {
+      ...event.event,
+      item: { ...event.event.item, text: previous.event.item.text + event.event.item.text },
+    },
+  };
+}
+function projectMemberState(
+  member: TaskConversationMember,
+  event: Extract<AgentManagerEvent, { type: "agent_state" }>,
+): void {
+  member.status = event.agent.lifecycle;
+  const pending = Array.from(event.agent.pendingPermissions.values());
+  // Closed native snapshots have no interactive permission map. Keep durable
+  // Codex plans visible until their original provider member resumes.
+  member.pendingPermissions =
+    (event.agent.lifecycle === "closed" || event.agent.lifecycle === "initializing") &&
+    !pending.length
+      ? (member.pendingPermissions ?? []).filter(
+          (request) => request.provider === "codex" && request.name === "CodexPlanApproval",
+        )
+      : pending;
+}
 function unseenContext(
   record: StoredTaskConversation,
   member: TaskConversationMember | undefined,
@@ -95,6 +136,7 @@ function unseenContext(
     const delivery = row.clientMessageId
       ? ownGet(record.deliveries, row.clientMessageId)
       : undefined;
+    if (row.kind === "user" && delivery?.status === "rejected") return false;
     return !(
       row.kind === "user" &&
       delivery?.backendAgentId === backendAgentId &&
@@ -159,7 +201,11 @@ function memberMatchesConfiguration(
 function sensitiveConfig(config: AgentSessionConfig): unknown {
   return Object.fromEntries(
     Object.entries(config).filter(
-      ([key]) => !["systemPrompt", "title", "internal", "daemonAppendSystemPrompt"].includes(key),
+      // Trusted agent.create hooks add host MCP servers after task admission.
+      ([key]) =>
+        !["systemPrompt", "title", "internal", "daemonAppendSystemPrompt", "mcpServers"].includes(
+          key,
+        ),
     ),
   );
 }
@@ -172,6 +218,14 @@ export class TaskConversationService {
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly activeDeliveries = new Map<string, Promise<TaskConversationDelivery>>();
   private readonly projectionTails = new Map<string, Promise<void>>();
+  private readonly pendingProjections = new Map<
+    string,
+    {
+      timer: ReturnType<typeof setTimeout>;
+      events: { agentId: string; event: AgentManagerEvent }[];
+    }
+  >();
+  private readonly projectionSourceSeqs = new Map<string, number>();
   private readonly recoveryMembers = new Map<string, Set<string>>();
   private readonly recoveryOperations = new Map<string, Promise<void>>();
   private readonly unsubscribe: () => void;
@@ -187,56 +241,79 @@ export class TaskConversationService {
   ) {
     dependencies.agentManager.taskConversations = this;
     for (const record of dependencies.store.list()) {
-      dependencies.store.update(record.snapshot.conversationId, (current) => {
-        for (const delivery of Object.values(current.deliveries)) {
-          if (delivery.status === "dispatching") {
-            delivery.status = "unknown";
-            delivery.error = "投递结果尚未核实；请查询原成员记录，不能自动重发。";
-            current.snapshot.status = "paused";
+      if (record.snapshot.status === "archived") continue;
+      try {
+        dependencies.store.update(record.snapshot.conversationId, (current) => {
+          for (const delivery of Object.values(current.deliveries)) {
+            if (delivery.status === "prepared") {
+              delivery.status = "rejected";
+              delivery.error = "宿主在派发前重启，消息未投递。";
+              this.markRejectedMessage(current, delivery.clientMessageId);
+            } else if (delivery.status === "dispatching") {
+              delivery.status = "unknown";
+              delivery.error = "投递结果尚未核实；请查询原成员记录，不能自动重发。";
+              current.snapshot.status = "paused";
+            }
           }
-        }
-        const members = current.snapshot.members.filter(
-          (member) =>
-            member.status === "running" ||
-            current.rows.some(
-              (row) =>
-                row.source?.backendAgentId === member.backendAgentId &&
-                row.kind === "assistant" &&
-                !row.completed,
-            ) ||
-            Object.values(current.deliveries).some(
-              (delivery) =>
-                delivery.backendAgentId === member.backendAgentId && delivery.status === "unknown",
-            ),
-        );
-        if (members.length) {
-          this.recoveryMembers.set(
-            current.snapshot.conversationId,
-            new Set(members.map((member) => member.backendAgentId)),
+          const members = current.snapshot.members.filter(
+            (member) =>
+              member.status === "running" ||
+              current.rows.some(
+                (row) =>
+                  row.source?.backendAgentId === member.backendAgentId &&
+                  row.kind === "assistant" &&
+                  !row.completed,
+              ) ||
+              Object.values(current.deliveries).some(
+                (delivery) =>
+                  delivery.backendAgentId === member.backendAgentId &&
+                  delivery.status === "unknown",
+              ),
           );
-          current.snapshot.status = "paused";
-          dependencies.store.append(current, {
-            sourceKey: `recovery:${members
-              .map((member) => member.backendAgentId)
-              .sort()
-              .join(":")}`,
-            kind: "system",
-            text: "宿主重启时有成员轮次尚未收口。将核对原始记录；确认完整性前暂停派发，不自动重发。",
-            completed: true,
-          });
-        }
-      });
+          if (members.length) {
+            this.recoveryMembers.set(
+              current.snapshot.conversationId,
+              new Set(members.map((member) => member.backendAgentId)),
+            );
+            current.snapshot.status = "paused";
+            dependencies.store.append(current, {
+              sourceKey: `recovery:${members
+                .map((member) => member.backendAgentId)
+                .sort()
+                .join(":")}`,
+              kind: "system",
+              text: "宿主重启时有成员轮次尚未收口。将核对原始记录；确认完整性前暂停派发，不自动重发。",
+              completed: true,
+            });
+          }
+        });
+      } catch (error) {
+        dependencies.logger.warn(
+          { err: error, conversationId: record.snapshot.conversationId },
+          "Task conversation recovery failed; skipping record",
+        );
+      }
     }
     this.unsubscribe = dependencies.agentManager.subscribe((event) => this.onAgentEvent(event), {
       replayState: false,
     });
   }
 
+  listByWorkspace(workspaceId: string): TaskConversationSnapshot[] {
+    const record = this.dependencies.store.find({ workspaceId });
+    return record ? [record.snapshot] : [];
+  }
+  runWithControl<T>(callback: () => T): T {
+    return this.authority.run({ control: true }, callback);
+  }
   getByAgentId(backendAgentId: string): TaskConversationSnapshot | null {
     return this.dependencies.store.find({ backendAgentId })?.snapshot ?? null;
   }
   assertAgentRun(agentId: string, options?: AgentRunOptions): void {
-    if (this.getByAgentId(agentId) && (!options || this.authorizedRuns.get(options) !== agentId))
+    if (
+      this.dependencies.store.hasMember(agentId) &&
+      (!options || this.authorizedRuns.get(options) !== agentId)
+    )
       throw new Error(
         "task_conversation_route_required: 请通过任务会话发送，后台成员不接受普通发送入口。",
       );
@@ -250,9 +327,9 @@ export class TaskConversationService {
     const conversation = this.getByAgentId(agentId);
     const parentId = getParentAgentIdFromLabels(options.labels);
     if (
-      conversation ||
+      this.dependencies.store.hasMember(agentId) ||
       options.labels?.[CONVERSATION_LABEL] ||
-      (parentId && this.getByAgentId(parentId))
+      (parentId && this.dependencies.store.hasMember(parentId))
     ) {
       if (!conversation || this.authority.getStore()?.agentId !== agentId || config.internal)
         throw new Error("task_conversation_member_admission_required");
@@ -286,7 +363,7 @@ export class TaskConversationService {
   }
   assertAgentMutation(agentId: string, operation: string): void {
     if (
-      this.getByAgentId(agentId) &&
+      this.dependencies.store.hasMember(agentId) &&
       !this.authority.getStore()?.control &&
       this.authority.getStore()?.agentId !== agentId
     )
@@ -310,7 +387,7 @@ export class TaskConversationService {
           "task_conversation_reserved_labels: Task member identity must match its canonical binding",
         );
     }
-    if (!conversation) return;
+    if (!conversation && !this.dependencies.store.hasMember(agentId)) return;
     if (
       Object.keys(labels).some(
         (key) =>
@@ -421,7 +498,8 @@ export class TaskConversationService {
         )
           throw new Error("Task speaker does not belong to this conversation");
       }
-      return this.dependencies.store.append(record, input);
+      const { conversationId: _conversationId, ...rowInput } = input;
+      return this.dependencies.store.append(record, rowInput);
     });
     this.notify(input.conversationId, { row, eventSeq: row.updatedSeq ?? row.seq });
     return row;
@@ -753,6 +831,7 @@ export class TaskConversationService {
         ]
       : prompt;
     return this.authority.run({ agentId: backendAgentId }, async () => {
+      let providerStarted = false;
       try {
         if (
           candidate &&
@@ -784,18 +863,22 @@ export class TaskConversationService {
           throw new Error("Task stopped before dispatch");
         this.dependencies.store.update(input.conversationId, (current) => {
           current.deliveries[input.clientMessageId].status = "dispatching";
-          current.deliveries[input.clientMessageId].prompt = preparedPrompt;
           current.snapshot.members.find((entry) => entry.memberId === memberId)!.lastRequestAt =
             new Date().toISOString();
         });
         const runOptions = { clientMessageId: delivery.deliveryId };
         this.authorizedRuns.set(runOptions, backendAgentId);
-        const iterator = this.dependencies.agentManager.streamAgent(
-          backendAgentId,
-          preparedPrompt,
-          runOptions,
-        );
-        this.authorizedRuns.delete(runOptions);
+        let iterator: AsyncGenerator<import("../agent/agent-sdk-types.js").AgentStreamEvent>;
+        try {
+          iterator = this.dependencies.agentManager.streamAgent(
+            backendAgentId,
+            preparedPrompt,
+            runOptions,
+          );
+        } finally {
+          this.authorizedRuns.delete(runOptions);
+        }
+        providerStarted = true;
         const first = await iterator.next();
         if (first.done || first.value.type !== "turn_started")
           throw new Error("Provider did not confirm task delivery");
@@ -806,7 +889,6 @@ export class TaskConversationService {
             first.value.type === "turn_started" ? first.value.turnId : undefined;
           const target = current.snapshot.members.find((entry) => entry.memberId === memberId)!;
           target.seenConversationSeq = throughSeq;
-          target.status = "running";
           if (summary) target.summary = summary;
         });
         this.notifySnapshot(input.conversationId);
@@ -815,12 +897,20 @@ export class TaskConversationService {
         );
         return this.require(input.conversationId).deliveries[input.clientMessageId];
       } catch (error) {
-        this.dependencies.store.update(input.conversationId, (current) => {
+        const rejectedRow = this.dependencies.store.update(input.conversationId, (current) => {
           const failed = current.deliveries[input.clientMessageId];
-          failed.status = failed.status === "dispatching" ? "unknown" : "rejected";
+          failed.status = providerStarted ? "unknown" : "rejected";
           failed.error = errorText(error);
-          if (failed.status === "unknown") current.snapshot.status = "paused";
+          if (failed.status === "unknown") {
+            current.snapshot.status = "paused";
+            this.trackRecovery(input.conversationId, backendAgentId);
+          } else return this.markRejectedMessage(current, input.clientMessageId);
         });
+        if (rejectedRow)
+          this.notify(input.conversationId, {
+            row: rejectedRow,
+            eventSeq: rejectedRow.updatedSeq ?? rejectedRow.seq,
+          });
         this.notifySnapshot(input.conversationId);
         return this.require(input.conversationId).deliveries[input.clientMessageId];
       }
@@ -836,6 +926,7 @@ export class TaskConversationService {
       if (event.type === "turn_failed")
         this.dependencies.logger.warn({ agentId, error: event.error }, "Task member turn failed");
     }
+    this.flushProjection(conversationId);
     await this.projectionTails.get(conversationId);
   }
   private async admit(
@@ -876,6 +967,19 @@ export class TaskConversationService {
     };
   }
 
+  async preparePermissionResponse(agentId: string): Promise<void> {
+    const conversation = this.getByAgentId(agentId);
+    if (!conversation) throw new Error("Task member is missing");
+    if (conversation.status === "archived" || conversation.status === "stopping")
+      throw new Error("Task is archived or stopping");
+    await this.authority.run({ agentId }, () =>
+      ensureAgentLoaded(agentId, {
+        agentManager: this.dependencies.agentManager,
+        agentStorage: this.dependencies.agentStorage,
+        logger: this.dependencies.logger,
+      }),
+    );
+  }
   async continuePermission(
     agentId: string,
     prompt: AgentPromptInput,
@@ -883,8 +987,36 @@ export class TaskConversationService {
   ): Promise<void> {
     const conversation = this.getByAgentId(agentId);
     if (!conversation) throw new Error("Task member is missing");
-    if (conversation.status !== "active")
-      throw new Error("Task is paused; approval cannot start a new turn");
+    const conversationId = conversation.conversationId;
+    const previous = this.queues.get(conversationId) ?? Promise.resolve();
+    const result = previous
+      .catch(() => undefined)
+      .then(() => this.dispatchPermission(agentId, prompt, requestId));
+    this.queues.set(conversationId, result);
+    try {
+      await result;
+    } finally {
+      if (this.queues.get(conversationId) === result) this.queues.delete(conversationId);
+    }
+  }
+
+  private async dispatchPermission(
+    agentId: string,
+    prompt: AgentPromptInput,
+    requestId: string,
+  ): Promise<void> {
+    const conversation = this.getByAgentId(agentId);
+    if (!conversation) throw new Error("Task member is missing");
+    const stored = this.require(conversation.conversationId);
+    if (
+      conversation.status === "stopping" ||
+      conversation.status === "archived" ||
+      stored.control?.status === "unknown" ||
+      Object.values(stored.deliveries).some((delivery) => delivery.status === "unknown")
+    )
+      throw new Error(
+        "Task approval is blocked until its pending control or delivery is reconciled",
+      );
     const member = conversation.members.find((entry) => entry.backendAgentId === agentId)!;
     const clientMessageId = `permission:${agentId}:${requestId}`;
     await this.admit(
@@ -904,6 +1036,8 @@ export class TaskConversationService {
     );
     const runOptions = { clientMessageId };
     this.dependencies.store.update(conversation.conversationId, (record) => {
+      if (record.snapshot.status === "stopping" || record.snapshot.status === "archived")
+        throw new Error("Task stopped during approval admission");
       if (ownGet(record.deliveries, clientMessageId))
         throw new Error("Permission follow-up was already dispatched; inspect its receipt");
       ownSet(record.deliveries, clientMessageId, {
@@ -916,36 +1050,51 @@ export class TaskConversationService {
         throughSeq: member.seenConversationSeq,
         error: null,
         requestFingerprint: fingerprint(prompt),
-        prompt,
       });
       record.snapshot.members.find((entry) => entry.memberId === member.memberId)!.lastRequestAt =
         new Date().toISOString();
     });
-    this.authorizedRuns.set(runOptions, agentId);
-    try {
-      const iterator = this.dependencies.agentManager.streamAgent(agentId, prompt, runOptions);
-      this.authorizedRuns.delete(runOptions);
-      const first = await iterator.next();
-      if (first.done || first.value.type !== "turn_started")
-        throw new Error("Provider did not confirm permission follow-up");
-      this.dependencies.store.update(conversation.conversationId, (record) => {
-        record.deliveries[clientMessageId].status = "accepted";
-        record.deliveries[clientMessageId].sourceTurnId =
-          first.value.type === "turn_started" ? first.value.turnId : undefined;
-      });
-      void this.drain(iterator, conversation.conversationId, agentId).catch((error) =>
-        this.dependencies.logger.warn({ err: error }, "Task permission follow-up failed"),
-      );
-    } catch (error) {
-      this.dependencies.store.update(conversation.conversationId, (record) => {
-        record.deliveries[clientMessageId].status = "unknown";
-        record.deliveries[clientMessageId].error = errorText(error);
-        record.snapshot.status = "paused";
-      });
-      throw error;
-    } finally {
-      this.authorizedRuns.delete(runOptions);
-    }
+    let providerStarted = false;
+    await this.authority.run({ agentId }, async () => {
+      try {
+        await ensureAgentLoaded(agentId, {
+          agentManager: this.dependencies.agentManager,
+          agentStorage: this.dependencies.agentStorage,
+          logger: this.dependencies.logger,
+        });
+        this.authorizedRuns.set(runOptions, agentId);
+        const iterator = this.dependencies.agentManager.hasInFlightRun(agentId)
+          ? await this.dependencies.agentManager.replaceAgentRun(agentId, prompt, runOptions)
+          : this.dependencies.agentManager.streamAgent(agentId, prompt, runOptions);
+        providerStarted = true;
+        this.authorizedRuns.delete(runOptions);
+        const first = await iterator.next();
+        if (first.done || first.value.type !== "turn_started")
+          throw new Error("Provider did not confirm permission follow-up");
+        this.dependencies.store.update(conversation.conversationId, (record) => {
+          record.snapshot.status = "active";
+          record.deliveries[clientMessageId].status = "accepted";
+          record.deliveries[clientMessageId].sourceTurnId =
+            first.value.type === "turn_started" ? first.value.turnId : undefined;
+        });
+        void this.drain(iterator, conversation.conversationId, agentId).catch((error) =>
+          this.dependencies.logger.warn({ err: error }, "Task permission follow-up failed"),
+        );
+      } catch (error) {
+        this.dependencies.store.update(conversation.conversationId, (record) => {
+          record.deliveries[clientMessageId].status = providerStarted ? "unknown" : "rejected";
+          record.deliveries[clientMessageId].error = errorText(error);
+          if (providerStarted) {
+            record.snapshot.status = "paused";
+            this.trackRecovery(conversation.conversationId, agentId);
+          }
+        });
+        throw error;
+      } finally {
+        this.authorizedRuns.delete(runOptions);
+      }
+    });
+    this.notifySnapshot(conversation.conversationId);
   }
 
   async stop(input: Input<TaskConversationStopRequest>): Promise<TaskConversationSnapshot> {
@@ -986,11 +1135,13 @@ export class TaskConversationService {
             if (!uncertain) return true;
             const stored = await this.dependencies.agentStorage.get(member.backendAgentId);
             if (!stored?.persistence) return false;
-            await ensureAgentLoaded(member.backendAgentId, {
-              agentManager: this.dependencies.agentManager,
-              agentStorage: this.dependencies.agentStorage,
-              logger: this.dependencies.logger,
-            });
+            await this.authority.run({ agentId: member.backendAgentId }, () =>
+              ensureAgentLoaded(member.backendAgentId, {
+                agentManager: this.dependencies.agentManager,
+                agentStorage: this.dependencies.agentStorage,
+                logger: this.dependencies.logger,
+              }),
+            );
           }
           return (
             (
@@ -1017,7 +1168,56 @@ export class TaskConversationService {
     );
     this.notifySnapshot(input.conversationId);
     if (!settled) throw new Error("Task cancellation is unknown; resources must remain reserved");
+    this.flushProjection(input.conversationId);
+    await this.projectionTails.get(input.conversationId);
+    for (const member of selected) this.trackRecovery(input.conversationId, member.backendAgentId);
+    await this.reconcile(input.conversationId);
+    this.completeStoppedMembers(input.conversationId, selected);
+    if (input.reconcileDelivery) {
+      const resolution = input.reconcileDelivery;
+      const rejectedRow = this.dependencies.store.update(input.conversationId, (record) => {
+        const delivery = ownGet(record.deliveries, resolution.clientMessageId);
+        if (
+          !delivery ||
+          !selected.some((member) => member.backendAgentId === delivery.backendAgentId)
+        )
+          throw new Error("Task delivery does not belong to the selected member");
+        if (resolution.resolution === "accepted") {
+          if (delivery.status !== "accepted" || !delivery.sourceTurnId)
+            throw new Error("Task delivery has no confirmed provider receipt");
+        } else {
+          if (delivery.status !== "unknown")
+            throw new Error("Only an unknown task delivery can be explicitly rejected");
+          delivery.status = "rejected";
+          delivery.error = "经人工核对确认未投递，已解除结果不明状态。";
+          return this.markRejectedMessage(record, delivery.clientMessageId);
+        }
+      });
+      if (rejectedRow)
+        this.notify(input.conversationId, {
+          row: rejectedRow,
+          eventSeq: rejectedRow.updatedSeq ?? rejectedRow.seq,
+        });
+      this.notifySnapshot(input.conversationId);
+    }
     return this.require(input.conversationId).snapshot;
+  }
+  private completeStoppedMembers(conversationId: string, members: TaskConversationMember[]): void {
+    const ids = new Set(members.map((member) => member.backendAgentId));
+    const rows = this.dependencies.store.update(conversationId, (record) => {
+      for (const member of record.snapshot.members) {
+        if (ids.has(member.backendAgentId) && member.status !== "error") member.status = "idle";
+      }
+      return record.rows
+        .filter(
+          (row) =>
+            row.kind === "assistant" && !row.completed && ids.has(row.source?.backendAgentId ?? ""),
+        )
+        .map((row) => this.dependencies.store.replaceRow(record, row.id, { completed: true }));
+    });
+    for (const row of rows)
+      this.notify(conversationId, { row, eventSeq: row.updatedSeq ?? row.seq });
+    this.notifySnapshot(conversationId);
   }
   async archive(input: Input<TaskConversationArchiveRequest>): Promise<TaskConversationSnapshot> {
     await this.stop(input);
@@ -1036,6 +1236,7 @@ export class TaskConversationService {
       this.dependencies.store.update(input.conversationId, (record) => {
         record.snapshot.status = "archived";
         record.snapshot.archivedAt = new Date().toISOString();
+        for (const member of record.snapshot.members) member.pendingPermissions = [];
       });
       await this.controlNotice(snapshot, "archive", "settled");
       this.notifySnapshot(input.conversationId);
@@ -1117,20 +1318,74 @@ export class TaskConversationService {
     if (event.type === "agent_state") agentId = event.agent.id;
     else if (event.type === "agent_stream") agentId = event.agentId;
     if (!agentId) return;
-    const conversation = this.getByAgentId(agentId);
-    if (!conversation) return;
-    const previous = this.projectionTails.get(conversation.conversationId) ?? Promise.resolve();
+    const conversationId = this.dependencies.store.conversationIdForMember(agentId);
+    if (!conversationId) return;
+    if (
+      event.type === "agent_stream" &&
+      event.event.type === "timeline" &&
+      event.event.item.type === "assistant_message"
+    ) {
+      let pending = this.pendingProjections.get(conversationId);
+      if (!pending) {
+        const timer = setTimeout(() => this.flushProjection(conversationId), 50);
+        timer.unref?.();
+        pending = { timer, events: [] };
+        this.pendingProjections.set(conversationId, pending);
+      }
+      if (event.epoch && event.seq !== undefined) {
+        const sourceKey = `${conversationId}:${agentId}:${event.epoch}`;
+        const latest = Math.max(
+          this.projectionSourceSeqs.get(sourceKey) ?? -1,
+          this.dependencies.store.sourceSequence(conversationId, agentId, event.epoch),
+        );
+        if (event.seq <= latest) return;
+        this.projectionSourceSeqs.set(sourceKey, event.seq);
+      }
+      const previous = pending.events.at(-1);
+      const merged = mergeAssistantFragments(previous?.event, event);
+      if (previous && merged) previous.event = merged;
+      else pending.events.push({ agentId, event });
+      return;
+    }
+    this.flushProjection(conversationId);
+    this.enqueueProjection(conversationId, agentId, event);
+  }
+  private flushProjection(conversationId: string): void {
+    const pending = this.pendingProjections.get(conversationId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingProjections.delete(conversationId);
+    for (const { agentId, event } of pending.events)
+      this.enqueueProjection(conversationId, agentId, event);
+  }
+  private enqueueProjection(
+    conversationId: string,
+    agentId: string,
+    event: AgentManagerEvent,
+  ): void {
+    if (
+      event.type === "agent_stream" &&
+      event.event.type !== "turn_started" &&
+      event.event.type !== "turn_completed" &&
+      event.event.type !== "turn_failed" &&
+      event.event.type !== "turn_canceled" &&
+      !(event.event.type === "timeline" && event.event.item.type === "assistant_message")
+    )
+      return;
+    const previous = this.projectionTails.get(conversationId) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => this.project(conversation.conversationId, agentId, event));
-    this.projectionTails.set(conversation.conversationId, next);
+      .then(() => this.project(conversationId, agentId, event));
+    this.projectionTails.set(conversationId, next);
     void next.catch((error) => {
+      for (const key of this.projectionSourceSeqs.keys())
+        if (key.startsWith(`${conversationId}:`)) this.projectionSourceSeqs.delete(key);
       this.dependencies.logger.error(
-        { err: error, conversationId: conversation.conversationId },
+        { err: error, conversationId },
         "Task public history commit failed",
       );
       try {
-        this.dependencies.store.update(conversation.conversationId, (record) => {
+        this.dependencies.store.update(conversationId, (record) => {
           record.snapshot.status = "paused";
         });
       } catch {
@@ -1147,8 +1402,7 @@ export class TaskConversationService {
     this.dependencies.store.update(conversationId, (record) => {
       const member = record.snapshot.members.find((entry) => entry.backendAgentId === agentId)!;
       if (event.type === "agent_state") {
-        member.status = event.agent.lifecycle;
-        member.pendingPermissions = Array.from(event.agent.pendingPermissions.values());
+        projectMemberState(member, event);
         return;
       }
       if (event.type !== "agent_stream") return;
@@ -1173,15 +1427,17 @@ export class TaskConversationService {
         event.event.type === "turn_canceled"
       ) {
         member.status = event.event.type === "turn_failed" ? "error" : "idle";
-        const existing = record.rows.find(
-          (entry) => entry.sourceKey === `assistant:${member.memberId}:${turnId}`,
-        );
+        const existing = this.dependencies.store.querySource(conversationId, {
+          sourceKey: `assistant:${member.memberId}:${turnId}`,
+        });
         if (existing)
           row = this.dependencies.store.replaceRow(record, existing.id, { completed: true });
       }
     });
     this.notify(conversationId, {
-      conversation: this.require(conversationId).snapshot,
+      ...(event.type !== "agent_stream" || event.event.type !== "timeline"
+        ? { conversation: this.require(conversationId).snapshot }
+        : {}),
       ...(row ? { row, eventSeq: row.updatedSeq ?? row.seq } : {}),
     });
   }
@@ -1193,7 +1449,9 @@ export class TaskConversationService {
     event: { epoch?: string; seq?: number },
   ): TaskConversationRow | undefined {
     const sourceKey = `assistant:${member.memberId}:${turnId}`;
-    const existing = record.rows.find((entry) => entry.sourceKey === sourceKey);
+    const existing = this.dependencies.store.querySource(record.snapshot.conversationId, {
+      sourceKey,
+    });
     const source = {
       memberId: member.memberId,
       backendAgentId: member.backendAgentId,
@@ -1202,6 +1460,17 @@ export class TaskConversationService {
       seq: event.seq,
       messageId: item.messageId,
     };
+    if (
+      event.epoch &&
+      event.seq !== undefined &&
+      !this.dependencies.store.acceptSourceSequence(
+        record,
+        member.backendAgentId,
+        event.epoch,
+        event.seq,
+      )
+    )
+      return;
     if (!existing)
       return this.dependencies.store.append(record, {
         sourceKey,
@@ -1219,11 +1488,15 @@ export class TaskConversationService {
     )
       return;
     return this.dependencies.store.replaceRow(record, existing.id, {
-      text: existing.text + item.text,
+      text:
+        existing.text +
+        (item.messageId &&
+        existing.source?.messageId &&
+        item.messageId !== existing.source.messageId
+          ? "\n\n"
+          : "") +
+        item.text,
       source,
-      ...(event.epoch && event.seq !== undefined
-        ? { sourceKey: `fragment:${member.memberId}:${event.epoch}:${event.seq}` }
-        : {}),
     });
   }
   private async validateAttachments(
@@ -1238,6 +1511,21 @@ export class TaskConversationService {
           );
       }
   }
+  private markRejectedMessage(
+    record: StoredTaskConversation,
+    clientMessageId: string,
+  ): TaskConversationRow | undefined {
+    const row = record.rows.find(
+      (entry) => entry.kind === "user" && entry.clientMessageId === clientMessageId,
+    );
+    if (row && !row.text.startsWith("[未投递] "))
+      return this.dependencies.store.replaceRow(record, row.id, { text: `[未投递] ${row.text}` });
+  }
+  private trackRecovery(conversationId: string, agentId: string): void {
+    const members = this.recoveryMembers.get(conversationId) ?? new Set<string>();
+    members.add(agentId);
+    this.recoveryMembers.set(conversationId, members);
+  }
   private reconcile(conversationId: string): Promise<void> {
     const existing = this.recoveryOperations.get(conversationId);
     if (existing) return existing;
@@ -1245,79 +1533,104 @@ export class TaskConversationService {
     if (!members?.size) return Promise.resolve();
     const operation = (async () => {
       for (const agentId of members) {
-        const stored = await this.dependencies.agentStorage.get(agentId);
-        // Missing native identity is explicitly uncertain, never a reason to create a replacement.
-        if (!stored?.persistence) continue;
-        await ensureAgentLoaded(agentId, {
-          agentManager: this.dependencies.agentManager,
-          agentStorage: this.dependencies.agentStorage,
-          logger: this.dependencies.logger,
-        });
-        const native = await this.dependencies.agentManager.getTimelineRows(agentId);
-        const epoch = this.dependencies.agentManager.fetchTimeline(agentId, { limit: 1 }).epoch;
-        const rows: TaskConversationRow[] = [];
-        this.dependencies.store.update(conversationId, (record) => {
-          for (const delivery of Object.values(record.deliveries).filter(
-            (entry) => entry.backendAgentId === agentId,
-          )) {
-            const receipt = native.find(
-              (row) =>
-                row.item.type === "user_message" &&
-                row.item.clientMessageId === delivery.deliveryId,
-            );
-            if (delivery.status === "unknown" && receipt?.turnId) {
-              delivery.status = "accepted";
-              delivery.sourceTurnId = receipt.turnId;
-            }
-            if (!delivery.sourceTurnId) continue;
-            const output = native.filter(
-              (row) =>
-                row.turnId === delivery.sourceTurnId && row.item.type === "assistant_message",
-            );
-            if (!output.length) continue;
-            const text = output
-              .map((row) => (row.item.type === "assistant_message" ? row.item.text : ""))
-              .join("");
-            const sourceKey = `assistant:${delivery.memberId}:${delivery.sourceTurnId}`;
-            const current = record.rows.find((row) => row.sourceKey === sourceKey);
-            const source = {
-              memberId: delivery.memberId,
-              backendAgentId: agentId,
-              sourceTurnId: delivery.sourceTurnId,
-              epoch,
-              seq: output.at(-1)!.seq,
-            };
-            if (current && text.startsWith(current.text) && current.text !== text)
-              rows.push(
-                this.dependencies.store.replaceRow(record, current.id, {
-                  text,
-                  source,
-                  sourceKey: `recovery:${agentId}:${epoch}:${source.seq}`,
-                }),
+        try {
+          this.flushProjection(conversationId);
+          await this.projectionTails.get(conversationId);
+          const stored = await this.dependencies.agentStorage.get(agentId);
+          // Missing native identity is explicitly uncertain, never a reason to create a replacement.
+          if (!this.dependencies.agentManager.getAgent(agentId) && !stored?.persistence) continue;
+          await this.authority.run({ agentId }, () =>
+            ensureAgentLoaded(agentId, {
+              agentManager: this.dependencies.agentManager,
+              agentStorage: this.dependencies.agentStorage,
+              logger: this.dependencies.logger,
+            }),
+          );
+          const native = await this.dependencies.agentManager.getTimelineRows(agentId);
+          const epoch = this.dependencies.agentManager.fetchTimeline(agentId, { limit: 1 }).epoch;
+          // Replay can overlap a buffered stream batch: commit it before comparing prefixes.
+          this.flushProjection(conversationId);
+          await this.projectionTails.get(conversationId);
+          const rows: TaskConversationRow[] = [];
+          this.dependencies.store.update(conversationId, (record) => {
+            for (const delivery of Object.values(record.deliveries).filter(
+              (entry) => entry.backendAgentId === agentId,
+            )) {
+              const receipt = native.find(
+                (row) =>
+                  row.item.type === "user_message" &&
+                  row.item.clientMessageId === delivery.deliveryId,
               );
-            else if (!current) {
-              const member = record.snapshot.members.find(
-                (entry) => entry.memberId === delivery.memberId,
-              )!;
-              rows.push(
-                this.dependencies.store.append(record, {
-                  sourceKey,
-                  kind: "assistant",
-                  text,
-                  source,
-                  speaker: this.speaker(member),
-                  completed: false,
-                }),
+              if (delivery.status === "unknown" && receipt?.turnId) {
+                delivery.status = "accepted";
+                delivery.sourceTurnId = receipt.turnId;
+                const member = record.snapshot.members.find(
+                  (entry) => entry.memberId === delivery.memberId,
+                )!;
+                member.seenConversationSeq = Math.max(
+                  member.seenConversationSeq,
+                  delivery.throughSeq,
+                );
+              }
+              if (!delivery.sourceTurnId) continue;
+              const output = native.filter(
+                (row) =>
+                  row.turnId === delivery.sourceTurnId && row.item.type === "assistant_message",
               );
+              if (!output.length) continue;
+              const text = output
+                .map((row) => (row.item.type === "assistant_message" ? row.item.text : ""))
+                .join("\n\n");
+              const sourceKey = `assistant:${delivery.memberId}:${delivery.sourceTurnId}`;
+              const current = record.rows.find((row) => row.sourceKey === sourceKey);
+              const source = {
+                memberId: delivery.memberId,
+                backendAgentId: agentId,
+                sourceTurnId: delivery.sourceTurnId,
+                epoch,
+                seq: output.at(-1)!.seq,
+              };
+              this.dependencies.store.acceptSourceSequence(record, agentId, epoch, source.seq);
+              if (current && text.startsWith(current.text) && current.text !== text)
+                rows.push(
+                  this.dependencies.store.replaceRow(record, current.id, {
+                    text,
+                    source,
+                    sourceKey: `recovery:${agentId}:${epoch}:${source.seq}`,
+                  }),
+                );
+              else if (!current) {
+                const member = record.snapshot.members.find(
+                  (entry) => entry.memberId === delivery.memberId,
+                )!;
+                rows.push(
+                  this.dependencies.store.append(record, {
+                    sourceKey,
+                    kind: "assistant",
+                    text,
+                    source,
+                    speaker: this.speaker(member),
+                    completed: false,
+                  }),
+                );
+              }
             }
-          }
-        });
-        for (const row of rows)
-          this.notify(conversationId, { row, eventSeq: row.updatedSeq ?? row.seq });
+          });
+          for (const row of rows)
+            this.notify(conversationId, { row, eventSeq: row.updatedSeq ?? row.seq });
+        } catch (error) {
+          this.dependencies.logger.warn(
+            { err: error, conversationId, agentId },
+            "Task member reconciliation failed",
+          );
+        }
       }
       this.notifySnapshot(conversationId);
     })();
     this.recoveryOperations.set(conversationId, operation);
+    void operation
+      .finally(() => this.recoveryOperations.delete(conversationId))
+      .catch(() => undefined);
     return operation;
   }
   private require(conversationId: string): StoredTaskConversation {
@@ -1339,6 +1652,9 @@ export class TaskConversationService {
   }
   async close(): Promise<void> {
     this.unsubscribe();
+    await Promise.allSettled(this.recoveryOperations.values());
+    for (const conversationId of this.pendingProjections.keys())
+      this.flushProjection(conversationId);
     await Promise.allSettled(this.projectionTails.values());
     this.dependencies.store.close();
   }

@@ -1753,8 +1753,12 @@ export class AgentManager {
   }
 
   closeAgent(agentId: string): Promise<void> {
-    if (this.hasInFlightRun(agentId))
-      this.taskConversations?.assertAgentMutation(agentId, "close active member");
+    try {
+      if (this.hasInFlightRun(agentId))
+        this.taskConversations?.assertAgentMutation(agentId, "close active member");
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const existing = this.inFlightAgentCloses.get(agentId);
     if (existing) {
       return existing;
@@ -1791,6 +1795,7 @@ export class AgentManager {
     await this.drainSessionEvents(agentId);
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
+    this.refreshSessionPersistence(agent);
     await agent.session.close();
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");

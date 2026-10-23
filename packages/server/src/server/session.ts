@@ -2174,6 +2174,7 @@ export class Session {
         return;
       }
       try {
+        // COMPAT(taskConversations): added in v0.12.0, remove legacy member guards after 2027-04-23 once the client floor supports task conversations.
         if (
           "agentId" in msg &&
           typeof msg.agentId === "string" &&
@@ -2250,6 +2251,7 @@ export class Session {
   }
 
   public subscribesToAgent(agent: ManagedAgent, source: object): Promise<boolean> {
+    // COMPAT(taskConversations): added in v0.12.0, remove legacy member filtering after 2027-04-23 once the client floor supports task conversations.
     if (
       this.taskConversations?.getByAgentId(agent.id) &&
       !this.supportsForSource(CLIENT_CAPS.taskConversations, source)
@@ -2799,19 +2801,27 @@ export class Session {
           source,
         );
         return;
-      case "task.conversation.send.request":
+      case "task.conversation.send.request": {
+        let delivery = null;
+        let error = null;
+        try {
+          delivery = await service.send(taskConversationInput(request));
+        } catch (cause) {
+          error = cause instanceof Error ? cause.message : String(cause);
+        }
         this.emitForSource(
           {
             type: "task.conversation.send.response",
             payload: {
               requestId: request.requestId,
-              error: null,
-              delivery: await service.send(taskConversationInput(request)),
+              error,
+              delivery,
             },
           },
           source,
         );
         return;
+      }
       case "task.conversation.get_delivery.request":
         this.emitForSource(
           {
@@ -5804,6 +5814,7 @@ export class Session {
     request: AgentDirectoryRequestMessage,
   ): AgentSnapshotPayload[] {
     if (request.type === "fetch_agents_request" && request.sync) return agents;
+    // COMPAT(taskConversations): added in v0.12.0, remove legacy directory filtering after 2027-04-23 once the client floor supports task conversations.
     if (this.supports(CLIENT_CAPS.taskConversations)) return agents;
     return agents.filter((agent) => !this.taskConversations?.getByAgentId(agent.id));
   }
@@ -6970,6 +6981,7 @@ export class Session {
       request.sync ?? {},
       request.includeBackground,
     );
+    // COMPAT(taskConversations): added in v0.12.0, remove legacy sync filtering after 2027-04-23 once the client floor supports task conversations.
     const entries = await Promise.all(
       result.entries.map(async (entry) =>
         (await this.agentDirectory.includes(entry.agent, request.includeBackground)) &&
@@ -8907,6 +8919,7 @@ export class Session {
     message: SessionOutboundMessage,
     source?: object,
   ): boolean {
+    // COMPAT(taskConversations): added in v0.12.0, remove legacy outbound filtering after 2027-04-23 once the client floor supports task conversations.
     if (this.supportsForRequest(CLIENT_CAPS.taskConversations, source)) return true;
     if (message.type.startsWith("task.conversation.")) return false;
     if (message.type === "agent_update" && message.payload.kind === "upsert")

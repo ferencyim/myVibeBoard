@@ -1,4 +1,4 @@
-import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { DaemonRpcError, type DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { TaskConversationDelivery } from "@getpaseo/protocol/messages";
 import type { ComposerTaskConversationTransport } from "@/composer/actions";
 
@@ -26,7 +26,13 @@ export async function sendTaskConversationSubmission(
   >;
   try {
     response = await input.client.sendTaskConversationMessage(input.message);
-  } catch {
+  } catch (error) {
+    if (error instanceof DaemonRpcError) {
+      throw new Error(
+        taskConversationSendErrorMessage(error.serverMessage.replace(/^Request failed: /, "")),
+        { cause: error },
+      );
+    }
     try {
       response = await input.client.getTaskConversationDelivery({
         conversationId: input.message.conversationId,

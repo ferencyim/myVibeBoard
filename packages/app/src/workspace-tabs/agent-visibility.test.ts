@@ -2,6 +2,13 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { afterEach, describe, expect, it } from "vitest";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import {
+  closeTabInLayout,
+  collectAllTabs,
+  createDefaultLayout,
+  reconcileWorkspaceTabs,
+  revealTargetInLayout,
+} from "@/stores/workspace-layout-actions";
+import {
   buildWorkspaceTabSnapshot,
   createWorkspaceAgentVisibilitySelector,
   deriveWorkspaceAgentVisibility,
@@ -77,8 +84,60 @@ describe("workspace agent visibility", () => {
       sessionAgents: new Map([[child.id, child]]),
       workspaceId: WORKSPACE_ID,
     });
-    expect(result.autoOpenAgentIds).toEqual(new Set(["worker"]));
+    expect(result.activeAgentIds).toEqual(new Set(["worker"]));
+    expect(result.autoOpenAgentIds).toEqual(new Set());
     expect(result.conversationByAgentId?.get("worker")).toBe("conversation-1");
+  });
+  it("does not reopen a closed conversation when anchor or later background members update", () => {
+    const target = { kind: "task_conversation", conversationId: "conversation" } as const;
+    const opened = revealTargetInLayout({
+      layout: createDefaultLayout(),
+      target,
+      now: 1,
+      placement: { mode: "focused" },
+      explorerSidebarPaneId: null,
+      createTabId: () => "task-tab",
+    })!;
+    const closed = closeTabInLayout({
+      layout: opened.layout,
+      tabId: opened.tabId,
+      explorerSidebarPaneId: null,
+    })!;
+    const agents = ["anchor", "worker"].map((id) =>
+      Object.assign(makeAgent({ id, cwd: "/repo", workspaceId: WORKSPACE_ID }), {
+        taskConversationId: "conversation",
+      }),
+    );
+    const visibility = deriveWorkspaceAgentVisibility({
+      sessionAgents: new Map(agents.map((agent) => [agent.id, agent])),
+      workspaceId: WORKSPACE_ID,
+    });
+    const reconciled = reconcileWorkspaceTabs(
+      { layout: closed, explorerSidebarPaneId: null },
+      buildWorkspaceTabSnapshot({
+        agentVisibility: visibility,
+        agentsHydrated: true,
+        terminalsHydrated: true,
+        knownTerminalIds: [],
+        standaloneTerminalIds: [],
+        hasActivePendingTerminalCreate: false,
+        hasActivePendingDraftCreate: false,
+      }),
+    );
+    expect(
+      collectAllTabs(reconciled.layout.root).some((tab) => tab.target.kind === "task_conversation"),
+    ).toBe(false);
+    const reopened = revealTargetInLayout({
+      layout: reconciled.layout,
+      target,
+      now: 2,
+      placement: { mode: "focused" },
+      explorerSidebarPaneId: null,
+      createTabId: () => "task-tab-reopened",
+    })!;
+    expect(
+      collectAllTabs(reopened.layout.root).some((tab) => tab.target.kind === "task_conversation"),
+    ).toBe(true);
   });
   it("keeps subagents active while excluding them from auto-open", () => {
     const parent = makeAgent({

@@ -298,6 +298,33 @@ test("task RPCs require capability and omit transport identity from creation and
   expect(f.send.mock.calls[0][0]).not.toHaveProperty("type");
 });
 
+test.each([
+  "Task member is busy; stop the current round before handing over",
+  "准入拒绝",
+  "Task conversation owner plugin is unavailable",
+  "Attachment is missing",
+])("deterministic send failure returns a send receipt error: %s", async (error) => {
+  const f = transportFixture();
+  f.send.mockRejectedValue(new Error(error));
+  await f.request({
+    type: "task.conversation.send.request",
+    requestId: "failed-send",
+    conversationId: "conversation",
+    recipient: bound.members[0],
+    clientMessageId: "message",
+    text: "请求接手",
+  });
+  expect(f.messages).toEqual([
+    {
+      source: f.source,
+      message: {
+        type: "task.conversation.send.response",
+        payload: { requestId: "failed-send", error, delivery: null },
+      },
+    },
+  ]);
+});
+
 test("conversation subscriptions belong to their source and release on detach before reconnect", async () => {
   const f = transportFixture();
   await f.request({

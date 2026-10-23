@@ -995,6 +995,8 @@ export async function createPaseoDaemon(
   const taskConversations = new TaskConversationService({
     store: new TaskConversationStore({
       filePath: path.join(config.paseoHome, "task-conversations.sqlite"),
+      onCorruptRecord: (error, conversationId) =>
+        logger.warn({ err: error, conversationId }, "Task conversation record was skipped"),
     }),
     agentManager,
     agentStorage,
@@ -1928,13 +1930,15 @@ export async function createPaseoDaemon(
  */
 const AGENT_CLOSE_TIMEOUT_MS = 5_000;
 
-async function closeAllAgents(logger: Logger, agentManager: AgentManager): Promise<void> {
+export async function closeAllAgents(logger: Logger, agentManager: AgentManager): Promise<void> {
   const agents = agentManager.listAgents({ includeInternal: true });
   await Promise.all(
     agents.map(async (agent) => {
       try {
         await withTimeout({
-          promise: agentManager.closeAgent(agent.id),
+          promise: agentManager.taskConversations
+            ? agentManager.taskConversations.runWithControl(() => agentManager.closeAgent(agent.id))
+            : agentManager.closeAgent(agent.id),
           timeoutMs: AGENT_CLOSE_TIMEOUT_MS,
           label: `close agent ${agent.id}`,
         });

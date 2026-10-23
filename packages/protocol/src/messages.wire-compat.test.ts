@@ -544,6 +544,27 @@ test("task conversation wire keeps arbitrary roles, frozen public source, and pu
   ).toMatchObject({ payload: { row: { seq: 1, updatedSeq: 3, source: row.source } } });
 });
 
+test("task conversation stop preserves legacy requests and accepts explicit delivery reconciliation", () => {
+  const legacy = {
+    type: "task.conversation.stop.request",
+    requestId: "stop",
+    conversationId: "conversation",
+  };
+  expect(SessionInboundMessageSchema.parse(legacy)).toEqual(legacy);
+  const reconcile = {
+    ...legacy,
+    memberId: "member",
+    reconcileDelivery: { clientMessageId: "message", resolution: "rejected" },
+  };
+  expect(SessionInboundMessageSchema.parse(reconcile)).toEqual(reconcile);
+  expect(
+    SessionInboundMessageSchema.safeParse({
+      ...legacy,
+      reconcileDelivery: { clientMessageId: "message", resolution: "retry" },
+    }).success,
+  ).toBe(false);
+});
+
 test("task conversation feature and capability fields remain optional for ordinary peers", () => {
   expect(
     WSHelloMessageSchema.parse({

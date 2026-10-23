@@ -19,6 +19,7 @@ import {
   type ManagedAgent,
 } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
+import type { TaskConversationService } from "../task-conversation/service.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 import { toAgentPayload } from "./agent-projections.js";
 import { projectTimelineRows } from "./timeline-projection.js";
@@ -10400,6 +10401,89 @@ test("load waits for an in-flight explicit close and creates one resumed runtime
     await manager.closeAgent("00000000-0000-4000-8000-000000000216").catch(() => undefined);
     await storage.flush().catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("close captures the latest provider persistence before session teardown clears it", async () => {
+  const client = new SessionRecordingAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+    workspaceId: undefined,
+  });
+  const session: AgentSession = client.sessions[0]!;
+  const persistence: AgentPersistenceHandle = {
+    provider: "codex",
+    sessionId: "plan-thread",
+    metadata: { planApproval: { requestId: "stable-request", text: "待批准方案" } },
+  };
+  session.describePersistence = () => persistence;
+  session.close = async () => {
+    session.describePersistence = () => null;
+  };
+  let closedPersistence: AgentPersistenceHandle | null | undefined;
+  const unsubscribe = manager.subscribe(
+    (event) => {
+      if (
+        event.type === "agent_state" &&
+        event.agent.id === agent.id &&
+        event.agent.lifecycle === "closed"
+      )
+        closedPersistence = event.agent.persistence;
+    },
+    { replayState: false },
+  );
+  try {
+    await manager.closeAgent(agent.id);
+    expect(closedPersistence).toMatchObject(persistence);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test("task member close guard returns a rejected promise", async () => {
+  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
+  const activeRun = vi.spyOn(manager, "hasInFlightRun").mockReturnValue(true);
+  manager.taskConversations = {
+    assertAgentMutation: () => {
+      throw new Error("task_conversation_control_required");
+    },
+  } as unknown as TaskConversationService;
+  try {
+    let close!: Promise<void>;
+    expect(() => {
+      close = manager.closeAgent("task-member");
+    }).not.toThrow();
+    await expect(close).rejects.toThrow("task_conversation_control_required");
+  } finally {
+    activeRun.mockRestore();
+  }
+});
+
+test("provider retirement catches task member close guard rejection", async () => {
+  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+    workspaceId: undefined,
+  });
+  const activeRun = vi.spyOn(manager, "hasInFlightRun").mockReturnValue(true);
+  const guard = vi.fn(() => {
+    throw new Error("task_conversation_control_required");
+  });
+  manager.taskConversations = { assertAgentMutation: guard } as unknown as TaskConversationService;
+  try {
+    expect(() =>
+      manager.updateProviderRegistry({
+        providerDefinitions: {},
+        clients: {},
+        retiredProviders: ["codex"],
+      }),
+    ).not.toThrow();
+    await Promise.resolve();
+    expect(guard).toHaveBeenCalledWith(agent.id, "close active member");
+    expect(manager.getAgent(agent.id)).not.toBeNull();
+  } finally {
+    manager.taskConversations = undefined;
+    activeRun.mockRestore();
+    await manager.closeAgent(agent.id);
   }
 });
 

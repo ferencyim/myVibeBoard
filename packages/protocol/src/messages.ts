@@ -3522,6 +3522,12 @@ export const TaskConversationStopRequestSchema = z.object({
   requestId: z.string(),
   conversationId: z.string(),
   memberId: z.string().optional(),
+  reconcileDelivery: z
+    .object({
+      clientMessageId: z.string(),
+      resolution: z.enum(["accepted", "rejected"]),
+    })
+    .optional(),
 });
 export const TaskConversationStopResponseSchema = z.object({
   type: z.literal("task.conversation.stop.response"),

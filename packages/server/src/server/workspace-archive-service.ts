@@ -33,7 +33,10 @@ export interface ArchiveDependencies {
   paseoWorktreesBaseRoot?: string;
   github: ForgeService;
   workspaceGitService: Pick<WorkspaceGitService, "getSnapshot" | "invalidateWorktrees">;
-  agentManager: Pick<AgentManager, "listAgents" | "getAgent" | "archiveAgent" | "archiveSnapshot">;
+  agentManager: Pick<
+    AgentManager,
+    "listAgents" | "getAgent" | "archiveAgent" | "archiveSnapshot" | "taskConversations"
+  >;
   agentStorage: Pick<AgentStorage, "listByWorkspace">;
   // Resolves the worktree at a path to its workspaceId for archive-by-path. The
   // path uniquely identifies a worktree workspace; this is a directory lookup for
@@ -330,6 +333,7 @@ async function archiveTargetRecords(
     }),
   );
 
+  const failures: unknown[] = [];
   for (const result of results) {
     if (result.status === "fulfilled") {
       archivedWorkspaceIds.push(result.value.workspaceId);
@@ -337,12 +341,20 @@ async function archiveTargetRecords(
         archivedAgents.add(agentId);
       }
     } else {
+      failures.push(result.reason);
       dependencies.sessionLogger?.warn(
         { err: result.reason, requestId },
-        "archiveByScope workspace teardown failed; continuing",
+        "archiveByScope workspace teardown failed",
       );
     }
   }
+  if (failures.length > 0)
+    throw new AggregateError(
+      failures,
+      `Workspace archive failed; directory has been retained: ${failures
+        .map((failure) => (failure instanceof Error ? failure.message : String(failure)))
+        .join("; ")}`,
+    );
 
   return { archivedAgents, archivedWorkspaceIds };
 }
@@ -465,6 +477,13 @@ export async function archiveWorkspaceContents(
   workspaceId: string,
 ): Promise<Set<string>> {
   const archivedAgents = new Set<string>();
+  const taskConversations = dependencies.agentManager.taskConversations;
+  for (const conversation of taskConversations?.listByWorkspace(workspaceId) ?? []) {
+    if (conversation.status === "archived") continue;
+    // Stop must settle before any workspace teardown can release its resources.
+    await taskConversations!.archive({ conversationId: conversation.conversationId });
+    for (const member of conversation.members) archivedAgents.add(member.backendAgentId);
+  }
 
   const liveAgents = dependencies.agentManager
     .listAgents({ includeInternal: true })
@@ -489,8 +508,12 @@ export async function archiveWorkspaceContents(
 
   const archivedAt = new Date().toISOString();
   const agentIdsToArchive = new Set([
-    ...liveAgents.map((agent) => agent.id),
-    ...matchingStoredRecords.filter((record) => !record.archivedAt).map((record) => record.id),
+    ...liveAgents
+      .filter((agent) => !taskConversations?.getByAgentId(agent.id))
+      .map((agent) => agent.id),
+    ...matchingStoredRecords
+      .filter((record) => !record.archivedAt && !taskConversations?.getByAgentId(record.id))
+      .map((record) => record.id),
   ]);
   const archiveResults = await Promise.allSettled([
     ...[...agentIdsToArchive].map((agentId) =>
@@ -501,14 +524,17 @@ export async function archiveWorkspaceContents(
     dependencies.killTerminalsForWorkspace(workspaceId),
   ]);
 
+  const failures: unknown[] = [];
   for (const result of archiveResults) {
     if (result.status === "rejected") {
+      failures.push(result.reason);
       dependencies.sessionLogger?.warn(
         { err: result.reason, workspaceId },
-        "Workspace archive teardown step failed; continuing",
+        "Workspace archive teardown step failed",
       );
     }
   }
+  if (failures.length > 0) throw new AggregateError(failures, "Workspace archive teardown failed");
 
   return archivedAgents;
 }

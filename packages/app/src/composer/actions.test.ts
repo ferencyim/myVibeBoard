@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { DaemonConnectionError, DaemonRpcError } from "@getpaseo/client/internal/daemon-client";
 import type {
   AgentAttachment,
   ForgeSearchItem,
@@ -490,7 +491,9 @@ describe("dispatchComposerAgentMessage", () => {
       config: { provider: "claude", cwd: "/repo" },
     };
     const taskClient = {
-      sendTaskConversationMessage: vi.fn().mockRejectedValue(new Error("lost response")),
+      sendTaskConversationMessage: vi
+        .fn()
+        .mockRejectedValue(new DaemonConnectionError("lost response", "DAEMON_REQUEST_TIMEOUT")),
       getTaskConversationDelivery: vi.fn().mockRejectedValue(new Error("offline")),
     };
     const onUncertain = vi.fn();
@@ -521,6 +524,40 @@ describe("dispatchComposerAgentMessage", () => {
     );
     expect(stream.tail.get("conversation")).toHaveLength(1);
   });
+
+  it.each(["handler_error", "access_denied"])(
+    "treats an explicit RPC %s as rejected without querying an uncertain receipt",
+    async (code) => {
+      const taskClient = {
+        sendTaskConversationMessage: vi.fn().mockRejectedValue(
+          new DaemonRpcError({
+            requestId: "request",
+            requestType: "task.conversation.send.request",
+            code,
+            error:
+              "Request failed: Task member is busy; stop the current round before handing over",
+          }),
+        ),
+        getTaskConversationDelivery: vi.fn(),
+      };
+      const onUncertain = vi.fn();
+      await expect(
+        sendTaskConversationSubmission({
+          client: taskClient,
+          message: {
+            conversationId: "conversation",
+            clientMessageId: "message",
+            text: "请接手",
+            recipient: { role: "planner", config: { provider: "codex", cwd: "/repo" } },
+          },
+          onDelivery: vi.fn(),
+          onUncertain,
+        }),
+      ).rejects.toThrow("当前角色还在工作，请先停止当前轮次后接手。");
+      expect(taskClient.getTaskConversationDelivery).not.toHaveBeenCalled();
+      expect(onUncertain).not.toHaveBeenCalled();
+    },
+  );
 
   it("rolls back a task submission only when its delivery was explicitly rejected", async () => {
     const stream = createFakeStream();
