@@ -4,7 +4,7 @@ import { Modal, useToast } from "@getpaseo/plugin/client/react-native";
 import { SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   PRESET_ENVIRONMENT_KINDS,
   PRESET_PERMISSION_MODES,
@@ -255,8 +255,9 @@ function PresetModelEditor({
 }) {
   const models = providers.find((p) => p.id === value.provider)?.models ?? [];
   return (
-    <View style={{ gap: 10 }}>
+    <ScrollView horizontal contentContainerStyle={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
       <SettingsSelect
+        inline
         label="Agent（provider）"
         value={value.provider}
         options={[
@@ -271,6 +272,7 @@ function PresetModelEditor({
         }}
       />
       <SettingsSelect
+        inline
         label="模型（必填）"
         value={value.model}
         options={[
@@ -287,18 +289,20 @@ function PresetModelEditor({
         }}
       />
       <SettingsSelect
+        inline
         label="思考强度"
         value={value.thinking}
         options={thinkingChoices(models, value.model, value.thinking).map((o) => ({ value: o.id, label: o.label }))}
         onValueChange={(thinking) => patch({ thinking })}
       />
       <SettingsSelect
+        inline
         label="权限模式"
         value={value.permissionMode}
         options={PRESET_PERMISSION_MODES.map((m) => ({ value: m, label: PERMISSION_LABELS[m] }))}
         onValueChange={(permissionMode) => patch({ permissionMode })}
       />
-    </View>
+    </ScrollView>
   );
 }
 
