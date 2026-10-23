@@ -7267,6 +7267,122 @@ test("wire snapshot callers own expansion and receive hash references unchanged"
   expect(await request).toEqual(body);
 });
 
+test.each([
+  null,
+  {
+    kind: "workspace",
+    idempotencyKey: "restored-draft",
+    phase: "completed",
+    revision: 4,
+    workspaceId: "wks_0123456789abcdef",
+    agentId: "00000000-0000-4000-8000-000000000001",
+    error: null,
+  },
+])("getWorkspaceCreation returns the stored snapshot: %j", async (snapshot) => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "creation-query",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connected = client.connect();
+  transport.triggerOpen({ features: { creationLifecycle: true } });
+  await connected;
+
+  const query = client.getWorkspaceCreation("restored-draft");
+  const request = parseSentFrame(transport.sent[0]);
+  expect(request).toEqual({
+    type: "creation.subscribe.request",
+    requestId: expect.any(String),
+    kind: "workspace",
+    idempotencyKey: "restored-draft",
+    subscribe: false,
+  });
+  transport.triggerMessage(
+    wrapSessionMessage({
+      type: "creation.subscribe.response",
+      payload: { requestId: "another-query", snapshot: null, error: "unrelated" },
+    }),
+  );
+  transport.triggerMessage(
+    wrapSessionMessage({
+      type: "creation.subscribe.response",
+      payload: { requestId: request.requestId, snapshot, error: null },
+    }),
+  );
+
+  await expect(query).resolves.toEqual(snapshot);
+  await client.close();
+  expect(transport.sent).toHaveLength(1);
+});
+
+test("getWorkspaceCreation rejects a query error", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "creation-query-error",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connected = client.connect();
+  transport.triggerOpen({ features: { creationLifecycle: true } });
+  await connected;
+
+  const query = client.getWorkspaceCreation("restored-draft");
+  const request = parseSentFrame(transport.sent[0]);
+  transport.triggerMessage(
+    wrapSessionMessage({
+      type: "creation.subscribe.response",
+      payload: { requestId: request.requestId, snapshot: null, error: "Creation lookup failed" },
+    }),
+  );
+
+  await expect(query).rejects.toThrow("Creation lookup failed");
+  expect(transport.sent).toHaveLength(1);
+});
+
+test("getWorkspaceCreation rejects when disconnected during a query", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "creation-query-disconnected",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connected = client.connect();
+  transport.triggerOpen({ features: { creationLifecycle: true } });
+  await connected;
+
+  const query = client.getWorkspaceCreation("restored-draft");
+  transport.triggerClose({ code: 1006, reason: "network lost" });
+
+  await expect(query).rejects.toThrow(/network lost|disconnected|closed/i);
+  expect(transport.sent).toHaveLength(1);
+});
+
+test("getWorkspaceCreation gates unsupported hosts before sending", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "creation-query-gate",
+    transportFactory: () => transport.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connected = client.connect();
+  transport.triggerOpen();
+  await connected;
+
+  await expect(client.getWorkspaceCreation("restored-draft")).rejects.toThrow(
+    "请升级主机后查询创建结果",
+  );
+  expect(transport.sent).toHaveLength(0);
+});
+
 test("creation lifecycle sends the keyed agent and initial prompt as one intent", async () => {
   const transport = createMockTransport();
   const client = new DaemonClient({

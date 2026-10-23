@@ -159,6 +159,8 @@ App 改动集中在 `packages/app/src/{composer,runtime,vibe}`：原生 outbox �
 - **单测验收**：创建前/后断线、回执丢失、App 重启、重复重连均只建一个 workspace/发一条首消息；host 不串用，附件失败保留正文；离线配置编辑/执行确认拒绝；旧积压不会导入。
 - **隔离 daemon 实测**：Android 飞行模式写首消息、杀 App 重开、联网自动发出，桌面看到同一规划但仍待确认；重复网络切换不多建，通知进入准确 tab。Web 窄屏核对同一在线流程，离线不依赖看板插件 bundle。
 
+**WP-113 本地进度（尚未整体验收）**：App 已接入独立原生首消息 outbox、附件引用保留、重连提交、本机状态与精确通知路由，不读取旧手机积压；旧 UI/副本删除仍归 WP-114。客户端已按批准方案公开已有创建回执的只读查询，冷重启和重连自动核对结果；查询失败保留内容，查无回执才复用原幂等键继续首发。原生 API 幂等烟测通过，真实规划模型连接失败；Android 无可用模拟器，Web 界面验证尚未完成。本工作区保留第二版设计正文；main 上第三版设计优先，`conversationId` 接点待 WP-111 合入后处理，本次仅补只读查询与自动恢复。
+
 ### WP-114：最终切换与删除旧看板、表及手机副本
 
 - **范围 / 目录**：`plugins/vibe-*` 旧 board/detail/UI、card CRUD/同步合同与命令，`plugins/vibe-shared/db` 删除迁移，`packages/app/src/vibe` 的 replica/sync/local-rpc/replies/plugin-cache、旧生成物及 registry/layout 引用，安装/烟测脚本和 `docs/vibe`、需求文档。逐文件删除，无递归删除。
@@ -170,6 +172,6 @@ App 改动集中在 `packages/app/src/{composer,runtime,vibe}`：原生 outbox �
 
 仍需用户拍板的问题：**没有**。旧卡/事件/旧手机积压不迁移，用户「通过」后安全合并本地 main 并 push origin main，维护任务一律先规划并等待确认，均已确定。
 
-开发验证经验：旧迁移 fixture 应固定它要验证的版本边界，不把“倒数一条迁移”当作固定功能迁移；共享源只由 sync-shared 复制，测试启动兼容 Windows PowerShell 5.1 并显式关闭 relay。
+开发验证经验：outbox 必须在原生草稿清空前可靠落盘，附件 GC 也必须先恢复 outbox 引用；不能用 workspace 目录猜测创建请求的结果，未知结果依赖原生幂等回执查询。`dist` 联接其它检出时，新增 SDK 接口用临时源码映射做 `tsc --noEmit`，不能靠构建更新共享声明。旧迁移 fixture 应固定它要验证的版本边界，不把“倒数一条迁移”当作固定功能迁移；共享源只由 sync-shared 复制，测试启动兼容 Windows PowerShell 5.1 并显式关闭 relay。
 
 本轮经验：问答归原生会话，快照与结论归插件，执行授权归用户；先用原生模型选择，避免为首发前七角色设置引入草稿、路由和恢复协议。
