@@ -1545,15 +1545,15 @@ export function DisplaySettings() {
 }
 ```
 
-| Component                          | Props and behavior                                                                                                                       |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `SettingsGroup`, `SettingsSection` | Required `title`, `children`; optional `info` tooltip, `trailing` content, `testID`. Own section spacing and headings.                   |
-| `SettingsCard`                     | `children`, optional `testID`. Owns the card surface and dividers between direct children. Give mapped rows stable React keys.           |
-| `SettingsRow`                      | Required `label`; optional `hint`, `error`, `children`, `testID`. Wrap any custom control or content.                                    |
-| `SettingsSwitch`                   | Row props plus required `value: boolean`, `onValueChange`; optional `disabled`.                                                          |
-| `SettingsSelect`                   | Row props plus required string `value`, `options: { label, value }[]`, `onValueChange`; optional `disabled`. Uses Paseo's adaptive menu. |
-| `SettingsInput`                    | Row props plus required `onChangeText`; optional `initialValue`, `placeholder`, `disabled`, `secureTextEntry`, `ref`.                    |
-| `SettingsAction`                   | Row props plus required `actionLabel`, `onPress`; optional `disabled`.                                                                   |
+| Component                          | Props and behavior                                                                                                                                                                                   |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SettingsGroup`, `SettingsSection` | Required `title`, `children`; optional `info` tooltip, `trailing` content, `testID`. Own section spacing and headings.                                                                               |
+| `SettingsCard`                     | `children`, optional `testID`. Owns the card surface and dividers between direct children. Give mapped rows stable React keys.                                                                       |
+| `SettingsRow`                      | Required `label`; optional `hint`, `error`, `children`, `testID`. Wrap any custom control or content.                                                                                                |
+| `SettingsSwitch`                   | Row props plus required `value: boolean`, `onValueChange`; optional `disabled`.                                                                                                                      |
+| `SettingsSelect`                   | Row props plus required string `value`, `options: { label, value }[]`, `onValueChange`; optional `disabled`, `inline` (dropdown only, label retained for accessibility). Uses Paseo's adaptive menu. |
+| `SettingsInput`                    | Row props plus required `onChangeText`; optional `initialValue`, `placeholder`, `disabled`, `secureTextEntry`, `ref`.                                                                                |
+| `SettingsAction`                   | Row props plus required `actionLabel`, `onPress`; optional `disabled`.                                                                                                                               |
 
 `SettingsInput` owns in-progress text. `initialValue` seeds it when mounted. Its ref exposes
 `focus()`, `blur()`, `getText()`, and `replaceText(text)` for explicit programmatic changes.

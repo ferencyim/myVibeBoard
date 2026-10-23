@@ -116,31 +116,35 @@ export function SettingsSelect<Value extends string>({
   options,
   onValueChange,
   disabled,
+  inline,
   ...row
 }: SettingsSelectProps<Value>) {
   const selectedLabel = options.find((option) => option.value === value)?.label ?? value;
-  return (
-    <SettingsRow {...row}>
-      <DropdownMenu>
-        <DropdownTrigger
-          disabled={disabled}
-          accessibilityRole="button"
-          accessibilityLabel={`${row.label}: ${selectedLabel}`}
-        >
-          {selectedLabel}
-        </DropdownTrigger>
-        <DropdownMenuContent side="bottom" align="end" width={220}>
-          {options.map((option) => (
-            <SettingsOption
-              key={option.value}
-              option={option}
-              selected={option.value === value}
-              onValueChange={onValueChange}
-            />
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </SettingsRow>
+  const control = (
+    <DropdownMenu>
+      <DropdownTrigger
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel={`${row.label}: ${selectedLabel}`}
+      >
+        {selectedLabel}
+      </DropdownTrigger>
+      <DropdownMenuContent side="bottom" align="end" width={220}>
+        {options.map((option) => (
+          <SettingsOption
+            key={option.value}
+            option={option}
+            selected={option.value === value}
+            onValueChange={onValueChange}
+          />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+  return inline ? (
+    <View testID={row.testID}>{control}</View>
+  ) : (
+    <SettingsRow {...row}>{control}</SettingsRow>
   );
 }
 

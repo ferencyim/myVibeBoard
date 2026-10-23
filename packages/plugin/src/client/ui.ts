@@ -21,6 +21,8 @@ export interface SettingsSwitchProps extends SettingsRowProps {
   disabled?: boolean;
 }
 export interface SettingsSelectProps<Value extends string = string> extends SettingsRowProps {
+  /** Render only the dropdown; keep label for accessibility. */
+  inline?: boolean;
   value: Value;
   options: readonly { label: string; value: Value }[];
   onValueChange(value: Value): void;
