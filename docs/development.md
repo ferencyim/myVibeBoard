@@ -509,6 +509,14 @@ The desktop-managed daemon disables the bundled web UI by default (`PASEO_WEB_UI
 
 Package imports resolve through package exports to compiled `dist/` output, not sibling `src/` files. This is true in local dev and in published packages: the app, daemon, CLI, and SDK consumers should all exercise the same runtime paths.
 
+In a Windows worktree that shares `node_modules`, verify the resolved package paths before
+building or testing. An independent local `dist` does not help when `@getpaseo/*` junctions
+still target the source checkout: TypeScript reads its declarations and the daemon runs its
+code. Preserve the shared junctions and use worktree-local workspace links and writable caches;
+do not rebuild or rewrite the shared checkout to repair resolution. Metro must also be able to
+read the real targets of shared third-party modules. When a task forbids recursive deletion,
+inspect build copy/cleanup scripts and test teardown before running them.
+
 `npm run dev:server` builds the server-side workspace packages once, then keeps `@getpaseo/protocol` and `@getpaseo/client` fresh with TypeScript watch builds while the daemon runs. If you change protocol schemas or client code outside that watch workflow, rebuild the producer before trusting runtime behavior.
 
 Use the named root build targets instead of remembering workspace dependency chains:

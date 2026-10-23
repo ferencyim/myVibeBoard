@@ -21,6 +21,14 @@ to 64 KiB, and the same bounded item is used for runtime timeline rows and live 
 Provider history hydration applies the same rule so reopening an agent cannot restore an oversized
 tool payload.
 
+Task conversations use the same epoch/cursor and source-owned subscription principles with a
+separate durable authority. Their public rows are committed by the daemon before publication;
+member provider replay only supplies original details or reconciles an explicitly incomplete
+turn. A streamed row keeps its initial `seq` position and advances `updatedSeq` as content grows,
+so forward catch-up uses the update watermark and retains `sourceSeqRanges`. Hydrating a member
+does not replace the container's history. See the [WP-111 contract](vibe/ROUND5-DESIGN.md#wp-111core-群聊任务会话宿主)
+for source identity, unknown delivery, and context cursor semantics.
+
 ## Presence is not delivery
 
 Client heartbeat reports presence:

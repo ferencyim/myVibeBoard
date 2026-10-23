@@ -557,6 +557,29 @@ export default function contribute(server: PluginServerContext) {
 
 Hooks run on the daemon while the plugin is enabled, even with no app connected.
 
+### Task conversation hooks
+
+`server.registerTaskConversationHooks({ prepare, admit, beforeControl? })` returns an idempotent
+cleanup. Callbacks use the same `({ request }, { paseo, signal })` signature as `before`.
+The host calls only the conversation's `ownerPluginId`; another plugin cannot authorize its work.
+Missing or disabled preparation/admission hooks reject new turns. Reading history, stopping,
+and answering an existing permission remain available.
+
+| Hook            | Request and result                                                                                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prepare`       | Receives conversation/workspace/owner, stable anchor and preallocated member/backend IDs, `recipient`, `clientMessageId`, `text`, fixed `throughSeq`, and `publicContext` rows. Return `ready: true`, `config`, and optional `env`/internal `context`; otherwise the host pauses delivery. |
+| `admit`         | Receives the same identity/recipient and `operation: "send" \| "compact" \| "create"`. Return `admitted: true` to run, or keep false with an optional `reason`.                                                                                                                            |
+| `beforeControl` | Receives conversation/workspace/owner, `action: "stop" \| "archive" \| "compact" \| "stop_member"`, optional `backendAgentId`, and `phase: "before" \| "settled" \| "unknown"`. Release resources only after `settled`; an unknown cancellation still owns its resources.                  |
+
+Preparation may change only `ready`, `config`, `env`, `context`, `summary`, and `reason`. An optional
+`summary: { text, throughSeq }` records a durable summary boundary; the host validates its range.
+Hooks cannot replace
+the recipient, submitted text, public rows, or source boundary. `context` is internal input; it is
+never rendered as a human message or copied back into the public timeline. Control hooks observe
+the stop barrier and cannot prevent the host from cancelling members. These hooks also remain
+available through `server.before("task.conversation.prepare" | "task.conversation.admit" |
+"task.conversation.control", callback)`.
+
 ### Change configuration and inject an MCP server
 
 Add this callback inside `contribute(server)`. Replace the placeholder URL with your MCP endpoint.
@@ -1705,16 +1728,33 @@ export default function contribute(client: PluginClientContext) {
 
 `addWorkspacePanel` fields:
 
-| Field       | Required | Meaning                                                       |
-| ----------- | -------- | ------------------------------------------------------------- |
-| `id`        | Yes      | Plugin-local panel ID.                                        |
-| `title`     | Yes      | Workspace-tab title.                                          |
-| `icon`      | Yes      | Lucide name, `{ svg }`, or component. See [Icons](#icons).    |
-| `context`   | Yes      | `workspace` or `agent`.                                       |
-| `locations` | No       | `workspace` and/or `explorer`. Defaults to `workspace`.       |
-| `Component` | Yes      | React Native component matching the selected context's props. |
+| Field       | Required | Meaning                                                                         |
+| ----------- | -------- | ------------------------------------------------------------------------------- |
+| `id`        | Yes      | Plugin-local panel ID.                                                          |
+| `title`     | Yes      | Workspace-tab title.                                                            |
+| `icon`      | Yes      | Lucide name, `{ svg }`, or component. See [Icons](#icons).                      |
+| `context`   | Yes      | `workspace` or `agent`.                                                         |
+| `locations` | No       | `workspace`, `explorer`, or agent-only `conversation`. Defaults to `workspace`. |
+| `Component` | Yes      | React Native component matching the selected context's props.                   |
 
 A workspace panel receives `PluginWorkspacePanelProps`: `context: "workspace"`, `theme`, `host`, `layout`, and `workspaceId`. An agent panel receives `PluginAgentPanelProps`: `context: "agent"`, the same common fields and `workspaceId`, plus `agentId`.
+
+For the exclusive `locations: ["conversation"]`, use `PluginConversationPanelProps`. The host mounts
+the panel beside the task conversation on wide layouts and in its native sheet on compact layouts.
+Props include stable `conversationId` and `anchorAgentId: string | null`; `agentId` is absent before
+the first recipient creates an anchor and then remains equal to that anchor when the recipient changes. The host
+validates the conversation's workspace ownership and does not require the anchor runtime to be
+loaded. Conversation-only panels do not create standalone workspace tabs.
+Open one with `client.openPanel(id, { workspaceId, conversationId, anchorAgentId,
+location: "conversation" })`, or `openPanel(id, { location: "conversation" })` from its task slash
+context. Gate the task entry on `server_info.features.taskConversations`.
+
+The owning plugin supplies selector options with
+`client.setTaskConversationRecipients({ workspaceId, conversationId,
+recipients: [{ id, label, recipient }], selectedRecipientId? })`. Each `recipient` uses the host SDK's
+`TaskConversationRecipient` contract. A mounted conversation panel may call the same method on
+`navigation`. The host validates workspace/owner identity and removes the options when the plugin
+unloads; supplying options does not create provider sessions. The plugin resolves roles and presets.
 
 Read cached state with `useWorkspace(workspaceId, selector)` and `useAgent(agentId, selector)`. A selector is required. Paseo compares its result shallowly, so selecting `{ name, status }` does not re-render when unrelated fields change. Select every field the component renders in one call; do not select the whole snapshot.
 
@@ -1895,6 +1935,10 @@ into a shared overflow menu. Placement and overflow are host decisions.
 and returns the same registration. It targets one agent's composer track alongside Tasks and
 Subagents. Composer pills always show the icon and `label` (or `title` when `label` is omitted).
 They never show a chevron, including for menus and popovers.
+
+Task pills also provide `conversationId` and `anchorAgentId`, with `agentId === anchorAgentId`.
+The registration matches only that conversation; changing the recipient does not retarget it.
+Agent-context task slash callbacks receive those same optional fields and the real anchor snapshot.
 
 ```tsx
 const pill = client.addComposerPill({
