@@ -12,6 +12,8 @@ import type { PluginClientRuntime } from "./evaluate";
 import { createPluginNavigation } from "./navigation";
 import { pluginButtonStore } from "./buttons";
 import type { InstalledPlugin } from "./types";
+import { setPluginTaskConversationRecipients } from "./workspace-panels/recipients";
+import { resolvePluginPanelOpenLocation } from "./workspace-panels/locations";
 
 export function createPluginClientRuntime(
   installation: InstalledPlugin,
@@ -24,6 +26,9 @@ export function createPluginClientRuntime(
   );
   return {
     ...capabilities,
+    setTaskConversationRecipients(input) {
+      setPluginTaskConversationRecipients(installation.serverId, input, installation);
+    },
     playAudio: createPlayAudio(audio, installation.lifetime.signal),
     hosts: createPluginHosts(getHostRuntimeStore(), installation.lifetime.signal),
     addComposerPill(contribution) {
@@ -46,8 +51,18 @@ function openClientPanel(input: {
 }): void {
   const { installation, state, panelId, options } = input;
   const workspaceId = options.workspaceId.trim();
-  const agentId = options.agentId?.trim();
+  const agentId = (options.anchorAgentId ?? options.agentId)?.trim();
   const navigation = createPluginNavigation({ serverId: installation.serverId, workspaceId });
+  const panel = installation.workspacePanels.find((candidate) => candidate.id === panelId);
+  if (!panel) throw new Error(`Workspace panel is unavailable: ${panelId}`);
+  const location = resolvePluginPanelOpenLocation(panel, options.location);
+  if (location === "conversation") {
+    if (!options.conversationId || !navigation.openConversationPanel) {
+      throw new Error("Conversation panel context is unavailable");
+    }
+    navigation.openConversationPanel(installation.id, panelId, options.conversationId);
+    return;
+  }
   const action = agentId
     ? createPluginAgentActionContext({
         plugin: installation,
@@ -55,6 +70,8 @@ function openClientPanel(input: {
         state,
         workspaceId,
         agentId,
+        conversationId: options.conversationId,
+        anchorAgentId: options.anchorAgentId ?? undefined,
       })
     : createPluginWorkspaceActionContext({
         plugin: installation,

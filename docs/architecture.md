@@ -89,6 +89,13 @@ not retain non-Git directories.
 | `server/relay-transport.ts`     | Outbound relay connection with E2E encryption                                  |
 | `server/schedule/`              | Cron-based scheduled agents                                                    |
 
+Task conversations have a daemon-owned identity independent of their provider members.
+`server/task-conversation/` owns their SQLite public history and delivery receipts under
+`PASEO_HOME`; ordinary agent timelines retain provider history as their authority. The
+container binds each member before agent publication, routes new runs through its owning
+plugin's context/admission hooks, and uses its complete member index for controls. Interface
+and integration ownership are frozen in [WP-111](vibe/ROUND5-DESIGN.md#wp-111core-群聊任务会话宿主).
+
 ### `packages/protocol` — Wire schemas and shared protocol types
 
 The source of truth for WebSocket messages, binary frame codecs, endpoint parsing,

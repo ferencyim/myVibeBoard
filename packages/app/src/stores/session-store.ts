@@ -90,6 +90,8 @@ export interface Agent {
   title: string | null;
   cwd: string;
   workspaceId?: string;
+  taskConversationId?: string;
+  taskConversationMemberId?: string;
   model: string | null;
   features?: AgentFeature[];
   thinkingOptionId?: string | null;

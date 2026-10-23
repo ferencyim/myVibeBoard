@@ -42,6 +42,31 @@ function button(onPress = () => {}): PluginButton {
 }
 
 describe("plugin buttons", () => {
+  it("binds task pills to the stable anchor and exact conversation", () => {
+    const buttons = store();
+    buttons.addComposerPill(installation(), {
+      id: "task",
+      workspaceId: "workspace",
+      agentId: "anchor",
+      anchorAgentId: "anchor",
+      conversationId: "conversation",
+      button: button(),
+    });
+    const entry = buttons.getSnapshot()[0];
+    expect(buttonMatches(entry, "host-a", "workspace", "anchor", "conversation")).toBe(true);
+    expect(buttonMatches(entry, "host-a", "workspace", "anchor")).toBe(false);
+    expect(buttonMatches(entry, "host-a", "workspace", "anchor", "other")).toBe(false);
+    expect(() =>
+      buttons.addComposerPill(installation(), {
+        id: "task",
+        workspaceId: "workspace",
+        agentId: "current-recipient",
+        anchorAgentId: "anchor",
+        conversationId: "conversation",
+        button: button(),
+      }),
+    ).toThrow("must target its anchor");
+  });
   it("updates visibility in place, closes hidden content, and scopes each placement", () => {
     const buttons = store();
     const plugin = installation();

@@ -51,6 +51,7 @@ function registry() {
         openSettings: () => {},
         playAudio: async () => {},
         openPanel: () => {},
+        setTaskConversationRecipients: () => {},
         addComposerPill: () => ({ update() {}, remove() {} }),
         addHeaderButton: () => ({ update() {}, remove() {} }),
       };

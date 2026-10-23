@@ -38,7 +38,7 @@ import { pluginReactNativeRuntime } from "./react-native/runtime";
 import { parsePluginThemeContribution } from "./themes";
 
 const CONTRIBUTION_ID = /^[a-z][a-z0-9-]*$/;
-const PANEL_LOCATIONS = ["workspace", "explorer"] as const;
+const PANEL_LOCATIONS = ["workspace", "explorer", "conversation"] as const;
 const TIMELINE_ITEM_TYPES = new Set([
   "user_message",
   "assistant_message",
@@ -100,6 +100,7 @@ export type PluginClientRuntime = Pick<
   | "openPanel"
   | "addComposerPill"
   | "addHeaderButton"
+  | "setTaskConversationRecipients"
 > & { hosts: ReturnType<typeof createPluginHosts> };
 
 export function runPluginClientBundle(
@@ -269,17 +270,19 @@ export function runPluginClientBundle(
         throw new Error(`Workspace panel ${normalizedId} is not a component`);
       }
       const locations = normalizePanelLocations(normalizedId, contribution.locations);
+      if (locations.includes("conversation") && locations.length !== 1) {
+        throw new Error(`Workspace panel ${normalizedId} conversation placement must be exclusive`);
+      }
+      if (contribution.context !== "agent" && locations.includes("conversation")) {
+        throw new Error(
+          `Workspace panel ${normalizedId} needs agent context for conversation placement`,
+        );
+      }
       workspacePanelIds.add(normalizedId);
-      return register(
-        collector.workspacePanels,
-        {
-          ...contribution,
-          id: normalizedId,
-          title,
-          icon,
-          locations,
-        },
-        () => workspacePanelIds.delete(normalizedId),
+      const panel = { ...contribution, id: normalizedId, title, icon };
+      if (!panel.locations) panel.locations = ["workspace"];
+      return register(collector.workspacePanels, panel, () =>
+        workspacePanelIds.delete(normalizedId),
       );
     },
     addCommandCenterItem(contribution: PluginCommandCenterItemContribution) {

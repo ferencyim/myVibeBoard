@@ -11,13 +11,16 @@ import { createPluginHostNavigation } from "./host-navigation-model";
 import { router } from "expo-router";
 import { buildPluginSurfaceRoute } from "./routes";
 import { buildPluginSettingsRoute } from "./settings/routes";
+import { setPluginTaskConversationRecipients } from "./workspace-panels/recipients";
+import type { InstalledPlugin } from "./types";
 
 export function usePluginHostNavigation(
   serverId: string,
+  installation?: InstalledPlugin,
 ): NonNullable<PluginSurfaceProps["navigation"]> {
   return useMemo(
-    () =>
-      createPluginHostNavigation(serverId, {
+    () => ({
+      ...createPluginHostNavigation(serverId, {
         browserAvailable: getIsElectron(),
         openAgent: navigateToAgent,
         openWorkspace: navigateToWorkspace,
@@ -34,6 +37,10 @@ export function usePluginHostNavigation(
             workspaceId,
           }),
       }),
-    [serverId],
+      setTaskConversationRecipients: installation
+        ? (input) => setPluginTaskConversationRecipients(serverId, input, installation)
+        : undefined,
+    }),
+    [serverId, installation],
   );
 }

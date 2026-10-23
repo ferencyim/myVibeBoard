@@ -3,6 +3,7 @@ import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
   DaemonClient,
+  DaemonRpcError,
   supportsUsageReports,
   type DaemonClientTrace,
   type CreateAgentRequestOptions,
@@ -1039,6 +1040,7 @@ test("advertises client capabilities in hello", async () => {
       plugin_timeline_items: true,
       workspace_setup_blocked: true,
       hello_rejection: true,
+      task_conversations: true,
       browser_host: {
         supportedCommands: ["list_tabs"],
         hostKind: "desktop app",
@@ -2085,6 +2087,18 @@ test("keeps enable and disable inside the session RPC deadline", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("preserves server RPC errors separately from transport failures and diagnostic metadata", () => {
+  const error = new DaemonRpcError({
+    requestId: "request",
+    requestType: "task.conversation.send.request",
+    error: "Request failed: 准入拒绝",
+    code: "handler_error",
+  });
+  expect(error.serverMessage).toBe("Request failed: 准入拒绝");
+  expect(error.code).toBe("handler_error");
+  expect(error.message).toContain("requestType=task.conversation.send.request");
 });
 
 test("reports a plugin reload failure that arrives after the session RPC deadline", async () => {
@@ -7089,7 +7103,7 @@ test.each([
           icon: readFileSync(
             new URL("../../../plugins/claude-usage-source/icon.svg", import.meta.url),
             "utf8",
-          ),
+          ).replace(/\r\n/g, "\n"),
           account: {},
           fetchedAt: "2026-09-30T00:00:00.000Z",
           report,

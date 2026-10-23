@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { WorkspaceDescriptorPayload } from "@getpaseo/protocol/messages";
+import type {
+  TaskConversationSnapshot,
+  TaskConversationRow,
+  WorkspaceDescriptorPayload,
+} from "@getpaseo/protocol/messages";
 import {
   normalizeProjectDescriptor,
   normalizeWorkspaceDescriptor,
@@ -8,10 +12,71 @@ import {
 import type { StreamItem } from "@/types/stream";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { ReplicaCache } from ".";
-import type { DirectoryCheckpoint } from "@/runtime/replica-cache";
+import type { CachedTimeline, DirectoryCheckpoint } from "@/runtime/replica-cache";
 import type { ReplicaHostRows, ReplicaRow, ReplicaRowChanges, ReplicaRowStore } from "./row-store";
 
 const SERVER_ID = "cached-host";
+
+it("persists task source identities, child links and images in the existing timeline cache", async () => {
+  const storage = new MemoryStorage();
+  const writer = createCache(storage);
+  const conversation: TaskConversationSnapshot = {
+    conversationId: "task",
+    workspaceId: "workspace",
+    anchorAgentId: "anchor",
+    ownerPluginId: "test",
+    status: "active",
+    epoch: "epoch",
+    lastSeq: 7,
+    members: [],
+    createdAt: "2026-10-23T12:00:00Z",
+    updatedAt: "2026-10-23T12:00:00Z",
+  };
+  const row: TaskConversationRow = {
+    id: "row",
+    seq: 1,
+    updatedSeq: 7,
+    epoch: "epoch",
+    sourceKey: "source",
+    kind: "child",
+    text: "子会话",
+    createdAt: "2026-10-23T12:00:00Z",
+    source: {
+      backendAgentId: "agent",
+      memberId: "member",
+      sourceTurnId: "turn",
+      epoch: "provider-epoch",
+      seq: 22,
+    },
+    child: { backendAgentId: "agent", providerSubagentId: "child" },
+    images: [{ data: "aW1hZ2U=", mimeType: "image/png" }],
+  };
+  const cached: CachedTimeline = {
+    agentId: "task-conversation:task",
+    items: [],
+    range: { epoch: "epoch", startSeq: 1, endSeq: 7 },
+    hasOlder: false,
+    taskConversation: { conversation, rows: [row] },
+  };
+  writer.commitTaskConversation(SERVER_ID, "task", cached);
+  await writer.flush();
+  expect(await createCache(storage).readTaskConversation(SERVER_ID, "task")).toEqual(cached);
+  writer.commitTaskConversation(SERVER_ID, "task", {
+    ...cached,
+    taskConversation: {
+      conversation,
+      rows: Array.from({ length: 51 }, (_, index) => ({
+        ...row,
+        id: `row-${index}`,
+        seq: index + 1,
+      })),
+    },
+  });
+  await writer.flush();
+  const sliced = await createCache(storage).readTaskConversation(SERVER_ID, "task");
+  expect(sliced?.range).toBeNull();
+  expect(sliced?.taskConversation?.rows).toHaveLength(50);
+});
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
   let resolve!: () => void;

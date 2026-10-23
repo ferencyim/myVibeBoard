@@ -1,3 +1,8 @@
+import {
+  createTaskConversationActions,
+  type PaseoTaskConversationActions,
+} from "./task-conversations/index.js";
+export type * from "./task-conversations/index.js";
 import type { OwnedSubscription } from "./connection/index.js";
 export type { OwnedSubscription, SubscriptionObserver } from "./connection/index.js";
 import type { DaemonClientConfig } from "./daemon-client.js";
@@ -363,6 +368,7 @@ export interface PaseoAgentHandle {
   current(): PaseoAgent | null;
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
   send(text: string, options?: PaseoAgentSendOptions): Promise<void>;
+  cancel(): Promise<void>;
   respondToPermission(options: PaseoAgentRespondToPermissionOptions): Promise<void>;
   /** Sends a prompt and resolves when that turn finishes or needs attention. */
   run(text: string, options?: PaseoAgentRunOptions): Promise<PaseoAgentRunResult>;
@@ -498,6 +504,7 @@ export interface PaseoApi {
   readonly workspaces: PaseoWorkspaceActions;
   readonly projects: PaseoProjectActions;
   readonly agents: PaseoAgentActions;
+  readonly taskConversations: PaseoTaskConversationActions;
   readonly providers: PaseoProviderActions;
   readonly config: PaseoConfigActions;
 }
@@ -705,6 +712,7 @@ export function createPaseoApi(
     dispose,
     observeEvents,
     terminals,
+    taskConversations: createTaskConversationActions(daemonClient, (create) => own(create)),
     projects: {
       list: (options) => daemonClient.listProjects(options),
       subscribe: (handler) => {
@@ -950,6 +958,7 @@ function createAgentHandleFactory(
         current = result?.agent ?? null;
         return result;
       },
+      cancel: () => daemonClient.cancelAgent(id),
       send: async (text, options) => {
         await daemonClient.sendAgentMessage(id, text, options);
       },

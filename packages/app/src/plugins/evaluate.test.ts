@@ -457,12 +457,12 @@ describe("evaluatePluginClientBundle", () => {
           title: "Review",
           icon: "Scan",
           context: "agent",
-          locations: ["workspace", "explorer"],
+          locations: ["conversation"],
           Component: ReviewPanel,
         });
       `),
     );
-    expect(plugin.workspacePanels[0]?.locations).toEqual(["workspace", "explorer"]);
+    expect(plugin.workspacePanels[0]?.locations).toEqual(["conversation"]);
 
     for (const [locations, message] of [
       ["[]", "must support at least one location"],
@@ -486,6 +486,18 @@ describe("evaluatePluginClientBundle", () => {
         ),
       ).toThrow(message);
     }
+  });
+
+  it("requires agent context for conversation placement", () => {
+    expect(() =>
+      evaluatePluginClientBundle(
+        "review",
+        bundle(`
+      plugin.addWorkspacePanel({ id: "review", title: "Review", icon: "Scan",
+        context: "workspace", locations: ["conversation"], Component: function() { return null; } });
+    `),
+      ),
+    ).toThrow("needs agent context for conversation placement");
   });
 
   it("rejects duplicate workspace panel and Command Center ids", () => {

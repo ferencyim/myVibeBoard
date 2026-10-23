@@ -7,6 +7,7 @@ import {
   CreationSnapshotSchema,
   type AgentSnapshotPayload,
   type CreationSnapshot,
+  type TaskConversationSnapshot,
   type WorkspaceDescriptorPayload,
 } from "@getpaseo/protocol/messages";
 import { writeFileAtomic } from "../atomic-file.js";
@@ -28,6 +29,10 @@ interface CreationRequest {
   provision?: (
     workspaceId: string,
   ) => Promise<{ workspace: WorkspaceDescriptorPayload; setupSkippedReason?: string }>;
+  createConversation?: (
+    workspace: WorkspaceDescriptorPayload | undefined,
+    onReady: (conversation: TaskConversationSnapshot) => Promise<void>,
+  ) => Promise<{ conversation: TaskConversationSnapshot; agent?: AgentSnapshotPayload }>;
   createAgent?: (
     agentId: string,
     workspace: WorkspaceDescriptorPayload | undefined,
@@ -168,6 +173,7 @@ export class CreationService {
           setupSkippedReason,
         });
       }
+      await this.createConversation(identity, record, input);
       if (input.hasAgent && input.createAgent && !record.snapshot.agent) {
         record.inFlight = "agent";
         await this.write(identity, record);
@@ -215,6 +221,36 @@ export class CreationService {
       });
     }
     return record.snapshot;
+  }
+
+  private async createConversation(
+    identity: string,
+    record: Record,
+    input: CreationInput,
+  ): Promise<void> {
+    if (!input.createConversation || record.snapshot.conversation?.anchorAgentId) return;
+    record.inFlight = "agent";
+    await this.write(identity, record);
+    const persistConversation = async (conversation: TaskConversationSnapshot) => {
+      const member = conversation.members.find(
+        (candidate) => candidate.backendAgentId === conversation.anchorAgentId,
+      );
+      record.inFlight = input.hasPrompt && member ? "prompt" : "agent";
+      await this.publish(identity, record, {
+        conversation,
+        conversationId: conversation.conversationId,
+        memberId: member?.memberId,
+        agentId: conversation.anchorAgentId,
+      });
+    };
+    const { conversation, agent } = await input.createConversation(
+      record.snapshot.workspace,
+      persistConversation,
+    );
+    await persistConversation(conversation);
+    record.inFlight = null;
+    if (agent) await this.publish(identity, record, { phase: "agent_ready", agent });
+    if (input.hasPrompt) await this.publish(identity, record, { phase: "prompt_started" });
   }
 
   // COMPAT(agentRequestReceipts): added in v0.8.0, remove after 2027-03-11 once old creation receipts can expire.

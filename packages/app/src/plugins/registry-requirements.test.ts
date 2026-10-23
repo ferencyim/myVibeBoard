@@ -35,6 +35,7 @@ function registry(version: string) {
         openSurface() {},
         async playAudio() {},
         openPanel() {},
+        setTaskConversationRecipients() {},
         addComposerPill: () => ({ update() {}, remove() {} }),
         addHeaderButton: () => ({ update() {}, remove() {} }),
       };

@@ -44,6 +44,7 @@ import { toPluginTheme } from "../theme";
 import { buttonMatches, type RegisteredPluginButton } from "./model";
 import { pluginButtonStore } from "./store";
 import { resolvePluginPlatform } from "../platform";
+import { taskConversationKey, useTaskConversationStore } from "@/task-conversations/store";
 
 interface ButtonView {
   entry: RegisteredPluginButton;
@@ -501,24 +502,40 @@ function OverflowPages({
 
 const ThemedOverflowPages = withUnistyles(OverflowPages);
 
-function useButtons(serverId: string, workspaceId: string, agentId: string | null) {
+function useButtons(
+  serverId: string,
+  workspaceId: string,
+  agentId: string | null,
+  conversationId?: string,
+) {
+  const conversation = useTaskConversationStore((state) => {
+    if (!conversationId) return null;
+    return state.conversations.get(taskConversationKey(serverId, conversationId)) ?? null;
+  });
   const entries = useSyncExternalStore(
     pluginButtonStore.subscribe,
     pluginButtonStore.getSnapshot,
     pluginButtonStore.getSnapshot,
   );
-  return useMemo(
-    () => entries.filter((entry) => buttonMatches(entry, serverId, workspaceId, agentId)),
-    [entries, serverId, workspaceId, agentId],
-  );
+  return useMemo(() => {
+    if (
+      conversationId &&
+      (conversation?.workspaceId !== workspaceId || conversation.anchorAgentId !== agentId)
+    )
+      return [];
+    return entries.filter((entry) =>
+      buttonMatches(entry, serverId, workspaceId, agentId, conversationId),
+    );
+  }, [entries, serverId, workspaceId, agentId, conversationId, conversation]);
 }
 
 export function useHasPluginComposerPills(
   serverId: string,
   workspaceId: string,
   agentId: string,
+  conversationId?: string,
 ): boolean {
-  return useButtons(serverId, workspaceId, agentId).length > 0;
+  return useButtons(serverId, workspaceId, agentId, conversationId).length > 0;
 }
 
 export function PluginComposerPills({
@@ -526,13 +543,15 @@ export function PluginComposerPills({
   workspaceId,
   agentId,
   compact,
+  conversationId,
 }: {
   serverId: string;
   workspaceId: string;
   agentId: string;
   compact: boolean;
+  conversationId?: string;
 }) {
-  const entries = useButtons(serverId, workspaceId, agentId);
+  const entries = useButtons(serverId, workspaceId, agentId, conversationId);
   const hosts = useHosts();
   const hostLabel = hosts.find((host) => host.serverId === serverId)?.label ?? serverId;
   return entries.map((entry) => (

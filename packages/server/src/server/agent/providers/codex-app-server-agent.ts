@@ -3573,7 +3573,10 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.currentThreadId = this.resumeHandle.sessionId;
       this.historyPending = true;
       // Resuming can start a goal before the caller receives the session.
-      if (this.initialResumePurpose === "interactive") this.startupEvents = [];
+      if (this.initialResumePurpose === "interactive") {
+        this.startupEvents = [];
+        this.restoreSyntheticPlanApproval(this.resumeHandle.metadata?.planApproval);
+      }
     }
   }
 
@@ -3891,10 +3894,30 @@ export class CodexAppServerAgentSession implements AgentSession {
     };
   }
 
-  private emitSyntheticPlanApprovalRequest(planText: string): void {
+  private restoreSyntheticPlanApproval(value: unknown): void {
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !("requestId" in value) ||
+      typeof value.requestId !== "string" ||
+      !("text" in value) ||
+      typeof value.text !== "string"
+    )
+      return;
+    if ("turnId" in value && typeof value.turnId !== "string") return;
+    this.emitSyntheticPlanApprovalRequest(value.text, {
+      requestId: value.requestId,
+      turnId: "turnId" in value && typeof value.turnId === "string" ? value.turnId : undefined,
+    });
+  }
+
+  private emitSyntheticPlanApprovalRequest(
+    planText: string,
+    restored?: { requestId: string; turnId?: string },
+  ): void {
     this.dismissPendingPlanApprovals("Superseded by a newer plan");
 
-    const requestId = `permission-${randomUUID()}`;
+    const requestId = restored?.requestId ?? `permission-${randomUUID()}`;
     const request: AgentPermissionRequest = {
       id: requestId,
       provider: CODEX_PROVIDER,
@@ -3914,8 +3937,14 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.pendingPermissionHandlers.set(requestId, {
       resolve: () => undefined,
       kind: "plan",
-      plan: { text: planText, turnId: this.activeForegroundTurnId ?? undefined },
+      plan: {
+        text: planText,
+        turnId: restored?.turnId ?? this.activeForegroundTurnId ?? undefined,
+      },
     });
+    // The host hydrates pending permissions from the resumed session; replaying a
+    // timeline event here would duplicate the proposal already in native history.
+    if (restored) return;
     // Reserve the proposal's place before a later prompt can resolve it.
     this.emitEvent({
       type: "timeline",
@@ -4922,6 +4951,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   } | null {
     if (!this.currentThreadId) return null;
     const thinkingOptionId = normalizeCodexThinkingOptionId(this.config.thinkingOptionId) ?? null;
+    const planApproval = Array.from(this.pendingPermissionHandlers).find(
+      ([, pending]) => pending.kind === "plan" && pending.plan,
+    );
     return {
       provider: CODEX_PROVIDER,
       sessionId: this.currentThreadId,
@@ -4938,6 +4970,15 @@ export class CodexAppServerAgentSession implements AgentSession {
         systemPrompt: this.config.systemPrompt,
         mcpServers: this.config.mcpServers,
         asyncQuestions: this.asyncQuestions.serialize(),
+        ...(planApproval
+          ? {
+              planApproval: {
+                requestId: planApproval[0],
+                text: planApproval[1].plan!.text,
+                ...(planApproval[1].plan!.turnId ? { turnId: planApproval[1].plan!.turnId } : {}),
+              },
+            }
+          : {}),
       },
     };
   }
@@ -5031,7 +5072,8 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   async close(): Promise<void> {
     this.closed = true;
-    this.clearPendingPermissions();
+    // Synthetic approvals are host-owned decisions, independent of the live RPC process.
+    this.clearPendingPermissions({ preservePlanApprovals: true });
     this.pendingSubAgentNotificationsByThreadId.clear();
     this.subscribers.clear();
     this.startupEvents = null;

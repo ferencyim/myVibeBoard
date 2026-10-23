@@ -17,6 +17,7 @@ const WorkspaceTabTargetStorageSchema = z.discriminatedUnion("kind", [
     setup: WorkspaceDraftTabSetupStorageSchema.optional(),
   }),
   z.strictObject({ kind: z.literal("agent"), agentId: z.string() }),
+  z.strictObject({ kind: z.literal("task_conversation"), conversationId: z.string() }),
   z.strictObject({
     kind: z.literal("provider_subagent"),
     parentAgentId: z.string(),
@@ -96,6 +97,7 @@ const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.strictObject(
 });
 export const WorkspaceLayoutPersistedStateSchema = z.strictObject({
   pinnedAgentIdsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
+  closedTaskConversationIdsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
   layoutByWorkspace: z.record(z.string(), WorkspaceLayoutStorageSchema),
   splitSizesByWorkspace: z.record(z.string(), z.record(z.string(), z.array(z.number()))).optional(),
   explorerSidebarWidthByWorkspace: z.record(z.string(), z.number()).optional(),

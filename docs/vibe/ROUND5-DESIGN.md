@@ -32,7 +32,7 @@
 
 conversationId 是稳定、独立的宿主身份，**不是当前接手者的 agentId**。为复用 WP-110，task.workspace_id、anchor_agent_id 保留：anchor_agent_id 仍指首个规划 agent，作为现有 parent 树的稳定根，不再等同用户所见群聊。新增 task.conversation_id 关联容器；更换规划模型也不改容器或旧 anchor 身份。容器单独保存群聊历史，普通 provider hydrate/reload 只能改该成员的原始历史。
 
-规划 anchor 自身也是成员；探路、方案复核、主代理、复核、验证挂该 anchor，执行子代理挂主代理。**容器成员表才是任务停止/恢复的完整集合**，parent 用于复用原生关系与通知，不依赖它推断全部运行者。七角色、方案与授权规则仍归插件；宿主只管理会话、成员、消息来源和控制入口。创建时在目录/agent.created 可见前持久绑定成员（包括 anchor）；普通 root 自动开 tab、历史/深链及布局恢复均将任务成员映射到 conversation，不能靠事后关 tab 或归档来隐藏。
+规划 anchor 自身也是成员；探路、方案复核、主代理、复核、验证挂该 anchor，执行子代理挂主代理。**容器成员表才是任务停止/恢复的完整集合**，parent 用于复用原生关系与通知，不依赖它推断全部运行者。七角色、方案与授权规则仍归插件；宿主只管理会话、成员、消息来源和控制入口。创建时在目录/agent.created 可见前持久绑定成员（包括 anchor）；普通 root 自动开 tab、历史/深链及布局恢复均将任务成员映射到 conversation；任务在每台设备自动出现一个群聊 tab，成员不单独开 tab。用户关闭后记录本设备的关闭意图，后续 reconcile/重连不自动加回；显式打开清除关闭意图。不能靠事后关成员 tab 或归档来隐藏。
 
 ### 接手、消息与上下文
 
@@ -161,6 +161,21 @@ WP-113 仍只做**新任务首消息 outbox**：保存 host、projectId、稳定
 - **依赖/并行**：无新执行任务；111/115 只做增量，后续共享副本由 owner 统一同步。
 
 ### WP-111：[core] 群聊任务会话宿主
+
+#### WP-111 冻结宿主接口（2026-10-23，第三版实施合同）
+
+- 能力：`server_info.features.taskConversations`；客户端声明 `task_conversations`。普通 agent wire 仅增加可选 `taskConversationId` / `taskConversationMemberId`，新容器消息只给声明能力的连接。任务身份为独立 `conversationId`，兼容 `agentId` 始终指首个 `anchorAgentId`。
+- RPC：`task.conversation.{create,resolve,send,get_delivery,fetch,subscribe,unsubscribe,publish,query_source,stop,archive,compact}.request`，逐一配同名前缀 `.response`；订阅更新 `task.conversation.update`，使用现有 source-owned subscription 的 release/reconnect 生命周期。请求参数平铺，响应结果放 `payload`，两端均带 `requestId`。
+- `create({workspaceId,idempotencyKey,ownerPluginId,initialRecipient?,initialMessage?})`：复用原创建 journal 的稳定里程碑，先绑定容器和成员再发首消息；相同 key 查询/重试返回相同容器。`resolve({conversationId?|workspaceId?|backendAgentId?|idempotencyKey?})` 至少提供一个条件，返回容器或明确不存在。workspace 创建增加可选任务会话配置，原 phase 不加新枚举；creation snapshot 以可选 `conversationId` / `memberId` 交付 WP-113。
+- `recipient={role,presetId?,config,memberId?,parentMemberId?}`；role 为宿主不解释的字符串，config 复用原生 agent 配置。可选 `memberId` 精确选回成员，也可由调用方为新的独立子成员预分配稳定 ID；已有 ID 的角色、父成员与有效配置不一致时拒绝，不另路由。未指定时按角色/有效配置复用，因此 115 为同角色/模型/父成员的不同子任务各给独立 memberId。`send({conversationId,recipient,clientMessageId,text,images?,attachments?})` 冻结本次接手选择；按需建成员。回执含 `deliveryId`、`status`、`memberId`、`backendAgentId`、固定 `throughSeq`，`get_delivery` 按 conversation + clientMessageId 查询。状态区分 prepared/dispatching/accepted/unknown/rejected；unknown 不自动重发；确定未进入 provider 的失败为 rejected，拒绝消息标记未投递且不进入后续上下文。宿主重启时 prepared 改为 rejected，dispatching 改为 unknown。
+- 容器 snapshot：`conversationId,workspaceId,anchorAgentId,ownerPluginId,status,members`。成员包含 `memberId,backendAgentId,role,presetId?,config,seenConversationSeq,lastRequestAt` 及原生状态；角色/实际 provider/model/thinking 按消息冻结。未接手的角色没有 provider 会话。
+- 持久公开行有 `id,epoch,seq,sourceKey,kind,text,images?,attachments?,speaker?,source?,clientMessageId?`；source 保留 backendAgentId/memberId/sourceTurnId 及可用原始 epoch/seq/messageId。`fetch` 以 `{epoch,seq}` cursor、tail/before/after、limit 分页并返回 sourceSeqRanges、hasOlder/hasNewer；流与查询都在事务落盘后发布。`publish({conversationId,sourceKey,...})` 永久幂等；`query_source` 以 sourceKey 或 epoch/seq 返回冻结公开源，供 115 校验方案来源与跳转。工具/私有推理只在原 provider 详情。
+- SDK：`paseo.taskConversations.create/resolve/ref(conversationId)`；handle 提供 `send/getDelivery/fetch/subscribe/publish/querySource/stop/archive/compact`，并公开普通 agent handle 的 `cancel`。宿主插件提供 `server.registerTaskConversationHooks({prepare,admit,beforeControl?})`，返回 cleanup；prepare 提供公开沉淀/必要压缩的上下文，admit 明确允许才运行。未注册、停用或准备失败均拒绝新轮次，读历史/停止/原有审批仍可用。所有普通 API/MCP/initialPrompt 的受管成员运行入口也核对同一准入。
+- `stop({conversationId,memberId?,reconcileDelivery?:{clientMessageId,resolution:"accepted"|"rejected"}})`：容器停止冻结派发并等待全部成员取消；单成员停止使容器暂停。stop/control 权限可在原成员核对并停稳后显式解除 unknown：accepted 必须有原生回执；rejected 表示人工核对确认未投递，不自动重发。进程内支持重复核对单个成员。`archive({conversationId})` 先完成同一停止屏障再归档所有成员，不删除 worktree。`compact({conversationId,memberId})` 只压缩指定成员；缓存时间用成员 `lastRequestAt`。审批仍用原 `backendAgentId + requestId` 原生回复入口，由宿主校验归属。
+- 面板：原 `context:'agent'` panel 可增加 `locations:['conversation']`；上下文增加可选 `conversationId,anchorAgentId`，`agentId` 固定 anchor，slash/pill 同义。App 提供 `PluginConversationPanels` 挂载点，验证容器及 workspace；宽屏右侧收起/展开，窄屏宿主 sheet。成员详情/子会话展开不打开 agent tab、不设置 open-agent-tab 或 detach 标记。
+- 接手选项供给：客户端插件调用 `client.setTaskConversationRecipients({workspaceId,conversationId,recipients:[{id,label,recipient}],selectedRecipientId?})`，同名 navigation action 可用；宿主校验容器归属并更新选择，不创建成员、不执行任务。七角色和完整预设由 115 提供，宿主不解析。`prepare` 可返回 `summary:{text,throughSeq}`；宿主校验覆盖边界、保留最近公开原文并持久化成员摘要。`recipient.parentMemberId` 明确表示获准后台成员，可并行；前台接手忙时保留输入并要求显式停止当前轮次。
+- 空容器面板使用 `PluginConversationPanelProps`（`context:'agent',conversationId,workspaceId,anchorAgentId:string|null,agentId?:string`），注册时 `locations:['conversation']` 独占；原普通 agent panel 保持必需 `agentId`，不以虚构 agent 填充空容器。兼容字段在 anchor 创建后指向该 anchor。
+- 本合同只定义宿主机制；七角色解析、授权/任务阶段、调度准入策略、缓存倒计时界面、Git 策略仍由 115/112 实现。
 
 - **范围/目录**：packages/server/src/server/{agent,creation,plugins,session.ts,bootstrap.ts} 的最小接线及新任务会话模块；packages/{protocol,client}；packages/app/src/{panels,composer,agent-stream,subagents,timeline,workspace-tabs,plugins}；packages/plugin/src/{client,server}。实现 §2 的容器/成员、durable store、创建/路由/接续、公开发布与源查询、单 tab/展开/审批、Stop/归档控制、会话面板 slot、feature gate；不实现业务状态机或复制调度。
 - **接口交付**：任务会话 create/resolve、send({conversationId,recipient,clientMessageId,...})、fetch/subscribe、publish({sourceKey,...})、stop/archive 控制；上下文准备/准入由插件提供，宿主负责校验与投递。具体 RPC 用 task.conversation.\*.request/.response。向 115 暴露 panel 挂载/源定位，向 113 暴露同创建 journal 的容器/首发幂等结果，向 112 暴露统一成员与实际来源。

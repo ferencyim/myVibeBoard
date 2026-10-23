@@ -436,7 +436,7 @@ const ToolPolicySchema = z
   })
   .strict();
 
-const AgentSessionConfigSchema = z.object({
+export const AgentSessionConfigSchema = z.object({
   provider: AgentProviderSchema,
   cwd: z.string(),
   modeId: z.string().optional(),
@@ -812,6 +812,8 @@ const AgentActiveTurnPayloadSchema = z.object({
 
 export const AgentSnapshotPayloadSchema = z.object({
   id: z.string(),
+  taskConversationId: z.string().optional(),
+  taskConversationMemberId: z.string().optional(),
   provider: AgentProviderSchema,
   cwd: z.string(),
   workspaceId: z.string().optional(),
@@ -847,6 +849,8 @@ export type AgentSnapshotPayload = z.infer<typeof AgentSnapshotPayloadSchema>;
 
 export const AgentListItemPayloadSchema = z.object({
   id: z.string(),
+  taskConversationId: z.string().optional(),
+  taskConversationMemberId: z.string().optional(),
   shortId: z.string(),
   title: z.string().nullable(),
   provider: AgentProviderSchema,
@@ -1112,19 +1116,21 @@ export const ExternalResourceAttachmentMetadataSchema = z.object({
   url: z.string(),
 });
 
-export const TextAttachmentSchema = z
-  .object({
-    type: z.literal("text"),
-    mimeType: z.literal("text/plain"),
-    contextKind: z.string().optional(),
-    title: z.string().nullable().optional(),
-    text: z.string(),
-    externalResource: ExternalResourceAttachmentMetadataSchema.optional(),
-  })
-  .transform(({ contextKind, ...attachment }) => ({
+const TextAttachmentWireSchema = z.object({
+  type: z.literal("text"),
+  mimeType: z.literal("text/plain"),
+  contextKind: z.string().optional(),
+  title: z.string().nullable().optional(),
+  text: z.string(),
+  externalResource: ExternalResourceAttachmentMetadataSchema.optional(),
+});
+
+export const TextAttachmentSchema = TextAttachmentWireSchema.transform(
+  ({ contextKind, ...attachment }) => ({
     ...attachment,
     ...(contextKind === "chat_history" ? { contextKind } : {}),
-  }));
+  }),
+);
 
 export const ReviewAttachmentContextLineSchema = z.object({
   oldLineNumber: z.number().int().positive().nullable(),
@@ -2636,6 +2642,140 @@ export const ArchiveWorkspaceRequestSchema = z.object({
 // Create a new workspace record. Unlike open_project, this never deduplicates by
 // directory: it always produces a fresh workspace. The source discriminates
 // between an existing local directory and a newly created paseo worktree.
+// Public task history is independent of provider transcripts.
+export const TaskConversationRecipientSchema = z.object({
+  memberId: z.string().min(1).optional(),
+  role: z.string().min(1),
+  presetId: z.string().optional(),
+  config: AgentSessionConfigSchema,
+  env: z.record(z.string(), z.string()).optional(),
+  parentMemberId: z.string().optional(),
+});
+export const TaskConversationAttachmentSchema = z.discriminatedUnion("type", [
+  ForgeChangeRequestAttachmentSchema,
+  ForgeIssueAttachmentSchema,
+  GitHubPrAttachmentSchema,
+  GitHubIssueAttachmentSchema,
+  TextAttachmentWireSchema,
+  ReviewAttachmentSchema,
+  UploadedFileAttachmentSchema,
+]);
+export const TaskConversationMessageSchema = z.object({
+  clientMessageId: z.string().min(1),
+  text: z.string(),
+  images: z.array(ImageAttachmentSchema).optional(),
+  attachments: z.array(TaskConversationAttachmentSchema).optional(),
+});
+export const TaskConversationCreateOptionsSchema = z.object({
+  idempotencyKey: z.string().min(1).max(512),
+  ownerPluginId: z.string().min(1),
+  initialRecipient: TaskConversationRecipientSchema.optional(),
+  initialMessage: TaskConversationMessageSchema.optional(),
+});
+export const TaskConversationCursorSchema = z.object({
+  epoch: z.string(),
+  seq: z.number().int().nonnegative(),
+});
+export const TaskConversationMemberSchema = z.object({
+  memberId: z.string(),
+  backendAgentId: z.string(),
+  role: z.string(),
+  presetId: z.string().optional(),
+  config: AgentSessionConfigSchema,
+  parentMemberId: z.string().optional(),
+  seenConversationSeq: z.number().int().nonnegative(),
+  lastRequestAt: z.string().nullable(),
+  status: AgentStatusSchema,
+  pendingPermissions: z.array(AgentPermissionRequestPayloadSchema).optional(),
+  summary: z.object({ text: z.string(), throughSeq: z.number().int().nonnegative() }).optional(),
+});
+export const TaskConversationSnapshotSchema = z.object({
+  conversationId: z.string(),
+  workspaceId: z.string(),
+  anchorAgentId: z.string().nullable(),
+  ownerPluginId: z.string(),
+  status: z.enum(["active", "stopping", "paused", "archived"]),
+  epoch: z.string(),
+  lastSeq: z.number().int().nonnegative(),
+  members: z.array(TaskConversationMemberSchema),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable().optional(),
+});
+export const TaskConversationSpeakerSchema = z.object({
+  role: z.string(),
+  provider: z.string(),
+  model: z.string().nullable(),
+  thinkingOptionId: z.string().nullable().optional(),
+  presetId: z.string().optional(),
+  memberId: z.string(),
+  backendAgentId: z.string(),
+});
+export const TaskConversationSourceSchema = z.object({
+  backendAgentId: z.string(),
+  memberId: z.string(),
+  sourceTurnId: z.string().optional(),
+  epoch: z.string().optional(),
+  seq: z.number().int().nonnegative().optional(),
+  messageId: z.string().optional(),
+});
+export const TaskConversationRowSchema = z.object({
+  id: z.string(),
+  epoch: z.string(),
+  seq: z.number().int().positive(),
+  updatedSeq: z.number().int().positive().optional(),
+  sourceKey: z.string(),
+  kind: z.enum(["user", "assistant", "system", "artifact", "child"]),
+  text: z.string(),
+  images: z.array(ImageAttachmentSchema).optional(),
+  attachments: z.array(TaskConversationAttachmentSchema).optional(),
+  speaker: TaskConversationSpeakerSchema.optional(),
+  source: TaskConversationSourceSchema.optional(),
+  clientMessageId: z.string().optional(),
+  completed: z.boolean().optional(),
+  createdAt: z.string(),
+  child: z
+    .object({
+      backendAgentId: z.string(),
+      memberId: z.string().optional(),
+      providerSubagentId: z.string().optional(),
+    })
+    .optional(),
+});
+export const TaskConversationDeliverySchema = z.object({
+  deliveryId: z.string(),
+  conversationId: z.string(),
+  clientMessageId: z.string(),
+  status: z.enum(["prepared", "dispatching", "accepted", "unknown", "rejected"]),
+  memberId: z.string(),
+  backendAgentId: z.string(),
+  throughSeq: z.number().int().nonnegative(),
+  error: z.string().nullable(),
+});
+export const TaskConversationPageSchema = z.object({
+  conversationId: z.string(),
+  epoch: z.string(),
+  rows: z.array(TaskConversationRowSchema),
+  startCursor: TaskConversationCursorSchema.nullable(),
+  endCursor: TaskConversationCursorSchema.nullable(),
+  hasOlder: z.boolean(),
+  hasNewer: z.boolean(),
+  sourceSeqRanges: z.array(
+    z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }),
+  ),
+});
+export type TaskConversationRecipient = z.infer<typeof TaskConversationRecipientSchema>;
+export type TaskConversationMember = z.infer<typeof TaskConversationMemberSchema>;
+export type TaskConversationSnapshot = z.infer<typeof TaskConversationSnapshotSchema>;
+export type TaskConversationRow = z.infer<typeof TaskConversationRowSchema>;
+export type TaskConversationSpeaker = z.infer<typeof TaskConversationSpeakerSchema>;
+export type TaskConversationSource = z.infer<typeof TaskConversationSourceSchema>;
+export type TaskConversationCursor = z.infer<typeof TaskConversationCursorSchema>;
+export type TaskConversationDelivery = z.infer<typeof TaskConversationDeliverySchema>;
+export type TaskConversationPage = z.infer<typeof TaskConversationPageSchema>;
+export type TaskConversationMessage = z.infer<typeof TaskConversationMessageSchema>;
+export type TaskConversationCreateOptions = z.infer<typeof TaskConversationCreateOptionsSchema>;
+
 export const WorkspaceCreateRequestSchema = z.object({
   type: z.literal("workspace.create.request"),
   workspaceId: z
@@ -2643,6 +2783,7 @@ export const WorkspaceCreateRequestSchema = z.object({
     .regex(/^wks_[a-f0-9]{16}$/)
     .optional(),
   agent: WorkspaceInitialAgentSchema.optional(),
+  taskConversation: TaskConversationCreateOptionsSchema.optional(),
   subscribe: z.boolean().optional(),
   requestId: z.string(),
   idempotencyKey: z.string().min(1).max(512).optional(),
@@ -3197,7 +3338,264 @@ export const SubscriptionReleaseResponseSchema = z.object({
   payload: z.object({ requestId: z.string(), subscriptionId: z.string() }),
 });
 
+export const TaskConversationCreateRequestSchema = z.object({
+  type: z.literal("task.conversation.create.request"),
+  requestId: z.string(),
+  ...TaskConversationCreateOptionsSchema.shape,
+  workspaceId: z.string(),
+});
+export const TaskConversationCreateResponseSchema = z.object({
+  type: z.literal("task.conversation.create.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    conversation: TaskConversationSnapshotSchema.nullable(),
+  }),
+});
+export type TaskConversationCreateRequest = z.infer<typeof TaskConversationCreateRequestSchema>;
+export type TaskConversationCreateResponse = z.infer<typeof TaskConversationCreateResponseSchema>;
+export const TaskConversationResolveRequestSchema = z.object({
+  type: z.literal("task.conversation.resolve.request"),
+  requestId: z.string(),
+  conversationId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  backendAgentId: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+});
+export const TaskConversationResolveResponseSchema = z.object({
+  type: z.literal("task.conversation.resolve.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    conversation: TaskConversationSnapshotSchema.nullable(),
+  }),
+});
+export type TaskConversationResolveRequest = z.infer<typeof TaskConversationResolveRequestSchema>;
+export type TaskConversationResolveResponse = z.infer<typeof TaskConversationResolveResponseSchema>;
+export const TaskConversationSendRequestSchema = z.object({
+  type: z.literal("task.conversation.send.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  recipient: TaskConversationRecipientSchema,
+  ...TaskConversationMessageSchema.shape,
+});
+export const TaskConversationSendResponseSchema = z.object({
+  type: z.literal("task.conversation.send.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    delivery: TaskConversationDeliverySchema.nullable(),
+  }),
+});
+export type TaskConversationSendRequest = z.infer<typeof TaskConversationSendRequestSchema>;
+export type TaskConversationSendResponse = z.infer<typeof TaskConversationSendResponseSchema>;
+export const TaskConversationGetDeliveryRequestSchema = z.object({
+  type: z.literal("task.conversation.get_delivery.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  clientMessageId: z.string(),
+});
+export const TaskConversationGetDeliveryResponseSchema = z.object({
+  type: z.literal("task.conversation.get_delivery.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    delivery: TaskConversationDeliverySchema.nullable(),
+  }),
+});
+export type TaskConversationGetDeliveryRequest = z.infer<
+  typeof TaskConversationGetDeliveryRequestSchema
+>;
+export type TaskConversationGetDeliveryResponse = z.infer<
+  typeof TaskConversationGetDeliveryResponseSchema
+>;
+export const TaskConversationFetchRequestSchema = z.object({
+  type: z.literal("task.conversation.fetch.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  cursor: TaskConversationCursorSchema.optional(),
+  direction: z.enum(["tail", "before", "after"]).optional(),
+  limit: z.number().int().positive().max(500).optional(),
+});
+export const TaskConversationFetchResponseSchema = z.object({
+  type: z.literal("task.conversation.fetch.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    page: TaskConversationPageSchema.nullable(),
+  }),
+});
+export type TaskConversationFetchRequest = z.infer<typeof TaskConversationFetchRequestSchema>;
+export type TaskConversationFetchResponse = z.infer<typeof TaskConversationFetchResponseSchema>;
+export const TaskConversationSubscribeRequestSchema = z.object({
+  type: z.literal("task.conversation.subscribe.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  cursor: TaskConversationCursorSchema.optional(),
+  limit: z.number().int().positive().max(500).optional(),
+});
+export const TaskConversationSubscribeResponseSchema = z.object({
+  type: z.literal("task.conversation.subscribe.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    subscriptionId: z.string(),
+    conversation: TaskConversationSnapshotSchema.nullable(),
+    page: TaskConversationPageSchema.nullable(),
+  }),
+});
+export type TaskConversationSubscribeRequest = z.infer<
+  typeof TaskConversationSubscribeRequestSchema
+>;
+export type TaskConversationSubscribeResponse = z.infer<
+  typeof TaskConversationSubscribeResponseSchema
+>;
+export const TaskConversationUnsubscribeRequestSchema = z.object({
+  type: z.literal("task.conversation.unsubscribe.request"),
+  requestId: z.string(),
+  subscriptionId: z.string(),
+});
+export const TaskConversationUnsubscribeResponseSchema = z.object({
+  type: z.literal("task.conversation.unsubscribe.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    subscriptionId: z.string(),
+  }),
+});
+export type TaskConversationUnsubscribeRequest = z.infer<
+  typeof TaskConversationUnsubscribeRequestSchema
+>;
+export type TaskConversationUnsubscribeResponse = z.infer<
+  typeof TaskConversationUnsubscribeResponseSchema
+>;
+export const TaskConversationPublishRequestSchema = z.object({
+  type: z.literal("task.conversation.publish.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  sourceKey: z.string().min(1),
+  kind: TaskConversationRowSchema.shape.kind,
+  text: z.string(),
+  images: z.array(ImageAttachmentSchema).optional(),
+  attachments: z.array(TaskConversationAttachmentSchema).optional(),
+  speaker: TaskConversationSpeakerSchema.optional(),
+  source: TaskConversationSourceSchema.optional(),
+  completed: z.boolean().optional(),
+  child: TaskConversationRowSchema.shape.child,
+});
+export const TaskConversationPublishResponseSchema = z.object({
+  type: z.literal("task.conversation.publish.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    row: TaskConversationRowSchema.nullable(),
+  }),
+});
+export type TaskConversationPublishRequest = z.infer<typeof TaskConversationPublishRequestSchema>;
+export type TaskConversationPublishResponse = z.infer<typeof TaskConversationPublishResponseSchema>;
+export const TaskConversationQuerySourceRequestSchema = z.object({
+  type: z.literal("task.conversation.query_source.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  sourceKey: z.string().optional(),
+  cursor: TaskConversationCursorSchema.optional(),
+  memberId: z.string().optional(),
+  role: z.string().optional(),
+  completed: z.boolean().optional(),
+});
+export const TaskConversationQuerySourceResponseSchema = z.object({
+  type: z.literal("task.conversation.query_source.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    row: TaskConversationRowSchema.nullable(),
+  }),
+});
+export type TaskConversationQuerySourceRequest = z.infer<
+  typeof TaskConversationQuerySourceRequestSchema
+>;
+export type TaskConversationQuerySourceResponse = z.infer<
+  typeof TaskConversationQuerySourceResponseSchema
+>;
+export const TaskConversationStopRequestSchema = z.object({
+  type: z.literal("task.conversation.stop.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  memberId: z.string().optional(),
+  reconcileDelivery: z
+    .object({
+      clientMessageId: z.string(),
+      resolution: z.enum(["accepted", "rejected"]),
+    })
+    .optional(),
+});
+export const TaskConversationStopResponseSchema = z.object({
+  type: z.literal("task.conversation.stop.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    conversation: TaskConversationSnapshotSchema.nullable(),
+  }),
+});
+export type TaskConversationStopRequest = z.infer<typeof TaskConversationStopRequestSchema>;
+export type TaskConversationStopResponse = z.infer<typeof TaskConversationStopResponseSchema>;
+export const TaskConversationArchiveRequestSchema = z.object({
+  type: z.literal("task.conversation.archive.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+});
+export const TaskConversationArchiveResponseSchema = z.object({
+  type: z.literal("task.conversation.archive.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    conversation: TaskConversationSnapshotSchema.nullable(),
+  }),
+});
+export type TaskConversationArchiveRequest = z.infer<typeof TaskConversationArchiveRequestSchema>;
+export type TaskConversationArchiveResponse = z.infer<typeof TaskConversationArchiveResponseSchema>;
+export const TaskConversationCompactRequestSchema = z.object({
+  type: z.literal("task.conversation.compact.request"),
+  requestId: z.string(),
+  conversationId: z.string(),
+  memberId: z.string(),
+});
+export const TaskConversationCompactResponseSchema = z.object({
+  type: z.literal("task.conversation.compact.response"),
+  payload: z.object({
+    requestId: z.string(),
+    error: z.string().nullable(),
+    conversation: TaskConversationSnapshotSchema.nullable(),
+  }),
+});
+export type TaskConversationCompactRequest = z.infer<typeof TaskConversationCompactRequestSchema>;
+export type TaskConversationCompactResponse = z.infer<typeof TaskConversationCompactResponseSchema>;
+export const TaskConversationUpdateSchema = z.object({
+  type: z.literal("task.conversation.update"),
+  payload: z.object({
+    subscriptionId: z.string(),
+    conversationId: z.string(),
+    eventSeq: z.number().int().nonnegative().optional(),
+    conversation: TaskConversationSnapshotSchema.optional(),
+    row: TaskConversationRowSchema.optional(),
+  }),
+});
+export type TaskConversationUpdate = z.infer<typeof TaskConversationUpdateSchema>;
+
 export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
+  TaskConversationCreateRequestSchema,
+  TaskConversationResolveRequestSchema,
+  TaskConversationSendRequestSchema,
+  TaskConversationGetDeliveryRequestSchema,
+  TaskConversationFetchRequestSchema,
+  TaskConversationSubscribeRequestSchema,
+  TaskConversationUnsubscribeRequestSchema,
+  TaskConversationPublishRequestSchema,
+  TaskConversationQuerySourceRequestSchema,
+  TaskConversationStopRequestSchema,
+  TaskConversationArchiveRequestSchema,
+  TaskConversationCompactRequestSchema,
+
   BrowserHostRegisterRequestSchema,
   SubscriptionReleaseRequestSchema,
   SessionEventsSetSubscriptionRequestSchema,
@@ -3579,6 +3977,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(workspaceRequestReceipts): added in v0.8.0; remove gate after 2027-03-07.
         workspaceRequestReceipts: z.boolean().optional(),
         creationLifecycle: z.boolean().optional(),
+        taskConversations: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
         // COMPAT(internalAgents): added in v0.9.0; remove gate after 2027-03-17.
@@ -4882,6 +5281,9 @@ export const CreationSnapshotSchema = z.object({
   ]),
   workspaceId: z.string().nullable(),
   agentId: z.string().nullable(),
+  conversationId: z.string().optional(),
+  memberId: z.string().optional(),
+  conversation: TaskConversationSnapshotSchema.optional(),
   workspace: WorkspaceDescriptorPayloadSchema.optional(),
   agent: AgentSnapshotPayloadSchema.optional(),
   error: z.string().nullable(),
@@ -6855,6 +7257,19 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
 });
 
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
+  TaskConversationCreateResponseSchema,
+  TaskConversationResolveResponseSchema,
+  TaskConversationSendResponseSchema,
+  TaskConversationGetDeliveryResponseSchema,
+  TaskConversationFetchResponseSchema,
+  TaskConversationSubscribeResponseSchema,
+  TaskConversationUnsubscribeResponseSchema,
+  TaskConversationPublishResponseSchema,
+  TaskConversationQuerySourceResponseSchema,
+  TaskConversationStopResponseSchema,
+  TaskConversationArchiveResponseSchema,
+  TaskConversationCompactResponseSchema,
+  TaskConversationUpdateSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
   SessionEventsSetSubscriptionResponseSchema,
@@ -7560,6 +7975,7 @@ export const WSHelloMessageSchema = z.object({
     .object({
       voice: z.boolean().optional(),
       [CLIENT_CAPS.helloRejection]: z.boolean().optional(),
+      [CLIENT_CAPS.taskConversations]: z.boolean().optional(),
       pushNotifications: z.boolean().optional(),
       [CLIENT_CAPS.explicitEventSubscriptions]: z.boolean().optional(),
       [CLIENT_CAPS.allProviders]: z.boolean().optional(),

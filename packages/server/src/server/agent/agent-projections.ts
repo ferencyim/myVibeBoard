@@ -1,3 +1,4 @@
+import { taskConversationIdentity } from "../task-conversation/identity.js";
 import type {
   AgentListItemPayload,
   AgentSnapshotPayload,
@@ -139,6 +140,7 @@ export function toAgentPayload(
     persistence: projectPersistenceHandleForWire(agent.persistence),
     title: options?.title ?? null,
     labels: agent.labels,
+    ...taskConversationIdentity(agent.labels),
     ...(agent.internal ? { internal: true } : {}),
   };
 
@@ -250,6 +252,7 @@ export function buildStoredAgentPayload(
     archivedAt: record.archivedAt ?? null,
     ...(record.internal ? { internal: true } : {}),
     labels: normalizeLabels(record.labels),
+    ...taskConversationIdentity(record.labels),
     ...(typeof record.lastError === "string" ? { lastError: record.lastError } : {}),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
   };
@@ -259,6 +262,10 @@ export function toAgentListItemPayload(agent: AgentSnapshotPayload): AgentListIt
   return {
     id: agent.id,
     shortId: agent.id.slice(0, 7),
+    ...(agent.taskConversationId ? { taskConversationId: agent.taskConversationId } : {}),
+    ...(agent.taskConversationMemberId
+      ? { taskConversationMemberId: agent.taskConversationMemberId }
+      : {}),
     title: agent.title,
     provider: agent.provider,
     model: agent.runtimeInfo?.model ?? agent.model,

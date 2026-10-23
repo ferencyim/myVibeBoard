@@ -552,15 +552,24 @@ export class PluginRuntime {
     await Promise.all(this.pendingEvents);
   }
 
+  hasBefore(pluginId: string, name: keyof PluginBeforeRequests): boolean {
+    return this.plugins.get(pluginId)?.hooks.before.includes(name) ?? false;
+  }
+
   async before<Name extends keyof PluginBeforeRequests>(
     name: Name,
     input: PluginBeforeRequests[Name],
+    options?: { pluginId: string },
   ): Promise<PluginBeforeRequests[Name]> {
     let request = validateBeforeRequest(name, input);
+    if (options && !this.hasBefore(options.pluginId, name)) {
+      throw new Error(`Plugin ${options.pluginId} before ${name} is unavailable`);
+    }
     const plugins = [...this.plugins.values()].sort((left, right) => {
       return left.id.localeCompare(right.id);
     });
     for (const loaded of plugins) {
+      if (options && loaded.id !== options.pluginId) continue;
       if (!loaded.hooks.before.includes(name)) {
         continue;
       }

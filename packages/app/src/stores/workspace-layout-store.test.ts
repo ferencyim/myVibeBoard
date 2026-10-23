@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Layout policies only read installed panel declarations; importing the runtime
+// registry also starts native plugin and offline storage dependencies.
+vi.mock("@/plugins/registry", () => ({ pluginRegistry: { getSnapshot: () => [] } }));
+
 vi.mock("@react-native-async-storage/async-storage", () => {
   const storage = new Map<string, string>();
   return {
@@ -552,6 +556,7 @@ describe("workspace-layout-store version 2 migration", () => {
       const persisted = JSON.parse((await AsyncStorage.getItem("workspace-layout-state")) ?? "{}");
       expect(persisted.version).toBe(2);
       expect(Object.keys(persisted.state).sort()).toEqual([
+        "closedTaskConversationIdsByWorkspace",
         "explorerPaneIdByWorkspace",
         "explorerSidebarWidthByWorkspace",
         "layoutByWorkspace",
@@ -3146,6 +3151,7 @@ describe("workspace-layout-store actions", () => {
 
     expect(persisted).toEqual({
       layoutByWorkspace: { [workspaceKey]: layout },
+      closedTaskConversationIdsByWorkspace: {},
       pinnedAgentIdsByWorkspace: {},
       splitSizesByWorkspace: currentState.splitSizesByWorkspace,
       explorerSidebarWidthByWorkspace: currentState.explorerSidebarWidthByWorkspace,
@@ -3379,6 +3385,7 @@ describe("workspace-layout-store actions", () => {
     const partialize = workspaceLayoutStore.persist.getOptions().partialize;
     expect(partialize).toBeTypeOf("function");
     expect(partialize?.(state)).toEqual({
+      closedTaskConversationIdsByWorkspace: {},
       pullRequestTabAutoOpenedByWorkspace: {},
       layoutByWorkspace: {},
       pinnedAgentIdsByWorkspace: {},
@@ -3724,6 +3731,69 @@ describe("workspace-layout-store actions", () => {
         (tab) => tab.tabId,
       ),
     ).toEqual(["agent_parent-agent"]);
+  });
+
+  it("auto-opens one task tab on each device and remembers closing it across members and reload", async () => {
+    const workspaceKey = createWorkspaceKey();
+    const saved = new Map<string, string>();
+    const storage = {
+      getItem: async (key: string) => saved.get(key) ?? null,
+      setItem: async (key: string, value: string) => {
+        saved.set(key, value);
+      },
+      removeItem: async (key: string) => {
+        saved.delete(key);
+      },
+    };
+    const firstDevice = createWorkspaceLayoutStore(workspaceLayoutIds, storage);
+    await firstDevice.persist.rehydrate();
+    const snapshot = {
+      agentsHydrated: true,
+      terminalsHydrated: true,
+      activeAgentIds: ["anchor", "worker"],
+      autoOpenAgentIds: ["anchor", "worker"],
+      conversationByAgentId: new Map([
+        ["anchor", "task-1"],
+        ["worker", "task-1"],
+      ]),
+      standaloneTerminalIds: [],
+    };
+    firstDevice.getState().reconcileTabs(workspaceKey, snapshot);
+    const [tab] = contentTabs(firstDevice.getState().getWorkspaceTabs(workspaceKey));
+    expect(tab.target).toEqual({ kind: "task_conversation", conversationId: "task-1" });
+    expect(contentTabs(firstDevice.getState().getWorkspaceTabs(workspaceKey))).toHaveLength(1);
+    firstDevice.getState().closeTab(workspaceKey, tab.tabId);
+    const updatedSnapshot = {
+      ...snapshot,
+      activeAgentIds: [...snapshot.activeAgentIds, "reviewer"],
+      autoOpenAgentIds: [...snapshot.autoOpenAgentIds, "reviewer"],
+      conversationByAgentId: new Map([...snapshot.conversationByAgentId, ["reviewer", "task-1"]]),
+    };
+    firstDevice.getState().reconcileTabs(workspaceKey, updatedSnapshot);
+    expect(contentTabs(firstDevice.getState().getWorkspaceTabs(workspaceKey))).toEqual([]);
+
+    const restoredDevice = createWorkspaceLayoutStore(workspaceLayoutIds, storage);
+    await restoredDevice.persist.rehydrate();
+    restoredDevice.getState().reconcileTabs(workspaceKey, updatedSnapshot);
+    expect(contentTabs(restoredDevice.getState().getWorkspaceTabs(workspaceKey))).toEqual([]);
+    restoredDevice.getState().openTab({
+      workspaceKey,
+      target: { kind: "task_conversation", conversationId: "task-1" },
+      intent: "reveal",
+    });
+    restoredDevice.getState().reconcileTabs(workspaceKey, updatedSnapshot);
+    expect(contentTabs(restoredDevice.getState().getWorkspaceTabs(workspaceKey))).toHaveLength(1);
+
+    const secondDevice = createWorkspaceLayoutStore(workspaceLayoutIds, {
+      getItem: async () => null,
+      setItem: async () => undefined,
+      removeItem: async () => undefined,
+    });
+    await secondDevice.persist.rehydrate();
+    secondDevice.getState().reconcileTabs(workspaceKey, updatedSnapshot);
+    expect(contentTabs(secondDevice.getState().getWorkspaceTabs(workspaceKey))).toEqual([
+      expect.objectContaining({ target: { kind: "task_conversation", conversationId: "task-1" } }),
+    ]);
   });
 
   it("reconcileTabs keeps manually opened subagent tabs that remain active", () => {
