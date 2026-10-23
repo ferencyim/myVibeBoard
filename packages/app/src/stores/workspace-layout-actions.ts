@@ -263,6 +263,7 @@ export interface WorkspaceTabReconcileState {
   layout: WorkspaceLayout;
   pinnedAgentIds?: ReadonlySet<string> | null;
   hiddenAgentIds?: ReadonlySet<string> | null;
+  closedTaskConversationIds?: ReadonlySet<string> | null;
   explorerSidebarPaneId: string | null;
 }
 
@@ -2386,6 +2387,7 @@ function addMissingEntityTabs(input: {
   hasActivePendingDraftCreate: boolean;
   conversationByAgentId?: ReadonlyMap<string, string>;
   explorerSidebarPaneId: string | null;
+  closedTaskConversationIds?: ReadonlySet<string> | null;
 }): WorkspaceLayout {
   const {
     autoOpenAgentIds,
@@ -2412,6 +2414,7 @@ function addMissingEntityTabs(input: {
   const sortedAutoOpenAgentIds = [...autoOpenAgentIds].sort();
   for (const agentId of sortedAutoOpenAgentIds) {
     const conversationId = input.conversationByAgentId?.get(agentId);
+    if (conversationId && input.closedTaskConversationIds?.has(conversationId)) continue;
     if (conversationId && currentConversationIds.has(conversationId)) continue;
     if (currentAgentIds.has(agentId)) {
       continue;
@@ -2532,6 +2535,7 @@ export function reconcileWorkspaceTabs(
     layout: nextLayout,
     autoOpenAgentIds: autoOpenSet,
     conversationByAgentId: snapshot.conversationByAgentId,
+    closedTaskConversationIds: state.closedTaskConversationIds,
     representedAgentIds,
     standaloneTerminalIds,
     hasActivePendingTerminalCreate: snapshot.hasActivePendingTerminalCreate ?? false,

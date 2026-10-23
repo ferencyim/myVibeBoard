@@ -582,12 +582,12 @@ describe("archiveByScope", () => {
       return originalArchiveWorkspaceRecord(workspaceId);
     };
 
-    await expect(
-      archiveByScope(deps, {
-        scope: { kind: "worktree", targetPath: worktree.worktreePath },
-        requestId: "req-partial-failure",
-      }),
-    ).rejects.toThrow("Workspace archive failed");
+    const result = await archiveByScope(deps, {
+      scope: { kind: "worktree", targetPath: worktree.worktreePath },
+      requestId: "req-partial-failure",
+    });
+    expect(result.archivedWorkspaceIds).toEqual([workspaceB]);
+    expect(result.removedDirectory).toBe(false);
     expect(existsSync(worktree.worktreePath)).toBe(true);
   });
 
@@ -925,6 +925,103 @@ describe("task conversation workspace archive", () => {
       }),
       "archiveByScope workspace teardown failed",
     );
+  });
+
+  test.each(["agent", "snapshot", "terminal"])(
+    "continues workspace archive after an ordinary %s teardown fails",
+    async (failingStep) => {
+      const { deps, workspaceId } = taskArchiveDeps();
+      deps.agentManager.listAgents = () =>
+        [{ id: "ordinary-agent", workspaceId }] as ManagedAgent[];
+      deps.agentManager.getAgent = (id) =>
+        id === "ordinary-agent" ? ({ id } as ManagedAgent) : null;
+      deps.agentStorage.listByWorkspace = async () =>
+        [{ id: "ordinary-snapshot", workspaceId, archivedAt: null }] as StoredAgentRecord[];
+      const failure = new Error(`ordinary ${failingStep} teardown failed`);
+      if (failingStep === "agent") {
+        vi.mocked(deps.agentManager.archiveAgent).mockRejectedValue(failure);
+      } else if (failingStep === "snapshot") {
+        vi.mocked(deps.agentManager.archiveSnapshot).mockRejectedValue(failure);
+      } else {
+        vi.mocked(deps.killTerminalsForWorkspace).mockRejectedValue(failure);
+      }
+
+      const result = await archiveByScope(deps, {
+        scope: { kind: "workspace", workspaceId },
+        requestId: `ordinary-${failingStep}-failure`,
+      });
+
+      expect(result.archivedWorkspaceIds).toEqual([workspaceId]);
+      expect(result.removedDirectory).toBe(false);
+      expect(deps.activeWorkspaces).toEqual([]);
+      expect(deps.agentManager.archiveAgent).toHaveBeenCalledWith("ordinary-agent");
+      expect(deps.agentManager.archiveSnapshot).toHaveBeenCalledWith(
+        "ordinary-snapshot",
+        expect.any(String),
+      );
+      expect(deps.killTerminalsForWorkspace).toHaveBeenCalledWith(workspaceId);
+      expect(deps.sessionLogger?.warn).toHaveBeenCalledWith(
+        { err: failure, workspaceId },
+        "Workspace archive teardown step failed; continuing",
+      );
+    },
+  );
+
+  test("checks every workspace task before setup, ordinary agent, or terminal teardown", async () => {
+    const { deps, workspaceId, conversation, taskService } = taskArchiveDeps();
+    deps.activeWorkspaces.unshift({
+      workspaceId: "ws-ordinary-first",
+      cwd: process.cwd(),
+      kind: "local_checkout",
+    });
+    // A task in the second workspace must block teardown in the first workspace too.
+    taskService.listByWorkspace.mockImplementation((id?: string) =>
+      id === workspaceId ? [conversation] : [],
+    );
+    taskService.archive.mockRejectedValue(new Error("Task cancellation is unknown"));
+    deps.stopWorkspaceSetup = vi.fn(async () => {});
+    deps.archiveWorkspaceRecord = vi.fn(async () => {});
+    deps.agentManager.listAgents = () =>
+      [{ id: "ordinary-agent", workspaceId: "ws-ordinary-first" }] as ManagedAgent[];
+
+    await expect(
+      archiveByScope(deps, {
+        scope: { kind: "worktree", targetPath: process.cwd() },
+        requestId: "task-preflight-all-workspaces",
+      }),
+    ).rejects.toThrow("Task cancellation is unknown");
+
+    expect(deps.stopWorkspaceSetup).not.toHaveBeenCalled();
+    expect(deps.archiveWorkspaceRecord).not.toHaveBeenCalled();
+    expect(deps.agentManager.archiveAgent).not.toHaveBeenCalled();
+    expect(deps.agentManager.archiveSnapshot).not.toHaveBeenCalled();
+    expect(deps.killTerminalsForWorkspace).not.toHaveBeenCalled();
+  });
+
+  test("continues sibling workspace records when persisting one archive fails", async () => {
+    const { deps, workspaceId } = taskArchiveDeps();
+    const siblingId = "ws-sibling";
+    deps.activeWorkspaces.push({
+      workspaceId: siblingId,
+      cwd: process.cwd(),
+      kind: "local_checkout",
+    });
+    const archiveRecord = deps.archiveWorkspaceRecord;
+    deps.archiveWorkspaceRecord = vi.fn(async (id) => {
+      if (id === workspaceId) throw new Error("Workspace record write failed");
+      await archiveRecord(id);
+    });
+
+    const result = await archiveByScope(deps, {
+      scope: { kind: "worktree", targetPath: process.cwd() },
+      requestId: "partial-workspace-record-failure",
+    });
+
+    expect(result.archivedWorkspaceIds).toEqual([siblingId]);
+    expect(result.removedDirectory).toBe(false);
+    expect(deps.activeWorkspaces.map((workspace) => workspace.workspaceId)).toEqual([workspaceId]);
+    expect(deps.killTerminalsForWorkspace).toHaveBeenCalledWith(workspaceId);
+    expect(deps.killTerminalsForWorkspace).toHaveBeenCalledWith(siblingId);
   });
 });
 

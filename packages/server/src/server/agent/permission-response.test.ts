@@ -121,6 +121,29 @@ describe("respondToAgentPermission", () => {
     expect(agentManager.replacementRuns).toEqual([]);
   });
 
+  test("keeps a blocked task approval at the provider until delivery is reconciled", async () => {
+    const agentManager = new FakePermissionAgentManager();
+    const continuePermission = vi.fn();
+    agentManager.taskConversations = {
+      getByAgentId: () => ({ conversationId: "task" }),
+      preparePermissionResponse: vi.fn(async () => {
+        throw new Error("unknown delivery");
+      }),
+      continuePermission,
+    } as unknown as TaskConversationService;
+    await expect(
+      respondToAgentPermission({
+        agentManager,
+        agentId: "task-member",
+        requestId: "approval",
+        response: { behavior: "allow" },
+        logger,
+      }),
+    ).rejects.toThrow("unknown delivery");
+    expect(agentManager.permissionResponses).toEqual([]);
+    expect(continuePermission).not.toHaveBeenCalled();
+  });
+
   test("does not start a run when the permission response has no follow-up prompt", async () => {
     const agentManager = new FakePermissionAgentManager();
 

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -82,6 +82,84 @@ afterEach(() => {
 });
 
 describe("TaskConversationStore", () => {
+  it("uses NORMAL for recoverable projections and FULL for durable delivery commits", () => {
+    const store = open();
+    create(store);
+    const db = (store as unknown as { db: TestDatabase }).db;
+    const synchronous = () => db.prepare("PRAGMA synchronous").get()!.synchronous;
+    expect(synchronous()).toBe(1);
+    store.update(
+      "conversation",
+      (record) => {
+        expect(synchronous()).toBe(1);
+        store.append(record, { sourceKey: "recoverable", kind: "assistant", text: "流式内容" });
+      },
+      { durability: "normal" },
+    );
+    store.update("conversation", () => expect(synchronous()).toBe(2));
+    expect(synchronous()).toBe(1);
+    const fail = (record: StoredTaskConversation) => {
+      expect(synchronous()).toBe(2);
+      store.append(record, { sourceKey: "rollback", kind: "user", text: "未提交" });
+      throw new Error("提交失败");
+    };
+    expect(() => store.update("conversation", fail)).toThrow("提交失败");
+    expect(synchronous()).toBe(1);
+    expect(store.fetch("conversation").rows.map((row) => row.text)).toEqual(["流式内容"]);
+  });
+
+  it("queries unseen boundaries, unfinished member rows and rejected messages without full history", () => {
+    const store = open();
+    create(store);
+    store.update("conversation", (record) => {
+      store.append(record, { sourceKey: "old", kind: "artifact", text: "旧上下文" });
+      const unfinished = store.append(record, {
+        sourceKey: "unfinished",
+        kind: "assistant",
+        text: "未收口",
+        source: { backendAgentId: "agent-planner", memberId: "planner" },
+      });
+      store.append(record, {
+        sourceKey: "done",
+        kind: "assistant",
+        text: "已完成",
+        completed: true,
+        source: { backendAgentId: "agent-planner", memberId: "planner" },
+      });
+      store.append(record, {
+        sourceKey: "human:rejected",
+        kind: "user",
+        text: "未投递消息",
+        clientMessageId: "rejected",
+      });
+      store.replaceRow(record, unfinished, { text: "窗口内新内容" });
+    });
+    const record = store.get("conversation")!;
+    Object.defineProperty(record, "rows", {
+      get: () => {
+        throw new Error("不允许加载全部历史");
+      },
+    });
+    expect(store.queryRows(record, { afterSeq: 3, throughSeq: 5 }).map((row) => row.text)).toEqual([
+      "窗口内新内容",
+      "未投递消息",
+    ]);
+    expect(
+      store
+        .queryRows(record, {
+          kind: "assistant",
+          completed: false,
+          backendAgentIds: ["agent-planner"],
+        })
+        .map((row) => row.text),
+    ).toEqual(["窗口内新内容"]);
+    expect(store.queryRows(record, { clientMessageId: "rejected" })[0]!.text).toBe("未投递消息");
+    expect(store.queryRows(record, { backendAgentIds: [] })).toEqual([]);
+    expect(store.querySource(record, { sourceKey: "unfinished", completed: false })?.text).toBe(
+      "窗口内新内容",
+    );
+  });
+
   it("reopens authoritative history, members, configuration, and unresolved deliveries without providers", () => {
     const databasePath = filePath();
     const store = open(databasePath);
@@ -467,6 +545,35 @@ describe("TaskConversationStore", () => {
     const image = restarted.fetch("conversation").rows[0]!.images![0]!;
     expect(image.mimeType).toBe("image/png");
     expect(Buffer.from(image.data, "base64")).toEqual(bytes);
+  });
+
+  it("keeps text and other rows readable when an uploaded image file is missing", () => {
+    const databasePath = filePath();
+    const store = open(databasePath);
+    create(store);
+    store.update("conversation", (record) => {
+      store.append(record, {
+        sourceKey: "missing-image",
+        kind: "user",
+        text: "图片说明仍可读取",
+        images: [{ data: Buffer.from("图片").toString("base64"), mimeType: "image/png" }],
+      });
+      store.append(record, { sourceKey: "other-row", kind: "assistant", text: "其它发言" });
+    });
+    const db = new DatabaseSync(databasePath);
+    try {
+      const raw = db.prepare("SELECT record FROM task_conversation_rows WHERE seq = 1").get()!;
+      const imagePath = JSON.parse(String(raw.record)).imageReferences[0].path;
+      unlinkSync(imagePath);
+    } finally {
+      db.close();
+    }
+    const page = store.fetch("conversation");
+    expect(page.rows.map((row) => row.text)).toEqual(["图片说明仍可读取", "其它发言"]);
+    expect(page.rows[0]!.images).toEqual([]);
+    expect(store.querySource("conversation", { sourceKey: "missing-image" })?.text).toBe(
+      "图片说明仍可读取",
+    );
   });
 
   it("keeps one durable sequence watermark per source without accumulating fragment keys", () => {

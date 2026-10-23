@@ -49,6 +49,7 @@ export interface StoredTaskConversation {
   sources: Record<string, string>;
   rowSourceSeqRanges: Record<string, TaskConversationPage["sourceSeqRanges"]>;
   control?: { status: "stopping" | "settled" | "unknown"; memberId?: string };
+  recoveryMembers?: string[];
   memberConfigs: Record<
     string,
     {
@@ -72,6 +73,7 @@ const StoredTaskConversationSchema = z.object({
   control: z
     .object({ status: z.enum(["stopping", "settled", "unknown"]), memberId: z.string().optional() })
     .optional(),
+  recoveryMembers: z.array(z.string()).optional(),
   memberConfigs: z.record(
     z.string(),
     z.object({
@@ -112,6 +114,20 @@ export interface TaskConversationFindOptions {
   anchorAgentId?: string;
   backendAgentId?: string;
   idempotencyKey?: string;
+}
+
+export interface TaskConversationRowQuery {
+  afterSeq?: number;
+  throughSeq?: number;
+  kind?: TaskConversationRow["kind"];
+  completed?: boolean;
+  backendAgentIds?: string[];
+  clientMessageId?: string;
+}
+
+export interface TaskConversationUpdateOptions {
+  /** Recoverable streaming projections can use NORMAL; delivery/control commits use FULL. */
+  durability?: "normal" | "full";
 }
 
 function rowWatermark(row: TaskConversationRow): number {
@@ -172,7 +188,7 @@ export class TaskConversationStore {
       ((error, id) => console.warn(`Task conversation ${id} was skipped`, error));
     this.db.exec(`
       PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = FULL;
+      PRAGMA synchronous = NORMAL;
       PRAGMA foreign_keys = ON;
       PRAGMA busy_timeout = 5000;
       CREATE TABLE IF NOT EXISTS task_conversations (
@@ -396,7 +412,11 @@ export class TaskConversationStore {
   }
 
   /** The callback is synchronous; callers may publish its result only after this returns. */
-  update<T>(conversationId: string, mutate: (record: StoredTaskConversation) => T): T {
+  update<T>(
+    conversationId: string,
+    mutate: (record: StoredTaskConversation) => T,
+    options: TaskConversationUpdateOptions = {},
+  ): T {
     return this.transaction(() => {
       const record = this.get(conversationId);
       if (!record) throw new Error("Task conversation not found");
@@ -423,7 +443,7 @@ export class TaskConversationStore {
       )
         this.indexMembers(record);
       return result;
-    });
+    }, options.durability);
   }
 
   append(record: StoredTaskConversation, input: TaskConversationAppendInput): TaskConversationRow {
@@ -448,11 +468,11 @@ export class TaskConversationStore {
   /** Streaming changes retain the original row position and frozen speaker identity. */
   replaceRow(
     record: StoredTaskConversation,
-    rowId: string,
+    rowOrId: TaskConversationRow | string,
     patch: TaskConversationRowUpdate,
   ): TaskConversationRow {
     this.assertTransaction();
-    const row = this.requireRow(record, rowId);
+    const row = typeof rowOrId === "string" ? this.requireRow(record, rowOrId) : rowOrId;
     const existingId = patch.sourceKey && this.sourceRowId(record, patch.sourceKey);
     if (existingId) {
       return this.requireRow(record, existingId);
@@ -522,7 +542,7 @@ export class TaskConversationStore {
   }
 
   querySource(
-    conversationId: string,
+    conversation: string | StoredTaskConversation,
     options: {
       sourceKey?: string;
       cursor?: TaskConversationCursor;
@@ -531,8 +551,9 @@ export class TaskConversationStore {
       completed?: boolean;
     },
   ): TaskConversationRow | null {
-    const record = this.get(conversationId);
+    const record = typeof conversation === "string" ? this.get(conversation) : conversation;
     if (!record) throw new Error("Task conversation not found");
+    const conversationId = record.snapshot.conversationId;
     if (options.cursor && options.cursor.epoch !== record.snapshot.epoch) return null;
     const filters = ["conversation_id = ?"];
     const parameters: (string | number)[] = [conversationId];
@@ -555,7 +576,7 @@ export class TaskConversationStore {
       parameters.push(options.role);
     }
     if (options.completed !== undefined) {
-      filters.push("json_extract(record, '$.completed') = ?");
+      filters.push("COALESCE(json_extract(record, '$.completed'), 0) = ?");
       parameters.push(Number(options.completed));
     }
     const row = this.db
@@ -564,6 +585,50 @@ export class TaskConversationStore {
       )
       .get(...parameters);
     return row ? this.readRow(row) : null;
+  }
+
+  /** Filter in SQLite so admission/recovery never hydrate an entire conversation implicitly. */
+  queryRows(
+    conversation: string | StoredTaskConversation,
+    options: TaskConversationRowQuery,
+  ): TaskConversationRow[] {
+    const conversationId =
+      typeof conversation === "string" ? conversation : conversation.snapshot.conversationId;
+    const filters = ["conversation_id = ?"];
+    const parameters: (string | number)[] = [conversationId];
+    if (options.afterSeq !== undefined) {
+      filters.push("updated_seq > ?");
+      parameters.push(options.afterSeq);
+    }
+    if (options.throughSeq !== undefined) {
+      filters.push("updated_seq <= ?");
+      parameters.push(options.throughSeq);
+    }
+    if (options.kind !== undefined) {
+      filters.push("json_extract(record, '$.kind') = ?");
+      parameters.push(options.kind);
+    }
+    if (options.completed !== undefined) {
+      filters.push("COALESCE(json_extract(record, '$.completed'), 0) = ?");
+      parameters.push(Number(options.completed));
+    }
+    if (options.backendAgentIds !== undefined) {
+      if (!options.backendAgentIds.length) return [];
+      filters.push(
+        `json_extract(record, '$.source.backendAgentId') IN (${options.backendAgentIds.map(() => "?").join(", ")})`,
+      );
+      parameters.push(...options.backendAgentIds);
+    }
+    if (options.clientMessageId !== undefined) {
+      filters.push("json_extract(record, '$.clientMessageId') = ?");
+      parameters.push(options.clientMessageId);
+    }
+    return this.db
+      .prepare(
+        `SELECT record FROM task_conversation_rows WHERE ${filters.join(" AND ")} ORDER BY seq`,
+      )
+      .all(...parameters)
+      .map((row) => this.readRow(row));
   }
 
   close(): void {
@@ -667,10 +732,15 @@ export class TaskConversationStore {
   private readRow(row: Record<string, unknown>): TaskConversationRow {
     const { imageReferences, ...item } = JSON.parse(String(row.record));
     if (imageReferences)
-      item.images = imageReferences.map((image: { path: string; mimeType: string }) => ({
-        data: readFileSync(image.path).toString("base64"),
-        mimeType: image.mimeType,
-      }));
+      item.images = imageReferences.flatMap((image: { path: string; mimeType: string }) => {
+        try {
+          return [{ data: readFileSync(image.path).toString("base64"), mimeType: image.mimeType }];
+        } catch (error) {
+          // A missing upload must not make otherwise valid public history unreadable.
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          return [];
+        }
+      });
     return TaskConversationRowSchema.parse(item);
   }
 
@@ -748,18 +818,23 @@ export class TaskConversationStore {
     }
   }
 
-  private transaction<T>(operation: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    this.inTransaction = true;
+  private transaction<T>(operation: () => T, durability: "normal" | "full" = "full"): T {
+    if (durability === "full") this.db.exec("PRAGMA synchronous = FULL");
+    let began = false;
     try {
+      this.db.exec("BEGIN IMMEDIATE");
+      began = true;
+      this.inTransaction = true;
       const result = operation();
       this.db.exec("COMMIT");
+      began = false;
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (began) this.db.exec("ROLLBACK");
       throw error;
     } finally {
       this.inTransaction = false;
+      if (durability === "full") this.db.exec("PRAGMA synchronous = NORMAL");
     }
   }
   private assertTransaction(): void {

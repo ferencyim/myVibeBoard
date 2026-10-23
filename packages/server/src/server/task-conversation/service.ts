@@ -123,26 +123,47 @@ function projectMemberState(
         )
       : pending;
 }
+function isTerminalEvent(event: AgentManagerEvent): boolean {
+  return (
+    event.type === "agent_stream" &&
+    (event.event.type === "turn_completed" ||
+      event.event.type === "turn_failed" ||
+      event.event.type === "turn_canceled")
+  );
+}
+function isProjectionEvent(event: AgentManagerEvent): boolean {
+  return (
+    event.type === "agent_state" ||
+    (event.type === "agent_stream" &&
+      (event.event.type === "turn_started" ||
+        isTerminalEvent(event) ||
+        (event.event.type === "timeline" && event.event.item.type === "assistant_message")))
+  );
+}
 function unseenContext(
+  store: TaskConversationStore,
   record: StoredTaskConversation,
   member: TaskConversationMember | undefined,
   backendAgentId: string,
   throughSeq: number,
 ): TaskConversationRow[] {
-  return record.rows.filter((row) => {
-    const position = row.updatedSeq ?? row.seq;
-    if (position <= (member?.seenConversationSeq ?? 0) || position > throughSeq) return false;
-    if (row.kind === "assistant" && row.source?.backendAgentId === backendAgentId) return false;
-    const delivery = row.clientMessageId
-      ? ownGet(record.deliveries, row.clientMessageId)
-      : undefined;
-    if (row.kind === "user" && delivery?.status === "rejected") return false;
-    return !(
-      row.kind === "user" &&
-      delivery?.backendAgentId === backendAgentId &&
-      delivery.status === "accepted"
-    );
-  });
+  return store
+    .queryRows(record, {
+      afterSeq: member?.seenConversationSeq ?? 0,
+      throughSeq,
+    })
+    .filter((row) => {
+      if (row.kind === "assistant" && row.source?.backendAgentId === backendAgentId) return false;
+      const delivery = row.clientMessageId
+        ? ownGet(record.deliveries, row.clientMessageId)
+        : undefined;
+      if (row.kind === "user" && delivery?.status === "rejected") return false;
+      return !(
+        row.kind === "user" &&
+        delivery?.backendAgentId === backendAgentId &&
+        delivery.status === "accepted"
+      );
+    });
 }
 function validateSummary(
   summary: TaskConversationMember["summary"],
@@ -227,7 +248,7 @@ export class TaskConversationService {
   >();
   private readonly projectionSourceSeqs = new Map<string, number>();
   private readonly recoveryMembers = new Map<string, Set<string>>();
-  private readonly recoveryOperations = new Map<string, Promise<void>>();
+  private readonly recoveryOperations = new Map<string, Promise<Set<string>>>();
   private readonly unsubscribe: () => void;
   constructor(
     private readonly dependencies: {
@@ -255,15 +276,19 @@ export class TaskConversationService {
               current.snapshot.status = "paused";
             }
           }
+          const unfinishedMembers = new Set(
+            dependencies.store
+              .queryRows(current, {
+                kind: "assistant",
+                completed: false,
+              })
+              .map((row) => row.source?.backendAgentId),
+          );
           const members = current.snapshot.members.filter(
             (member) =>
               member.status === "running" ||
-              current.rows.some(
-                (row) =>
-                  row.source?.backendAgentId === member.backendAgentId &&
-                  row.kind === "assistant" &&
-                  !row.completed,
-              ) ||
+              current.recoveryMembers?.includes(member.backendAgentId) ||
+              unfinishedMembers.has(member.backendAgentId) ||
               Object.values(current.deliveries).some(
                 (delivery) =>
                   delivery.backendAgentId === member.backendAgentId &&
@@ -596,7 +621,8 @@ export class TaskConversationService {
     if (candidate && this.dependencies.agentManager.hasInFlightRun(backendAgentId))
       throw new Error("Task member is already running");
     const throughSeq = record.snapshot.lastSeq;
-    const contextForMember = () => unseenContext(record, candidate, backendAgentId, throughSeq);
+    const contextForMember = () =>
+      unseenContext(this.dependencies.store, record, candidate, backendAgentId, throughSeq);
     let publicContext = contextForMember();
     await this.validateAttachments(publicContext, cwd);
     const prepareForMember = () =>
@@ -863,8 +889,11 @@ export class TaskConversationService {
           throw new Error("Task stopped before dispatch");
         this.dependencies.store.update(input.conversationId, (current) => {
           current.deliveries[input.clientMessageId].status = "dispatching";
-          current.snapshot.members.find((entry) => entry.memberId === memberId)!.lastRequestAt =
-            new Date().toISOString();
+          const target = current.snapshot.members.find((entry) => entry.memberId === memberId)!;
+          // Persist recovery intent with the FULL dispatch receipt, before the
+          // first throttled text/state batch can be lost in a crash.
+          target.status = "running";
+          target.lastRequestAt = new Date().toISOString();
         });
         const runOptions = { clientMessageId: delivery.deliveryId };
         this.authorizedRuns.set(runOptions, backendAgentId);
@@ -904,7 +933,11 @@ export class TaskConversationService {
           if (failed.status === "unknown") {
             current.snapshot.status = "paused";
             this.trackRecovery(input.conversationId, backendAgentId);
-          } else return this.markRejectedMessage(current, input.clientMessageId);
+          } else {
+            const target = current.snapshot.members.find((entry) => entry.memberId === memberId)!;
+            if (target.status === "running") target.status = "idle";
+            return this.markRejectedMessage(current, input.clientMessageId);
+          }
         });
         if (rejectedRow)
           this.notify(input.conversationId, {
@@ -926,7 +959,7 @@ export class TaskConversationService {
       if (event.type === "turn_failed")
         this.dependencies.logger.warn({ agentId, error: event.error }, "Task member turn failed");
     }
-    this.flushProjection(conversationId);
+    this.flushProjection(conversationId, agentId);
     await this.projectionTails.get(conversationId);
   }
   private async admit(
@@ -970,8 +1003,7 @@ export class TaskConversationService {
   async preparePermissionResponse(agentId: string): Promise<void> {
     const conversation = this.getByAgentId(agentId);
     if (!conversation) throw new Error("Task member is missing");
-    if (conversation.status === "archived" || conversation.status === "stopping")
-      throw new Error("Task is archived or stopping");
+    this.assertPermissionResponse(this.require(conversation.conversationId));
     await this.authority.run({ agentId }, () =>
       ensureAgentLoaded(agentId, {
         agentManager: this.dependencies.agentManager,
@@ -979,6 +1011,7 @@ export class TaskConversationService {
         logger: this.dependencies.logger,
       }),
     );
+    this.assertPermissionResponse(this.require(conversation.conversationId));
   }
   async continuePermission(
     agentId: string,
@@ -1008,15 +1041,7 @@ export class TaskConversationService {
     const conversation = this.getByAgentId(agentId);
     if (!conversation) throw new Error("Task member is missing");
     const stored = this.require(conversation.conversationId);
-    if (
-      conversation.status === "stopping" ||
-      conversation.status === "archived" ||
-      stored.control?.status === "unknown" ||
-      Object.values(stored.deliveries).some((delivery) => delivery.status === "unknown")
-    )
-      throw new Error(
-        "Task approval is blocked until its pending control or delivery is reconciled",
-      );
+    this.assertPermissionResponse(stored);
     const member = conversation.members.find((entry) => entry.backendAgentId === agentId)!;
     const clientMessageId = `permission:${agentId}:${requestId}`;
     await this.admit(
@@ -1051,8 +1076,9 @@ export class TaskConversationService {
         error: null,
         requestFingerprint: fingerprint(prompt),
       });
-      record.snapshot.members.find((entry) => entry.memberId === member.memberId)!.lastRequestAt =
-        new Date().toISOString();
+      const target = record.snapshot.members.find((entry) => entry.memberId === member.memberId)!;
+      target.status = "running";
+      target.lastRequestAt = new Date().toISOString();
     });
     let providerStarted = false;
     await this.authority.run({ agentId }, async () => {
@@ -1087,6 +1113,11 @@ export class TaskConversationService {
           if (providerStarted) {
             record.snapshot.status = "paused";
             this.trackRecovery(conversation.conversationId, agentId);
+          } else {
+            const target = record.snapshot.members.find(
+              (entry) => entry.memberId === member.memberId,
+            )!;
+            if (target.status === "running") target.status = "idle";
           }
         });
         throw error;
@@ -1095,6 +1126,18 @@ export class TaskConversationService {
       }
     });
     this.notifySnapshot(conversation.conversationId);
+  }
+
+  private assertPermissionResponse(record: StoredTaskConversation): void {
+    if (
+      record.snapshot.status === "stopping" ||
+      record.snapshot.status === "archived" ||
+      record.control?.status === "unknown" ||
+      Object.values(record.deliveries).some((delivery) => delivery.status === "unknown")
+    )
+      throw new Error(
+        "Task approval is blocked until its pending control or delivery is reconciled",
+      );
   }
 
   async stop(input: Input<TaskConversationStopRequest>): Promise<TaskConversationSnapshot> {
@@ -1121,18 +1164,50 @@ export class TaskConversationService {
         }),
       ]));
     if (timer) clearTimeout(timer);
+    this.flushProjection(input.conversationId);
+    await this.projectionTails.get(input.conversationId);
     snapshot = this.require(input.conversationId).snapshot;
     const selected = input.memberId
       ? snapshot.members.filter((member) => member.memberId === input.memberId)
       : snapshot.members;
+    const recoveryRecord = this.require(input.conversationId);
+    const unfinishedMembers = new Set(
+      this.dependencies.store
+        .queryRows(recoveryRecord, {
+          kind: "assistant",
+          completed: false,
+        })
+        .map((row) => row.source?.backendAgentId),
+    );
+    const uncertainMembers = new Set(
+      selected
+        .filter(
+          (member) =>
+            this.dependencies.agentManager.hasInFlightRun(member.backendAgentId) ||
+            member.status === "running" ||
+            recoveryRecord.recoveryMembers?.includes(member.backendAgentId) ||
+            this.recoveryMembers.get(input.conversationId)?.has(member.backendAgentId) ||
+            Object.values(recoveryRecord.deliveries).some(
+              (delivery) =>
+                delivery.backendAgentId === member.backendAgentId && delivery.status === "unknown",
+            ) ||
+            unfinishedMembers.has(member.backendAgentId),
+        )
+        .map((member) => member.backendAgentId),
+    );
+    // Cancellation may publish idle/completed before native history is read.
+    // Keep the recovery obligation durable across a crash in that interval.
+    this.dependencies.store.update(input.conversationId, (current) => {
+      current.recoveryMembers = [
+        ...new Set([...(current.recoveryMembers ?? []), ...uncertainMembers]),
+      ];
+    });
+    for (const agentId of uncertainMembers) this.trackRecovery(input.conversationId, agentId);
     const outcomes = await Promise.all(
       selected.map(async (member) => {
         try {
           if (!this.dependencies.agentManager.getAgent(member.backendAgentId)) {
-            const uncertain =
-              member.status === "running" ||
-              this.recoveryMembers.get(input.conversationId)?.has(member.backendAgentId);
-            if (!uncertain) return true;
+            if (!uncertainMembers.has(member.backendAgentId)) return true;
             const stored = await this.dependencies.agentStorage.get(member.backendAgentId);
             if (!stored?.persistence) return false;
             await this.authority.run({ agentId: member.backendAgentId }, () =>
@@ -1170,8 +1245,7 @@ export class TaskConversationService {
     if (!settled) throw new Error("Task cancellation is unknown; resources must remain reserved");
     this.flushProjection(input.conversationId);
     await this.projectionTails.get(input.conversationId);
-    for (const member of selected) this.trackRecovery(input.conversationId, member.backendAgentId);
-    await this.reconcile(input.conversationId);
+    const reconciled = await this.reconcile(input.conversationId);
     this.completeStoppedMembers(input.conversationId, selected);
     if (input.reconcileDelivery) {
       const resolution = input.reconcileDelivery;
@@ -1200,7 +1274,27 @@ export class TaskConversationService {
         });
       this.notifySnapshot(input.conversationId);
     }
+    this.clearRejectedRecovery(input, reconciled);
     return this.require(input.conversationId).snapshot;
+  }
+  private clearRejectedRecovery(
+    input: Input<TaskConversationStopRequest>,
+    reconciled: Set<string>,
+  ): void {
+    if (input.reconcileDelivery?.resolution === "rejected") {
+      const current = this.require(input.conversationId);
+      const agentId = current.deliveries[input.reconcileDelivery.clientMessageId]!.backendAgentId;
+      if (
+        reconciled.has(agentId) &&
+        !Object.values(current.deliveries).some(
+          (delivery) => delivery.backendAgentId === agentId && delivery.status === "unknown",
+        )
+      )
+        this.recoveryMembers.get(input.conversationId)?.delete(agentId);
+      this.dependencies.store.update(input.conversationId, (record) => {
+        record.recoveryMembers = [...(this.recoveryMembers.get(input.conversationId) ?? [])];
+      });
+    }
   }
   private completeStoppedMembers(conversationId: string, members: TaskConversationMember[]): void {
     const ids = new Set(members.map((member) => member.backendAgentId));
@@ -1208,12 +1302,13 @@ export class TaskConversationService {
       for (const member of record.snapshot.members) {
         if (ids.has(member.backendAgentId) && member.status !== "error") member.status = "idle";
       }
-      return record.rows
-        .filter(
-          (row) =>
-            row.kind === "assistant" && !row.completed && ids.has(row.source?.backendAgentId ?? ""),
-        )
-        .map((row) => this.dependencies.store.replaceRow(record, row.id, { completed: true }));
+      return this.dependencies.store
+        .queryRows(record, {
+          kind: "assistant",
+          completed: false,
+          backendAgentIds: [...ids],
+        })
+        .map((row) => this.dependencies.store.replaceRow(record, row, { completed: true }));
     });
     for (const row of rows)
       this.notify(conversationId, { row, eventSeq: row.updatedSeq ?? row.seq });
@@ -1318,64 +1413,52 @@ export class TaskConversationService {
     if (event.type === "agent_state") agentId = event.agent.id;
     else if (event.type === "agent_stream") agentId = event.agentId;
     if (!agentId) return;
+    if (!isProjectionEvent(event)) return;
     const conversationId = this.dependencies.store.conversationIdForMember(agentId);
     if (!conversationId) return;
-    if (
-      event.type === "agent_stream" &&
-      event.event.type === "timeline" &&
-      event.event.item.type === "assistant_message"
-    ) {
-      let pending = this.pendingProjections.get(conversationId);
-      if (!pending) {
-        const timer = setTimeout(() => this.flushProjection(conversationId), 50);
-        timer.unref?.();
-        pending = { timer, events: [] };
-        this.pendingProjections.set(conversationId, pending);
-      }
-      if (event.epoch && event.seq !== undefined) {
-        const sourceKey = `${conversationId}:${agentId}:${event.epoch}`;
-        const latest = Math.max(
-          this.projectionSourceSeqs.get(sourceKey) ?? -1,
-          this.dependencies.store.sourceSequence(conversationId, agentId, event.epoch),
-        );
-        if (event.seq <= latest) return;
-        this.projectionSourceSeqs.set(sourceKey, event.seq);
-      }
-      const previous = pending.events.at(-1);
-      const merged = mergeAssistantFragments(previous?.event, event);
-      if (previous && merged) previous.event = merged;
-      else pending.events.push({ agentId, event });
-      return;
+    const assistant = event.type === "agent_stream" && event.event.type === "timeline";
+    if (assistant && event.epoch && event.seq !== undefined) {
+      const sourceKey = `${conversationId}:${agentId}:${event.epoch}`;
+      const latest = Math.max(
+        this.projectionSourceSeqs.get(sourceKey) ?? -1,
+        this.dependencies.store.sourceSequence(conversationId, agentId, event.epoch),
+      );
+      if (event.seq <= latest) return;
+      this.projectionSourceSeqs.set(sourceKey, event.seq);
     }
-    this.flushProjection(conversationId);
-    this.enqueueProjection(conversationId, agentId, event);
+    let pending = this.pendingProjections.get(conversationId);
+    if (!pending) {
+      // The native coalescer already emits every 60ms. A shorter window would
+      // still commit once per native fragment instead of throttling disk work.
+      const timer = setTimeout(() => this.flushProjection(conversationId), 300);
+      timer.unref?.();
+      pending = { timer, events: [] };
+      this.pendingProjections.set(conversationId, pending);
+    }
+    // Members interleave; merge each member's adjacent message fragments even
+    // when other members or state notifications arrive between them.
+    const previous = pending.events.findLast(
+      (entry) => entry.agentId === agentId && entry.event.type === "agent_stream",
+    );
+    const merged = assistant && mergeAssistantFragments(previous?.event, event);
+    if (previous && merged) previous.event = merged;
+    else pending.events.push({ agentId, event });
+    if (isTerminalEvent(event)) this.flushProjection(conversationId, agentId);
   }
-  private flushProjection(conversationId: string): void {
+  private flushProjection(conversationId: string, agentId?: string): void {
     const pending = this.pendingProjections.get(conversationId);
     if (!pending) return;
-    clearTimeout(pending.timer);
-    this.pendingProjections.delete(conversationId);
-    for (const { agentId, event } of pending.events)
-      this.enqueueProjection(conversationId, agentId, event);
-  }
-  private enqueueProjection(
-    conversationId: string,
-    agentId: string,
-    event: AgentManagerEvent,
-  ): void {
-    if (
-      event.type === "agent_stream" &&
-      event.event.type !== "turn_started" &&
-      event.event.type !== "turn_completed" &&
-      event.event.type !== "turn_failed" &&
-      event.event.type !== "turn_canceled" &&
-      !(event.event.type === "timeline" && event.event.item.type === "assistant_message")
-    )
-      return;
+    const events = agentId
+      ? pending.events.filter((entry) => entry.agentId === agentId)
+      : pending.events;
+    if (!events.length) return;
+    if (agentId) pending.events = pending.events.filter((entry) => entry.agentId !== agentId);
+    if (!agentId || !pending.events.length) {
+      clearTimeout(pending.timer);
+      this.pendingProjections.delete(conversationId);
+    }
     const previous = this.projectionTails.get(conversationId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(() => this.project(conversationId, agentId, event));
+    const next = previous.catch(() => undefined).then(() => this.project(conversationId, events));
     this.projectionTails.set(conversationId, next);
     void next.catch((error) => {
       for (const key of this.projectionSourceSeqs.keys())
@@ -1393,53 +1476,63 @@ export class TaskConversationService {
       }
     });
   }
-  private async project(
+  private project(
     conversationId: string,
-    agentId: string,
-    event: AgentManagerEvent,
-  ): Promise<void> {
-    let row: TaskConversationRow | undefined;
-    this.dependencies.store.update(conversationId, (record) => {
-      const member = record.snapshot.members.find((entry) => entry.backendAgentId === agentId)!;
-      if (event.type === "agent_state") {
-        projectMemberState(member, event);
-        return;
-      }
-      if (event.type !== "agent_stream") return;
-      if (event.event.type === "turn_started")
-        member.lastRequestAt = event.timestamp ?? new Date().toISOString();
-      const sourceTurnId = "turnId" in event.event ? event.event.turnId : undefined;
-      const delivery = Object.values(record.deliveries).findLast(
-        (candidate) =>
-          candidate.backendAgentId === agentId &&
-          (candidate.status === "accepted" || candidate.status === "dispatching"),
-      );
-      const turnId =
-        sourceTurnId ??
-        this.dependencies.agentManager.getAgent(agentId)?.activeForegroundTurnId ??
-        delivery?.sourceTurnId;
-      if (event.event.type === "timeline" && event.event.item.type === "assistant_message") {
-        if (!turnId) return;
-        row = this.projectAssistant(record, member, turnId, event.event.item, event);
-      } else if (
-        event.event.type === "turn_completed" ||
-        event.event.type === "turn_failed" ||
-        event.event.type === "turn_canceled"
-      ) {
-        member.status = event.event.type === "turn_failed" ? "error" : "idle";
-        const existing = this.dependencies.store.querySource(conversationId, {
-          sourceKey: `assistant:${member.memberId}:${turnId}`,
-        });
-        if (existing)
-          row = this.dependencies.store.replaceRow(record, existing.id, { completed: true });
-      }
-    });
-    this.notify(conversationId, {
-      ...(event.type !== "agent_stream" || event.event.type !== "timeline"
-        ? { conversation: this.require(conversationId).snapshot }
-        : {}),
-      ...(row ? { row, eventSeq: row.updatedSeq ?? row.seq } : {}),
-    });
+    events: { agentId: string; event: AgentManagerEvent }[],
+  ): void {
+    const rows = new Map<string, TaskConversationRow>();
+    let snapshot: TaskConversationSnapshot | undefined;
+    const terminal = events.some(({ event }) => isTerminalEvent(event));
+    this.dependencies.store.update(
+      conversationId,
+      (record) => {
+        for (const { agentId, event } of events) {
+          const member = record.snapshot.members.find((entry) => entry.backendAgentId === agentId)!;
+          if (event.type === "agent_state") {
+            projectMemberState(member, event);
+            snapshot = record.snapshot;
+            continue;
+          }
+          if (event.type !== "agent_stream") continue;
+          if (event.event.type === "turn_started")
+            member.lastRequestAt = event.timestamp ?? new Date().toISOString();
+          const sourceTurnId = "turnId" in event.event ? event.event.turnId : undefined;
+          const delivery = Object.values(record.deliveries).findLast(
+            (candidate) =>
+              candidate.backendAgentId === agentId &&
+              (candidate.status === "accepted" || candidate.status === "dispatching"),
+          );
+          const turnId =
+            sourceTurnId ??
+            this.dependencies.agentManager.getAgent(agentId)?.activeForegroundTurnId ??
+            delivery?.sourceTurnId;
+          let row: TaskConversationRow | undefined;
+          if (event.event.type === "timeline" && event.event.item.type === "assistant_message") {
+            if (turnId)
+              row = this.projectAssistant(record, member, turnId, event.event.item, event);
+          } else {
+            snapshot = record.snapshot;
+            if (
+              event.event.type === "turn_completed" ||
+              event.event.type === "turn_failed" ||
+              event.event.type === "turn_canceled"
+            ) {
+              member.status = event.event.type === "turn_failed" ? "error" : "idle";
+              const existing = this.dependencies.store.querySource(record, {
+                sourceKey: `assistant:${member.memberId}:${turnId}`,
+              });
+              if (existing)
+                row = this.dependencies.store.replaceRow(record, existing, { completed: true });
+            }
+          }
+          if (row) rows.set(row.id, row);
+        }
+      },
+      { durability: terminal ? "full" : "normal" },
+    );
+    if (snapshot) this.notify(conversationId, { conversation: snapshot });
+    for (const row of rows.values())
+      this.notify(conversationId, { row, eventSeq: row.updatedSeq ?? row.seq });
   }
   private projectAssistant(
     record: StoredTaskConversation,
@@ -1449,7 +1542,7 @@ export class TaskConversationService {
     event: { epoch?: string; seq?: number },
   ): TaskConversationRow | undefined {
     const sourceKey = `assistant:${member.memberId}:${turnId}`;
-    const existing = this.dependencies.store.querySource(record.snapshot.conversationId, {
+    const existing = this.dependencies.store.querySource(record, {
       sourceKey,
     });
     const source = {
@@ -1487,7 +1580,7 @@ export class TaskConversationService {
       (existing.source.seq ?? -1) >= event.seq
     )
       return;
-    return this.dependencies.store.replaceRow(record, existing.id, {
+    return this.dependencies.store.replaceRow(record, existing, {
       text:
         existing.text +
         (item.messageId &&
@@ -1515,23 +1608,22 @@ export class TaskConversationService {
     record: StoredTaskConversation,
     clientMessageId: string,
   ): TaskConversationRow | undefined {
-    const row = record.rows.find(
-      (entry) => entry.kind === "user" && entry.clientMessageId === clientMessageId,
-    );
+    const row = this.dependencies.store.queryRows(record, { kind: "user", clientMessageId })[0];
     if (row && !row.text.startsWith("[未投递] "))
-      return this.dependencies.store.replaceRow(record, row.id, { text: `[未投递] ${row.text}` });
+      return this.dependencies.store.replaceRow(record, row, { text: `[未投递] ${row.text}` });
   }
   private trackRecovery(conversationId: string, agentId: string): void {
     const members = this.recoveryMembers.get(conversationId) ?? new Set<string>();
     members.add(agentId);
     this.recoveryMembers.set(conversationId, members);
   }
-  private reconcile(conversationId: string): Promise<void> {
+  private reconcile(conversationId: string): Promise<Set<string>> {
     const existing = this.recoveryOperations.get(conversationId);
     if (existing) return existing;
     const members = this.recoveryMembers.get(conversationId);
-    if (!members?.size) return Promise.resolve();
+    if (!members?.size) return Promise.resolve(new Set());
     const operation = (async () => {
+      const reconciled = new Set<string>();
       for (const agentId of members) {
         try {
           this.flushProjection(conversationId);
@@ -1582,7 +1674,7 @@ export class TaskConversationService {
                 .map((row) => (row.item.type === "assistant_message" ? row.item.text : ""))
                 .join("\n\n");
               const sourceKey = `assistant:${delivery.memberId}:${delivery.sourceTurnId}`;
-              const current = record.rows.find((row) => row.sourceKey === sourceKey);
+              const current = this.dependencies.store.querySource(record, { sourceKey });
               const source = {
                 memberId: delivery.memberId,
                 backendAgentId: agentId,
@@ -1593,7 +1685,7 @@ export class TaskConversationService {
               this.dependencies.store.acceptSourceSequence(record, agentId, epoch, source.seq);
               if (current && text.startsWith(current.text) && current.text !== text)
                 rows.push(
-                  this.dependencies.store.replaceRow(record, current.id, {
+                  this.dependencies.store.replaceRow(record, current, {
                     text,
                     source,
                     sourceKey: `recovery:${agentId}:${epoch}:${source.seq}`,
@@ -1616,8 +1708,15 @@ export class TaskConversationService {
               }
             }
           });
+          reconciled.add(agentId);
           for (const row of rows)
             this.notify(conversationId, { row, eventSeq: row.updatedSeq ?? row.seq });
+          if (
+            !Object.values(this.require(conversationId).deliveries).some(
+              (delivery) => delivery.backendAgentId === agentId && delivery.status === "unknown",
+            )
+          )
+            members.delete(agentId);
         } catch (error) {
           this.dependencies.logger.warn(
             { err: error, conversationId, agentId },
@@ -1625,7 +1724,11 @@ export class TaskConversationService {
           );
         }
       }
+      this.dependencies.store.update(conversationId, (record) => {
+        record.recoveryMembers = [...members];
+      });
       this.notifySnapshot(conversationId);
+      return reconciled;
     })();
     this.recoveryOperations.set(conversationId, operation);
     void operation

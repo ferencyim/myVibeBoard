@@ -85,7 +85,7 @@ describe("workspace agent visibility", () => {
       workspaceId: WORKSPACE_ID,
     });
     expect(result.activeAgentIds).toEqual(new Set(["worker"]));
-    expect(result.autoOpenAgentIds).toEqual(new Set());
+    expect(result.autoOpenAgentIds).toEqual(new Set(["worker"]));
     expect(result.conversationByAgentId?.get("worker")).toBe("conversation-1");
   });
   it("does not reopen a closed conversation when anchor or later background members update", () => {
@@ -113,7 +113,11 @@ describe("workspace agent visibility", () => {
       workspaceId: WORKSPACE_ID,
     });
     const reconciled = reconcileWorkspaceTabs(
-      { layout: closed, explorerSidebarPaneId: null },
+      {
+        layout: closed,
+        explorerSidebarPaneId: null,
+        closedTaskConversationIds: new Set(["conversation"]),
+      },
       buildWorkspaceTabSnapshot({
         agentVisibility: visibility,
         agentsHydrated: true,

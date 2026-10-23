@@ -54,9 +54,9 @@ export function deriveWorkspaceAgentVisibility(input: {
       const parentAgent = agent.parentAgentId
         ? (sessionAgents?.get(agent.parentAgentId) ?? agentDetails?.get(agent.parentAgentId))
         : undefined;
-      // Conversation tabs open through task creation/navigation. Background member events
-      // must not reopen a conversation the user closed.
-      if (!agent.taskConversationId && isWorkspaceRootAgent(agent, parentAgent)) {
+      // Reconciliation maps every task member to one conversation tab, including when
+      // a member arrives before its anchor on another client.
+      if (agent.taskConversationId || isWorkspaceRootAgent(agent, parentAgent)) {
         autoOpenAgentIds.add(agent.id);
       }
     }

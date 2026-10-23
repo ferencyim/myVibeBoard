@@ -338,6 +338,61 @@ describe("TaskConversationService", () => {
     },
   );
 
+  it.each(["delivery", "control"])(
+    "blocks approval before loading its provider with unknown %s",
+    async (kind) => {
+      const { service, store, manager } = fixture();
+      const conversation = await createConversation(service);
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient,
+        clientMessageId: "approval-unknown",
+        text: "等待审批",
+      });
+      store.update(conversation.conversationId, (record) => {
+        if (kind === "delivery") record.deliveries[delivery.clientMessageId]!.status = "unknown";
+        else record.control = { status: "unknown" };
+      });
+      manager.getAgent.mockClear();
+      await expect(service.preparePermissionResponse(delivery.backendAgentId)).rejects.toThrow(
+        "blocked",
+      );
+      expect(manager.getAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not reconcile idle unused members or reload settled members when tabs reopen", async () => {
+    const { service, manager, store } = fixture();
+    const conversation = await createConversation(service);
+    const one = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "used",
+      text: "使用过",
+    });
+    const two = await service.send({
+      conversationId: conversation.conversationId,
+      recipient: { ...recipient, role: "reviewer" },
+      clientMessageId: "unused",
+      text: "已完成",
+    });
+    store.update(conversation.conversationId, (record) => {
+      record.snapshot.members[0]!.status = "running";
+      record.snapshot.members[1]!.status = "idle";
+    });
+    const loaded = manager.getAgent(one.backendAgentId);
+    manager.getAgent.mockImplementation((id) => (id === two.backendAgentId ? undefined : loaded));
+    await service.stop({ conversationId: conversation.conversationId });
+    expect(manager.getTimelineRows.mock.calls.map(([id]) => id)).toEqual([one.backendAgentId]);
+    manager.getAgent.mockReturnValue(undefined);
+    for (let i = 0; i < 3; i++) {
+      const release = service.subscribe(conversation.conversationId, () => undefined);
+      await Promise.resolve();
+      release();
+    }
+    expect(manager.getTimelineRows).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers prepared deliveries as rejected without starting providers", async () => {
     const original = fixture();
     const conversation = await createConversation(original.service);
@@ -449,6 +504,117 @@ describe("TaskConversationService", () => {
     expect(recovered.service.resolve({ conversationId: conversation.conversationId })!.status).toBe(
       "archived",
     );
+    expect(recovered.manager.streamAgent).not.toHaveBeenCalled();
+  });
+
+  it("retains a member's older output recovery when its latest unknown delivery is rejected", async () => {
+    const { service, manager, store } = fixture();
+    const conversation = await createConversation(service);
+    const one = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "older-accepted",
+      text: "旧轮次",
+    });
+    const two = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "latest-unknown",
+      text: "新轮次",
+    });
+    store.update(conversation.conversationId, (record) => {
+      record.deliveries[two.clientMessageId]!.status = "unknown";
+    });
+    manager.getTimelineRows.mockRejectedValueOnce(new Error("原生历史暂时不可用"));
+    await service.stop({
+      conversationId: conversation.conversationId,
+      reconcileDelivery: { clientMessageId: two.clientMessageId, resolution: "rejected" },
+    });
+    expect(store.get(conversation.conversationId)!.recoveryMembers).toEqual([one.backendAgentId]);
+    const turnId = store.get(conversation.conversationId)!.deliveries[one.clientMessageId]!
+      .sourceTurnId!;
+    manager.getTimelineRows.mockResolvedValue([
+      { seq: 1, turnId, item: { type: "assistant_message", text: "旧轮次仍补回" } },
+    ]);
+    await service.stop({ conversationId: conversation.conversationId });
+    expect(service.fetch({ conversationId: conversation.conversationId }).rows.at(-1)?.text).toBe(
+      "旧轮次仍补回",
+    );
+    expect(store.get(conversation.conversationId)!.recoveryMembers).toEqual([]);
+  });
+
+  it("retains another member's failed recovery across explicit rejection and restart", async () => {
+    const original = fixture();
+    const conversation = await createConversation(original.service);
+    const one = await original.service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "reject-one",
+      text: "第一成员",
+    });
+    const two = await original.service.send({
+      conversationId: conversation.conversationId,
+      recipient: { ...recipient, role: "worker" },
+      clientMessageId: "recover-other",
+      text: "第二成员",
+    });
+    original.store.update(conversation.conversationId, (record) => {
+      record.deliveries[one.clientMessageId]!.status = "unknown";
+    });
+    original.manager.getTimelineRows.mockImplementation(async (agentId) => {
+      if (agentId === two.backendAgentId) throw new Error("暂时无法核对");
+      return [];
+    });
+    await original.service.stop({
+      conversationId: conversation.conversationId,
+      reconcileDelivery: { clientMessageId: one.clientMessageId, resolution: "rejected" },
+    });
+    expect(original.store.get(conversation.conversationId)!.recoveryMembers).toEqual([
+      two.backendAgentId,
+    ]);
+    const turnId = original.store.get(conversation.conversationId)!.deliveries[two.clientMessageId]!
+      .sourceTurnId!;
+    const recovered = fixture(original.store);
+    services.delete(original.service);
+    recovered.manager.getAgent.mockReturnValue({ config: recipient.config, runtimeInfo: {} });
+    recovered.manager.getTimelineRows.mockResolvedValue([
+      { seq: 1, turnId, item: { type: "assistant_message", text: "失败后重启补回" } },
+    ]);
+    await recovered.service.stop({ conversationId: conversation.conversationId });
+    expect(recovered.manager.getTimelineRows.mock.calls.map(([id]) => id)).toEqual([
+      two.backendAgentId,
+    ]);
+    expect(
+      recovered.service.fetch({ conversationId: conversation.conversationId }).rows.at(-1)?.text,
+    ).toBe("失败后重启补回");
+    expect(recovered.store.get(conversation.conversationId)!.recoveryMembers).toEqual([]);
+  });
+
+  it("recovers accepted native output after a crash before the first projection batch", async () => {
+    const original = fixture();
+    const conversation = await createConversation(original.service);
+    const delivery = await original.service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "before-first-batch",
+      text: "首批前崩溃",
+    });
+    expect(
+      original.service.fetch({ conversationId: conversation.conversationId }).rows,
+    ).toHaveLength(1);
+    const recovered = fixture(original.store);
+    services.delete(original.service);
+    recovered.manager.getAgent.mockReturnValue({ config: recipient.config, runtimeInfo: {} });
+    const turnId = original.store.get(conversation.conversationId)!.deliveries[
+      delivery.clientMessageId
+    ]!.sourceTurnId!;
+    recovered.manager.getTimelineRows.mockResolvedValue([
+      { seq: 1, turnId, item: { type: "assistant_message", text: "原生历史完整补回" } },
+    ]);
+    await recovered.service.stop({ conversationId: conversation.conversationId });
+    expect(
+      recovered.service.fetch({ conversationId: conversation.conversationId }).rows.at(-1),
+    ).toMatchObject({ text: "原生历史完整补回", completed: true });
     expect(recovered.manager.streamAgent).not.toHaveBeenCalled();
   });
 
@@ -915,7 +1081,7 @@ describe("TaskConversationService streaming durability", () => {
       for (let seq = 1; seq <= 100; seq++) emit(assistantEvent(delivery.backendAgentId, seq, "字"));
       emit(assistantEvent(delivery.backendAgentId, 100, "重复不得显示"));
       expect(write).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(300);
       expect(write).toHaveBeenCalledTimes(1);
       expect(updates.filter((update) => update.row)).toHaveLength(1);
       const changed = updates.find((update) => update.row)!;
@@ -941,6 +1107,74 @@ describe("TaskConversationService streaming durability", () => {
         ),
       ).toEqual([]);
       release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("throttles interleaved native-rate members in one transaction without unrelated flushes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, store, manager } = fixture();
+      const conversation = await createConversation(service);
+      const deliveries = [];
+      for (const role of ["planner", "worker", "reviewer"])
+        deliveries.push(
+          await service.send({
+            conversationId: conversation.conversationId,
+            recipient: { ...recipient, role },
+            clientMessageId: role,
+            text: role,
+          }),
+        );
+      await vi.advanceTimersByTimeAsync(0);
+      const emit = manager.subscribe.mock.calls[0]![0];
+      const write = vi.spyOn(store, "update");
+      for (let tick = 1; tick <= 10; tick++) {
+        for (const delivery of deliveries) {
+          emit(assistantEvent(delivery.backendAgentId, tick, "字"));
+          emit({
+            type: "agent_stream",
+            agentId: delivery.backendAgentId,
+            event: { type: "timeline", item: { type: "user_message", text: "ignored" } },
+          } as AgentManagerEvent);
+          emit({
+            type: "agent_state",
+            agent: {
+              ...manager.getAgent(delivery.backendAgentId),
+              id: delivery.backendAgentId,
+              lifecycle: "running",
+              pendingPermissions: new Map(),
+            },
+          } as unknown as AgentManagerEvent);
+        }
+        await vi.advanceTimersByTimeAsync(60);
+      }
+      expect(write).toHaveBeenCalledTimes(2);
+      const rows = service
+        .fetch({ conversationId: conversation.conversationId })
+        .rows.filter((row) => row.kind === "assistant");
+      expect(rows.map((row) => row.text)).toEqual([
+        "字".repeat(10),
+        "字".repeat(10),
+        "字".repeat(10),
+      ]);
+      for (const delivery of deliveries) emit(assistantEvent(delivery.backendAgentId, 11, "尾"));
+      emit({
+        type: "agent_stream",
+        agentId: deliveries[0]!.backendAgentId,
+        event: { type: "turn_completed", provider: "claude", turnId: "turn-1" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(write).toHaveBeenCalledTimes(3);
+      expect(
+        service
+          .fetch({ conversationId: conversation.conversationId })
+          .rows.filter((row) => row.kind === "assistant")
+          .map((row) => row.text),
+      ).toEqual(["字".repeat(10) + "尾", "字".repeat(10), "字".repeat(10)]);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(write).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }
@@ -990,7 +1224,7 @@ describe("Task conversation recovery boundaries", () => {
       manager.fetchTimeline.mockReturnValue({ epoch: "native" });
       const emit = manager.subscribe.mock.calls[0]![0];
       emit(assistantEvent(delivery.backendAgentId, 1, "A"));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(300);
       manager.getTimelineRows.mockImplementationOnce(async () => {
         emit(assistantEvent(delivery.backendAgentId, 2, "B"));
         emit(assistantEvent(delivery.backendAgentId, 3, "C"));
@@ -1004,7 +1238,7 @@ describe("Task conversation recovery boundaries", () => {
         ];
       });
       const release = service.subscribe(conversation.conversationId, () => undefined);
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(300);
       expect(
         store.querySource(conversation.conversationId, {
           sourceKey: `assistant:${delivery.memberId}:native-turn`,
@@ -1012,7 +1246,7 @@ describe("Task conversation recovery boundaries", () => {
       ).toBe("ABC");
       emit(assistantEvent(delivery.backendAgentId, 2, "B"));
       emit(assistantEvent(delivery.backendAgentId, 4, "D"));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(300);
       expect(
         store.querySource(conversation.conversationId, {
           sourceKey: `assistant:${delivery.memberId}:native-turn`,
