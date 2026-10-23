@@ -251,3 +251,85 @@ describe("submitAgentInput", () => {
     expect(clearDraft).toHaveBeenCalledWith("sent");
   });
 });
+
+describe("existing agent offline boundary", () => {
+  function composer(hasAgent: boolean, isConnected: boolean, isAgentRunning: boolean) {
+    const state = {
+      text: "/执行",
+      attachments: [{ id: "image" }],
+      error: null as string | null,
+      queued: 0,
+      sent: 0,
+      cleared: 0,
+    };
+    const input = {
+      message: state.text,
+      attachments: state.attachments,
+      isAgentRunning,
+      canSubmit: true,
+      connection: { hasAgent, isConnected },
+      queueMessage: () => {
+        state.queued++;
+      },
+      submitMessage: async () => {
+        state.sent++;
+      },
+      clearDraft: () => {
+        state.cleared++;
+      },
+      setUserInput: (text: string) => {
+        state.text = text;
+      },
+      setAttachments: (attachments: Array<{ id: string }>) => {
+        state.attachments = attachments;
+      },
+      setSendError: (error: string | null) => {
+        state.error = error;
+      },
+      setIsProcessing: () => undefined,
+    };
+    return { state, input };
+  }
+
+  it.each([false, true])(
+    "keeps existing task input and attachments offline (running=%s)",
+    async (isAgentRunning) => {
+      const { state, input } = composer(true, false, isAgentRunning);
+      expect(await submitAgentInput(input)).toBe("failed");
+      expect(state).toEqual({
+        text: "/执行",
+        attachments: [{ id: "image" }],
+        error: "主机未连接；已有任务的消息、确认和审批须联网后发送",
+        queued: 0,
+        sent: 0,
+        cleared: 0,
+      });
+    },
+  );
+
+  it("allows the new-task parent submit to retain its offline outbox behavior", async () => {
+    const { state, input } = composer(false, false, false);
+    expect(await submitAgentInput(input)).toBe("submitted");
+    expect(state).toEqual({
+      text: "",
+      attachments: [],
+      error: null,
+      queued: 0,
+      sent: 1,
+      cleared: 1,
+    });
+  });
+
+  it("keeps the original online queue behavior", async () => {
+    const { state, input } = composer(true, true, true);
+    expect(await submitAgentInput(input)).toBe("queued");
+    expect(state).toEqual({
+      text: "",
+      attachments: [],
+      error: null,
+      queued: 1,
+      sent: 0,
+      cleared: 0,
+    });
+  });
+});

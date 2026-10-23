@@ -1,110 +1,67 @@
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { expect, test, vi } from "vitest";
-import { createPluginHosts } from "./hosts";
-import { PluginRegistry } from "./registry";
+import { describe, expect, it } from "vitest";
+import { invokeConnectedPluginRpc } from "./rpc";
 
-const audio = { play: async () => 0 };
-
-function fakeClient(rpc = vi.fn(async () => "online")) {
-  return {
-    observeEvents: () => ({
-      ready: Promise.resolve({ subscriptionId: "x" }),
-      subscribe: () => () => undefined,
-      release: async () => undefined,
-    }),
-    invokePluginRpc: rpc,
-  } as unknown as DaemonClient;
+function connectedHost() {
+  const calls: Array<{ pluginId: string; method: string; input: unknown }> = [];
+  const client: Pick<DaemonClient, "invokePluginRpc"> = {
+    async invokePluginRpc(pluginId, method, input) {
+      calls.push({ pluginId, method, input });
+      return { saved: true };
+    },
+  };
+  return { client, calls };
 }
 
-function registry(options: { live?: () => DaemonClient | null } = {}) {
-  const invokeOffline = vi.fn(async () => "offline");
-  const plugins = new PluginRegistry({
-    version: "0.8.0",
-    getLiveClient: options.live,
-    invokeOffline,
-    createRuntime: (installation) => ({
-      hosts: createPluginHosts(
-        {
-          getHosts: () => [],
-          getSnapshot: () => null,
-          subscribeAll: () => () => {},
-          subscribeHostList: () => () => {},
-        },
-        installation.lifetime.signal,
-      ),
-      paseo: installation.paseo,
-      rpc: async () => {
-        throw new Error("Unexpected plugin RPC");
-      },
-      openScreen: () => {},
-      openSurface: () => {},
-      openSettings: () => {},
-      playAudio: async () => {},
-      openPanel: () => {},
-      addComposerPill: () => ({ update() {}, remove() {} }),
-      addHeaderButton: () => ({ update() {}, remove() {} }),
-    }),
+describe("plugin RPC online boundary", () => {
+  it.each([
+    "vibe.presets.update",
+    "vibe.prompts.set",
+    "vibe.task.confirm",
+    "vibe.reply.send",
+    "vibe.task.stop",
+    "vibe.cards.create",
+  ])("rejects offline %s without local success or queueing", async (method) => {
+    await expect(invokeConnectedPluginRpc(null, "vibe-board", method, {})).rejects.toThrow(
+      "[offline] 主机未连接；设置、确认、审批和停止操作须联网后重试",
+    );
   });
-  return { plugins, invokeOffline };
-}
 
-const entry = (id: string, marker = "a") => ({
-  id,
-  requirements: { paseo: ">=0.8.0" },
-  clientBundle: `(function() { return { default: function(plugin) { /* ${marker} */ return function() {}; } }; })`,
-});
+  it("forwards only to the exact connected host and plugin", async () => {
+    const hostA = connectedHost();
+    const hostB = connectedHost();
+    await expect(
+      invokeConnectedPluginRpc(hostB.client, "vibe-board", "vibe.task.confirm", {
+        workspaceId: "workspace",
+      }),
+    ).resolves.toEqual({ saved: true });
+    expect(hostA.calls).toEqual([]);
+    expect(hostB.calls).toEqual([
+      { pluginId: "vibe-board", method: "vibe.task.confirm", input: { workspaceId: "workspace" } },
+    ]);
+  });
 
-test("an installation restored from the cache answers RPCs locally and has no Paseo API", async () => {
-  const { plugins, invokeOffline } = registry({ live: () => null });
-  plugins.restoreFromCache("host", [entry("board")], { audio });
+  it("does not retain a disconnected operation to replay after reconnect", async () => {
+    const host = connectedHost();
+    await expect(
+      invokeConnectedPluginRpc(null, "vibe-board", "vibe.task.confirm", {
+        workspaceId: "workspace",
+      }),
+    ).rejects.toThrow("须联网后重试");
+    await invokeConnectedPluginRpc(host.client, "vibe-board", "vibe.projects.list", {});
+    expect(host.calls).toEqual([
+      { pluginId: "vibe-board", method: "vibe.projects.list", input: {} },
+    ]);
+  });
 
-  const [board] = plugins.getSnapshot();
-  expect(board?.id).toBe("board");
-  await expect(board?.invoke("vibe.cards.list", { a: 1 })).resolves.toBe("offline");
-  expect(invokeOffline).toHaveBeenCalledWith("host", "board", "vibe.cards.list", { a: 1 });
-  expect(() => board?.paseo.agents.list()).toThrow("[offline]");
-  await expect(board?.paseo.dispose()).resolves.toBeUndefined();
-});
-
-test("the same installation switches between daemon and local RPC with the connection", async () => {
-  let live: DaemonClient | null = null;
-  const rpc = vi.fn(async () => "online");
-  const client = fakeClient(rpc);
-  const { plugins, invokeOffline } = registry({ live: () => live });
-  plugins.installCatalog("host", [entry("board")], { client, audio });
-  const [board] = plugins.getSnapshot();
-
-  live = client;
-  await expect(board?.invoke("m", 1)).resolves.toBe("online");
-  expect(rpc).toHaveBeenCalledWith("board", "m", 1);
-  live = null;
-  await expect(board?.invoke("m", 2)).resolves.toBe("offline");
-  expect(invokeOffline).toHaveBeenCalledTimes(1);
-});
-
-test("going online replaces the cached installation but keeps it across disconnects", () => {
-  const { plugins } = registry({ live: () => null });
-  const client = fakeClient();
-  plugins.restoreFromCache("host", [entry("board")], { audio });
-  const [cached] = plugins.getSnapshot();
-
-  // A second restore (reconnect flap while offline) changes nothing.
-  plugins.restoreFromCache("host", [entry("board")], { audio });
-  expect(plugins.getSnapshot()[0]).toBe(cached);
-
-  plugins.installCatalog("host", [entry("board")], { client, audio });
-  const [online] = plugins.getSnapshot();
-  expect(online).not.toBe(cached);
-
-  // The online installation survives a refresh with the same client and bundle.
-  plugins.installCatalog("host", [entry("board")], { client, audio });
-  expect(plugins.getSnapshot()[0]).toBe(online);
-});
-
-test("pruneHosts drops only hosts that left the app", () => {
-  const { plugins } = registry();
-  plugins.restoreFromCache("kept", [entry("board")], { audio });
-  plugins.restoreFromCache("gone", [entry("board")], { audio });
-  plugins.pruneHosts(["kept"]);
-  expect(plugins.getSnapshot().map((p) => p.serverId)).toEqual(["kept"]);
+  it("returns an online transport failure to the caller", async () => {
+    const client: Pick<DaemonClient, "invokePluginRpc"> = {
+      async invokePluginRpc() {
+        throw new Error("连接已断开");
+      },
+    };
+    await expect(
+      invokeConnectedPluginRpc(client, "vibe-board", "vibe.task.confirm", {}),
+    ).rejects.toThrow("连接已断开");
+  });
 });

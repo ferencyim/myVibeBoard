@@ -1,37 +1,25 @@
-// Where a tap on a Vibe Board push goes. The daemon's board pushes carry only {event, cardKey}
-// (minimal payload, no host id): card.verifying opens that card on the board, session.waiting opens
-// the session overview where the waiting session is pinned on top.
-
-import { VIBE_BOARD_PLUGIN_ID } from "../rpc/local-rpc";
-import { buildPluginSurfaceRoute } from "@/plugins/routes";
+import { buildHostWorkspaceOpenRoute, buildHostWorkspaceRoute } from "@/utils/host-routes";
 
 type PushData = Record<string, unknown> | null | undefined;
 
 const str = (data: PushData, key: string): string | null => {
-  const v = data?.[key];
-  return typeof v === "string" && v.trim() ? v.trim() : null;
+  const value = data?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 };
 
-/**
- * `candidateServerIds`: hosts that have the board installed (first one wins when the push names
- * no host and several qualify). Returns null for pushes that are not Vibe Board events.
- */
-export function resolveVibePushRoute(data: PushData, candidateServerIds: readonly string[]) {
-  const event = str(data, "event");
-  if (event !== "card.verifying" && event !== "session.waiting") return null;
-  const serverId = str(data, "serverId") ?? candidateServerIds[0];
-  if (!serverId) return null;
-  const cardKey = str(data, "cardKey");
-  if (event === "card.verifying") {
-    return buildPluginSurfaceRoute(
-      serverId,
-      VIBE_BOARD_PLUGIN_ID,
-      { kind: "surface", id: "board" },
-      cardKey ? { card: cardKey } : {},
-    );
-  }
-  return buildPluginSurfaceRoute(serverId, VIBE_BOARD_PLUGIN_ID, {
-    kind: "surface",
-    id: "sessions",
-  });
+/** Legacy card notifications have no native task identity and cannot be mapped to a task. */
+export function isRetiredVibePush(data: PushData): boolean {
+  return str(data, "event")?.startsWith("card.") ?? false;
+}
+
+/** Route only the exact host and workspace named by the notification. */
+export function resolveVibePushRoute(data: PushData) {
+  if (isRetiredVibePush(data)) return null;
+  const serverId = str(data, "serverId");
+  const workspaceId = str(data, "workspaceId");
+  if (!serverId || !workspaceId) return null;
+  const agentId = str(data, "agentId");
+  return agentId
+    ? buildHostWorkspaceOpenRoute(serverId, workspaceId, `agent:${agentId}`)
+    : buildHostWorkspaceRoute(serverId, workspaceId);
 }

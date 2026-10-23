@@ -208,6 +208,12 @@ WP-113 仍只做**新任务首消息 outbox**：保存 host、projectId、稳定
 - **单测**：创建前后断线、回执丢失、杀 App、重复重连仅一 workspace/一容器/一首消息；host 隔离、附件失败留正文、缺 capability 留草稿；无后续消息/配置/授权入队、无旧积压导入。
 - **隔离实测**：Android 飞行模式首发→杀 App 重开→联网自动创建群聊，桌面看到同一首发仍待确认；多次断连不多建，附件及通知正确定位。Web 窄屏复核在线流程；不依赖旧插件离线 bundle。
 
+#### WP-113 已实现部分（2026-10-23 合入，第三版 conversationId 对接待 WP-111）
+
+**WP-113 本地进度（尚未整体验收）**：App 已接入独立原生首消息 outbox、附件引用保留、重连提交、本机状态与精确通知路由，不读取旧手机积压；旧 UI/副本删除仍归 WP-114。客户端已按批准方案公开已有创建回执的只读查询，冷重启和重连自动核对结果；查询失败保留内容，查无回执才复用原幂等键继续首发。原生 API 幂等烟测通过，真实规划模型连接失败；Android 无可用模拟器，Web 界面验证尚未完成。本工作区保留第二版设计正文；main 上第三版设计优先，`conversationId` 接点待 WP-111 合入后处理，本次仅补只读查询与自动恢复。
+
+开发验证经验：outbox 必须在原生草稿清空前可靠落盘，附件 GC 也必须先恢复 outbox 引用；不能用 workspace 目录猜测创建请求的结果，未知结果依赖原生幂等回执查询。`dist` 联接其它检出时，新增 SDK 接口用临时源码映射做 `tsc --noEmit`，不能靠构建更新共享声明。旧迁移 fixture 应固定它要验证的版本边界，不把“倒数一条迁移”当作固定功能迁移；共享源只由 sync-shared 复制，测试启动兼容 Windows PowerShell 5.1 并显式关闭 relay。
+
 ### WP-114：最终切换与删除旧实现（依赖增加）
 
 - **范围/目录**：plugins/vibe-\* 旧 board/detail/card CRUD/同步、vibe-shared 删除迁移、packages/app/src/vibe 旧 replica/sync/local-rpc/replies/plugin-cache 及生成物/registry/layout 引用，安装/烟测脚本和 docs/vibe/需求。逐文件移除，禁止递归删除。

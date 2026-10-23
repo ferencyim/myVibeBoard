@@ -2851,6 +2851,23 @@ export class DaemonClient {
   // Agent Lifecycle
   // ============================================================================
 
+  async getWorkspaceCreation(idempotencyKey: string): Promise<CreationSnapshot | null> {
+    if (this.lastServerInfoMessage?.features?.creationLifecycle !== true) {
+      throw new Error("请升级主机后查询创建结果");
+    }
+    const result = await this.sendCorrelatedSessionRequest({
+      message: {
+        type: "creation.subscribe.request",
+        kind: "workspace",
+        idempotencyKey,
+        subscribe: false,
+      },
+      responseType: "creation.subscribe.response",
+    });
+    if (result.error) throw new Error(result.error);
+    return result.snapshot;
+  }
+
   private readonly creations = new CreationClient({
     supports: (feature) => this.lastServerInfoMessage?.features?.[feature] === true,
     requestId: () => this.createRequestId(),

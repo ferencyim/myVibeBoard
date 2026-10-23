@@ -1,25 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { resolveVibePushRoute } from "./push-route";
+import { isRetiredVibePush, resolveVibePushRoute } from "./push-route";
 
 describe("resolveVibePushRoute", () => {
-  it("opens the card on the board for a verifying push", () => {
-    expect(resolveVibePushRoute({ event: "card.verifying", cardKey: "VB-7" }, ["srv"])).toBe(
-      "/h/srv/plugin/vibe-board/surface/board?param.card=VB-7",
-    );
-  });
-
-  it("opens the session overview for a waiting push", () => {
-    expect(resolveVibePushRoute({ event: "session.waiting", cardKey: "VB-7" }, ["srv"])).toBe(
-      "/h/srv/plugin/vibe-board/surface/sessions",
-    );
-  });
-
-  it("prefers the host named in the push and ignores other pushes", () => {
+  it("opens the exact host, workspace and agent named in the push", () => {
     expect(
-      resolveVibePushRoute({ event: "session.waiting", serverId: "named" }, ["srv"]),
-    ).toContain("/h/named/");
-    expect(resolveVibePushRoute({ event: "master.alert" }, ["srv"])).toBeNull();
-    expect(resolveVibePushRoute({ agentId: "a" }, ["srv"])).toBeNull();
-    expect(resolveVibePushRoute({ event: "card.verifying" }, [])).toBeNull();
+      resolveVibePushRoute({
+        event: "session.waiting",
+        serverId: "named",
+        workspaceId: "workspace",
+        agentId: "agent",
+      }),
+    ).toBe("/h/named/workspace/workspace?open=agent%3Aagent");
+  });
+
+  it("opens a workspace when the push has no agent", () => {
+    expect(resolveVibePushRoute({ serverId: "named", workspaceId: "workspace" })).toBe(
+      "/h/named/workspace/workspace",
+    );
+  });
+
+  it("never guesses a host or workspace", () => {
+    for (const data of [
+      undefined,
+      { agentId: "agent" },
+      { serverId: "named", agentId: "agent" },
+      { workspaceId: "workspace", agentId: "agent" },
+      { event: "session.waiting", cardKey: "VB-7" },
+    ]) {
+      expect(resolveVibePushRoute(data)).toBeNull();
+    }
+  });
+
+  it("keeps retired card pushes out of native tasks", () => {
+    const data = {
+      event: "card.verifying",
+      cardKey: "VB-7",
+      serverId: "named",
+      workspaceId: "workspace",
+      agentId: "agent",
+    };
+    expect(isRetiredVibePush(data)).toBe(true);
+    expect(resolveVibePushRoute(data)).toBeNull();
+    expect(isRetiredVibePush({ event: "session.waiting" })).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ export interface AgentInputSubmitActionInput<TAttachment> {
   forceSend?: boolean;
   isAgentRunning: boolean;
   canSubmit: boolean;
+  connection?: { hasAgent: boolean; isConnected: boolean };
   queueMessage: (input: { message: string; attachments: TAttachment[] }) => void;
   submitMessage: (input: { message: string; attachments: TAttachment[] }) => Promise<void>;
   clearDraft: (lifecycle: "sent" | "abandoned") => void;
@@ -20,6 +21,10 @@ export interface AgentInputSubmitActionInput<TAttachment> {
   setIsProcessing: (isProcessing: boolean) => void;
   onSubmitError?: (error: unknown) => void;
   failedToSendMessage?: string;
+}
+
+export function agentInputOfflineError(hasAgent: boolean, isConnected: boolean): string | null {
+  return hasAgent && !isConnected ? "主机未连接；已有任务的消息、确认和审批须联网后发送" : null;
 }
 
 export async function submitAgentInput<TAttachment>(
@@ -36,6 +41,14 @@ export async function submitAgentInput<TAttachment>(
     !input.allowEmptySubmit
   ) {
     return "noop";
+  }
+
+  const offlineError = input.connection
+    ? agentInputOfflineError(input.connection.hasAgent, input.connection.isConnected)
+    : null;
+  if (offlineError) {
+    input.setSendError(offlineError);
+    return "failed";
   }
 
   if (!input.canSubmit) {
