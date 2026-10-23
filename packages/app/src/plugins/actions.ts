@@ -10,6 +10,7 @@ import type { PluginClientStateSource } from "@getpaseo/plugin/client/host";
 import { resolvePluginPanelOpenLocation } from "./workspace-panels/locations";
 import { parsePluginOpenScreenInput } from "./surface-contribution";
 import type { InstalledPlugin } from "./types";
+import { taskConversationKey, useTaskConversationStore } from "@/task-conversations/store";
 
 export interface PluginNavigation {
   openSettings(pluginId: string, screenId: string): void;
@@ -21,6 +22,7 @@ export interface PluginNavigation {
     agentId: string,
     location: PluginPanelLocation,
   ): void;
+  openConversationPanel?(pluginId: string, panelId: string, conversationId: string): void;
 }
 
 export function createPluginCapabilities(
@@ -51,20 +53,40 @@ export function createPluginAgentActionContext(input: {
   state: PluginClientStateSource;
   workspaceId: string;
   agentId: string;
+  conversationId?: string;
+  anchorAgentId?: string;
 }): PluginAgentCommandContext | null {
   const { plugin, navigation, state, workspaceId, agentId } = input;
   const workspace = state.getWorkspace(workspaceId);
   const agent = state.getAgent(agentId);
   if (!workspace || !agent || agent.workspaceId !== workspace.id) return null;
+  if (input.conversationId) {
+    const key = taskConversationKey(plugin.serverId, input.conversationId);
+    const conversation = useTaskConversationStore.getState().conversations.get(key);
+    const matchesConversation =
+      conversation?.workspaceId === workspaceId &&
+      conversation.anchorAgentId === input.anchorAgentId &&
+      agentId === input.anchorAgentId;
+    if (!matchesConversation) return null;
+  }
   return {
     context: "agent",
     ...createPluginCapabilities(plugin, navigation),
     workspace,
     agent,
+    conversationId: input.conversationId,
+    anchorAgentId: input.anchorAgentId,
     openPanel(panelId, options) {
       const panel = plugin.workspacePanels.find((candidate) => candidate.id === panelId);
       if (!panel) throw new Error(`Workspace panel is unavailable: ${panelId}`);
       const location = resolvePluginPanelOpenLocation(panel, options?.location);
+      if (location === "conversation") {
+        if (!input.conversationId || !navigation.openConversationPanel) {
+          throw new Error("Conversation panel context is unavailable");
+        }
+        navigation.openConversationPanel(plugin.id, panelId, input.conversationId);
+        return;
+      }
       if (panel.context === "workspace") {
         navigation.openWorkspacePanel(plugin.id, panelId, location);
         return;

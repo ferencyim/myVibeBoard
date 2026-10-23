@@ -10,6 +10,8 @@ export type AgentDirectoryEntry = Pick<
   | "lastActivityAt"
   | "cwd"
   | "workspaceId"
+  | "taskConversationId"
+  | "taskConversationMemberId"
   | "provider"
   | "requiresAttention"
   | "attentionReason"

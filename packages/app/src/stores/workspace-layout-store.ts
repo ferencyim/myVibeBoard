@@ -67,6 +67,23 @@ import { isSheetTabModified, resolveCompactSheetPolicy } from "@/workspace-tabs/
 import { panelResourceKey, type CompactSheetPolicy } from "@/panels/panel-manifest";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import { panelTargetSupportsHostForWorkspaceKey } from "@/plugins/workspace-panels/locations";
+import { useSessionStore } from "@/stores/session-store";
+
+function resolveMemberTabTarget(
+  workspaceKey: string | null,
+  target: WorkspaceTabTarget,
+): WorkspaceTabTarget | null {
+  const normalized = normalizeWorkspaceTabTarget(target);
+  if (normalized?.kind !== "agent" && normalized?.kind !== "provider_subagent") return normalized;
+  const agentId = normalized.kind === "agent" ? normalized.agentId : normalized.parentAgentId;
+  for (const [serverId, session] of Object.entries(useSessionStore.getState().sessions)) {
+    const agent = session.agents.get(agentId) ?? session.agentDetails.get(agentId);
+    if (agent?.taskConversationId && workspaceKey === `${serverId}:${agent.workspaceId}`) {
+      return { kind: "task_conversation", conversationId: agent.taskConversationId };
+    }
+  }
+  return normalized;
+}
 
 export {
   AMBIENT_PLACEMENT,
@@ -1027,7 +1044,7 @@ export function createWorkspaceLayoutStore(
         pullRequestTabAutoOpenedByWorkspace: {},
         openTab: (input) => {
           const normalizedWorkspaceKey = trimNonEmpty(input.workspaceKey);
-          const normalizedTarget = normalizeWorkspaceTabTarget(input.target);
+          const normalizedTarget = resolveMemberTabTarget(normalizedWorkspaceKey, input.target);
           if (!normalizedWorkspaceKey || !normalizedTarget) {
             return null;
           }
@@ -1106,7 +1123,10 @@ export function createWorkspaceLayoutStore(
             placement.explorerSidebarPaneId,
             placement.layout.focusedPaneId,
           );
-          const shouldPinAgent = input.pin === true && normalizedTarget.kind === "agent";
+          const pinAgentId =
+            input.pin === true && normalizedTarget.kind === "agent"
+              ? normalizedTarget.agentId
+              : null;
           set((state) => ({
             ...withoutFocusRestoration(state, normalizedWorkspaceKey),
             // A tab brought to the front dismisses the sheet over it.
@@ -1119,11 +1139,11 @@ export function createWorkspaceLayoutStore(
                     normalizedWorkspaceKey,
                     normalizedTarget.agentId,
                   ),
-            pinnedAgentIdsByWorkspace: shouldPinAgent
+            pinnedAgentIdsByWorkspace: pinAgentId
               ? addAgentIdToWorkspaceSet(
                   state.pinnedAgentIdsByWorkspace,
                   normalizedWorkspaceKey,
-                  normalizedTarget.agentId,
+                  pinAgentId,
                 )
               : state.pinnedAgentIdsByWorkspace,
             layoutByWorkspace: {

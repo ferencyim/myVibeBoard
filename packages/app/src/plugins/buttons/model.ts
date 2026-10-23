@@ -68,10 +68,17 @@ export class PluginButtonStore {
     input: PluginComposerPillContribution,
   ): PluginButtonRegistration {
     if (!input.agentId.trim()) throw new Error("Plugin composer pill needs an agent");
+    const conversationId = input.conversationId?.trim();
+    const anchorAgentId = input.anchorAgentId?.trim();
+    if (conversationId && anchorAgentId !== input.agentId.trim()) {
+      throw new Error("Conversation composer pill must target its anchor agent");
+    }
     return this.add(installation, input, "composer", {
       context: "agent",
       workspaceId: input.workspaceId.trim(),
       agentId: input.agentId.trim(),
+      conversationId,
+      anchorAgentId,
     });
   }
 
@@ -90,7 +97,9 @@ export class PluginButtonStore {
         entry.id === id &&
         entry.context.workspaceId === context.workspaceId &&
         (entry.context.context === "workspace" ||
-          (context.context === "agent" && entry.context.agentId === context.agentId)),
+          (context.context === "agent" &&
+            entry.context.agentId === context.agentId &&
+            entry.context.conversationId === context.conversationId)),
     );
     if (duplicate) throw new Error(`Duplicate plugin button: ${id}`);
     const key = this.nextKey++;
@@ -162,6 +171,7 @@ export function buttonMatches(
   serverId: string,
   workspaceId: string,
   agentId: string | null,
+  conversationId?: string,
 ): boolean {
   if (
     entry.installation.serverId !== serverId ||
@@ -173,6 +183,7 @@ export function buttonMatches(
   return (
     entry.placement === "composer" &&
     entry.context.context === "agent" &&
-    entry.context.agentId === agentId
+    entry.context.agentId === agentId &&
+    entry.context.conversationId === conversationId
   );
 }

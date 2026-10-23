@@ -271,6 +271,7 @@ export interface WorkspaceTabSnapshot {
   terminalsHydrated: boolean;
   activeAgentIds: Iterable<string>;
   autoOpenAgentIds: Iterable<string>;
+  conversationByAgentId?: ReadonlyMap<string, string>;
   knownTerminalIds?: Iterable<string>;
   standaloneTerminalIds: Iterable<string>;
   hasActivePendingTerminalCreate?: boolean;
@@ -2257,8 +2258,10 @@ function getFocusedPaneIdAfterTabClose(input: {
 
 function isEntityTarget(
   target: WorkspaceTabTarget,
-): target is Extract<WorkspaceTabTarget, { kind: "agent" | "terminal" }> {
-  return target.kind === "agent" || target.kind === "terminal";
+): target is Extract<WorkspaceTabTarget, { kind: "agent" | "terminal" | "task_conversation" }> {
+  return (
+    target.kind === "agent" || target.kind === "terminal" || target.kind === "task_conversation"
+  );
 }
 
 function isAgentTab(
@@ -2309,13 +2312,20 @@ function applyPinnedAndHidden(input: {
   return result;
 }
 
-function buildEntityTabGroups(initialTabs: WorkspaceTab[]): Map<string, EntityTabGroup> {
+function buildEntityTabGroups(
+  initialTabs: WorkspaceTab[],
+  conversationByAgentId?: ReadonlyMap<string, string>,
+): Map<string, EntityTabGroup> {
   const entityGroups = new Map<string, EntityTabGroup>();
   for (const tab of initialTabs) {
     if (!isEntityTarget(tab.target)) {
       continue;
     }
-    const canonicalTarget = normalizeWorkspaceTabTarget(tab.target);
+    const conversationId =
+      tab.target.kind === "agent" ? conversationByAgentId?.get(tab.target.agentId) : undefined;
+    const canonicalTarget = normalizeWorkspaceTabTarget(
+      conversationId ? { kind: "task_conversation", conversationId } : tab.target,
+    );
     if (!canonicalTarget) {
       continue;
     }
@@ -2374,6 +2384,7 @@ function addMissingEntityTabs(input: {
   standaloneTerminalIds: Set<string>;
   hasActivePendingTerminalCreate: boolean;
   hasActivePendingDraftCreate: boolean;
+  conversationByAgentId?: ReadonlyMap<string, string>;
   explorerSidebarPaneId: string | null;
 }): WorkspaceLayout {
   const {
@@ -2389,12 +2400,19 @@ function addMissingEntityTabs(input: {
   const currentAgentIds = new Set(
     currentEntityTabs.filter(isAgentTab).map((tab) => tab.target.agentId),
   );
+  const currentConversationIds = new Set(
+    currentEntityTabs.flatMap((tab) =>
+      tab.target.kind === "task_conversation" ? [tab.target.conversationId] : [],
+    ),
+  );
   const currentTerminalIds = new Set(
     currentEntityTabs.filter(isTerminalTab).map((tab) => tab.target.terminalId),
   );
 
   const sortedAutoOpenAgentIds = [...autoOpenAgentIds].sort();
   for (const agentId of sortedAutoOpenAgentIds) {
+    const conversationId = input.conversationByAgentId?.get(agentId);
+    if (conversationId && currentConversationIds.has(conversationId)) continue;
     if (currentAgentIds.has(agentId)) {
       continue;
     }
@@ -2403,10 +2421,13 @@ function addMissingEntityTabs(input: {
     }
     nextLayout = openEntityTabWithoutFocusing({
       layout: nextLayout,
-      target: { kind: "agent", agentId },
+      target: conversationId
+        ? { kind: "task_conversation", conversationId }
+        : { kind: "agent", agentId },
       explorerSidebarPaneId,
     });
     currentAgentIds.add(agentId);
+    if (conversationId) currentConversationIds.add(conversationId);
   }
 
   const sortedTerminalIds = [...standaloneTerminalIds].sort();
@@ -2465,7 +2486,7 @@ export function reconcileWorkspaceTabs(
     initialTabs.filter(isAgentTab).map((tab) => tab.target.agentId),
   );
 
-  const entityGroups = buildEntityTabGroups(initialTabs);
+  const entityGroups = buildEntityTabGroups(initialTabs, snapshot.conversationByAgentId);
 
   for (const [canonicalTabId, group] of entityGroups) {
     const keeper = group.tabs.find((tab) => tab.tabId === canonicalTabId) ?? group.tabs[0] ?? null;
@@ -2510,6 +2531,7 @@ export function reconcileWorkspaceTabs(
   nextLayout = addMissingEntityTabs({
     layout: nextLayout,
     autoOpenAgentIds: autoOpenSet,
+    conversationByAgentId: snapshot.conversationByAgentId,
     representedAgentIds,
     standaloneTerminalIds,
     hasActivePendingTerminalCreate: snapshot.hasActivePendingTerminalCreate ?? false,

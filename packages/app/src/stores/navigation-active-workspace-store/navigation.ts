@@ -92,7 +92,8 @@ export function navigateToWorkspace(
     workspaceId: input.workspaceId,
   });
   const shouldDeferAgentOpen = Boolean(
-    input.target?.kind === "agent" && (!resolvedWorkspaceId || !deps.isWorkspaceLayoutHydrated()),
+    (input.target?.kind === "agent" || input.target?.kind === "task_conversation") &&
+    (!resolvedWorkspaceId || !deps.isWorkspaceLayoutHydrated()),
   );
   if (input.target) {
     if (!shouldDeferAgentOpen) {
@@ -106,20 +107,26 @@ export function navigateToWorkspace(
       : [];
     const attentionAgentId = pickAttentionAgent(workspaceAgents);
     if (attentionAgentId && resolvedWorkspaceId) {
+      const agent = workspaceAgents.find((candidate) => candidate.id === attentionAgentId);
       deps.openTab({
         workspaceKey: `${input.serverId}:${resolvedWorkspaceId}`,
-        target: { kind: "agent", agentId: attentionAgentId },
+        target: agent?.taskConversationId
+          ? { kind: "task_conversation", conversationId: agent.taskConversationId }
+          : { kind: "agent", agentId: attentionAgentId },
         intent: "reveal",
       });
     }
   }
 
   const route =
-    input.target?.kind === "agent" && shouldDeferAgentOpen
+    (input.target?.kind === "agent" || input.target?.kind === "task_conversation") &&
+    shouldDeferAgentOpen
       ? buildHostWorkspaceOpenRoute(
           input.serverId,
           input.workspaceId,
-          `agent:${input.target.agentId}`,
+          input.target.kind === "agent"
+            ? `agent:${input.target.agentId}`
+            : `task_conversation:${input.target.conversationId}`,
         )
       : buildHostWorkspaceRoute(input.serverId, input.workspaceId);
   deps.rememberLastWorkspace({ serverId: input.serverId, workspaceId: input.workspaceId });

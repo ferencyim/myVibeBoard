@@ -1039,6 +1039,7 @@ test("advertises client capabilities in hello", async () => {
       plugin_timeline_items: true,
       workspace_setup_blocked: true,
       hello_rejection: true,
+      task_conversations: true,
       browser_host: {
         supportedCommands: ["list_tabs"],
         hostKind: "desktop app",

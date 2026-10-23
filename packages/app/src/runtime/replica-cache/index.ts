@@ -3,6 +3,8 @@ import {
   AgentStatusSchema,
   AgentTimelineItemPayloadSchema,
   WorkspaceGitHubRuntimePayloadSchema,
+  TaskConversationSnapshotSchema,
+  TaskConversationRowSchema,
 } from "@getpaseo/protocol/messages";
 import { AgentProviderSchema } from "@getpaseo/protocol/provider-manifest";
 import type { PluginTimelineData } from "@getpaseo/plugin";
@@ -66,7 +68,14 @@ export interface CachedTimeline {
   items: StreamItem[];
   range: AgentTimelineCursorState | null;
   hasOlder: boolean;
+  taskConversation?: CachedTaskConversation;
 }
+
+const CachedTaskConversationSchema = z.strictObject({
+  conversation: TaskConversationSnapshotSchema,
+  rows: z.array(TaskConversationRowSchema),
+});
+export type CachedTaskConversation = z.infer<typeof CachedTaskConversationSchema>;
 
 const PERSIST_DELAY_MS = 1_000;
 const MAX_TIMELINE_ITEMS = 50;
@@ -348,6 +357,7 @@ const StoredTimelineSchema = z.strictObject({
     })
     .nullable(),
   hasOlder: z.boolean(),
+  taskConversation: CachedTaskConversationSchema.optional(),
 });
 
 type StoredAgent = z.infer<typeof StoredAgentSchema>;
@@ -404,6 +414,7 @@ function deserializeTimeline(stored: StoredTimeline | null): CachedTimeline | nu
     items: stored.items.map(deserializeTimelineItem),
     range: stored.range,
     hasOlder: stored.hasOlder,
+    ...(stored.taskConversation ? { taskConversation: stored.taskConversation } : {}),
   };
 }
 
@@ -614,6 +625,8 @@ function serializeAgent(agent: Agent): StoredAgent {
     provider: agent.provider,
     cwd: agent.cwd,
     ...(agent.workspaceId ? { workspaceId: agent.workspaceId } : {}),
+    taskConversationId: agent.taskConversationId,
+    taskConversationMemberId: agent.taskConversationMemberId,
     model: agent.model,
     thinkingOptionId: agent.thinkingOptionId ?? null,
     createdAt: agent.createdAt.toISOString(),
@@ -754,6 +767,20 @@ function isTimelineItemStoredLosslessly(item: StreamItem): boolean {
 }
 
 function serializeTimeline(timeline: CachedTimeline): StoredTimeline | null {
+  if (timeline.taskConversation) {
+    const rows = timeline.taskConversation.rows;
+    const covered = rows.length <= MAX_TIMELINE_ITEMS;
+    return {
+      agentId: timeline.agentId,
+      items: [],
+      range: covered ? timeline.range : null,
+      hasOlder: covered ? timeline.hasOlder : true,
+      taskConversation: {
+        conversation: timeline.taskConversation.conversation,
+        rows: rows.slice(-MAX_TIMELINE_ITEMS),
+      },
+    };
+  }
   const canonicalItems = timeline.items.filter(
     (item) => item.kind !== "user_message" || !isUnreconciledLocalUserMessage(item),
   );
@@ -1009,6 +1036,13 @@ export class ReplicaCache {
     }
   }
 
+  readTaskConversation(
+    serverId: string,
+    conversationId: string,
+  ): Promise<CachedTimeline | undefined> {
+    return this.readTimeline(serverId, `task-conversation:${conversationId}`);
+  }
+
   private async readRows(
     serverId: string,
     kinds: readonly ReplicaRowKind[],
@@ -1181,6 +1215,10 @@ export class ReplicaCache {
     if (timeline.agentId !== agentId) throw new Error("Timeline cache key does not match payload");
     this.queueUpsert({ serverId, kind: "timeline", id: agentId, value: timeline });
     this.schedulePersist();
+  }
+
+  commitTaskConversation(serverId: string, conversationId: string, timeline: CachedTimeline): void {
+    this.commitTimeline(serverId, `task-conversation:${conversationId}`, timeline);
   }
 
   setHosts(serverIds: Iterable<string>): void {

@@ -6,6 +6,50 @@ import type {
 } from "@getpaseo/protocol/agent-types";
 import type { PaseoApi } from "@getpaseo/client";
 import type { WorkspaceCreateRequest } from "@getpaseo/protocol/messages";
+import type { TaskConversationRecipient, TaskConversationRow } from "@getpaseo/protocol/messages";
+
+export interface PluginTaskConversationPrepareRequest {
+  conversationId: string;
+  workspaceId: string;
+  ownerPluginId: string;
+  anchorAgentId: string | null;
+  memberId: string;
+  backendAgentId: string;
+  recipient: TaskConversationRecipient;
+  clientMessageId: string;
+  text: string;
+  throughSeq: number;
+  publicContext: TaskConversationRow[];
+  ready: boolean;
+  config?: AgentSessionConfig;
+  env?: Record<string, string>;
+  context?: string;
+  summary?: { text: string; throughSeq: number };
+  reason?: string;
+}
+
+export interface PluginTaskConversationAdmitRequest {
+  conversationId: string;
+  workspaceId: string;
+  ownerPluginId: string;
+  anchorAgentId: string | null;
+  memberId: string;
+  backendAgentId: string;
+  recipient: TaskConversationRecipient;
+  clientMessageId: string;
+  operation: "send" | "compact" | "create";
+  admitted: boolean;
+  reason?: string;
+}
+
+export interface PluginTaskConversationControlRequest {
+  conversationId: string;
+  workspaceId: string;
+  ownerPluginId: string;
+  action: "stop" | "archive" | "compact" | "stop_member";
+  backendAgentId?: string;
+  phase: "before" | "settled" | "unknown";
+}
 
 export interface PluginHookContext {
   paseo: PaseoApi;
@@ -22,6 +66,8 @@ export interface PluginHookWorkspace {
 
 export interface PluginHookAgent {
   id: string;
+  taskConversationId?: string;
+  taskConversationMemberId?: string;
   workspaceId: string | null;
   parentAgentId: string | null;
   provider: string;
@@ -69,6 +115,20 @@ export interface PluginBeforeRequests {
   "agent.create": { config: AgentSessionConfig; env?: Record<string, string> };
   "agent.session_open": PluginSessionOpenRequest;
   "workspace.create": Omit<WorkspaceCreateRequest, "type" | "requestId">;
+  "task.conversation.prepare": PluginTaskConversationPrepareRequest;
+  "task.conversation.admit": PluginTaskConversationAdmitRequest;
+  "task.conversation.control": PluginTaskConversationControlRequest;
+}
+
+type TaskConversationHook<Name extends keyof PluginBeforeRequests> = (
+  input: { request: PluginBeforeRequests[Name] },
+  context: PluginHookContext,
+) => PluginBeforeRequests[Name] | void | Promise<PluginBeforeRequests[Name] | void>;
+
+export interface PluginTaskConversationHooks {
+  prepare: TaskConversationHook<"task.conversation.prepare">;
+  admit: TaskConversationHook<"task.conversation.admit">;
+  beforeControl?: TaskConversationHook<"task.conversation.control">;
 }
 
 export interface PluginLifecycleRegistration {

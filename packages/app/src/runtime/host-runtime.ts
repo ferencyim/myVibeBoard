@@ -72,7 +72,8 @@ import { createMessageSubmissionWriter } from "@/composer/submission/writer";
 import { resolveComposerAttachmentSubmitFormat } from "@/composer/attachments/submit";
 import { encodeImages } from "@/utils/encode-images";
 import { DirectorySync, type RefreshAgentDirectoryResult } from "@/runtime/directory-sync";
-import { ReplicaCache } from "@/runtime/replica-cache";
+import { ReplicaCache, type CachedTimeline } from "@/runtime/replica-cache";
+import { useTaskConversationStore } from "@/task-conversations/store";
 import type { ReplicaRowStore } from "@/runtime/replica-cache/row-store";
 import { createReplicaRowStore } from "@/runtime/replica-cache/row-store-factory";
 import {
@@ -2350,6 +2351,7 @@ export class HostRuntimeStore {
 
   private clearHostReplica(serverId: string): void {
     useSessionStore.getState().clearSession(serverId);
+    useTaskConversationStore.getState().clearHost(serverId);
     useWorkspaceSetupStore.getState().clearServer(serverId);
   }
 
@@ -2630,6 +2632,21 @@ export class HostRuntimeStore {
     const replica = this.timelineReplicaByServer.get(serverId);
     if (!replica) throw new Error(`Unknown host runtime for serverId ${serverId}`);
     await replica.prepare(agentId);
+  }
+
+  readTaskConversationReplica(
+    serverId: string,
+    conversationId: string,
+  ): Promise<CachedTimeline | undefined> {
+    return this.replicaCache.readTaskConversation(serverId, conversationId);
+  }
+
+  commitTaskConversationReplica(
+    serverId: string,
+    conversationId: string,
+    timeline: CachedTimeline,
+  ): void {
+    this.replicaCache.commitTaskConversation(serverId, conversationId, timeline);
   }
 
   async fetchAgentTimeline(

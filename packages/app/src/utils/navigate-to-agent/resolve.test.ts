@@ -62,7 +62,7 @@ describe("resolveNavigateToAgent", () => {
     ]);
   });
 
-  it("uses the input workspaceId without reading the nav target", () => {
+  it("uses the input workspaceId while still resolving managed conversation ownership", () => {
     const readTargets: { serverId: string; agentId: string }[] = [];
     const { deps, tabNavigations } = createFakeNavigators({ agentWorkspaceId: null });
     deps.readAgentNavTarget = (input) => {
@@ -75,7 +75,7 @@ describe("resolveNavigateToAgent", () => {
       deps,
     );
 
-    expect(readTargets).toEqual([]);
+    expect(readTargets).toEqual([{ serverId: SERVER_ID, agentId: AGENT_ID }]);
     expect(tabNavigations).toEqual([
       {
         serverId: SERVER_ID,
@@ -84,6 +84,34 @@ describe("resolveNavigateToAgent", () => {
         pin: undefined,
       },
     ]);
+  });
+
+  it("routes a managed member notification into its stable conversation", () => {
+    const { deps, tabNavigations } = createFakeNavigators({
+      agentWorkspaceId: WORKSPACE_ID,
+      conversationId: "conversation-1",
+    });
+    resolveNavigateToAgent(
+      { serverId: SERVER_ID, agentId: AGENT_ID, workspaceId: WORKSPACE_ID },
+      deps,
+    );
+    expect(tabNavigations[0].target).toEqual({
+      kind: "task_conversation",
+      conversationId: "conversation-1",
+    });
+  });
+
+  it("resolves an unknown history member before creating a writable tab", () => {
+    const { deps, hostNavigations, tabNavigations } = createFakeNavigators({
+      agentWorkspaceId: null,
+      isKnown: false,
+    });
+    resolveNavigateToAgent(
+      { serverId: SERVER_ID, agentId: AGENT_ID, workspaceId: WORKSPACE_ID },
+      deps,
+    );
+    expect(hostNavigations).toEqual([{ route: "/h/server-1/agent/agent-1" }]);
+    expect(tabNavigations).toEqual([]);
   });
 
   it("falls back to the host agent route when the agent has no workspaceId", () => {

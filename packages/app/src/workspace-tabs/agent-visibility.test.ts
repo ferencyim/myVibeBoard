@@ -63,6 +63,23 @@ function makeAgent(input: {
 const WORKSPACE_ID = "ws-1";
 
 describe("workspace agent visibility", () => {
+  it("binds task members before root auto-open even when the anchor arrives later", () => {
+    const child = {
+      ...makeAgent({
+        id: "worker",
+        cwd: "/repo",
+        workspaceId: WORKSPACE_ID,
+        parentAgentId: "anchor",
+      }),
+      taskConversationId: "conversation-1",
+    };
+    const result = deriveWorkspaceAgentVisibility({
+      sessionAgents: new Map([[child.id, child]]),
+      workspaceId: WORKSPACE_ID,
+    });
+    expect(result.autoOpenAgentIds).toEqual(new Set(["worker"]));
+    expect(result.conversationByAgentId?.get("worker")).toBe("conversation-1");
+  });
   it("keeps subagents active while excluding them from auto-open", () => {
     const parent = makeAgent({
       id: "parent-agent",

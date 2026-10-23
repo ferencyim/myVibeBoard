@@ -1,5 +1,10 @@
 import type { SelectedFile } from "@/attachments/selected-file";
 import type { ForgeSearchItem } from "@getpaseo/protocol/messages";
+import {
+  TaskConversationRecipientSchema,
+  type TaskConversationRecipient,
+  type TaskConversationMessage,
+} from "@getpaseo/protocol/messages";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import type {
   AttachmentMetadata,
@@ -77,6 +82,17 @@ export interface MessageSubmissionWriter {
   begin: (agentId: string, message: UserMessageItem) => void;
   accept: (agentId: string, clientMessageId: string) => void;
   reject: (agentId: string, clientMessageId: string) => MessageSubmissionRejectionOutcome;
+}
+
+export interface ComposerTaskConversationTransport {
+  conversationId: string;
+  recipient: TaskConversationRecipient;
+  send: (
+    message: TaskConversationMessage & {
+      conversationId: string;
+      recipient: TaskConversationRecipient;
+    },
+  ) => Promise<void>;
 }
 
 export interface QueueWriter {
@@ -186,7 +202,7 @@ export function cancelComposerAgent(input: CancelComposerAgentInput): Promise<vo
 
 export interface DispatchComposerAgentMessageInput {
   client: ComposerSendClient;
-  agentId: string;
+  agentId?: string;
   text: string;
   attachments: ComposerAttachment[];
   attachmentSubmitFormat?: ComposerAttachmentSubmitFormat;
@@ -196,11 +212,18 @@ export interface DispatchComposerAgentMessageInput {
   submission: MessageSubmissionWriter;
   activeTurnBehavior?: ActiveTurnBehavior;
   activeTurnId?: string;
+  taskConversation?: ComposerTaskConversationTransport;
 }
 
 export async function dispatchComposerAgentMessage(
   input: DispatchComposerAgentMessageInput,
 ): Promise<void> {
+  const taskConversation = input.taskConversation;
+  const recipient = taskConversation
+    ? TaskConversationRecipientSchema.parse(taskConversation.recipient)
+    : null;
+  const submissionId = taskConversation?.conversationId ?? input.agentId;
+  if (!submissionId) throw new Error("没有可用的会话发送目标。");
   const wirePayload = splitComposerAttachmentsForSubmit(input.attachments, {
     format: input.attachmentSubmitFormat,
   });
@@ -211,22 +234,34 @@ export async function dispatchComposerAgentMessage(
     timestamp: new Date(),
     images: wirePayload.images,
     attachments: wirePayload.attachments,
-    ...(input.activeTurnBehavior === "steer" && input.activeTurnId
+    ...(!taskConversation && input.activeTurnBehavior === "steer" && input.activeTurnId
       ? { turnId: input.activeTurnId }
       : {}),
   });
-  input.submission.begin(input.agentId, userMessage);
+  input.submission.begin(submissionId, userMessage);
   try {
     const imagesData = await input.encodeImages(wirePayload.images);
-    await input.client.sendAgentMessage(input.agentId, input.text, {
-      messageId: clientMessageId,
-      ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
-      images: imagesData ?? [],
-      attachments: wirePayload.attachments,
-    });
-    input.submission.accept(input.agentId, clientMessageId);
+    if (taskConversation && recipient) {
+      await taskConversation.send({
+        conversationId: taskConversation.conversationId,
+        recipient,
+        clientMessageId,
+        text: input.text,
+        images: imagesData ?? [],
+        attachments: wirePayload.attachments,
+      });
+    } else {
+      if (!input.agentId) throw new Error("没有可用的代理发送目标。");
+      await input.client.sendAgentMessage(input.agentId, input.text, {
+        messageId: clientMessageId,
+        ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
+        images: imagesData ?? [],
+        attachments: wirePayload.attachments,
+      });
+    }
+    input.submission.accept(submissionId, clientMessageId);
   } catch (error) {
-    input.submission.reject(input.agentId, clientMessageId);
+    input.submission.reject(submissionId, clientMessageId);
     throw error;
   }
 }

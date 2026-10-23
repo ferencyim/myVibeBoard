@@ -132,6 +132,14 @@ function BottomOverlayInset({ height }: { height: number }) {
   return <View style={style} />;
 }
 
+function StaticTimeline({ children }: ComponentProps<typeof ChatFind>) {
+  return children;
+}
+
+function resolveTimelineFind(disableAgentTimelineActions: boolean | undefined) {
+  return disableAgentTimelineActions ? StaticTimeline : ChatFind;
+}
+
 function renderPendingPermissionsNode(input: {
   pendingPermissions: PendingPermission[];
   client: DaemonClient | null;
@@ -273,6 +281,8 @@ export interface AgentStreamViewProps {
   toast?: ToastApi | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   readOnly?: boolean;
+  renderItemHeader?: (item: StreamItem) => ReactNode;
+  disableAgentTimelineActions?: boolean;
   historyPagination?: {
     hasOlder: boolean;
     isLoadingOlder: boolean;
@@ -327,6 +337,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       readOnly = false,
+      renderItemHeader,
+      disableAgentTimelineActions,
       historyPagination,
     },
     ref,
@@ -374,13 +386,16 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     );
     const supportsChatOutline = useSessionStore(
       (state) =>
+        !disableAgentTimelineActions &&
         state.sessions[resolvedServerId]?.serverInfo?.features?.agentTimelinePromptIndex === true,
     );
     const timelineEpoch = useSessionStore(
       (state) => state.sessions[resolvedServerId]?.agentTimelineCursor.get(agentId)?.epoch ?? null,
     );
     const isTimelineDetached = useSessionStore(
-      (state) => state.sessions[resolvedServerId]?.agentTimelineHasNewer.get(agentId) === true,
+      (state) =>
+        !disableAgentTimelineActions &&
+        state.sessions[resolvedServerId]?.agentTimelineHasNewer.get(agentId) === true,
     );
 
     const workspaceRoot = context.cwd?.trim() || "";
@@ -894,7 +909,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderStreamItem = useCallback(
       (layoutItem: StreamLayoutItem) => {
-        const content = renderStreamItemContent(layoutItem);
+        const body = renderStreamItemContent(layoutItem);
+        const content = renderItemHeader ? (
+          <>
+            {renderItemHeader(layoutItem.item)}
+            {body}
+          </>
+        ) : (
+          body
+        );
         return renderStreamItemWithTurnFooter({
           content,
           layoutItem,
@@ -907,6 +930,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         handleForkAssistantTurn,
         readOnly,
         renderStreamItemContent,
+        renderItemHeader,
         streamRenderStrategy,
         supportsAgentForkContextCursor,
       ],
@@ -1078,8 +1102,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => [...effectiveStreamItems, ...(effectiveStreamHead ?? [])],
       [effectiveStreamItems, effectiveStreamHead],
     );
+    const TimelineFind = resolveTimelineFind(disableAgentTimelineActions);
     return (
-      <ChatFind
+      <TimelineFind
         agentId={agentId}
         serverId={resolvedServerId}
         epoch={timelineEpoch}
@@ -1137,7 +1162,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             )}
           </AssistantSelectionCopySurface>
         </ToolCallSheetProvider>
-      </ChatFind>
+      </TimelineFind>
     );
   },
 );
@@ -1261,6 +1286,9 @@ function agentStreamViewPropsEqual(
   if (left.toast !== right.toast) reasons.push("toast");
   if (left.onOpenWorkspaceFile !== right.onOpenWorkspaceFile) reasons.push("onOpenWorkspaceFile");
   if (left.readOnly !== right.readOnly) reasons.push("readOnly");
+  if (left.renderItemHeader !== right.renderItemHeader) reasons.push("renderItemHeader");
+  if (left.disableAgentTimelineActions !== right.disableAgentTimelineActions)
+    reasons.push("disableAgentTimelineActions");
   if (!historyPaginationPropsEqual(left.historyPagination, right.historyPagination)) {
     reasons.push("historyPagination");
   }
@@ -1388,7 +1416,7 @@ function PermissionActionButton({
   );
 }
 
-function PermissionRequestCard({
+export function PermissionRequestCard({
   permission,
   client,
 }: {

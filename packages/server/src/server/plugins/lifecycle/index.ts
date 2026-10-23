@@ -1,10 +1,16 @@
+import { taskConversationIdentity as projectTaskConversationIdentity } from "../../task-conversation/identity.js";
 import type { AgentStreamEvent, AgentTimelineItem } from "../../agent/agent-sdk-types.js";
 import { z } from "zod";
-import { CreateAgentRequestMessageSchema } from "@getpaseo/protocol/messages";
+import {
+  CreateAgentRequestMessageSchema,
+  TaskConversationRecipientSchema,
+  TaskConversationRowSchema,
+} from "@getpaseo/protocol/messages";
 import type {
   PluginHookAgent,
   PluginHookContext,
   PluginLifecycleRegistration,
+  PluginTaskConversationHooks,
 } from "@getpaseo/plugin/server";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import type {
@@ -26,7 +32,27 @@ export const lifecycleEventNames = [
   "workspace.created",
   "workspace.archived",
 ] as const;
-export const beforeHookNames = ["agent.create", "agent.session_open", "workspace.create"] as const;
+export const beforeHookNames = [
+  "agent.create",
+  "agent.session_open",
+  "workspace.create",
+  "task.conversation.prepare",
+  "task.conversation.admit",
+  "task.conversation.control",
+] as const;
+
+const taskConversationIdentity = z.object({
+  conversationId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  ownerPluginId: z.string().min(1),
+});
+const taskConversationDelivery = taskConversationIdentity.extend({
+  anchorAgentId: z.string().nullable(),
+  memberId: z.string().min(1),
+  backendAgentId: z.string().min(1),
+  recipient: TaskConversationRecipientSchema,
+  clientMessageId: z.string().min(1),
+});
 
 const beforeSchemas = {
   "agent.create": CreateAgentRequestMessageSchema.pick({ config: true, env: true }).strict(),
@@ -42,6 +68,35 @@ const beforeSchemas = {
     })
     .strict(),
   "workspace.create": WorkspaceCreateRequestSchema.omit({ type: true, requestId: true }).strict(),
+  "task.conversation.prepare": taskConversationDelivery
+    .extend({
+      text: z.string(),
+      throughSeq: z.number().int().nonnegative(),
+      publicContext: z.array(TaskConversationRowSchema),
+      ready: z.boolean(),
+      config: CreateAgentRequestMessageSchema.shape.config.optional(),
+      env: z.record(z.string(), z.string()).optional(),
+      context: z.string().optional(),
+      summary: z
+        .object({ text: z.string(), throughSeq: z.number().int().nonnegative() })
+        .optional(),
+      reason: z.string().optional(),
+    })
+    .strict(),
+  "task.conversation.admit": taskConversationDelivery
+    .extend({
+      operation: z.enum(["send", "compact", "create"]),
+      admitted: z.boolean(),
+      reason: z.string().optional(),
+    })
+    .strict(),
+  "task.conversation.control": taskConversationIdentity
+    .extend({
+      action: z.enum(["stop", "archive", "compact", "stop_member"]),
+      backendAgentId: z.string().optional(),
+      phase: z.enum(["before", "settled", "unknown"]),
+    })
+    .strict(),
 };
 
 export interface PluginLifecycle {
@@ -52,6 +107,7 @@ export interface PluginLifecycle {
   before<Name extends keyof PluginBeforeRequests>(
     name: Name,
     request: PluginBeforeRequests[Name],
+    options?: { pluginId: string },
   ): Promise<PluginBeforeRequests[Name]>;
 }
 
@@ -84,6 +140,7 @@ export function describeHookAgent(agent: {
     id: agent.id,
     workspaceId: agent.workspaceId ?? null,
     parentAgentId: agent.labels[PARENT_AGENT_ID_LABEL] ?? null,
+    ...projectTaskConversationIdentity(agent.labels),
     provider: agent.provider,
     cwd: agent.cwd,
     title: agent.title ?? null,
@@ -157,6 +214,37 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
       throw new Error("agent.create hooks cannot change the workspace directory");
     }
   }
+  if (name === "task.conversation.prepare") {
+    const immutable = beforeSchemas["task.conversation.prepare"]
+      .omit({
+        ready: true,
+        config: true,
+        env: true,
+        context: true,
+        summary: true,
+        reason: true,
+      })
+      .strip();
+    if (JSON.stringify(immutable.parse(input)) !== JSON.stringify(immutable.parse(result))) {
+      throw new Error("Task conversation hooks cannot change the public context boundary");
+    }
+  }
+  if (name === "task.conversation.admit") {
+    const immutable = beforeSchemas["task.conversation.admit"]
+      .omit({
+        admitted: true,
+        reason: true,
+      })
+      .strip();
+    if (JSON.stringify(immutable.parse(input)) !== JSON.stringify(immutable.parse(result))) {
+      throw new Error("Task conversation hooks cannot change an admission operation");
+    }
+  }
+  if (name === "task.conversation.control") {
+    if (JSON.stringify(beforeSchemas[name].parse(input)) !== JSON.stringify(result)) {
+      throw new Error("Task conversation hooks cannot change a control operation");
+    }
+  }
   return result;
 }
 
@@ -185,6 +273,19 @@ export class PluginHookHandlers implements PluginLifecycleRegistration {
       throw new Error(`Unknown before hook: ${name}`);
     }
     return this.register(this.transforms, name, handler as Handler);
+  };
+
+  readonly registerTaskConversationHooks = (hooks: PluginTaskConversationHooks): (() => void) => {
+    const removePrepare = this.before("task.conversation.prepare", hooks.prepare);
+    const removeAdmit = this.before("task.conversation.admit", hooks.admit);
+    const removeControl = hooks.beforeControl
+      ? this.before("task.conversation.control", hooks.beforeControl)
+      : () => {};
+    return () => {
+      removePrepare();
+      removeAdmit();
+      removeControl();
+    };
   };
 
   catalog(): { events: string[]; before: string[] } {

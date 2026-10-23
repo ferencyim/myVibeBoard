@@ -41,6 +41,7 @@ function registry(options: { live?: () => DaemonClient | null } = {}) {
       openSettings: () => {},
       playAudio: async () => {},
       openPanel: () => {},
+      setTaskConversationRecipients: () => {},
       addComposerPill: () => ({ update() {}, remove() {} }),
       addHeaderButton: () => ({ update() {}, remove() {} }),
     }),

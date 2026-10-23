@@ -1,3 +1,4 @@
+import type { TaskConversationService } from "./task-conversation/service.js";
 import { AgentDirectory } from "./agent/directory.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
@@ -9,7 +10,7 @@ import type {
 } from "@getpaseo/protocol/messages";
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
-import { CreationService, type CreatedAgent } from "./creation/index.js";
+import { CreationService, type CreatedAgent, type CreationInput } from "./creation/index.js";
 import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/messages";
 import type { MessageReceipts } from "./message-receipts/index.js";
 import equal from "fast-deep-equal";
@@ -462,6 +463,7 @@ export interface SessionOptions {
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   messageReceipts: Pick<MessageReceipts, "send">;
+  taskConversations?: TaskConversationService;
   creationService: Pick<CreationService, "create" | "subscribe">;
   projectRegistry: ProjectRegistry;
   workspaceRegistry: WorkspaceRegistry;
@@ -676,6 +678,7 @@ export class Session {
   readonly delivery = new SessionDelivery(
     (source, message) => {
       if (!this.authorization.allowsOutbound(message)) return;
+      if (!this.taskConversationMessageAllowed(message, source)) return;
       if (this.onMessageToSource) this.onMessageToSource(source, message);
       else this.onMessage(message);
     },
@@ -801,6 +804,7 @@ export class Session {
   private readonly workspaceScripts: WorkspaceScriptsService;
   private readonly messageReceipts: Pick<MessageReceipts, "send">;
   private readonly createAgentLifecycleDispatch: CreateAgentLifecycleDispatch;
+  private readonly taskConversations: TaskConversationService | undefined;
   private readonly creationService: Pick<CreationService, "create" | "subscribe">;
 
   constructor(options: SessionOptions) {
@@ -877,6 +881,7 @@ export class Session {
     this.paseoHome = paseoHome;
     this.messageReceipts = options.messageReceipts;
     this.creationService = options.creationService;
+    this.taskConversations = options.taskConversations;
     this.projectIcons = new ProjectIconReader(paseoHome);
     this.worktreesRoot = worktreesRoot;
     this.pluginRuntime = pluginRuntime;
@@ -2169,6 +2174,20 @@ export class Session {
         return;
       }
       try {
+        if (
+          "agentId" in msg &&
+          typeof msg.agentId === "string" &&
+          this.taskConversations?.getByAgentId(msg.agentId) &&
+          !this.supportsForRequest(CLIENT_CAPS.taskConversations, source) &&
+          [
+            "fetch_agent_request",
+            "fetch_agent_timeline_request",
+            "send_agent_message_request",
+            "resume_agent_request",
+            "refresh_agent_request",
+          ].includes(msg.type)
+        )
+          throw new Error("请升级客户端以打开或发送任务会话。");
         await this.dispatchInboundMessage(msg, source);
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
@@ -2231,6 +2250,11 @@ export class Session {
   }
 
   public subscribesToAgent(agent: ManagedAgent, source: object): Promise<boolean> {
+    if (
+      this.taskConversations?.getByAgentId(agent.id) &&
+      !this.supportsForSource(CLIENT_CAPS.taskConversations, source)
+    )
+      return Promise.resolve(false);
     return this.agentUpdates.includesLiveAgent(
       agent,
       new Set(this.delivery.subscriptionIds(source, "agents")),
@@ -2732,10 +2756,255 @@ export class Session {
     return undefined;
   }
 
+  private dispatchTaskConversationMessage(
+    request: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> | undefined {
+    if (!request.type.startsWith("task.conversation.")) return undefined;
+    return this.handleTaskConversationMessage(request, source);
+  }
+
+  private async handleTaskConversationMessage(
+    request: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> {
+    if (!this.supportsForRequest(CLIENT_CAPS.taskConversations, source))
+      throw new Error("请升级客户端以使用任务会话。");
+    const service = this.taskConversations;
+    if (!service) throw new Error("Task conversations are unavailable");
+    switch (request.type) {
+      case "task.conversation.create.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.create.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              conversation: await service.create(taskConversationInput(request)),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.resolve.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.resolve.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              conversation: await service.resolve(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.send.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.send.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              delivery: await service.send(taskConversationInput(request)),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.get_delivery.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.get_delivery.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              delivery: await service.getDelivery(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.fetch.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.fetch.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              page: await service.fetch(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.publish.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.publish.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              row: await this.publishTaskConversation(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.query_source.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.query_source.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              row: await service.querySource(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.stop.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.stop.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              conversation: await service.stop(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.archive.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.archive.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              conversation: await service.archive(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.compact.request":
+        this.emitForSource(
+          {
+            type: "task.conversation.compact.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              conversation: await service.compact(request),
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.unsubscribe.request":
+        await this.delivery.release(request.subscriptionId);
+        this.emitForSource(
+          {
+            type: "task.conversation.unsubscribe.response",
+            payload: {
+              requestId: request.requestId,
+              error: null,
+              subscriptionId: request.subscriptionId,
+            },
+          },
+          source,
+        );
+        return;
+      case "task.conversation.subscribe.request":
+        return this.subscribeTaskConversation(request, source);
+    }
+  }
+
+  private async publishTaskConversation(
+    request: Extract<SessionInboundMessage, { type: "task.conversation.publish.request" }>,
+  ) {
+    const pluginId = parsePluginClientId(this.clientId);
+    const conversation = await this.taskConversations!.resolve({
+      conversationId: request.conversationId,
+    });
+    if (!pluginId || pluginId !== conversation?.ownerPluginId)
+      throw new Error("Only the owner plugin can publish task conversation artifacts");
+    return this.taskConversations!.publish(taskConversationInput(request));
+  }
+
+  private async subscribeTaskConversation(
+    request: Extract<SessionInboundMessage, { type: "task.conversation.subscribe.request" }>,
+    source?: object,
+  ): Promise<void> {
+    const service = this.taskConversations!;
+    let unsubscribe = () => {};
+    const owner = this.delivery.begin(
+      "task-conversation",
+      undefined,
+      () => unsubscribe(),
+      request.conversationId,
+    );
+    const pending: Extract<SessionOutboundMessage, { type: "task.conversation.update" }>[] = [];
+    let bootstrapping = true;
+    try {
+      unsubscribe = service.subscribe(request.conversationId, (update) => {
+        const message: Extract<SessionOutboundMessage, { type: "task.conversation.update" }> = {
+          type: "task.conversation.update",
+          payload: {
+            ...update,
+            conversationId: request.conversationId,
+            subscriptionId: owner.responseId,
+          },
+        };
+        if (bootstrapping) pending.push(message);
+        else owner.emit(message);
+      });
+      if (owner.signal.aborted) unsubscribe();
+      const page = service.fetch({
+        ...request,
+        direction: request.cursor ? "after" : "tail",
+      });
+      const conversation = service.resolve({ conversationId: request.conversationId });
+      this.emitForSource(
+        {
+          type: "task.conversation.subscribe.response",
+          payload: {
+            requestId: request.requestId,
+            error: null,
+            subscriptionId: owner.responseId,
+            conversation,
+            page,
+          },
+        },
+        source,
+      );
+      bootstrapping = false;
+      for (const message of pending) {
+        const row = message.payload.row;
+        if (!row) continue;
+        const included = page.rows.find((entry) => entry.id === row.id);
+        if (included && (included.updatedSeq ?? included.seq) >= (row.updatedSeq ?? row.seq))
+          continue;
+        owner.emit({ ...message, payload: { ...message.payload, conversation: undefined } });
+      }
+    } catch (error) {
+      await owner.release();
+      throw error;
+    }
+  }
+
+  private supportsForRequest(capability: ClientCapability, source?: object): boolean {
+    return source ? this.supportsForSource(capability, source) : this.supports(capability);
+  }
+
   private dispatchCreationMessage(
     msg: SessionInboundMessage,
     source?: object,
   ): Promise<void> | undefined {
+    if (msg.type.startsWith("task.conversation."))
+      return this.dispatchTaskConversationMessage(msg, source);
     switch (msg.type) {
       case "agent.create.request":
         return this.handleAgentCreation(msg, source);
@@ -3193,6 +3462,10 @@ export class Session {
   }
 
   private async handleDeleteAgentRequest(agentId: string, requestId: string): Promise<void> {
+    if (this.taskConversations?.getByAgentId(agentId))
+      throw new Error(
+        "Task conversation members retain their history; archive the conversation instead",
+      );
     this.sessionLogger.info({ agentId }, `Deleting agent ${agentId} from registry`);
 
     const knownWorkspaceId =
@@ -3256,6 +3529,13 @@ export class Session {
   private async archiveAgentForClose(
     agentId: string,
   ): Promise<{ agentId: string; archivedAt: string }> {
+    const conversation = this.taskConversations?.getByAgentId(agentId);
+    if (conversation) {
+      const archived = await this.taskConversations!.archive({
+        conversationId: conversation.conversationId,
+      });
+      return { agentId, archivedAt: archived.archivedAt ?? new Date().toISOString() };
+    }
     const { archivedAt, record: archivedRecord } = await archiveAgentCommand(
       {
         agentManager: this.agentManager,
@@ -4069,6 +4349,69 @@ export class Session {
     }
   }
 
+  private workspaceConversationCreator(
+    request: Extract<SessionInboundMessage, { type: "workspace.create.request" }>,
+    source?: object,
+  ): CreationInput["createConversation"] {
+    const taskConversation = request.taskConversation;
+    if (taskConversation && !this.supportsForRequest(CLIENT_CAPS.taskConversations, source))
+      throw new Error("请升级客户端以创建任务会话。");
+    if (taskConversation && request.agent)
+      throw new Error("任务会话首成员请使用 taskConversation.initialRecipient。");
+    if (taskConversation && !this.taskConversations)
+      throw new Error("Task conversations are unavailable");
+    if (!taskConversation) return undefined;
+    return async (workspace, onReady) => {
+      if (!workspace?.workspaceDirectory) throw new Error("Created workspace has no directory");
+      let initialRecipient = taskConversation.initialRecipient;
+      if (initialRecipient) {
+        const sourceCwd =
+          request.source.kind === "directory"
+            ? request.source.path
+            : await resolveWorktreeSourceCwd(request.source, this.projectRegistry);
+        const relativeCwd = relative(resolve(sourceCwd), resolve(initialRecipient.config.cwd));
+        if (relativeCwd === ".." || relativeCwd.startsWith(`..${sep}`) || isAbsolute(relativeCwd))
+          throw new Error("Agent directory must be inside the workspace source");
+        initialRecipient = {
+          ...initialRecipient,
+          config: {
+            ...initialRecipient.config,
+            cwd: resolve(workspace.workspaceDirectory, relativeCwd),
+          },
+        };
+      }
+      const conversation = await this.taskConversations!.create(
+        { ...taskConversation, workspaceId: workspace.id, initialRecipient },
+        onReady,
+      );
+      const agent = conversation.anchorAgentId
+        ? await this.getAgentPayloadById(conversation.anchorAgentId)
+        : null;
+      return { conversation, ...(agent ? { agent } : {}) };
+    };
+  }
+
+  private workspaceCreationHasPrompt(
+    request: Extract<SessionInboundMessage, { type: "workspace.create.request" }>,
+  ): boolean {
+    return request.taskConversation
+      ? Boolean(request.taskConversation.initialMessage)
+      : hasInitialCreationPrompt(request.agent);
+  }
+
+  private workspaceCreationFirstContext(
+    request: Extract<SessionInboundMessage, { type: "workspace.create.request" }>,
+  ): FirstAgentContext | undefined {
+    if (request.agent)
+      return { prompt: request.agent.initialPrompt, attachments: request.agent.attachments };
+    if (request.taskConversation?.initialMessage)
+      return {
+        prompt: request.taskConversation.initialMessage.text,
+        attachments: request.taskConversation.initialMessage.attachments,
+      };
+    return request.firstAgentContext;
+  }
+
   private async handleWorkspaceCreation(
     request: Extract<SessionInboundMessage, { type: "workspace.create.request" }>,
     source?: object,
@@ -4089,6 +4432,7 @@ export class Session {
       ) {
         throw new Error("Session is not authorized to create an agent");
       }
+      const createConversation = this.workspaceConversationCreator(request, source);
       const agentInput = request.agent;
       const creation = await this.creationService.create(
         {
@@ -4098,15 +4442,14 @@ export class Session {
           workspaceId: request.workspaceId,
           agentId: agentInput?.agentId,
           hasAgent: Boolean(agentInput),
-          hasPrompt: hasInitialCreationPrompt(agentInput),
+          hasPrompt: this.workspaceCreationHasPrompt(request),
+          createConversation,
           exists: this.creationResourceExists,
           provision: async (id) => {
             const descriptor = await this.createRequestedWorkspace(
               {
                 ...request,
-                firstAgentContext: agentInput
-                  ? { prompt: agentInput.initialPrompt, attachments: agentInput.attachments }
-                  : request.firstAgentContext,
+                firstAgentContext: this.workspaceCreationFirstContext(request),
               },
               id,
             );
@@ -4691,10 +5034,14 @@ export class Session {
     this.sessionLogger.info({ agentId }, `Cancel request received for agent ${agentId}`);
 
     try {
-      await cancelAgentRunCommand(
-        { agentManager: this.agentManager, logger: this.sessionLogger },
-        agentId,
-      );
+      const conversation = this.taskConversations?.getByAgentId(agentId);
+      if (conversation)
+        await this.taskConversations!.stop({ conversationId: conversation.conversationId });
+      else
+        await cancelAgentRunCommand(
+          { agentManager: this.agentManager, logger: this.sessionLogger },
+          agentId,
+        );
       if (requestId) {
         const agent = this.agentManager.getAgent(agentId);
         const payload = agent ? await this.buildAgentPayload(agent) : null;
@@ -5452,6 +5799,15 @@ export class Session {
     return matchedEntries;
   }
 
+  private taskDirectoryAgents(
+    agents: AgentSnapshotPayload[],
+    request: AgentDirectoryRequestMessage,
+  ): AgentSnapshotPayload[] {
+    if (request.type === "fetch_agents_request" && request.sync) return agents;
+    if (this.supports(CLIENT_CAPS.taskConversations)) return agents;
+    return agents.filter((agent) => !this.taskConversations?.getByAgentId(agent.id));
+  }
+
   private async listFetchAgentsEntries(request: AgentDirectoryRequestMessage): Promise<{
     entries: FetchAgentsResponseEntry[];
     pageInfo: FetchAgentsResponsePageInfo;
@@ -5473,6 +5829,7 @@ export class Session {
         (request.type === "fetch_agents_request" && request.includeBackground),
       includeUnavailablePersisted: request.type === "fetch_agent_history_request",
     });
+    agents = this.taskDirectoryAgents(agents, request);
     const activePlacementsByWorkspaceId =
       scope === "active" ? await this.buildActiveProjectPlacementsByWorkspaceId() : null;
     if (activePlacementsByWorkspaceId) {
@@ -6615,7 +6972,11 @@ export class Session {
     );
     const entries = await Promise.all(
       result.entries.map(async (entry) =>
-        (await this.agentDirectory.includes(entry.agent, request.includeBackground)) ? entry : null,
+        (await this.agentDirectory.includes(entry.agent, request.includeBackground)) &&
+        (this.supports(CLIENT_CAPS.taskConversations) ||
+          !this.taskConversations?.getByAgentId(entry.agent.id))
+          ? entry
+          : null,
       ),
     );
     return { ...result, entries: entries.filter((entry) => entry !== null) };
@@ -8542,6 +8903,19 @@ export class Session {
     this.emitBinary(frame);
   }
 
+  private taskConversationMessageAllowed(
+    message: SessionOutboundMessage,
+    source?: object,
+  ): boolean {
+    if (this.supportsForRequest(CLIENT_CAPS.taskConversations, source)) return true;
+    if (message.type.startsWith("task.conversation.")) return false;
+    if (message.type === "agent_update" && message.payload.kind === "upsert")
+      return !this.taskConversations?.getByAgentId(message.payload.agent.id);
+    if (message.type === "agent_stream" || message.type === "agent_status")
+      return !this.taskConversations?.getByAgentId(message.payload.agentId);
+    return true;
+  }
+
   private emitForSource(msg: SessionOutboundMessage, source?: object): void {
     if (source && this.onMessageToSource) {
       msg = this.delivery.authorizeReply(msg, source);
@@ -8688,4 +9062,11 @@ function legacyWantsEvent(
     default:
       return true;
   }
+}
+
+function taskConversationInput<T extends { type: string; requestId: string }>(
+  request: T,
+): Omit<T, "type" | "requestId"> {
+  const { type: _type, requestId: _requestId, ...input } = request;
+  return input;
 }

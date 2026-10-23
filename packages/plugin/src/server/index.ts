@@ -22,6 +22,10 @@ export type {
   PluginLifecycleEvents,
   PluginBeforeRequests,
   PluginLifecycleRegistration,
+  PluginTaskConversationPrepareRequest,
+  PluginTaskConversationAdmitRequest,
+  PluginTaskConversationControlRequest,
+  PluginTaskConversationHooks,
 } from "./lifecycle.js";
 
 export { spawnProcess, execCommand, terminateProcess } from "./process.js";

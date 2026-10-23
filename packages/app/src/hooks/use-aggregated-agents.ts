@@ -5,6 +5,7 @@ import { useSessionStore } from "@/stores/session-store";
 import type { AgentDirectoryEntry } from "@/types/agent-directory";
 import type { Agent } from "@/stores/session-store";
 import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
+import { collapseTaskConversationDirectory } from "@/workspace-tabs/conversation-directory";
 
 export interface AggregatedAgent extends AgentDirectoryEntry {
   serverId: string;
@@ -89,6 +90,8 @@ export function useAggregatedAgents(options?: {
           lastActivityAt: agent.lastActivityAt,
           cwd: agent.cwd,
           workspaceId: agent.workspaceId,
+          taskConversationId: agent.taskConversationId,
+          taskConversationMemberId: agent.taskConversationMemberId,
           provider: agent.provider,
           pendingPermissionCount: agent.pendingPermissions.length,
           requiresAttention: agent.requiresAttention,
@@ -123,8 +126,9 @@ export function useAggregatedAgents(options?: {
     });
 
     // Update the identity cache for the next render pass.
+    const visibleAgents = collapseTaskConversationDirectory(allAgents);
     const nextCache = new Map<string, AggregatedAgent>();
-    for (const agent of allAgents) {
+    for (const agent of visibleAgents) {
       nextCache.set(`${agent.serverId}:${agent.id}`, agent);
     }
     prevAgentsRef.current = nextCache;
@@ -133,10 +137,10 @@ export function useAggregatedAgents(options?: {
     // return the previous array so downstream reference comparisons can bail.
     const prevSorted = prevSortedRef.current;
     const stableAgents =
-      allAgents.length === prevSorted.length &&
-      allAgents.every((agent, i) => agent === prevSorted[i])
+      visibleAgents.length === prevSorted.length &&
+      visibleAgents.every((agent, i) => agent === prevSorted[i])
         ? prevSorted
-        : allAgents;
+        : visibleAgents;
     prevSortedRef.current = stableAgents;
 
     // Check if we have any cached data

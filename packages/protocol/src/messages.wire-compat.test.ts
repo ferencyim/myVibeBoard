@@ -6,6 +6,8 @@ import {
   AgentTimelineItemPayloadSchema,
   ServerInfoStatusPayloadSchema,
   SessionOutboundMessageSchema,
+  SessionInboundMessageSchema,
+  TaskConversationRowSchema,
   WSHelloMessageSchema,
   WorkspaceSetupSnapshotSchema,
   WorkspaceSetupProgressMessageSchema,
@@ -473,4 +475,94 @@ test("usage entries accept older failures and additive successful snapshots", ()
       lastSuccessful: { fetchedAt: oldEntry.fetchedAt, report: oldEntry.report },
     }).success,
   ).toBe(false);
+});
+
+test("task conversation wire keeps arbitrary roles, frozen public source, and pure attachments", () => {
+  const request = {
+    type: "task.conversation.send.request",
+    requestId: "send",
+    conversationId: "conversation",
+    recipient: {
+      role: "a-plugin-defined-role",
+      config: { provider: "codex", cwd: "/repo", model: "cheap", thinkingOptionId: "low" },
+    },
+    clientMessageId: "human",
+    text: "继续",
+    attachments: [
+      {
+        type: "text",
+        mimeType: "text/plain",
+        contextKind: "plugin-public-context",
+        text: "公开正文",
+      },
+    ],
+  };
+  expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+  const targeted = {
+    ...request,
+    recipient: { ...request.recipient, memberId: "independent-child" },
+  };
+  expect(SessionInboundMessageSchema.parse(targeted)).toEqual(targeted);
+  expect(
+    SessionInboundMessageSchema.safeParse({
+      ...targeted,
+      recipient: { ...targeted.recipient, memberId: "" },
+    }).success,
+  ).toBe(false);
+  const row = {
+    id: "row",
+    epoch: "epoch",
+    seq: 1,
+    updatedSeq: 3,
+    sourceKey: "backend:turn:output",
+    kind: "assistant",
+    text: "完整方案",
+    completed: true,
+    createdAt: "2026-10-23T00:00:00.000Z",
+    speaker: {
+      role: "custom",
+      provider: "claude",
+      model: "cheap",
+      memberId: "member",
+      backendAgentId: "backend",
+    },
+    source: {
+      memberId: "member",
+      backendAgentId: "backend",
+      sourceTurnId: "turn",
+      epoch: "provider-epoch",
+      seq: 12,
+      messageId: "message",
+    },
+  };
+  expect(TaskConversationRowSchema.parse(row)).toEqual(row);
+  expect(
+    SessionOutboundMessageSchema.parse({
+      type: "task.conversation.update",
+      payload: { subscriptionId: "owned", conversationId: "conversation", row, eventSeq: 3 },
+    }),
+  ).toMatchObject({ payload: { row: { seq: 1, updatedSeq: 3, source: row.source } } });
+});
+
+test("task conversation feature and capability fields remain optional for ordinary peers", () => {
+  expect(
+    WSHelloMessageSchema.parse({
+      type: "hello",
+      clientId: "old",
+      clientType: "cli",
+      protocolVersion: 1,
+    }),
+  ).not.toHaveProperty("capabilities");
+  expect(
+    ServerInfoStatusPayloadSchema.parse({ status: "server_info", serverId: "old" }).features,
+  ).toBeUndefined();
+  expect(
+    WSHelloMessageSchema.parse({
+      type: "hello",
+      clientId: "new",
+      clientType: "cli",
+      protocolVersion: 1,
+      capabilities: { task_conversations: true },
+    }),
+  ).toMatchObject({ capabilities: { task_conversations: true } });
 });

@@ -222,3 +222,40 @@ test.each([
   });
   f.client.close();
 });
+
+test("task conversation first-message intent uses the workspace journal and retains identity after reconnect", async () => {
+  const f = fixture(true);
+  const { agent: _initialAgent, ...workspaceInput } = f.input;
+  const taskConversation = {
+    idempotencyKey: "conversation-intent",
+    ownerPluginId: "test-plugin",
+    initialRecipient: { role: "custom-planner", config: { provider: "codex", cwd: "/project" } },
+    initialMessage: { clientMessageId: "first-message", text: "首消息" },
+  };
+  const first = f.client.createWorkspace({ ...workspaceInput, taskConversation });
+  expect(f.requests).toEqual([
+    { kind: "workspace", input: { ...workspaceInput, taskConversation, subscribe: true } },
+  ]);
+  f.client.reconnect();
+  f.client.receive({
+    kind: "workspace",
+    idempotencyKey: workspaceInput.idempotencyKey,
+    revision: 4,
+    phase: "completed",
+    workspaceId: workspace.id,
+    agentId: agent.id,
+    conversationId: "conversation",
+    memberId: "member",
+    workspace,
+    agent,
+    error: null,
+  });
+  expect(await first).toMatchObject({
+    creation: { conversationId: "conversation", memberId: "member" },
+    workspace,
+    agent,
+  });
+  expect(f.requests).toHaveLength(1);
+  expect(f.legacy).toHaveLength(0);
+  f.client.close();
+});

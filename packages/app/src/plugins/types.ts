@@ -16,15 +16,12 @@ import type {
   PluginSettingsScreenContribution,
   PluginTimelineRendererContribution,
   PluginTimelineTransformerContribution,
-  PluginPanelLocation,
   PluginWorkspacePanelContribution,
 } from "@getpaseo/plugin/client";
 
 export type PluginSidebarSection = "header" | "footer";
 
-export type EvaluatedPluginWorkspacePanelContribution = PluginWorkspacePanelContribution & {
-  locations: readonly PluginPanelLocation[];
-};
+export type EvaluatedPluginWorkspacePanelContribution = PluginWorkspacePanelContribution;
 
 export interface EvaluatedPlugin {
   id: string;

@@ -121,6 +121,7 @@ function isCleanLegacyPathDecode(value: string): boolean {
 
 export type WorkspaceOpenIntent =
   | { kind: "agent"; agentId: string }
+  | { kind: "task_conversation"; conversationId: string }
   | { kind: "terminal"; terminalId: string }
   | { kind: "file"; path: string }
   | { kind: "draft"; draftId: string }
@@ -147,6 +148,9 @@ export function parseWorkspaceOpenIntent(
 
   if (kind === "agent") {
     return { kind: "agent", agentId: payload };
+  }
+  if (kind === "task_conversation") {
+    return { kind: "task_conversation", conversationId: payload };
   }
   if (kind === "terminal") {
     return { kind: "terminal", terminalId: payload };

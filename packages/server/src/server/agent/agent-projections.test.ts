@@ -1,9 +1,24 @@
+import { mkdir, mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import pino from "pino";
+import { AgentStorage } from "./agent-storage.js";
+import { AgentDirectory } from "./directory.js";
+import type { AgentManager } from "./agent-manager.js";
+import { createStub } from "../test-utils/class-mocks.js";
+import { serializeAgentSnapshot } from "../messages.js";
+import { DirectorySyncService } from "../directory-sync/index.js";
+import { describeHookAgent } from "../plugins/lifecycle/index.js";
+import {
+  TASK_CONVERSATION_ID_LABEL,
+  TASK_CONVERSATION_MEMBER_ID_LABEL,
+} from "../task-conversation/identity.js";
 import { describe, expect, it } from "vitest";
 
 import { AGENT_LIFECYCLE_STATUSES } from "./agent-manager.js";
 import {
   buildStoredAgentPayload,
   toAgentPayload,
+  toAgentListItemPayload,
   toRecentProviderSessionDescriptorPayload,
   toStoredAgentRecord,
   type ManagedAgent,
@@ -537,5 +552,109 @@ describe("toRecentProviderSessionDescriptorPayload", () => {
       firstPromptPreview: null,
       lastPromptPreview: null,
     });
+  });
+});
+
+describe("task conversation membership projections", () => {
+  const identity = {
+    taskConversationId: "task-container",
+    taskConversationMemberId: "task-member",
+  };
+  const labels = {
+    [TASK_CONVERSATION_ID_LABEL]: identity.taskConversationId,
+    [TASK_CONVERSATION_MEMBER_ID_LABEL]: identity.taskConversationMemberId,
+  };
+
+  it("publishes membership in the first live snapshot, hook event, and thin list item", () => {
+    const agent = createManagedAgent({ labels });
+    const snapshot = serializeAgentSnapshot(agent);
+    expect(snapshot).toMatchObject(identity);
+    expect(toAgentPayload(agent)).toMatchObject(identity);
+    expect(toAgentListItemPayload(snapshot)).toMatchObject(identity);
+    expect(describeHookAgent(agent)).toMatchObject(identity);
+  });
+
+  it("retains membership in real storage, history and directory synchronization after restart", async () => {
+    const root =
+      process.env.PASEO_TEST_HOME ?? join(process.cwd(), ".dev", "task-conversation-tests");
+    await mkdir(root, { recursive: true });
+    const directory = await mkdtemp(join(root, "membership-projection-"));
+    const logger = pino({ level: "silent" });
+    const member = createManagedAgent({ labels });
+    const history = createManagedAgent({
+      id: "archived-member",
+      labels: { ...labels, [TASK_CONVERSATION_MEMBER_ID_LABEL]: "old-member" },
+    });
+    const record = toStoredAgentRecord(member);
+    const archivedRecord = { ...toStoredAgentRecord(history), archivedAt: "2026-10-23T00:00:00Z" };
+    const storage = new AgentStorage(directory, logger);
+    await storage.upsert(record);
+    await storage.upsert(archivedRecord);
+    const restartedStorage = new AgentStorage(directory, logger);
+    const restored = await restartedStorage.get(member.id);
+    if (!restored) throw new Error("Missing persisted member");
+    const restoredPayload = buildStoredAgentPayload(restored, ["claude"]);
+    expect(restoredPayload).toMatchObject(identity);
+    expect(toAgentListItemPayload(restoredPayload)).toMatchObject(identity);
+    const agents = new AgentDirectory({
+      manager: createStub<AgentManager>({ listAgents: () => [] }),
+      storage: restartedStorage,
+      workspaces: { list: async () => [], get: async () => null },
+      projectLive: async (agent) => toAgentPayload(agent),
+      projectStored: (stored) => buildStoredAgentPayload(stored, ["claude"]),
+      isProviderVisible: () => true,
+      isStoredProviderAvailable: () => true,
+    });
+    expect(await agents.list()).toEqual([expect.objectContaining(identity)]);
+    expect(await agents.list({ includeArchived: true })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining(identity),
+        expect.objectContaining({
+          taskConversationId: "task-container",
+          taskConversationMemberId: "old-member",
+        }),
+      ]),
+    );
+    const project = {
+      projectKey: "project",
+      projectName: "Project",
+      checkout: {
+        cwd: "/tmp/project",
+        isGit: false as const,
+        currentBranch: null,
+        remoteUrl: null,
+        worktreeRoot: null,
+        isPaseoOwnedWorktree: false as const,
+        mainRepoRoot: null,
+      },
+    };
+    const sync = new DirectorySyncService();
+    const listed = sync.synchronizeAgents([{ agent: restoredPayload, project }], {});
+    expect(listed.entries[0].agent).toMatchObject(identity);
+    const live = toAgentPayload(createManagedAgent({ labels, lifecycle: "running" }));
+    expect(
+      sync.sequenceAgentUpdate(
+        { kind: "upsert", agent: live },
+        { agent: live, project },
+        live.id,
+        true,
+      ),
+    ).toMatchObject({ agent: identity });
+  });
+
+  it("does not add membership fields to ordinary or partially labelled agents", () => {
+    for (const ordinaryLabels of [{}, { [TASK_CONVERSATION_ID_LABEL]: "incomplete" }]) {
+      const agent = createManagedAgent({ labels: ordinaryLabels });
+      for (const projected of [
+        toAgentPayload(agent),
+        serializeAgentSnapshot(agent),
+        buildStoredAgentPayload(toStoredAgentRecord(agent), ["claude"]),
+        toAgentListItemPayload(toAgentPayload(agent)),
+        describeHookAgent(agent),
+      ]) {
+        expect(projected).not.toHaveProperty("taskConversationId");
+        expect(projected).not.toHaveProperty("taskConversationMemberId");
+      }
+    }
   });
 });
