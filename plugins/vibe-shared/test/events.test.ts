@@ -43,6 +43,7 @@ describe("publishEvent", () => {
   it("covers every documented event type with a payload schema", () => {
     expect([...EVENT_TYPES].sort()).toEqual(
       [
+        "task.updated",
         "card.created",
         "card.updated",
         "card.deleted",

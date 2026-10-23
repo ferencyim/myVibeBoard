@@ -18,3 +18,4 @@ export * from "./card-tabs";
 export * from "./overlap";
 export * from "./subtasks";
 export * from "./dispatch";
+export * from "./task";

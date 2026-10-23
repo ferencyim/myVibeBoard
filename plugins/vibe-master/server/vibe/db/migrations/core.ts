@@ -480,4 +480,26 @@ INSERT OR REPLACE INTO sync_meta (table_name, row_id, column_name, hlc, device_i
   FROM preset;
 `,
   },
+  {
+    version: 11,
+    name: "workspace_tasks",
+    sql: `
+-- WP-110 is additive: retained configuration stays in its existing owner tables, and project
+-- remains the native-project-linked extension record. Old cards never become tasks; WP-114
+-- owns removal of the legacy tables after the new flow has been verified.
+CREATE TABLE task (
+  workspace_id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(workspace_id)) > 0),
+  anchor_agent_id TEXT NOT NULL CHECK (length(trim(anchor_agent_id)) > 0),
+  phase TEXT NOT NULL DEFAULT 'planning'
+    CHECK (phase IN ('planning','awaiting_confirmation','queued','executing','reviewing',
+      'verifying','awaiting_acceptance','completed','paused','failed')),
+  plan_json TEXT CHECK (plan_json IS NULL OR json_valid(plan_json)),
+  confirmed_at TEXT,
+  roles_snapshot_json TEXT CHECK (roles_snapshot_json IS NULL OR json_valid(roles_snapshot_json)),
+  subtask_runs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(subtask_runs_json)),
+  summary TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_task_phase ON task(phase, confirmed_at);
+`,
+  },
 ];
