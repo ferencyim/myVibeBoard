@@ -26,7 +26,17 @@ separate durable authority. Their public rows are committed by the daemon before
 member provider replay only supplies original details or reconciles an explicitly incomplete
 turn. A streamed row keeps its initial `seq` position and advances `updatedSeq` as content grows,
 so forward catch-up uses the update watermark and retains `sourceSeqRanges`. Hydrating a member
-does not replace the container's history. See the [WP-111 contract](vibe/ROUND5-DESIGN.md#wp-111core-群聊任务会话宿主)
+does not replace the container's history. Public rows and source indexes live in separate SQLite
+tables, so a streamed update writes only its row. Inline images use durable upload references;
+delivery receipts retain context boundaries rather than copies of prompts. Assistant fragments
+coalesce for 50 ms, flush before terminal events and shutdown, and publish only after commit.
+Row updates omit the conversation snapshot; lifecycle changes publish snapshots separately.
+Each native source retains its highest sequence rather than a key for every fragment. Legacy
+records migrate independently, and corrupt records are retained and logged without blocking boot.
+Readers switch to row tables only after migration commits; a failed migration keeps its original
+record inaccessible rather than exposing an empty replacement. Recovery and shutdown synchronize
+with buffered streams so native replay cannot duplicate a partially committed batch.
+See the [WP-111 contract](vibe/ROUND5-DESIGN.md#wp-111core-群聊任务会话宿主)
 for source identity, unknown delivery, and context cursor semantics.
 
 ## Presence is not delivery

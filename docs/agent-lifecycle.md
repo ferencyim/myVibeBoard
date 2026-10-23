@@ -115,8 +115,15 @@ lifecycle is separate from public workspace visibility and is not a public creat
 Task members belong to a stable conversation in addition to their parent relationship. Their
 ordinary send/configuration/detach paths cannot bypass conversation admission. Task Stop and
 archive use the complete member index and wait for cancellation; an unknown result retains the
-control barrier. Closing a member detail sheet only closes that presentation. The task tab,
-including restored member deep links, targets the conversation; archive retains its public
+control barrier. Workspace archive first archives every owned task conversation and aborts if
+cancellation is uncertain. Approval follow-ups keep replacement semantics and can resume the
+original member while the conversation is paused. Codex synthetic plan approvals retain their
+request identity across daemon restarts; replies load that original member before resolving the
+request. Provider RPC approvals tied to a dead process are not reconstructed as live requests.
+Closing a member detail sheet or task tab only
+closes that presentation; background member events do not reopen the tab. Task navigation opens it
+again, and archive remains explicit. The task tab, including restored member deep links, targets
+the conversation; archive retains its public
 history and worktree. Ordinary agents keep the lifecycle below.
 
 Archive is a **soft delete**: the agent record stays on disk with `archivedAt` set, the runtime is closed, and the agent disappears from active lists. Archive is **global** — it lives on the server and propagates to every connected client.
