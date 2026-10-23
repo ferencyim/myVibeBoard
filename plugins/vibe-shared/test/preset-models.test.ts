@@ -53,7 +53,7 @@ describe("ordered models in a preset", () => {
   it("migrates legacy chains in order, deduplicating models and ignoring loops and missing presets", () => {
     const { db } = openTestDb();
     db.exec("CREATE TABLE schema_version (owner TEXT, version INTEGER, applied_at TEXT, PRIMARY KEY(owner, version))");
-    for (const migration of MIGRATIONS.core.slice(0, -1)) {
+    for (const migration of MIGRATIONS.core.filter((entry) => entry.version < 10)) {
       db.exec(migration.sql);
       db.prepare("INSERT INTO schema_version VALUES ('core', ?, 'old')").run(migration.version);
     }

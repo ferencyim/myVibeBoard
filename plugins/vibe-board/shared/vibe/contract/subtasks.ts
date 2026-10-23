@@ -39,7 +39,7 @@ export function runOf(card: Pick<CardView, "subtaskRuns">, subtaskId: string): S
 export const subtasksOf = (card: Pick<CardView, "plan">): Subtask[] => card.plan?.subtasks ?? [];
 
 /** Why a subtask list cannot be stored (unique ids, known dependencies, no cycles), or null. */
-export function subtaskListError(subtasks: readonly Subtask[]): string | null {
+export function subtaskListError(subtasks: readonly Pick<Subtask, "id" | "dependsOn">[]): string | null {
   const ids = new Set<string>();
   for (const s of subtasks) {
     if (ids.has(s.id)) return `子任务编号重复：${s.id}`;

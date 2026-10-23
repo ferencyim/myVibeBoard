@@ -98,8 +98,20 @@ import {
 import { isSafeRepoRelativePath } from "../contract/paths";
 import { syncSpec } from "../contract/sync-spec";
 import { ACTIVITY_COLUMN, activityTabsOf } from "../contract/card-tabs";
-import { MODEL_ROLES, cleanDefaults, prefillModels, type ModelDefaults } from "../contract/model-roles";
+import {
+  MODEL_ROLES,
+  ModelDefaultsSchema,
+  cleanDefaults,
+  prefillModels,
+  resolveTaskRoles,
+  type ModelDefaults,
+  type TaskRoleSelections,
+  type TaskRoleSnapshot,
+} from "../contract/model-roles";
 import { publishEvent } from "./events";
+import { findProjectConfig } from "./project-config";
+import { createTaskCommands } from "./tasks";
+import { TASK_PLAN_PROMPT } from "../contract/task";
 import { decodeRow, decodeRows } from "./rows";
 import type { Row, SqlParam, VibeDb } from "./sqlite";
 
@@ -731,10 +743,20 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
 
   // ---- projects ----
 
+  function validateDefaults(value: ModelDefaults | undefined): void {
+    if (value === undefined) return;
+    const parsed = ModelDefaultsSchema.parse(value);
+    for (const role of MODEL_ROLES) {
+      const id = parsed[role]?.trim();
+      if (id && !presets.get(id)) throw new CommandError("not_found", `Preset not found: ${id}`);
+    }
+  }
+
   const projects = {
     create(rawInput: CreateProjectInput): Project {
       const input = normalizeProjectInput(rawInput);
       checkRequirementsPath(input.requirementsPath);
+      validateDefaults(input.defaultPresets);
       if (!PROJECT_PREFIX_PATTERN.test(input.prefix)) {
         throw new CommandError(
           "invalid",
@@ -784,6 +806,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     update(id: string, rawPatch: UpdateProjectInput): Project {
       const patch = normalizeProjectInput(rawPatch);
       checkRequirementsPath(patch.requirementsPath);
+      validateDefaults(patch.defaultPresets);
       return write((hlc) => {
         mustProject(id);
         const { archived, ...rest } = patch;
@@ -810,6 +833,38 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           )
           .all(),
       );
+    },
+  };
+
+  // Project extensions share the existing row; callers use the native project ID.
+  const projectConfigs = {
+    get(paseoProjectId: string): Project | undefined {
+      return findProjectConfig(projects.list(true), paseoProjectId);
+    },
+    link(paseoProjectId: string, repoPath: string): Project | undefined {
+      return db.immediate(() => {
+        const project = findProjectConfig(projects.list(true), paseoProjectId, repoPath);
+        if (!project || project.paseoProjectId === paseoProjectId) return project;
+        return projects.update(project.id, { paseoProjectId });
+      });
+    },
+    update(
+      paseoProjectId: string,
+      patch: Pick<
+        UpdateProjectInput,
+        | "projectTypes"
+        | "description"
+        | "requirementsPath"
+        | "concurrencyLimit"
+        | "devices"
+        | "defaultPresets"
+      >,
+    ): Project {
+      return db.immediate(() => {
+        const project = projectConfigs.get(paseoProjectId);
+        if (!project) throw new CommandError("not_found", "项目扩展配置不存在：" + paseoProjectId);
+        return projects.update(project.id, patch);
+      });
     },
   };
 
@@ -2329,6 +2384,17 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
   }
 
   const modelDefaults = {
+    resolveTask(selections: TaskRoleSelections, paseoProjectId?: string): TaskRoleSnapshot {
+      return db.immediate(() =>
+        resolveTaskRoles(
+          selections,
+          paseoProjectId ? projectConfigs.get(paseoProjectId)?.defaultPresets : undefined,
+          modelDefaults.global(),
+          presets.get,
+        ),
+      );
+    },
+
     global(): ModelDefaults {
       const raw = db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(MODEL_DEFAULTS_KEY)?.value;
       if (!raw) return {};
@@ -2340,6 +2406,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
     /** Replaces the global defaults; unknown preset ids are refused. */
     setGlobal(value: ModelDefaults): ModelDefaults {
+      validateDefaults(value);
       const clean = cleanDefaults(value);
       for (const role of MODEL_ROLES) {
         const id = clean[role];
@@ -2371,5 +2438,32 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
   };
 
-  return { projects, presets, tags, cards, events, plans, sessions, gitSnapshots, prompts, limits, masterDispatch, modelDefaults, deviceId, db };
+  const taskCommands = createTaskCommands(db, { now });
+  const tasks = {
+    ...taskCommands,
+    create(input: Parameters<typeof taskCommands.create>[0]) {
+      return db.immediate(() => {
+        prompts.register([TASK_PLAN_PROMPT]);
+        return taskCommands.create(input);
+      });
+    },
+  };
+  return {
+    projects,
+    projectConfigs,
+    tasks,
+    presets,
+    tags,
+    cards,
+    events,
+    plans,
+    sessions,
+    gitSnapshots,
+    prompts,
+    limits,
+    masterDispatch,
+    modelDefaults,
+    deviceId,
+    db,
+  };
 }

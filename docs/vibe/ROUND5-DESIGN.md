@@ -1,6 +1,6 @@
 # 第五轮设计：项目 → workspace → 原生对话
 
-> 设计修订稿，尚未实现。产品决定见 [第五轮需求](../../PRODUCT-REQUIREMENTS.md#第五轮取消看板回到-paseo-对话2026-10-23-用户拍板)；前四轮实现记录见 [ARCHITECTURE.md](ARCHITECTURE.md)。本轮按 WP-110…114 实施。本次只提交文档，不操作用户数据库或日用 daemon，不 push、不合并 main。
+> WP-110 已实现；WP-111…114 待实施。产品决定见 [第五轮需求](../../PRODUCT-REQUIREMENTS.md#第五轮取消看板回到-paseo-对话2026-10-23-用户拍板)；前四轮实现记录见 [ARCHITECTURE.md](ARCHITECTURE.md)。本轮按 WP-110…114 实施。本次只提交文档，不操作用户数据库或日用 daemon，不 push、不合并 main。
 
 ## 1. 用户流程与确认边界
 
@@ -53,13 +53,13 @@ Agent 行为设置集中保留七角色默认、预设、提示词覆盖/恢复�
 
 Paseo 保存项目、workspace/worktree、agent 身份及 provider 历史；vibe.db 只保存任务编排和保留能力的数据，不复制原生聊天或项目目录。
 
-| 数据           | 第五轮落点                                                                                                                                                                                                                 |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 项目扩展       | project_config 以原生 projectId 关联，保留类型、简介、需求路径、并发、设备及七角色默认。旧项目按已关联 ID/仓库真实路径匹配原生项目；缺项用原生 API 建项目，歧义停下报告，不复制为第二份项目目录。                          |
-| task           | workspace_id 为主键，只存 anchor_agent_id、阶段、当前方案快照（含子任务、文件、验证清单）、确认时间、确认时的角色快照、子任务运行状态和结论摘要。不存标题/描述/验收表单，不建 task_event、task_run 或 revision/hash 系统。 |
-| 子任务状态     | 放在 task 的结构字段中，保存依赖、原生 agent ID、实际模型、状态及必要接续信息；工作目录/分支从 workspace 查询。当前方案替换前先停止旧运行；过去对话查原生会话。                                                            |
-| 配置与运行资料 | 预设及候选顺序、全局默认、提示词覆盖、维护规则及其按规则×项目的运行计数、记忆、统计保留。移除 card 外键时保留这些记录本身，旧统计可以按原项目/模型/日期查看，不制造伪任务。                                                |
-| 新证据与上下文 | 复用 verification / evidence、agent_session 等现有能力的必要字段，关联 workspace 和本轮确认时间/验证 commit；证据是文件与报告，不是全量消息事件。vibe_event 继续作插件总线，不作聊天档案。                                 |
+| 数据           | 第五轮落点                                                                                                                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 项目扩展       | 现有 project 表作为项目扩展，以 paseo_project_id 关联原生 projectId，保留类型、简介、需求路径、并发、设备及七角色默认。旧项目按已关联 ID/仓库真实路径匹配原生项目；缺项用原生 API 建项目，歧义停下报告，不复制为第二份项目目录。 |
+| task           | workspace_id 为主键，只存 anchor_agent_id、阶段、当前方案快照（含子任务、文件、验证清单）、确认时间、确认时的角色快照、子任务运行状态和结论摘要。不存标题/描述/验收表单，不建 task_event、task_run 或 revision/hash 系统。       |
+| 子任务状态     | 放在 task 的结构字段中，保存依赖、原生 agent ID、实际模型、状态及必要接续信息；工作目录/分支从 workspace 查询。当前方案替换前先停止旧运行；过去对话查原生会话。                                                                  |
+| 配置与运行资料 | 预设及候选顺序、全局默认、提示词覆盖、维护规则及其按规则×项目的运行计数、记忆、统计保留。移除 card 外键时保留这些记录本身，旧统计可以按原项目/模型/日期查看，不制造伪任务。                                                      |
+| 新证据与上下文 | 复用 verification / evidence、agent_session 等现有能力的必要字段，关联 workspace 和本轮确认时间/验证 commit；证据是文件与报告，不是全量消息事件。vibe_event 继续作插件总线，不作聊天档案。                                       |
 
 **旧卡片不迁移。** 3 张旧卡、card_event、卡片附属方案/子任务/证据和旧手机离线积压只留本机数据库备份，不导入、不建 workspace 映射、不回放首消息，不作新任务恢复依据。
 
@@ -124,6 +124,20 @@ App 改动集中在 `packages/app/src/{composer,runtime,vibe}`：原生 outbox �
 - **单测验收**：7 项目/3 旧卡 fixture，迁后新 task 为零，保留数据内容与计数相等；失败回滚、备份可读、项目路径歧义报告、三态角色及缺验证模型阻断。
 - **隔离 daemon 实测**：复制合成旧库升级、重启，用原生项目 API 验证配置关联；新建一任务能保存/读回快照和状态，旧卡不生成 workspace，原始文件和备份不变。
 
+**WP-110 实际接口（2026-10-23）**
+
+- 合同由 `contract/task.ts` 导出。阶段为 `planning / awaiting_confirmation / queued / executing / reviewing / verifying / awaiting_acceptance / completed / paused / failed`。`parseTaskPlan(output)` 只接受一个完整 `vibe-plan` fenced JSON，结构为 `{goal,approach,files,subtasks,checks:[{text,method}]}`，子任务为 `{id,goal,method,notes,dependsOn,files,acceptance,presetId?}`；不补缺失字段，依赖不可缺失或成环。
+- `createVibeStore(db).tasks`（或底层 `createTaskCommands(db,{now?})`）提供 `create({workspaceId,anchorAgentId}) / get / list({phase?}) / setPhase / savePlan / savePlanOutput / saveRolesSnapshot / confirm(workspaceId,{plan?,rolesSnapshot?}) / setSubtaskRun / setSummary`。确认仅允许规划/待确认原子入队，重复确认拒绝；排队/运行的方案须先停止并暂停才能改，改方案清确认、角色和旧运行状态。
+- 子任务运行字段为 `subtaskId,dependsOn,state,agentId,actualModel,continuation,summary`；状态为 `pending/running/waiting/completed/paused/failed`，运行中必须有原生 agent 与实际模型，continuation 保存前 agent、摘要与候选序号。事务发布 `task.updated {workspaceId,fields}`，不建 task_event，不参与旧手机同步。
+- `resolveTaskRoles(selections,projectDefaults,globalDefaults,getPreset)` 与 `store.modelDefaults.resolveTask(selections,paseoProjectId?)` 解析七角色。临时选择是 `{mode:"inherit"} / {mode:"preset",presetId} / {mode:"disabled"}`；默认配置缺键继承、字符串指定、可选角色的 null 不启用。只允许 scout/plan_reviewer/reviewer 不启用；planner/worker/verifier 缺失或指定预设失效报错，subagent 未设置沿用 worker。快照冻结七角色的有序候选、权限、环境和指令；旧卡接口留到 WP-114。
+- 复用 `project`，不新建 project_config。按原生 ID 调用 `store.projectConfigs.get/update`，`link(paseoProjectId,repoPath)` 将唯一旧配置关联原生项目；真实路径多解或已关联其它 ID 则拒绝，无匹配返回 undefined。原生项目创建/补齐沿用 WP-104 的宿主 API，由 WP-111 接入，不由 SQLite 迁移猜建项目。
+- core v11 仅新增空 task，保留配置/规则计数/记忆/统计原表原内容。已有磁盘库升级前自动调用 `backupVibeDb(db,{vibeHome?,now?})`，`VACUUM INTO` 后只读 integrity_check；显式数据库路径以父目录作为隔离 home，通常即 VIBE_HOME。新库不备份，重启不重复，失败阻止迁移并回滚；删旧表留给 WP-114。
+- `TASK_PLAN_PROMPT`（key `task.plan_format`）在 `store.tasks.create` 事务内注册，中文固定格式后缀只读。WP-111 负责附加后缀、核对最近已完成原生输出定位/规划状态与 Stop；不能以旧快照兜底最新输出读取失败。WP-112 负责调度、文件锁与证据验证，本包不提供运行器。
+
+**验收记录**：共享层 11 个相关测试文件共 144 项通过，脚本相关测试 10 项通过。隔离 home 为 `D:/devRepoCaches/r5-110-home`，用 `dev-daemon.ps1 -HomeDir … -Port 17110` 启动，config 关闭 relay。合成 schema 10 的 7 项目/3 旧卡启动后升至 11、task 为零；备份可打开且旧数据逐行一致。七个 Vibe 插件首次/重启均 running。用原生 project/workspace API 注册合成目录，再用临时脚本调用共享命令关联扩展、创建 task、保存/读回方案并确认；重启快照完全相等、迁移全跳过、备份数量与 SHA-256 不变。最后停止 daemon，17110 已释放。仅测试本包数据/API，anchor 为合成 ID，未运行真实规划模型或 WP-111…114 流程。
+
+**静态检查边界**：vibe-shared 及其它六个消费者插件 typecheck 通过；vibe-board 标准检查仍有本地旧 SDK 的四处 `SettingsSelect.inline` 类型错误。根 lint/format 默认排除 Vibe 插件；取消排除的同规则临时配置实际检查，新增代码无诊断，旧 commands.ts 与默认模型编辑器仍分别有 9/8 条与 HEAD 相同的基线诊断。不重装依赖、不改联接的 dist。另一次使用仓库 SDK 声明的临时类型检查遇到堆内存上限，未作为通过依据。
+
 ### WP-111：原生规划、显式执行与 agent 编排
 
 - **范围 / 目录**：`plugins/vibe-board/{server,client}`、`plugins/vibe-master/server/planning`；实现 anchor、slash/确认动作、pill、方案复核 send、主子代理、timeline 摘要、Stop/接续和安全 Git 收尾。最小 [core] 为 `packages/client/src/index.ts` 的 cancel 暴露、任务 Stop/归档前协调及原生规划默认值适配（`packages/app/src/composer` 与必要插件合同）。
@@ -155,5 +169,7 @@ App 改动集中在 `packages/app/src/{composer,runtime,vibe}`：原生 outbox �
 ## 7. 拍板结果与设计经验
 
 仍需用户拍板的问题：**没有**。旧卡/事件/旧手机积压不迁移，用户「通过」后安全合并本地 main 并 push origin main，维护任务一律先规划并等待确认，均已确定。
+
+开发验证经验：旧迁移 fixture 应固定它要验证的版本边界，不把“倒数一条迁移”当作固定功能迁移；共享源只由 sync-shared 复制，测试启动兼容 Windows PowerShell 5.1 并显式关闭 relay。
 
 本轮经验：问答归原生会话，快照与结论归插件，执行授权归用户；先用原生模型选择，避免为首发前七角色设置引入草稿、路由和恢复协议。

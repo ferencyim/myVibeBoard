@@ -16,6 +16,7 @@ const SessionRef = z.object({ sessionId: z.string(), agentId: z.string().optiona
 
 /** payload schema per event type */
 export const EVENT_PAYLOADS = {
+  "task.updated": z.object({ workspaceId: z.string().min(1), fields: z.array(z.string()) }),
   "card.created": z.object({
     key: z.string(),
     title: z.string(),

@@ -5,6 +5,8 @@
 // same time: each migration runs inside BEGIN IMMEDIATE and re-reads the version first, so
 // the loser of the race sees the work already done and skips it.
 
+import { dirname } from "node:path";
+import { backupVibeDb } from "./backup";
 import { MIGRATIONS, OWNER_DEPENDS, OWNERS, type Owner } from "./migrations";
 import type { VibeDb } from "./sqlite";
 
@@ -81,6 +83,11 @@ export function migrateOwner(
   const from = getSchemaVersion(db, owner);
   if (from > latest) throw new SchemaTooNewError(owner, from, latest);
   if (from === latest) return { owner, from, to: latest, applied: [] };
+
+  // Existing taskless databases are backed up before any upgrade writes. Fresh databases
+  // have no retained data; an explicit db path defines its own isolated VIBE_HOME.
+  if (owner === "core" && from > 0 && from < 11 && db.path !== ":memory:")
+    backupVibeDb(db, { vibeHome: dirname(db.path), now });
 
   db.exec(CREATE_VERSION_TABLE);
   const applied: number[] = [];

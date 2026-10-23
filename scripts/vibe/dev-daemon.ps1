@@ -43,10 +43,21 @@ if (-not (Test-Path $Cli)) { throw "CLI not found at $Cli; build first or pass -
 # `daemon start` ignores PASEO_LISTEN; the listen address comes from config.json.
 # Plugins are off by default, so the isolated home enables them.
 $configPath = Join-Path $paseoHome "config.json"
-$config = if (Test-Path $configPath) { Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable } else { @{} }
+# Convert only the objects we edit to hashtables; this also works in Windows PowerShell 5.1.
+$config = @{}
+if (Test-Path $configPath) {
+  $saved = Get-Content $configPath -Raw | ConvertFrom-Json
+  foreach ($property in $saved.PSObject.Properties) { $config[$property.Name] = $property.Value }
+}
+$daemonConfig = @{}
+if ($config.ContainsKey("daemon")) {
+  foreach ($property in $config["daemon"].PSObject.Properties) { $daemonConfig[$property.Name] = $property.Value }
+}
+$config["daemon"] = $daemonConfig
 if (-not $config.ContainsKey("version")) { $config["version"] = 1 }
 if (-not $config.ContainsKey("daemon")) { $config["daemon"] = @{} }
 $config["daemon"]["listen"] = "127.0.0.1:$Port"
+$config["daemon"]["relay"] = @{ enabled = $false }
 $config["pluginsEnabled"] = $true
 $config | ConvertTo-Json -Depth 10 | Set-Content -Path $configPath -Encoding utf8
 

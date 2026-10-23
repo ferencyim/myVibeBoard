@@ -25,7 +25,7 @@ export function DefaultModelsEditor({
   presets: readonly Preset[];
   inherited?: ModelDefaults;
 }) {
-  const nameOf = (id: string | undefined) => presets.find((p) => p.id === id)?.name ?? null;
+  const nameOf = (id: string | null | undefined) => presets.find((p) => p.id === id)?.name ?? null;
   return (
     <View style={{ gap: 4 }}>
       {MODEL_ROLES.map((role) => (
@@ -49,7 +49,13 @@ export function DefaultModelsEditor({
 }
 
 /** Global defaults with their own save button (top of the Agent 预设 tab). */
-export function GlobalDefaultsPanel({ api, presets }: { api: BoardApi; presets: readonly Preset[] }) {
+export function GlobalDefaultsPanel({
+  api,
+  presets,
+}: {
+  api: BoardApi;
+  presets: readonly Preset[];
+}) {
   const toast = useToast();
   const query = useQuery({
     queryKey: queryKey("defaults"),

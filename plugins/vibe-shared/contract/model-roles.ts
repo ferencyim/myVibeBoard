@@ -1,10 +1,10 @@
-// The seven model jobs of a card (WP-108) and where a job's preset comes from: the card's own pick,
-// else the project default, else the global default. Pure; shared by the daemon plugins, the board
-// UI and the App's offline replica.
+// Seven task roles. Task choices override project defaults, then global defaults.
+// Card adapters below remain until the WP-114 cutover.
 
 import { z } from "zod";
-import type { RoleHint } from "./enums";
-import type { CardView } from "./model";
+import { PresetEnvironmentKindSchema, PresetPermissionModeSchema, type RoleHint } from "./enums";
+import { presetModels } from "./preset-models";
+import type { Preset } from "./model";
 
 export const MODEL_ROLES = [
   "scout",
@@ -18,14 +18,14 @@ export const MODEL_ROLES = [
 export type ModelRole = (typeof MODEL_ROLES)[number];
 export const ModelRoleSchema = z.enum(MODEL_ROLES);
 
-/** Default preset per job; a missing key = not set (a project then follows the global default). */
+/** Missing key inherits; a preset ID selects; null disables an optional role. */
 export const ModelDefaultsSchema = z.object({
-  scout: z.string().optional(),
+  scout: z.string().nullable().optional(),
   planner: z.string().optional(),
-  plan_reviewer: z.string().optional(),
+  plan_reviewer: z.string().nullable().optional(),
   worker: z.string().optional(),
   subagent: z.string().optional(),
-  reviewer: z.string().optional(),
+  reviewer: z.string().nullable().optional(),
   verifier: z.string().optional(),
 });
 export type ModelDefaults = z.infer<typeof ModelDefaultsSchema>;
@@ -74,14 +74,19 @@ export interface ResolvedModel {
   source: ModelSource | null;
 }
 
-/** Keeps the known jobs with a non-empty preset id (input from the UI, settings or a JSON column). */
+/** Keep known preset IDs and explicit optional-role disables from settings or JSON columns. */
 export function cleanDefaults(value: unknown): ModelDefaults {
   const parsed = ModelDefaultsSchema.safeParse(value);
   if (!parsed.success) return {};
   const out: ModelDefaults = {};
   for (const role of MODEL_ROLES) {
-    const id = parsed.data[role]?.trim();
-    if (id) out[role] = id;
+    const presetId = parsed.data[role];
+    if (presetId === null) {
+      if (role === "scout" || role === "plan_reviewer" || role === "reviewer") out[role] = null;
+    } else {
+      const id = presetId?.trim();
+      if (id) out[role] = id;
+    }
   }
   return out;
 }
@@ -93,7 +98,7 @@ export function cleanDefaults(value: unknown): ModelDefaults {
  */
 export function resolveModel(
   role: ModelRole,
-  card: Partial<Pick<CardView, CardModelField>> | null | undefined,
+  card: Partial<Record<CardModelField, string | null>> | null | undefined,
   project: { defaultPresets: ModelDefaults } | null | undefined,
   global: ModelDefaults | null | undefined,
   exists: (id: string) => boolean = () => true,
@@ -123,4 +128,122 @@ export function prefillModels(
     if (presetId) out[field] = presetId;
   }
   return out;
+}
+
+/** Missing key / inherit, a named preset, or disabled (only the three optional roles). */
+export const TaskRoleSelectionSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("inherit") }).strict(),
+  z.object({ mode: z.literal("preset"), presetId: z.string().trim().min(1) }).strict(),
+  z.object({ mode: z.literal("disabled") }).strict(),
+]);
+export type TaskRoleSelection = z.infer<typeof TaskRoleSelectionSchema>;
+export const OPTIONAL_TASK_ROLES: readonly ModelRole[] = ["scout", "plan_reviewer", "reviewer"];
+export const TaskRoleSelectionsSchema = z
+  .object({
+    scout: TaskRoleSelectionSchema.optional(),
+    planner: TaskRoleSelectionSchema.optional(),
+    plan_reviewer: TaskRoleSelectionSchema.optional(),
+    worker: TaskRoleSelectionSchema.optional(),
+    subagent: TaskRoleSelectionSchema.optional(),
+    reviewer: TaskRoleSelectionSchema.optional(),
+    verifier: TaskRoleSelectionSchema.optional(),
+  })
+  .strict()
+  .superRefine((selections, ctx) => {
+    for (const role of MODEL_ROLES) {
+      if (selections[role]?.mode === "disabled" && !OPTIONAL_TASK_ROLES.includes(role))
+        ctx.addIssue({ code: "custom", path: [role], message: role + " 不能不启用" });
+    }
+  });
+export type TaskRoleSelections = z.infer<typeof TaskRoleSelectionsSchema>;
+
+/** Immutable execution inputs; no live preset lookup is needed after confirmation. */
+export const TaskPresetSnapshotSchema = z
+  .object({
+    presetId: z.string().min(1),
+    source: z.enum(["task", "project", "global", "worker"]),
+    models: z
+      .array(
+        z
+          .object({
+            provider: z.string().trim().min(1),
+            model: z.string(),
+            thinking: z.string(),
+            permissionMode: PresetPermissionModeSchema,
+          })
+          .strict(),
+      )
+      .min(1),
+    environmentKind: PresetEnvironmentKindSchema,
+    runtimeEnv: z.string().nullable(),
+    instructions: z.string(),
+  })
+  .strict();
+export type TaskPresetSnapshot = z.infer<typeof TaskPresetSnapshotSchema>;
+export const TaskRoleSnapshotSchema = z
+  .object({
+    scout: TaskPresetSnapshotSchema.nullable(),
+    planner: TaskPresetSnapshotSchema,
+    plan_reviewer: TaskPresetSnapshotSchema.nullable(),
+    worker: TaskPresetSnapshotSchema,
+    subagent: TaskPresetSnapshotSchema,
+    reviewer: TaskPresetSnapshotSchema.nullable(),
+    verifier: TaskPresetSnapshotSchema,
+  })
+  .strict();
+export type TaskRoleSnapshot = z.infer<typeof TaskRoleSnapshotSchema>;
+
+/** Does not depend on cards. An explicit unavailable preset is an error, never a silent fallback. */
+export function resolveTaskRoles(
+  task: TaskRoleSelections,
+  project: ModelDefaults | null | undefined,
+  global: ModelDefaults | null | undefined,
+  getPreset: (id: string) => Preset | undefined,
+): TaskRoleSnapshot {
+  const selections = TaskRoleSelectionsSchema.parse(task);
+  const result: Partial<Record<ModelRole, TaskPresetSnapshot | null>> = {};
+  // Resolve worker before subagent so its fallback is fully frozen too.
+  for (const role of [
+    "scout",
+    "planner",
+    "plan_reviewer",
+    "worker",
+    "subagent",
+    "reviewer",
+    "verifier",
+  ] as const) {
+    const own = selections[role];
+    let id: string | null | undefined;
+    let source: TaskPresetSnapshot["source"] = "task";
+    if (own?.mode === "disabled") id = null;
+    else if (own?.mode === "preset") id = own.presetId;
+    else if (project?.[role] !== undefined) {
+      id = project[role];
+      source = "project";
+    } else {
+      id = global?.[role];
+      source = "global";
+    }
+    if (!id) {
+      if (role === "subagent") {
+        result.subagent = { ...result.worker!, source: "worker" };
+        continue;
+      }
+      if (!OPTIONAL_TASK_ROLES.includes(role))
+        throw new Error("角色 " + role + " 未配置可用预设：请在任务、项目或全局默认中指定");
+      result[role] = null;
+      continue;
+    }
+    const preset = getPreset(id);
+    if (!preset) throw new Error("角色 " + role + " 的预设不存在或不可用：" + id);
+    result[role] = TaskPresetSnapshotSchema.parse({
+      presetId: id,
+      source,
+      models: presetModels(preset),
+      environmentKind: preset.environmentKind,
+      runtimeEnv: preset.runtimeEnv,
+      instructions: preset.instructions,
+    });
+  }
+  return TaskRoleSnapshotSchema.parse(result);
 }
