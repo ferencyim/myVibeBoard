@@ -3,6 +3,7 @@
 // Plus the cwd -> tight memory budget hint that the agent.create injection hook reads.
 
 import type { SessionComplexity } from "../vibe/contract";
+import { setContextMeta } from "../vibe/db/context-state";
 import type { VibeDb } from "../vibe/db";
 import type { TurnWindow } from "./usage";
 
@@ -33,14 +34,6 @@ function getMeta(db: MetaDb, key: string): string | undefined {
   return db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(key)?.value;
 }
 
-function setMeta(db: MetaDb, key: string, value: string | null) {
-  if (value === null) db.prepare("DELETE FROM vibe_meta WHERE key = ?").run(key);
-  else
-    db.prepare(
-      "INSERT INTO vibe_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    ).run(key, value);
-}
-
 export function readState(db: MetaDb, sessionId: string): ComplexityState {
   try {
     const raw = getMeta(db, stateKey(sessionId));
@@ -52,7 +45,7 @@ export function readState(db: MetaDb, sessionId: string): ComplexityState {
 
 export function writeState(db: MetaDb, sessionId: string, state: ComplexityState) {
   const windows = state.windows.slice(-MAX_WINDOWS);
-  setMeta(db, stateKey(sessionId), JSON.stringify({ ...state, windows }));
+  setContextMeta(db, stateKey(sessionId), JSON.stringify({ ...state, windows }));
 }
 
 export function updateState(
@@ -68,7 +61,7 @@ export function updateState(
 
 /** Remember (tokens) or forget (null) that agents in this directory want a tight memory budget. */
 export function setTightBudget(db: MetaDb, cwd: string, tokens: number | null) {
-  setMeta(db, tightKey(cwd), tokens === null ? null : String(tokens));
+  setContextMeta(db, tightKey(cwd), tokens === null ? null : String(tokens));
 }
 
 export function tightBudgetFor(db: MetaDb, cwd: string): number | undefined {

@@ -1,5 +1,5 @@
 // Read-side statistics over usage_event (own table) plus read-only joins on core tables
-// (card, project, agent_session, vibe_event) and the scheduler's resource_sample.
+// (project, agent_session, vibe_event) and the scheduler's resource_sample.
 
 import type { Overview, Period, StatsGroup, TokenTotals } from "../shared/rpc";
 import type { VibeDb } from "./vibe/db";
@@ -41,7 +41,7 @@ const SUMS = `SUM(e.tokens_in) AS input, SUM(e.tokens_out) AS output,
 
 const toGroup = (r: GroupRow): StatsGroup => ({
   key: r.k ?? "",
-  label: r.label ?? r.k ?? "(unlinked)",
+  label: r.label ?? r.k ?? "未关联",
   input: r.input,
   output: r.output,
   cacheRead: r.cache_read,
@@ -74,35 +74,42 @@ function speedStats(provider: string, rates: number[]) {
 
 interface CallRow {
   session_id: string;
-  card_id: string | null;
+  provider?: string;
+  workspace_id: string | null;
   ctx: number;
 }
 
 /** Context size before/after each compaction, detected as a sharp drop between consecutive calls. */
 export function detectCompactions(rows: CallRow[]) {
-  const found: Array<{ cardId: string | null; before: number; after: number }> = [];
+  const found: Array<{ workspaceId: string | null; before: number; after: number }> = [];
   let prev: CallRow | null = null;
   for (const row of rows) {
     if (
       prev &&
       prev.session_id === row.session_id &&
+      prev.provider === row.provider &&
       prev.ctx >= COMPACTION_MIN_CONTEXT &&
       row.ctx < prev.ctx * COMPACTION_RATIO
     ) {
-      found.push({ cardId: row.card_id ?? prev.card_id, before: prev.ctx, after: row.ctx });
+      found.push({
+        workspaceId: row.workspace_id ?? prev.workspace_id,
+        before: prev.ctx,
+        after: row.ctx,
+      });
     }
     prev = row;
   }
   return found;
 }
 
-/** Total time sessions of each card spent between session.waiting and session.answered. */
-function waitingByCard(db: VibeDb, since: string | null): Map<string, number> {
+/** Total time sessions of each workspace spent between session.waiting and session.answered. */
+function waitingByWorkspace(db: VibeDb, since: string | null): Map<string, number> {
   const rows = db
-    .prepare<{ ts: string; type: string; card_id: string | null; payload_json: string }>(
-      `SELECT ts, type, card_id, payload_json FROM vibe_event
-       WHERE type IN ('session.waiting', 'session.answered') AND card_id IS NOT NULL
-         AND (? IS NULL OR ts >= ?) ORDER BY seq`,
+    .prepare<{ ts: string; type: string; workspace_id: string | null; payload_json: string }>(
+      `SELECT e.ts, e.type, s.workspace_id, e.payload_json FROM vibe_event e
+       JOIN agent_session s ON s.id = json_extract(e.payload_json, '$.sessionId')
+       WHERE e.type IN ('session.waiting', 'session.answered') AND s.workspace_id IS NOT NULL
+         AND (? IS NULL OR e.ts >= ?) ORDER BY e.seq`,
     )
     .all(since, since);
   const open = new Map<string, number>();
@@ -118,9 +125,9 @@ function waitingByCard(db: VibeDb, since: string | null): Map<string, number> {
     if (r.type === "session.waiting") open.set(sessionId, ts);
     else {
       const start = open.get(sessionId);
-      if (start === undefined || !r.card_id) continue;
+      if (start === undefined || !r.workspace_id) continue;
       open.delete(sessionId);
-      total.set(r.card_id, (total.get(r.card_id) ?? 0) + Math.max(0, ts - start));
+      total.set(r.workspace_id, (total.get(r.workspace_id) ?? 0) + Math.max(0, ts - start));
     }
   }
   return total;
@@ -146,7 +153,7 @@ export function readPool(json: string): PoolShape {
       if (typeof x === "string") return x !== "free" && x !== "idle" && x !== "";
       if (x && typeof x === "object") {
         const d = x as Record<string, unknown>;
-        return !!(d.leased || d.busy || d.cardId || d.leaseId);
+        return !!(d.leased || d.busy || d.workspaceId || d.leaseId);
       }
       return false;
     }).length;
@@ -179,9 +186,17 @@ export function computeOverview(
   const byProvider = group("e.provider", "e.provider");
   const byModel = group("e.provider || '/' || e.model", "e.model");
   const byProject = group(
-    "COALESCE(p.id, '')",
-    "COALESCE(p.name, '(unlinked)')",
-    "LEFT JOIN card c ON c.id = e.card_id LEFT JOIN project p ON p.id = c.project_id",
+    "COALESCE(e.project_id, '')",
+    "COALESCE(p.name, e.project_id, '未关联')",
+    "LEFT JOIN project p ON p.id = e.project_id OR p.paseo_project_id = e.project_id",
+  );
+  const byWorkspace = group("e.workspace_id", "COALESCE(e.workspace_id, '历史或未关联')");
+  const byRole = group(
+    "e.role",
+    `CASE e.role WHEN 'scout' THEN '探路' WHEN 'planner' THEN '规划'
+    WHEN 'plan_reviewer' THEN '方案复核' WHEN 'worker' THEN '主代理' WHEN 'subagent' THEN '子代理'
+    WHEN 'reviewer' THEN '代码复核' WHEN 'verifier' THEN '验证' WHEN 'master' THEN '总 agent'
+    ELSE COALESCE(e.role, '历史或未关联') END`,
   );
   const byDay = group("date(e.ts, 'localtime')", "date(e.ts, 'localtime')").sort((a, b) =>
     a.key.localeCompare(b.key),
@@ -221,47 +236,45 @@ export function computeOverview(
   // Compactions, then per-task rows.
   const calls = db
     .prepare<CallRow>(
-      `SELECT e.session_id, e.card_id, e.tokens_in + e.tokens_cache_read + e.tokens_cache_write AS ctx
-       FROM usage_event e ${where} ORDER BY e.session_id, e.ts, e.id`,
+      `SELECT e.provider, e.session_id, e.workspace_id, e.tokens_in + e.tokens_cache_read + e.tokens_cache_write AS ctx
+       FROM usage_event e ${where} ORDER BY e.provider, e.session_id, e.ts, e.id`,
     )
     .all(...args);
   const compactions = detectCompactions(calls);
   const sum = (f: (c: (typeof compactions)[number]) => number) =>
-    compactions.length ? Math.round(compactions.reduce((s, c) => s + f(c), 0) / compactions.length) : 0;
+    compactions.length
+      ? Math.round(compactions.reduce((s, c) => s + f(c), 0) / compactions.length)
+      : 0;
 
-  const waiting = waitingByCard(db, since);
+  const waiting = waitingByWorkspace(db, since);
   const taskRows = db
     .prepare<{
-      card_id: string;
-      key: string;
-      title: string;
+      workspace_id: string;
       tokens: number;
       cost: number;
       unpriced: number;
     }>(
-      `SELECT c.id AS card_id, c.key AS key, c.title AS title,
+      `SELECT e.workspace_id,
          SUM(e.tokens_in + e.tokens_out + e.tokens_cache_read + e.tokens_cache_write) AS tokens,
          SUM(COALESCE(e.cost, 0)) AS cost,
          SUM(CASE WHEN e.cost IS NULL THEN e.tokens_in + e.tokens_out + e.tokens_cache_read + e.tokens_cache_write ELSE 0 END) AS unpriced
-       FROM usage_event e JOIN card c ON c.id = e.card_id ${where}
-       GROUP BY c.id ORDER BY tokens DESC LIMIT ${MAX_TASK_ROWS}`,
+       FROM usage_event e ${where} AND e.workspace_id IS NOT NULL
+       GROUP BY e.workspace_id ORDER BY tokens DESC LIMIT ${MAX_TASK_ROWS}`,
     )
     .all(...args);
   const sessionSpan = db.prepare<{ ms: number | null }>(
     `SELECT SUM(MAX(0, (julianday(COALESCE(ended_at, last_activity_at)) - julianday(started_at))
-       * 86400000)) AS ms FROM agent_session WHERE card_id = ?`,
+       * 86400000)) AS ms FROM agent_session WHERE workspace_id = ?`,
   );
   const tasks = taskRows.map((r) => ({
-    cardId: r.card_id,
-    key: r.key,
-    title: r.title,
+    workspaceId: r.workspace_id,
     tokens: r.tokens,
     cost: r.cost,
     unpricedTokens: r.unpriced,
-    durationMs: Math.round(sessionSpan.get(r.card_id)?.ms ?? 0),
-    waitingMs: Math.round(waiting.get(r.card_id) ?? 0),
+    durationMs: Math.round(sessionSpan.get(r.workspace_id)?.ms ?? 0),
+    waitingMs: Math.round(waiting.get(r.workspace_id) ?? 0),
     compactions: compactions
-      .filter((c) => c.cardId === r.card_id)
+      .filter((c) => c.workspaceId === r.workspace_id)
       .map(({ before, after }) => ({ before, after })),
   }));
 
@@ -301,7 +314,7 @@ export function computeOverview(
         devicesTotal: pool.total,
       };
     }
-    history = rows.reverse().map((r) => ({ ts: r.ts, cpu: r.cpu, mem: r.mem }));
+    history = rows.toReversed().map((r) => ({ ts: r.ts, cpu: r.cpu, mem: r.mem }));
   }
 
   return {
@@ -311,10 +324,16 @@ export function computeOverview(
     byProvider,
     byModel,
     byProject,
+    byWorkspace,
+    byRole,
     byDay,
     speed,
     tasks,
-    compactions: { count: compactions.length, avgBefore: sum((c) => c.before), avgAfter: sum((c) => c.after) },
+    compactions: {
+      count: compactions.length,
+      avgBefore: sum((c) => c.before),
+      avgAfter: sum((c) => c.after),
+    },
     resources: {
       runningSessions: count("'starting','working'"),
       waitingSessions: count("'waiting'"),

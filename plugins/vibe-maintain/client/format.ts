@@ -13,7 +13,8 @@ import {
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback);
-const num = (v: unknown, fallback = 0) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+const num = (v: unknown, fallback = 0) =>
+  typeof v === "number" && Number.isFinite(v) ? v : fallback;
 
 export interface RuleRow {
   id: string;
@@ -43,7 +44,13 @@ export interface RuleRow {
   /** Fields this project's maintenance.yml overrides (local override of the global rule). */
   ymlFields: FieldKey[];
   counters: Record<string, number>;
-  lastRun: { status: string; at: string; finishedAt: string; cards: number; error: string | null } | null;
+  lastRun: {
+    status: string;
+    at: string;
+    finishedAt: string;
+    tasks: number;
+    error: string | null;
+  } | null;
 }
 
 /** One rule as the user sees it: defined once, with a state row per applicable project. */
@@ -148,7 +155,7 @@ export function parseStatus(raw: unknown): MaintainView {
               status: str(last.status, "unknown"),
               at: str(last.triggeredAt),
               finishedAt: str(last.finishedAt),
-              cards: Array.isArray(last.cardIds) ? last.cardIds.length : 0,
+              tasks: Array.isArray(last.workspaceIds) ? last.workspaceIds.length : 0,
               error: isObj(failure) ? str(failure.error) : null,
             }
           : null,
@@ -170,7 +177,10 @@ export function parseStatus(raw: unknown): MaintainView {
   };
 }
 
-const ALL_YML = Object.fromEntries(FIELD_KEYS.map((k) => [k, "yml"])) as Record<FieldKey, FieldSource>;
+const ALL_YML = Object.fromEntries(FIELD_KEYS.map((k) => [k, "yml"])) as Record<
+  FieldKey,
+  FieldSource
+>;
 
 function buildGroups(rows: RuleRow[], globals: Obj[]): RuleGroup[] {
   const groups: RuleGroup[] = globals.map((g) => {
@@ -212,7 +222,7 @@ function buildGroups(rows: RuleRow[], globals: Obj[]): RuleGroup[] {
 }
 
 export const BLOCKED_TEXT: Record<string, string> = {
-  paused: "已暂停：连续多张维护卡被驳回，点「恢复」后继续",
+  paused: "已暂停：连续多张维护任务被驳回，点「恢复」后继续",
   daily_cap: "今天的运行次数已达每日上限",
   disabled: "已停用",
 };
@@ -252,7 +262,7 @@ export const FIELD_LABEL: Record<FieldKey, string> = {
 
 export const fmtTime = (iso: string): string => (iso ? iso.slice(0, 16).replace("T", " ") : "-");
 
-/** "2026-10-21 03:00 · 完成 · 生成或更新了 1 张卡", or the failure reason. */
+/** "2026-10-21 03:00 · 完成 · 生成或更新了 1 个任务", or the failure reason. */
 export function lastRunText(last: RuleRow["lastRun"]): string {
   if (!last) return "从未运行";
   const status = RUN_STATUS_TEXT[last.status] ?? last.status;
@@ -260,8 +270,8 @@ export function lastRunText(last: RuleRow["lastRun"]): string {
     last.status === "failed"
       ? `原因：${last.error ?? "未知"}`
       : last.status === "done"
-        ? last.cards > 0
-          ? `生成或更新了 ${last.cards} 张卡`
+        ? last.tasks > 0
+          ? `生成或更新了 ${last.tasks} 个任务`
           : "没有发现需要处理的问题"
         : "";
   return [fmtTime(last.at), status, result].filter(Boolean).join(" · ");

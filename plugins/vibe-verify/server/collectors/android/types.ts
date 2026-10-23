@@ -1,7 +1,8 @@
+import type { CollectorContext } from "../context";
 // Public types of the Android collector (WP-23): lease seam, process spawner seam, app/flow config.
 
 import type { z } from "zod";
-import type { CollectorContext } from "../../vibe/contract";
+
 import type {
   AdbStepSchema,
   AndroidAppConfigSchema,
@@ -13,7 +14,7 @@ import type {
 
 export interface DeviceLeaseRequest {
   platform: "android";
-  cardId: string;
+  cardId: string | null;
   verificationId: string;
   /** Lease a specific device (adb serial / device id) when set; otherwise any free emulator. */
   preferredDeviceId?: string;

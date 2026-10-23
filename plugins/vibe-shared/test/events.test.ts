@@ -27,6 +27,38 @@ describe("publishEvent", () => {
     expect(getMaxSeq(db)).toBe(b);
   });
 
+  it("retains host file scopes and retryable resource results", () => {
+    const { db } = setup();
+    publishEvent(db, {
+      type: "scheduler.task_resource_request",
+      payload: {
+        requestId: "r",
+        workspaceId: "w",
+        action: "acquire",
+        role: "master",
+        files: [".vibe/**", "PRODUCT-REQUIREMENTS.md"],
+        hostLease: true,
+      },
+    });
+    publishEvent(db, {
+      type: "scheduler.task_resource_result",
+      payload: {
+        requestId: "r",
+        workspaceId: "w",
+        ok: false,
+        reason: "文件正在使用",
+        retryable: true,
+      },
+    });
+    const events = readEvents(db, 0);
+    expect(events[0]?.payload).toMatchObject({
+      files: [".vibe/**", "PRODUCT-REQUIREMENTS.md"],
+      hostLease: true,
+    });
+    expect(events[1]?.payload).toMatchObject({ retryable: true });
+    db.close();
+  });
+
   it("is idempotent per dedupeKey and returns the original seq", () => {
     const { db } = setup();
     const a = publishEvent(db, { type: "plan.updated", payload: { version: 1 }, dedupeKey: "k1" });
@@ -44,6 +76,17 @@ describe("publishEvent", () => {
     expect([...EVENT_TYPES].sort()).toEqual(
       [
         "task.updated",
+        "task.stop_requested",
+        "task.stop_result",
+        "task.fix_requested",
+        "context.continuation_requested",
+        "context.continuation_result",
+        "scheduler.task_dispatch_wanted",
+        "scheduler.task_admitted",
+        "scheduler.task_resource_request",
+        "scheduler.task_resource_result",
+        "master.task_dispatch_chosen",
+        "master.task_dispatch_failed",
         "card.created",
         "card.updated",
         "card.deleted",

@@ -9,7 +9,6 @@ import {
   choosePreset,
   MODELS,
   defaultSettings,
-  deferred,
   fakePaseo,
   setupBoard,
   tempDir,
@@ -18,13 +17,22 @@ import {
   type Script,
 } from "./helpers";
 
-function build(script: Script, over: { usage?: ReturnType<typeof usageOf>[]; failCreate?: (p: string) => string | null; settings?: Parameters<typeof defaultSettings>[0] } = {}) {
+function build(
+  script: Script,
+  over: {
+    usage?: ReturnType<typeof usageOf>[];
+    failCreate?: (p: string) => string | null;
+    settings?: Parameters<typeof defaultSettings>[0];
+  } = {},
+) {
   const board = setupBoard();
   const clock = new ManualClock();
   const fake = fakePaseo(script, { usage: over.usage, failCreate: over.failCreate });
   const settings = defaultSettings(over.settings);
   const dataDir = tempDir();
   const runtime = createMasterRuntime({
+    admitMaster: async () => async () => undefined,
+    admitMemory: async () => async () => undefined,
     db: board.db,
     store: board.store,
     getPaseo: () => fake.paseo,
@@ -41,18 +49,27 @@ function build(script: Script, over: { usage?: ReturnType<typeof usageOf>[]; fai
 function doneCard(board: ReturnType<typeof setupBoard>, title: string) {
   const card = board.store.cards.create({ projectId: board.project.id, title }, "user");
   board.store.cards.move(card.id, { to: "todo", actor: "user" });
-  board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
+  board.store.cards.dispatch({
+    cardId: card.id,
+    agentId: "w1",
+    provider: "claude",
+    worktree: null,
+  });
   board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
   board.store.cards.move(card.id, { to: "done", actor: "user" });
   return card;
 }
 const memoryUpdated = (board: ReturnType<typeof setupBoard>, cardId: string) =>
-  board.store.events.list(cardId).some((e) => (e.body as { kind?: string } | null)?.kind === "memory_update");
+  board.store.events
+    .list(cardId)
+    .some((e) => (e.body as { kind?: string } | null)?.kind === "memory_update");
 const CONSOLIDATED = JSON.stringify({ summary: "Recorded." });
 
 const alerts = (board: ReturnType<typeof setupBoard>) =>
   board.db
-    .prepare<{ payload_json: string }>("SELECT payload_json FROM vibe_event WHERE type = 'master.alert' ORDER BY seq")
+    .prepare<{ payload_json: string }>(
+      "SELECT payload_json FROM vibe_event WHERE type = 'master.alert' ORDER BY seq",
+    )
     .all()
     .map((r) => JSON.parse(r.payload_json) as { kind: string; provider: string; message: string })
     .map((p) => `[master:${p.kind}] ${p.provider}: ${p.message}`);
@@ -60,8 +77,14 @@ const alerts = (board: ReturnType<typeof setupBoard>) =>
 describe("target resolution", () => {
   it("prefers Opus for Claude and the default model elsewhere", async () => {
     const paseo = fakePaseo(() => "").paseo;
-    expect(await resolveTarget(paseo, { provider: "claude" })).toEqual({ provider: "claude", model: "opus-x", thinking: null });
-    expect(await resolveTarget(paseo, { provider: "claude", model: "sonnet-x" })).toMatchObject({ model: "sonnet-x" });
+    expect(await resolveTarget(paseo, { provider: "claude" })).toEqual({
+      provider: "claude",
+      model: "opus-x",
+      thinking: null,
+    });
+    expect(await resolveTarget(paseo, { provider: "claude", model: "sonnet-x" })).toMatchObject({
+      model: "sonnet-x",
+    });
     expect(await resolveTarget(paseo, { provider: "codex" })).toEqual({
       provider: "codex",
       model: "gpt-5-codex",
@@ -92,6 +115,8 @@ describe("master session", () => {
 
     // a restarted plugin finds the agent through the state file and keeps using it
     const again = createMasterRuntime({
+      admitMaster: async () => async () => undefined,
+      admitMemory: async () => async () => undefined,
       db: t.board.db,
       store: t.board.store,
       getPaseo: () => t.fake.paseo,
@@ -135,13 +160,15 @@ describe("preset switching", () => {
 
     const sessions = t.board.store.sessions.list({ role: "master" });
     expect(sessions.map((s) => [s.currentProvider, s.state])).toEqual([
-      ["codex", "ended"],
+      ["claude", "ended"],
       ["codex", "idle"],
     ]);
     const status = await t.runtime.status();
     expect(status.preset).toMatchObject({ id: t.board.presets.codex.id, migrated: false });
     expect(status.session?.provider).toBe("codex");
-    expect(status.switchHistory).toMatchObject([{ from: "claude", to: "codex", reason: "切换总 agent 预设" }]);
+    expect(status.switchHistory).toMatchObject([
+      { from: "claude", to: "codex", reason: "切换总 agent 预设" },
+    ]);
     expect(t.board.eventTypes()).toContain("session.switched");
 
     // applying the same preset again changes nothing
@@ -151,7 +178,9 @@ describe("preset switching", () => {
   });
 
   it("keeps the old master running when the new preset's provider cannot start", async () => {
-    const t = build(() => "ok", { failCreate: (p) => (p === "codex" ? "codex is not logged in" : null) });
+    const t = build(() => "ok", {
+      failCreate: (p) => (p === "codex" ? "codex is not logged in" : null),
+    });
     await askMaster(t.runtime);
     await choosePreset(t, t.board.presets.codex.id); // logged, not thrown
     expect(t.fake.agents).toHaveLength(1);
@@ -165,7 +194,9 @@ describe("preset switching", () => {
   });
 
   it("migrates the pre-preset provider/model/thinking settings to the matching preset, and asks for a choice when none matches", async () => {
-    const old = build(() => "ok", { settings: { provider: "codex", model: "gpt-5-codex", thinking: "xhigh" } });
+    const old = build(() => "ok", {
+      settings: { provider: "codex", model: "gpt-5-codex", thinking: "xhigh" },
+    });
     await askMaster(old.runtime);
     expect(old.fake.agents[0]!.provider).toBe("codex");
     expect(await old.runtime.status()).toMatchObject({
@@ -193,7 +224,12 @@ describe("quota", () => {
     const preset = t.board.store.presets.update(t.board.presets.claude.id, {
       models: [
         { provider: "claude", model: "opus-x", thinking: "high", permissionMode: "auto" },
-        { provider: "codex", model: "gpt-5-codex", thinking: "xhigh", permissionMode: "accept-edits" },
+        {
+          provider: "codex",
+          model: "gpt-5-codex",
+          thinking: "xhigh",
+          permissionMode: "accept-edits",
+        },
         { provider: "kimi", model: "kimi-k2", thinking: "", permissionMode: "auto" },
       ],
     });
@@ -202,9 +238,11 @@ describe("quota", () => {
   }
 
   it("retries the same request in order with handoff and persists the actual active model", async () => {
-    const t = build(({ provider }) => provider === "claude"
-      ? { status: "error", lastMessage: null, error: "quota exhausted" }
-      : "continued");
+    const t = build(({ provider }) =>
+      provider === "claude"
+        ? { status: "error", lastMessage: null, error: "quota exhausted" }
+        : "continued",
+    );
     ordered(t);
     t.settings.permissionMode = "preset";
     expect(await askMaster(t.runtime, "finish the memory update")).toBe("continued");
@@ -213,11 +251,24 @@ describe("quota", () => {
     expect(t.fake.agents[1]!.prompts[0]).toContain("本次更换原因");
     expect(t.fake.agents[1]!.options.config.modeId).toBe("auto");
     expect(t.fake.agents[0]!.archived).toBe(false);
-    expect(t.runtime.sessions().find((s) => s.provider === "claude")).toMatchObject({ state: "ended", current: false });
-    expect((await t.runtime.status()).target).toMatchObject({ provider: "codex", model: "gpt-5-codex" });
+    expect(t.runtime.sessions().find((s) => s.provider === "claude")).toMatchObject({
+      state: "ended",
+      current: false,
+    });
+    expect((await t.runtime.status()).target).toMatchObject({
+      provider: "codex",
+      model: "gpt-5-codex",
+    });
     const again = createMasterRuntime({
-      db: t.board.db, store: t.board.store, getPaseo: () => t.fake.paseo,
-      settings: () => t.settings, dataDir: t.dataDir, clock: t.clock, log: () => undefined,
+      admitMaster: async () => async () => undefined,
+      admitMemory: async () => async () => undefined,
+      db: t.board.db,
+      store: t.board.store,
+      getPaseo: () => t.fake.paseo,
+      settings: () => t.settings,
+      dataDir: t.dataDir,
+      clock: t.clock,
+      log: () => undefined,
     });
     await askMaster(again);
     expect(t.fake.agents).toHaveLength(2);
@@ -227,7 +278,12 @@ describe("quota", () => {
   });
 
   it("skips an unavailable binary and an expired login during startup", async () => {
-    const t = build(() => "ok", { failCreate: (p) => p === "claude" ? "provider not installed" : p === "codex" ? "not logged in" : null });
+    const t = build(() => "ok", {
+      failCreate: (p) => {
+        if (p === "claude") return "provider not installed";
+        return p === "codex" ? "not logged in" : null;
+      },
+    });
     ordered(t);
     expect(await askMaster(t.runtime)).toBe("ok");
     expect(t.fake.agents.map((a) => a.provider)).toEqual(["kimi"]);
@@ -262,11 +318,15 @@ describe("quota", () => {
     let limited = true;
     const t = build(({ provider }) =>
       provider === "claude" && limited
-        ? { status: "error", lastMessage: null, error: "Claude usage limit reached. Your limit resets at 5pm." }
+        ? {
+            status: "error",
+            lastMessage: null,
+            error: "Claude usage limit reached. Your limit resets at 5pm.",
+          }
         : CONSOLIDATED,
     );
     const card = doneCard(t.board, "Hits the limit");
-    t.runtime.wake(card.key, "card_done", true);
+    t.runtime.queue.enqueue({ kind: "card_done", cardId: card.id, force: true });
     await t.runtime.queue.idle();
 
     expect(t.fake.agents).toHaveLength(1); // no automatic switch
@@ -288,7 +348,7 @@ describe("quota", () => {
   it("does not block on non-provider failures and raises no reminder", async () => {
     const t = build(() => ({ status: "error", lastMessage: null, error: "network down" }));
     const card = doneCard(t.board, "Plain failure");
-    t.runtime.wake(card.key, "card_done", true);
+    t.runtime.queue.enqueue({ kind: "card_done", cardId: card.id, force: true });
     await t.runtime.queue.idle();
     expect(alerts(t.board)).toEqual([]);
     expect((await t.runtime.status()).queue.blocked).toBe(0);
@@ -320,7 +380,12 @@ describe("status", () => {
     const status = await t.runtime.status();
     expect(status.paseoReady).toBe(true);
     const claude = status.presets.find((p) => p.id === t.board.presets.claude.id)!;
-    expect(claude).toMatchObject({ name: "Claude Opus", provider: "claude", remainingPct: 60, level: "ok" });
+    expect(claude).toMatchObject({
+      name: "Claude Opus",
+      provider: "claude",
+      remainingPct: 60,
+      level: "ok",
+    });
     expect(status.presets.find((p) => p.id === t.board.presets.codex.id)!.level).toBe("tight");
     expect(status.target).toEqual({ provider: "claude", model: "opus-x", thinking: "high" });
     await t.runtime.dispose();
@@ -332,23 +397,37 @@ describe("scheduler signals", () => {
     const t = build(() => "ok");
     await askMaster(t.runtime); // master is now live on claude
 
-    publishEvent(t.board.db, { type: "scheduler.quota_low", payload: { provider: "codex", level: "tight", remainingPct: 9 } });
-    publishEvent(t.board.db, { type: "scheduler.paused", payload: { reason: "memory", mem: 0.95, top: [] } });
+    publishEvent(t.board.db, {
+      type: "scheduler.quota_low",
+      payload: { provider: "codex", level: "tight", remainingPct: 9 },
+    });
+    publishEvent(t.board.db, {
+      type: "scheduler.paused",
+      payload: { reason: "memory", mem: 0.95, top: [] },
+    });
     await t.runtime.triggers.consumer.poll();
     expect(alerts(t.board)).toEqual([]); // not the master's provider
     expect((await t.runtime.status()).schedulerPaused).toBe(true);
 
-    publishEvent(t.board.db, { type: "scheduler.quota_low", payload: { provider: "claude", level: "exhausted", remainingPct: 0 } });
+    publishEvent(t.board.db, {
+      type: "scheduler.quota_low",
+      payload: { provider: "claude", level: "exhausted", remainingPct: 0 },
+    });
     publishEvent(t.board.db, { type: "scheduler.resumed", payload: { reason: "memory" } });
     await t.runtime.triggers.consumer.poll();
-    expect(alerts(t.board).filter((m) => m.startsWith("[master:quota_low] claude"))).toHaveLength(1);
+    expect(alerts(t.board).filter((m) => m.startsWith("[master:quota_low] claude"))).toHaveLength(
+      1,
+    );
     expect((await t.runtime.status()).schedulerPaused).toBe(false);
     await t.runtime.dispose();
   });
 
   it("reminds the owner when a maintenance rule is paused and only logs triggered runs", async () => {
     const t = build(() => "");
-    publishEvent(t.board.db, { type: "maintenance.triggered", payload: { ruleId: "r1", runId: "run1" } });
+    publishEvent(t.board.db, {
+      type: "maintenance.triggered",
+      payload: { ruleId: "r1", runId: "run1" },
+    });
     publishEvent(t.board.db, {
       type: "maintenance.paused",
       payload: { ruleId: "r1", ruleName: "git-health", reason: "rejections", rejections: 3 },

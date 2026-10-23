@@ -1,6 +1,6 @@
 # myVibeBoard 技术设计（可派工版）
 
-> 本文保留前四轮实现及 WP-00…109 的现状记录。第五轮取消看板后的目标设计与 WP-110…114 见 [ROUND5-DESIGN.md](ROUND5-DESIGN.md)，旧看板、卡片迁移、LWW/离线配置与旧收尾设计不再作为后续实现依据；迁移范围和 Git 收尾以第五轮为准。
+> 本文保留前四轮实现及 WP-00…109 的历史记录。第五轮第三版「一个任务 = 一个原生会话」、群聊多模型、会话内任务面板及 WP-110…115 以 [ROUND5-DESIGN.md](ROUND5-DESIGN.md) 为准；WP-110 已合入，其余包未整体验收。本文旧看板、分散角色 tab、卡片迁移、LWW/离线配置与旧收尾设计不再作为实施依据。
 
 > 状态：设计稿 v1（基于 paseo 0.12.0，分支 `arch/design`）。读者是后续并行实现 P1/P2/P3 的子代理。
 > 上游需求见 [PRODUCT-REQUIREMENTS.md](../../PRODUCT-REQUIREMENTS.md)，完整方案见 [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)，

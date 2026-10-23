@@ -101,8 +101,7 @@ const REVIEW_SUFFIX = `回复一个 JSON 对象（放在 \`\`\`json 围栏里，
 {"verdict": "pass|issues|severe", "summary": "一到两句话", "issues": [{"severity": "severe|major|minor", "file": "相对于工作树的路径", "line": 12, "text": "问题是什么、怎么修"}]}
 没有值得报告的问题时，issues 为空数组、verdict 为 "pass"。`;
 
-const SEND_BACK_TAIL =
-  "请修复这些问题，运行项目的测试，然后结束本轮；卡片会被重新验证。";
+const SEND_BACK_TAIL = "请修复这些问题，运行项目的测试，然后结束本轮；卡片会被重新验证。";
 
 const SEND_BACK_USER = `你在 {{card.key}} 上的工作被用户驳回了。
 
@@ -128,7 +127,79 @@ const SEND_BACK_VARS = [
   SEGMENT("failed", "未通过的检查清单，自带“未通过的检查：”前缀与段尾空行"),
 ];
 
+const TASK_VARS = [
+  "workspaceId",
+  "worktree",
+  "commitHash",
+  "outputDir",
+  "plan",
+  "checks",
+  "diff",
+  "stat",
+  "evidence",
+  "notes",
+  "failed",
+  "baseline",
+].map((name) => ({ name, description: "任务验证上下文：" + name }));
+const TASK_CONTEXT =
+  "任务 workspace：{{workspaceId}}\n只读工作目录：{{worktree}}\n已收口提交：{{commitHash}}\n证据输出目录：{{outputDir}}\n已确认方案：\n{{plan}}\n检查清单：\n{{checks}}\n";
 export const VERIFY_PROMPT_DEFS: readonly PromptDef[] = [
+  {
+    key: "verify.task.setup",
+    plugin: PLUGIN,
+    role: "verifier",
+    title: "原生任务：证据配置",
+    description: "核对确认方案，为现有采集器生成运行配置。",
+    whenSent: "无活跃写者且代码已收口后",
+    audience: "验证 agent",
+    defaultText:
+      TASK_CONTEXT +
+      "请只读代码，给出运行测试、日志和所需平台证据的采集配置。可用基线：{{baseline}}。所有检查都必须有证据；不要修改文件，配置直接在回复中返回。",
+    placeholders: TASK_VARS,
+    fixedSuffix: SETUP_SUFFIX,
+  },
+  {
+    key: "verify.task.judge",
+    plugin: PLUGIN,
+    role: "verifier",
+    title: "原生任务：证据判定",
+    description: "逐项判定 pass、doubt 或 fail。",
+    whenSent: "任务证据采集完成后",
+    audience: "验证 agent",
+    defaultText:
+      TASK_CONTEXT +
+      "证据文件：\n{{evidence}}\n采集备注：\n{{notes}}\n请打开证据核对每个检查项；没有对应证据必须存疑，禁止修改文件。",
+    placeholders: TASK_VARS,
+    fixedSuffix: JUDGE_SUFFIX,
+  },
+  {
+    key: "verify.task.review",
+    plugin: PLUGIN,
+    role: "reviewer",
+    title: "原生任务：代码复核",
+    description: "复核确认方案与已收口提交。",
+    whenSent: "任务选择了代码复核模型时",
+    audience: "复核 agent",
+    defaultText:
+      TASK_CONTEXT +
+      "改动统计：\n{{stat}}\nDiff：\n{{diff}}\n只读复核正确性、安全性与回归问题；严重且必须修复为 severe，其余问题为 major/minor。不要修改文件。",
+    placeholders: TASK_VARS,
+    fixedSuffix: REVIEW_SUFFIX,
+  },
+  {
+    key: "verify.task.fix",
+    plugin: PLUGIN,
+    role: "executor",
+    title: "原生任务：退回修复",
+    description: "修复必须由调度器重新准入。",
+    whenSent: "验证失败且自动退回次数未耗尽",
+    audience: "执行 agent",
+    defaultText:
+      TASK_CONTEXT +
+      "本轮验证未通过：\n{{failed}}\n请在原方案范围内修复并运行相关检查，完成收口提交后重新复核与验证。方案范围变化须停止并重新请求用户 /执行。",
+    placeholders: TASK_VARS,
+  },
+
   {
     key: "verify.verifier_system",
     plugin: PLUGIN,

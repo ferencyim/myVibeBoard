@@ -501,4 +501,47 @@ CREATE TABLE task (
 CREATE INDEX idx_task_phase ON task(phase, confirmed_at);
 `,
   },
+  {
+    version: 12,
+    name: "workspace_task_sessions",
+    foreignKeysOff: true,
+    sql: `
+CREATE TABLE agent_session_new (
+  id TEXT PRIMARY KEY,
+  card_id TEXT REFERENCES card(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  workspace_id TEXT,
+  role TEXT NOT NULL CHECK (role IN ('master','scout','planner','plan_reviewer','worker','subagent','reviewer','verifier')),
+  current_provider TEXT NOT NULL,
+  switch_history_json TEXT NOT NULL DEFAULT '[]',
+  state TEXT NOT NULL DEFAULT 'starting' CHECK (state IN ('starting','working','waiting','idle','ended','error')),
+  waiting_since TEXT,
+  pending_question_json TEXT,
+  cache_expires_at TEXT,
+  last_activity_at TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  error_message TEXT,
+  updated_hlc TEXT NOT NULL DEFAULT '',
+  stalled_since TEXT,
+  complexity TEXT CHECK (complexity IS NULL OR complexity IN ('short','multi','long')),
+  reassigned_from_session_id TEXT,
+  project_id TEXT,
+  model TEXT,
+  thinking TEXT,
+  candidate_index INTEGER CHECK (candidate_index IS NULL OR candidate_index >= 0),
+  previous_session_id TEXT,
+  confirmed_at TEXT
+);
+INSERT INTO agent_session_new (id,card_id,agent_id,workspace_id,role,current_provider,switch_history_json,state,waiting_since,pending_question_json,cache_expires_at,last_activity_at,started_at,ended_at,error_message,updated_hlc,stalled_since,complexity,reassigned_from_session_id)
+SELECT id,card_id,agent_id,workspace_id,role,current_provider,switch_history_json,state,waiting_since,pending_question_json,cache_expires_at,last_activity_at,started_at,ended_at,error_message,updated_hlc,stalled_since,complexity,reassigned_from_session_id FROM agent_session;
+UPDATE agent_session_new SET project_id = (SELECT project_id FROM card WHERE card.id = agent_session_new.card_id);
+DROP TABLE agent_session;
+ALTER TABLE agent_session_new RENAME TO agent_session;
+CREATE INDEX idx_agent_session_card ON agent_session(card_id,state);
+CREATE UNIQUE INDEX idx_agent_session_agent ON agent_session(agent_id);
+CREATE INDEX idx_agent_session_workspace ON agent_session(workspace_id,role);
+CREATE UNIQUE INDEX idx_agent_session_continuation ON agent_session(previous_session_id) WHERE previous_session_id IS NOT NULL;
+`,
+  },
 ];

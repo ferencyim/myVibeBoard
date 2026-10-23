@@ -30,6 +30,7 @@ export function strategyFor(provider: string): InjectionStrategy | null {
 }
 
 export interface InjectionOptions extends ContextOptions {
+  projectIdFor?: (cwd: string) => Promise<string | undefined>;
   /** Default memory budget (setting); a per-directory budget or `maxMemoryTokens` wins. */
   defaultMemoryTokens?: () => number;
   git?: GitRunner;
@@ -58,7 +59,9 @@ export async function injectContext(
   });
   const block = buildContextBlock(store, {
     ...options,
-    maxMemoryTokens: options.budgetFor?.(cwd) ?? options.maxMemoryTokens ?? options.defaultMemoryTokens?.(),
+    projectId: options.projectId ?? (await options.projectIdFor?.(cwd)),
+    maxMemoryTokens:
+      options.budgetFor?.(cwd) ?? options.maxMemoryTokens ?? options.defaultMemoryTokens?.(),
   });
   if (!block) return null;
   if (strategy === "system-prompt") {

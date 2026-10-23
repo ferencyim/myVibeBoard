@@ -5,7 +5,7 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { UsageProvider } from "../shared/rpc";
-import type { VibeDb } from "./vibe/db";
+import { createUsageCommands, type UsageSessionLink, type VibeDb } from "./vibe/db";
 import type { LogRoot } from "./paths";
 import { PARSERS, type FileState, type UsageRecord } from "./parsers";
 import { estimateCost, type PriceOverrides } from "./pricing";
@@ -58,41 +58,10 @@ export function createIndexer(options: IndexerOptions) {
   const getCursor = db.prepare<Cursor>(
     "SELECT byte_offset, size_bytes FROM usage_cursor WHERE file_path = ?",
   );
-  const putCursor = db.prepare(
-    `INSERT INTO usage_cursor (file_path, byte_offset, size_bytes, mtime_ms, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(file_path) DO UPDATE SET byte_offset = excluded.byte_offset,
-       size_bytes = excluded.size_bytes, mtime_ms = excluded.mtime_ms,
-       updated_at = excluded.updated_at`,
-  );
-  // On a duplicate (same message logged once per content block) only the duration may grow; a missing
-  // cost is filled in when a re-scan can price it (e.g. after a price file was added).
-  const putEvent = db.prepare(
-    `INSERT INTO usage_event (ts, provider, model, session_id, tokens_in, tokens_out,
-       tokens_cache_read, tokens_cache_write, duration_ms, cost, card_id, dedupe_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-     ON CONFLICT(dedupe_key) DO UPDATE SET
-       duration_ms = CASE WHEN excluded.duration_ms IS NOT NULL
-         AND excluded.duration_ms > COALESCE(usage_event.duration_ms, 0)
-         THEN excluded.duration_ms ELSE usage_event.duration_ms END,
-       cost = COALESCE(usage_event.cost, excluded.cost)`,
-  );
+  const commands = createUsageCommands(db);
 
   function store(rec: UsageRecord, prices: PriceOverrides): void {
-    const cost = rec.cost ?? estimateCost(rec.model, rec, prices);
-    putEvent.run(
-      rec.ts,
-      rec.provider,
-      rec.model,
-      rec.sessionId,
-      rec.tokensIn,
-      rec.tokensOut,
-      rec.tokensCacheRead,
-      rec.tokensCacheWrite,
-      rec.durationMs,
-      cost,
-      rec.dedupeKey,
-    );
+    commands.putEvent({ ...rec, cost: rec.cost ?? estimateCost(rec.model, rec, prices) });
   }
 
   async function readRange(
@@ -112,7 +81,9 @@ export function createIndexer(options: IndexerOptions) {
         const { bytesRead } = await handle.read(buf, 0, len, pos);
         if (bytesRead === 0) break;
         pos += bytesRead;
-        const data = carry.length ? Buffer.concat([carry, buf.subarray(0, bytesRead)]) : buf.subarray(0, bytesRead);
+        const data = carry.length
+          ? Buffer.concat([carry, buf.subarray(0, bytesRead)])
+          : buf.subarray(0, bytesRead);
         const last = data.lastIndexOf(0x0a);
         if (last < 0) {
           carry = Buffer.from(data);
@@ -181,7 +152,13 @@ export function createIndexer(options: IndexerOptions) {
         }
       });
     });
-    putCursor.run(file, end, st.size, Math.round(st.mtimeMs), now().toISOString());
+    commands.putCursor({
+      filePath: file,
+      byteOffset: end,
+      sizeBytes: st.size,
+      mtimeMs: Math.round(st.mtimeMs),
+      updatedAt: now().toISOString(),
+    });
     return { lines, events };
   }
 
@@ -215,21 +192,12 @@ export function createIndexer(options: IndexerOptions) {
     },
     /** Forget all cursors so the next scan re-reads every file (events stay, dedupe keys hold). */
     resetCursors(): void {
-      db.exec("DELETE FROM usage_cursor");
+      commands.resetCursors();
       states.clear();
     },
-    /** Attach card ids to events of sessions that are now known (provider session id -> card id). */
-    relink(sessionToCard: ReadonlyMap<string, string>): number {
-      let changed = 0;
-      const stmt = db.prepare(
-        "UPDATE usage_event SET card_id = ? WHERE session_id = ? AND (card_id IS NULL OR card_id <> ?)",
-      );
-      db.immediate(() => {
-        for (const [sessionId, cardId] of sessionToCard) {
-          changed += stmt.run(cardId, sessionId, cardId).changes;
-        }
-      });
-      return changed;
+    /** Attach native task attribution without changing event identity or token totals. */
+    relink(links: readonly UsageSessionLink[]): number {
+      return commands.relink(links);
     },
   };
 }

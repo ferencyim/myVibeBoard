@@ -1,3 +1,4 @@
+import type { CollectorContext } from "../context";
 // Android emulator evidence collector (WP-23).
 //
 // Flow: lease device -> make sure the emulator is up -> install APK (or Metro for debug builds)
@@ -11,7 +12,6 @@ import path from "node:path";
 import type {
   CollectResult,
   CollectorAvailability,
-  CollectorContext,
   EvidenceArtifact,
   EvidenceCollector,
 } from "../../vibe/contract";
@@ -73,7 +73,7 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     if (typeof options.app === "function") return options.app(ctx);
     if (options.app) return options.app;
     const configured = loadVerifyConfig(ctx.worktreePath).android?.app;
-    if (!configured) throw new Error("No android.app in .vibe/verify.json and no app option");
+    if (!configured) throw new Error("未在 .vibe/verify.json 或选项中配置 android.app");
     return configured;
   };
   const resolveFlow = (ctx: CollectorContext): AndroidFlow | undefined => {
@@ -94,21 +94,21 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
 
   async function detect(ctx: CollectorContext): Promise<CollectorAvailability> {
     if (!(await toolPresent(ctx, adbPath, ["version"]))) {
-      return { available: false, reason: "adb not found" };
+      return { available: false, reason: "未找到 adb" };
     }
     const devices = await ctx.runner.run(adbPath, ["devices"], { timeoutMs: 15_000 });
     const online = parseAdbDevices(devices.stdout).filter((d) => d.state === "device");
     const canBoot = Boolean(options.spawner && options.leases);
     if (online.length === 0 && !canBoot) {
-      return { available: false, reason: "no Android emulator online and no AVD boot configured" };
+      return { available: false, reason: "没有在线 Android 模拟器，也未配置 AVD 启动" };
     }
     const degradedBy: string[] = [];
     const flow = resolveFlow(ctx);
     if (flow?.maestroFile && !(await toolPresent(ctx, maestroPath, ["--version"]))) {
-      degradedBy.push("Maestro not found, flow runs via adb steps");
+      degradedBy.push("未找到 Maestro，流程使用 adb 步骤");
     }
     if (record && !(await toolPresent(ctx, ffmpegPath, ["-version"]))) {
-      degradedBy.push("ffmpeg not found, recording kept as mp4 instead of GIF");
+      degradedBy.push("未找到 ffmpeg，录屏保留为 mp4 而不生成 GIF");
     }
     return degradedBy.length
       ? { available: true, degraded: true, reason: degradedBy.join("; ") }
@@ -125,26 +125,27 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     const adb = state.adb as Adb;
     const listed = async () =>
       parseAdbDevices((await ctx.runner.run(adbPath, ["devices"], { timeoutMs: 15_000 })).stdout);
-    const isUp = async () => (await listed()).some((d) => d.serial === serial && d.state === "device");
+    const isUp = async () =>
+      (await listed()).some((d) => d.serial === serial && d.state === "device");
 
     if (!(await isUp())) {
       if (!avd || !options.spawner) {
-        throw new Error(`Device ${serial} is not online and no AVD/spawner is configured to boot it`);
+        throw new Error(`设备 ${serial} 不在线，且未配置 AVD 或启动器`);
       }
       const port = emulatorPort(serial);
       const args = ["-avd", avd, "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot-save"];
       if (port) args.push("-port", String(port));
       ctx.log(`booting AVD ${avd} headless (snapshot start)`);
       state.emulator = options.spawner.spawn(emulatorPath, args);
-      notes.push(`Started headless emulator for AVD ${avd} (quick-boot snapshot, not saved on exit).`);
+      notes.push(`已为 AVD ${avd} 启动无界面模拟器（使用快速启动快照，退出时不保存）。`);
     }
     const deadline = Date.now() + (options.bootTimeoutMs ?? 180_000);
     while (!(await isUp())) {
-      if (Date.now() > deadline) throw new Error(`Emulator ${serial} did not come online in time`);
+      if (Date.now() > deadline) throw new Error(`模拟器 ${serial} 上线超时`);
       await sleep(2000);
     }
     while (!(await adb.isBooted())) {
-      if (Date.now() > deadline) throw new Error(`Emulator ${serial} did not finish booting`);
+      if (Date.now() > deadline) throw new Error(`模拟器 ${serial} 未能完成启动`);
       await sleep(2000);
     }
   }
@@ -156,21 +157,21 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     notes: string[],
   ): Promise<string> {
     const metro = app.metro;
-    if (!metro) throw new Error("debug-metro mode requires app.metro");
+    if (!metro) throw new Error("debug-metro 模式需要配置 app.metro");
     const base = `http://localhost:${metro.port}`;
     const adb = state.adb as Adb;
     const timeout = metro.warmupTimeoutMs ?? 300_000;
     const statusUp = () => httpProbe(`${base}/status`, 3000);
     if (await statusUp()) {
-      notes.push(`Metro already running on port ${metro.port}; reused (not stopped afterwards).`);
+      notes.push(`Metro 已在端口 ${metro.port} 运行，本次复用，结束时保留。`);
     } else {
-      if (!options.spawner) throw new Error("debug-metro mode needs a ProcessSpawner to start Metro");
+      if (!options.spawner) throw new Error("debug-metro 模式需要 ProcessSpawner 来启动 Metro");
       const cwd = metro.cwd ? inWorktree(ctx, metro.cwd) : ctx.worktreePath;
       ctx.log(`starting Metro on port ${metro.port}`);
       state.metro = options.spawner.spawn(metro.command, metro.args, { cwd, env: metro.env });
       const deadline = Date.now() + timeout;
       while (!(await statusUp())) {
-        if (Date.now() > deadline) throw new Error("Metro did not start in time");
+        if (Date.now() > deadline) throw new Error("Metro 启动超时");
         await sleep(2000);
       }
     }
@@ -178,8 +179,8 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     // First full bundle takes ~145 s cold (SPIKE-ANDROID); the app would time out without warm-up.
     const started = Date.now();
     const bundleUrl = `${base}/index.bundle?platform=android&dev=true&minify=false`;
-    if (!(await httpProbe(bundleUrl, timeout))) throw new Error("Metro bundle warm-up failed");
-    notes.push(`Metro bundle warmed in ${Math.round((Date.now() - started) / 1000)} s.`);
+    if (!(await httpProbe(bundleUrl, timeout))) throw new Error("Metro bundle 预热失败");
+    notes.push(`Metro bundle 预热耗时 ${Math.round((Date.now() - started) / 1000)} 秒。`);
     return base;
   }
 
@@ -230,7 +231,7 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     let serial = ctx.deviceId;
     let avd: string | undefined;
     if (!serial) {
-      if (!options.leases) throw new Error("No ctx.deviceId and no DeviceLeaseProvider configured");
+      if (!options.leases) throw new Error("未指定 ctx.deviceId，也未配置 DeviceLeaseProvider");
       const lease = await options.leases.acquire({
         platform: "android",
         cardId: ctx.cardId,
@@ -245,7 +246,7 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     const adb = new Adb(ctx.runner, serial, adbPath, ctx.signal);
     state.adb = adb;
     await ensureOnline(ctx, state, serial, avd, notes);
-    notes.push(`Device: ${serial} (emulator; evidence marked simulated).`);
+    notes.push(`设备：${serial}（模拟器，证据标记为模拟）。`);
 
     // 2. tools
     const useMaestro =
@@ -254,28 +255,30 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
       degraded = true;
       notes.push(
         flow.steps?.length
-          ? "Maestro not found in PATH: degraded to adb steps."
-          : "Maestro not found in PATH and flow has no adb steps: only launch + screenshot were captured.",
+          ? "PATH 中未找到 Maestro，已降级为 adb 步骤。"
+          : "PATH 中未找到 Maestro，且流程没有 adb 步骤，本次仅启动并截图。",
       );
     }
     const haveFfmpeg = record && (await toolPresent(ctx, ffmpegPath, ["-version"]));
     if (record && !haveFfmpeg) {
       degraded = true;
-      notes.push("ffmpeg not found: screen recording kept as mp4, no GIF; per-step screenshots still captured.");
+      notes.push("未找到 ffmpeg：录屏保留为 mp4，不生成 GIF，仍采集逐步截图。");
     }
 
     // 3. install / metro
     if (app.apkPath) {
       const apk = inWorktree(ctx, app.apkPath);
-      if (!fileExists(apk)) throw new Error(`APK not found: ${apk}`);
+      if (!fileExists(apk)) throw new Error(`未找到 APK： ${apk}`);
       await adb.install(apk);
-      notes.push(`Installed ${path.basename(apk)} (${app.mode}).`);
-    } else if (!(await adb.shell(`pm path ${app.packageName}`, 15_000)).stdout.includes("package:")) {
-      throw new Error(`${app.packageName} is not installed and no apkPath was given`);
+      notes.push(`已安装 ${path.basename(apk)}（${app.mode}）。`);
+    } else if (
+      !(await adb.shell(`pm path ${app.packageName}`, 15_000)).stdout.includes("package:")
+    ) {
+      throw new Error(`未安装 ${app.packageName}，且未提供 apkPath`);
     }
     let metroUrl = "";
     if (app.mode === "debug-metro") metroUrl = await startMetro(ctx, state, app, notes);
-    else notes.push("Bundled mode: APK is expected to embed its JS bundle.");
+    else notes.push("Bundled 模式：APK 应已内置 JS bundle。");
 
     // 4. launch with recording
     await adb.forceStop(app.packageName);
@@ -284,19 +287,27 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
       const remote = `/sdcard/vibe-rec-${Date.now()}.mp4`;
       state.remoteRecording = remote;
       state.recording = adb.startRecording(remote, MAX_RECORD_SEC).catch((e) => {
-        notes.push(`screenrecord failed: ${String(e)}`);
+        notes.push(`screenrecord 失败： ${String(e)}`);
       });
       await sleep(500);
     }
 
     let seq = 0;
     const shot = async (label: string) => {
-      const file = path.join(ctx.outputDir, `${prefix}-${String(++seq).padStart(2, "0")}-${slug(label)}.png`);
+      const file = path.join(
+        ctx.outputDir,
+        `${prefix}-${String(++seq).padStart(2, "0")}-${slug(label)}.png`,
+      );
       try {
         await adb.screenshot(file);
-        addArtifact("screenshot", file, ctx.check ? `${ctx.check.text} - ${label}` : label, "image/png");
+        addArtifact(
+          "screenshot",
+          file,
+          ctx.check ? `${ctx.check.text} - ${label}` : label,
+          "image/png",
+        );
       } catch (e) {
-        failures.push(`screenshot "${label}" failed: ${String(e)}`);
+        failures.push(`截图“${label}”失败： ${String(e)}`);
       }
     };
     const launch = async () => {
@@ -311,9 +322,9 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     try {
       await launch();
       launched = await waitForApp(adb, app.packageName, app.launchTimeoutMs ?? 30_000);
-      if (!launched) failures.push(`${app.packageName} did not start within the launch timeout`);
+      if (!launched) failures.push(`${app.packageName} 启动超时`);
     } catch (e) {
-      failures.push(`launch failed: ${String(e)}`);
+      failures.push(`启动失败： ${String(e)}`);
     }
     await sleep(app.settleMs ?? 1500);
     await shot("launch");
@@ -331,12 +342,12 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
           const logFile = path.join(ctx.outputDir, `${prefix}-maestro.log`);
           writeFileSync(logFile, `${r.stdout}\n${r.stderr}`);
           addArtifact("log", logFile, "Maestro output", "text/plain");
-          if (r.exitCode !== 0) failures.push(`Maestro flow failed (exit ${r.exitCode})`);
+          if (r.exitCode !== 0) failures.push(`Maestro 流程失败（退出码 ${r.exitCode}）`);
         } else if (flow?.steps) {
           for (const step of flow.steps) await runStep(step);
         }
       } catch (e) {
-        failures.push(`flow failed: ${String(e)}`);
+        failures.push(`流程失败： ${String(e)}`);
       }
       await sleep(app.settleMs ?? 1500);
       await shot(failures.length ? "failure" : "final");
@@ -373,18 +384,20 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
         await adb.pullAndRemove(state.remoteRecording, mp4);
         if (haveFfmpeg) {
           const gif = path.join(ctx.outputDir, `${prefix}-flow.gif`);
-          const r = await ctx.runner.run(ffmpegPath, ffmpegGifArgs(mp4, gif), { timeoutMs: 120_000 });
+          const r = await ctx.runner.run(ffmpegPath, ffmpegGifArgs(mp4, gif), {
+            timeoutMs: 120_000,
+          });
           if (r.exitCode === 0) {
             addArtifact("gif", gif, ctx.check ? `${ctx.check.text} - flow` : "flow", "image/gif");
           } else {
             degraded = true;
-            notes.push("ffmpeg GIF conversion failed: recording kept as mp4.");
+            notes.push("ffmpeg 转换 GIF 失败，录屏保留为 mp4。");
           }
         }
         addArtifact("video", mp4, "screen recording", "video/mp4");
       } catch (e) {
         degraded = true;
-        notes.push(`Recording unavailable: ${String(e)}`);
+        notes.push(`录屏不可用： ${String(e)}`);
       }
     }
 
@@ -396,12 +409,13 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     addArtifact("log", logFile, "logcat", "text/plain");
     const analysis = analyzeLogcat(logText, app.packageName);
     const aliveAtEnd = launched ? (await adb.pids(app.packageName)).length > 0 : false;
-    for (const c of analysis.crashes) failures.push(`${c.kind} crash: ${c.line}`);
+    for (const c of analysis.crashes) failures.push(`${c.kind} 崩溃： ${c.line}`);
     if (launched && !aliveAtEnd && analysis.crashes.length === 0) {
-      failures.push("app process was gone at the end of the run (no crash found in logcat)");
+      failures.push("运行结束时应用进程已退出（logcat 未发现崩溃）");
     }
-    if (analysis.jsErrors > 0) notes.push(`logcat has ${analysis.jsErrors} ReactNativeJS error line(s).`);
-    if (failures.length === 0) notes.push("No crash/ANR in logcat; app alive at end.");
+    if (analysis.jsErrors > 0)
+      notes.push(`logcat 中有 ${analysis.jsErrors} 条 ReactNativeJS 错误。`);
+    if (failures.length === 0) notes.push("logcat 未发现崩溃或 ANR，结束时应用仍在运行。");
     else judgement = "fail";
 
     // 8. report

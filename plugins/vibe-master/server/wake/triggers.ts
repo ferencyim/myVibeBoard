@@ -10,7 +10,7 @@
 import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } from "../vibe/db";
 import { isEvent } from "../vibe/contract";
 import type { Clock } from "../clock";
-import { defaultTuning, type TuningSource } from "../tuning";
+import { type TuningSource } from "../tuning";
 import type { WakeQueue } from "./queue";
 
 /** Owner switches (settings). */
@@ -36,12 +36,32 @@ export interface TriggersOptions {
   /** vibe-maintain: a rule was paused after repeated rejections (the owner is reminded). */
   onMaintenancePaused?(event: { ruleName: string; rejections: number }): void;
   /** vibe-scheduler has free slots and asks which waiting card goes first (never awaited: it takes a model call). */
+  onMasterContinuation?(request: {
+    requestId: string;
+    sessionId: string;
+    agentId: string;
+    role: string;
+    reason: string;
+    summary: string;
+    message: string;
+  }): void;
+  taskConsolidated?(workspaceId: string): boolean;
+  onTaskDispatchWanted?(request: {
+    requestId: string;
+    slots: number;
+    workspaceIds: string[];
+  }): void;
   onDispatchWanted?(request: { requestId: string; slots: number; cardIds: string[] }): void;
   log?: (message: string, error?: unknown) => void;
 }
 
 export type SchedulerSignal =
-  | { kind: "quota_low"; provider: string; level: "tight" | "exhausted"; remainingPct: number | null }
+  | {
+      kind: "quota_low";
+      provider: string;
+      level: "tight" | "exhausted";
+      remainingPct: number | null;
+    }
   | { kind: "paused" | "resumed" };
 
 export interface Triggers {
@@ -56,11 +76,21 @@ export function createTriggers(options: TriggersOptions): Triggers {
   const log = options.log ?? (() => undefined);
   const flags = () => options.flags?.() ?? DEFAULT_TRIGGER_FLAGS;
 
+  function onCompletedTask(workspaceId: string) {
+    if (!options.enabled() || !flags().consolidateOnDone) return;
+    const task = store.tasks.get(workspaceId);
+    if (task?.phase === "completed" && !options.taskConsolidated?.(workspaceId)) {
+      queue.enqueue({ kind: "task_done", workspaceId });
+    }
+  }
+
   const consumer = createEventConsumer({
     db: options.db,
     consumer: "vibe-master",
     types: [
-      "card.moved",
+      "task.updated",
+      "context.continuation_requested",
+      "scheduler.task_dispatch_wanted",
       "scheduler.quota_low",
       "scheduler.paused",
       "scheduler.resumed",
@@ -72,12 +102,17 @@ export function createTriggers(options: TriggersOptions): Triggers {
     pollIntervalMs: options.pollIntervalMs,
     onError: (error, seq) => log(`event ${seq} failed`, error),
     handler: (event) => {
+      if (isEvent(event, "context.continuation_requested")) {
+        if (event.payload.role === "master") options.onMasterContinuation?.(event.payload);
+        return;
+      }
       if (isEvent(event, "scheduler.quota_low")) {
         const { provider, level, remainingPct } = event.payload;
         options.onScheduler?.({ kind: "quota_low", provider, level, remainingPct });
         return;
       }
-      if (isEvent(event, "scheduler.dispatch_wanted")) return options.onDispatchWanted?.(event.payload);
+      if (isEvent(event, "scheduler.task_dispatch_wanted"))
+        return options.onTaskDispatchWanted?.(event.payload);
       if (isEvent(event, "scheduler.paused")) return options.onScheduler?.({ kind: "paused" });
       if (isEvent(event, "scheduler.resumed")) return options.onScheduler?.({ kind: "resumed" });
       if (isEvent(event, "maintenance.paused")) {
@@ -85,13 +120,12 @@ export function createTriggers(options: TriggersOptions): Triggers {
         return options.onMaintenancePaused?.({ ruleName, rejections });
       }
       if (isEvent(event, "maintenance.triggered")) {
-        return log(`maintenance rule ${event.payload.ruleId} triggered (run ${event.payload.runId})`);
+        return log(
+          `maintenance rule ${event.payload.ruleId} triggered (run ${event.payload.runId})`,
+        );
       }
-      if (!options.enabled()) return;
-      if (isEvent(event, "card.moved") && event.cardId) {
-        if (event.payload.to === "done" && flags().consolidateOnDone) {
-          queue.enqueue({ kind: "card_done", cardId: event.cardId });
-        }
+      if (isEvent(event, "task.updated") && event.payload.fields.includes("phase")) {
+        onCompletedTask(event.payload.workspaceId);
       }
     },
   });
@@ -102,18 +136,12 @@ export function createTriggers(options: TriggersOptions): Triggers {
 
     sweep() {
       let queued = 0;
-      const since = new Date(
-        options.clock.now() - (options.tuning ?? defaultTuning)().sweepDoneWindowMs,
-      ).toISOString();
-      for (const card of flags().consolidateOnDone ? store.cards.list({ column: "done" }) : []) {
-        if (card.updatedAt < since) continue;
-        const consolidated = store.events
-          .list(card.id)
-          .some((e) => (e.body as { kind?: string } | null)?.kind === "memory_update");
-        if (!consolidated) {
-          queue.enqueue({ kind: "card_done", cardId: card.id });
-          queued++;
-        }
+      for (const task of flags().consolidateOnDone
+        ? store.tasks.list({ phase: "completed" })
+        : []) {
+        if (!task.confirmedAt || options.taskConsolidated?.(task.workspaceId)) continue;
+        queue.enqueue({ kind: "task_done", workspaceId: task.workspaceId });
+        queued++;
       }
       return queued;
     },

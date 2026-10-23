@@ -13,8 +13,8 @@ describe("format helpers", () => {
 
   it("marks unpriced tokens instead of showing a bare zero", () => {
     expect(fmtCostNote(1.5, 0)).toBe("$1.50");
-    expect(fmtCostNote(0, 1500)).toBe("price unknown (1.5k tok unpriced)");
-    expect(fmtCostNote(2, 1500)).toBe("$2.00 + 1.5k tok unpriced");
+    expect(fmtCostNote(0, 1500)).toBe("价格未知（1.5k token 未定价）");
+    expect(fmtCostNote(2, 1500)).toBe("$2.00 + 1.5k token 未定价");
   });
 
   it("computes bar shares and tolerates empty input", () => {

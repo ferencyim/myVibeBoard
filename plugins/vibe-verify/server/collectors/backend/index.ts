@@ -1,3 +1,4 @@
+import type { CollectorContext } from "../context";
 // Backend / CLI / library evidence collector: runs the project's tests through the injected
 // Runner and replays configured requests against the (optionally started) service, recording
 // request/response samples. Driven by `<worktree>/.vibe/verify.json` (see ../common.ts).
@@ -6,7 +7,6 @@ import path from "node:path";
 import type {
   CollectResult,
   CollectorAvailability,
-  CollectorContext,
   EvidenceArtifact,
   EvidenceCollector,
 } from "../../vibe/contract/collector";
@@ -63,7 +63,8 @@ export function resolveTestCommand(
   config: VerifyConfig,
   worktreePath: string,
 ): { command: string; args: string[] } | undefined {
-  if (config.backend?.test) return { command: config.backend.test.command, args: config.backend.test.args };
+  if (config.backend?.test)
+    return { command: config.backend.test.command, args: config.backend.test.args };
   const has = (f: string) => existsSync(path.join(worktreePath, f));
   if (has("package.json")) {
     const pkg = JSON.parse(readFileSync(path.join(worktreePath, "package.json"), "utf8"));
@@ -71,29 +72,46 @@ export function resolveTestCommand(
   }
   if (has("Cargo.toml")) return { command: "cargo", args: ["test"] };
   if (has("go.mod")) return { command: "go", args: ["test", "./..."] };
-  if (has("pyproject.toml") || has("pytest.ini")) return { command: "python", args: ["-m", "pytest"] };
+  if (has("pyproject.toml") || has("pytest.ini"))
+    return { command: "python", args: ["-m", "pytest"] };
   return undefined;
 }
 
 function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}\n...[truncated ${text.length - max} chars]`;
+  return text.length <= max
+    ? text
+    : `${text.slice(0, max)}\n...[truncated ${text.length - max} chars]`;
 }
 
 function tail(text: string, max: number): string {
-  return text.length <= max ? text : `[truncated ${text.length - max} chars]...\n${text.slice(-max)}`;
+  return text.length <= max
+    ? text
+    : `[truncated ${text.length - max} chars]...\n${text.slice(-max)}`;
 }
 
-const medianOf = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
+const medianOf = (values: number[]) =>
+  [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
 
 type Measured = { runs: number[]; medianMs: number } | { error: string };
 
 /** Runs the timing command `runs` times in `cwd`; an error when it failed or timed out. */
-async function measure(ctx: CollectorContext, perf: PerfConfig, cwd: string, timeoutMs: number): Promise<Measured> {
+async function measure(
+  ctx: CollectorContext,
+  perf: PerfConfig,
+  cwd: string,
+  timeoutMs: number,
+): Promise<Measured> {
   const runs: number[] = [];
   for (let i = 0; i < perf.runs; i++) {
-    const res = await ctx.runner.run(perf.command, perf.args, { cwd, timeoutMs, signal: ctx.signal });
+    const res = await ctx.runner.run(perf.command, perf.args, {
+      cwd,
+      timeoutMs,
+      signal: ctx.signal,
+    });
     if (res.exitCode !== 0 || res.timedOut) {
-      return { error: `${res.timedOut ? "timed out" : `exit ${res.exitCode}`}: ${(res.stderr || res.stdout).trim().slice(-300)}` };
+      return {
+        error: `${res.timedOut ? "超时" : `退出码 ${res.exitCode}`}: ${(res.stderr || res.stdout).trim().slice(-300)}`,
+      };
     }
     runs.push(res.durationMs);
   }
@@ -122,25 +140,29 @@ async function comparePerf(ctx: CollectorContext, perf: PerfConfig, timeoutMs: n
   }
   const measuredBefore = before && "medianMs" in before ? before.medianMs : undefined;
   const beforeMs = measuredBefore ?? perf.beforeMs;
-  const beforeSource = measuredBefore !== undefined ? "baseline" : perf.beforeMs !== undefined ? "recorded" : "none";
+  const beforeSource =
+    measuredBefore !== undefined ? "baseline" : perf.beforeMs !== undefined ? "recorded" : "none";
   const afterMs = "medianMs" in after ? after.medianMs : undefined;
-  const improvement = beforeMs !== undefined && afterMs !== undefined && beforeMs > 0 ? (beforeMs - afterMs) / beforeMs : undefined;
+  const improvement =
+    beforeMs !== undefined && afterMs !== undefined && beforeMs > 0
+      ? (beforeMs - afterMs) / beforeMs
+      : undefined;
   let judgement: "pass" | "fail" | "doubt" = "pass";
   const reasons: string[] = [];
   if (afterMs === undefined) {
     judgement = "fail";
-    reasons.push(`command failed after the change (${"error" in after ? after.error : ""})`);
+    reasons.push(`改动后的命令执行失败 (${"error" in after ? after.error : ""})`);
   } else if (perf.thresholdMs !== undefined && afterMs > perf.thresholdMs) {
     judgement = "fail";
-    reasons.push(`still above the threshold: ${afterMs}ms > ${perf.thresholdMs}ms`);
+    reasons.push(`仍超过阈值： ${afterMs}ms > ${perf.thresholdMs}ms`);
   }
   if (judgement !== "fail" && improvement !== undefined && improvement < 0.1) {
     judgement = "doubt";
-    reasons.push(`less than 10% faster than before (${beforeMs}ms -> ${afterMs}ms)`);
+    reasons.push(`相较改动前的性能改善不足 10% (${beforeMs}ms -> ${afterMs}ms)`);
   }
   if (judgement !== "fail" && beforeMs === undefined) {
     judgement = "doubt";
-    reasons.push("no baseline timing available, cannot show the improvement");
+    reasons.push("没有基线计时，无法证明性能改善");
   }
   return { after, before, beforeMs, beforeSource, afterMs, improvement, judgement, reasons };
 }
@@ -169,7 +191,7 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
       ) {
         return { available: true };
       }
-      return { available: false, reason: "No test command found and no requests configured in .vibe/verify.json" };
+      return { available: false, reason: "未找到测试命令，.vibe/verify.json 也未配置请求" };
     },
 
     async collect(ctx): Promise<CollectResult> {
@@ -210,64 +232,96 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
               null,
               2,
             ),
-            `tests: ${passed ? "passed" : "failed"}`,
+            `测试：${passed ? "通过" : "失败"}`,
           ),
           writeArtifact(
             ctx,
             "log",
             `${prefix}test-output.log`,
-            tail(`${result.stdout}${result.stderr ? `\n--- stderr ---\n${result.stderr}` : ""}`, MAX_LOG_BYTES),
+            tail(
+              `${result.stdout}${result.stderr ? `\n--- stderr ---\n${result.stderr}` : ""}`,
+              MAX_LOG_BYTES,
+            ),
             "test output",
           ),
         );
-        notes.push(`${cmdline}: ${result.timedOut ? "timed out" : `exit ${result.exitCode}`} in ${result.durationMs}ms`);
-        if (!passed) failures.push(`tests failed (${cmdline})`);
+        notes.push(
+          `${cmdline}: ${result.timedOut ? "超时" : `退出码 ${result.exitCode}`}，耗时 ${result.durationMs}ms`,
+        );
+        if (!passed) failures.push(`测试失败（${cmdline})`);
       } else if (!ctx.check) {
-        notes.push("No test command found");
+        notes.push("未找到测试命令");
       }
 
       const requests = selectRequests(config, ctx);
       if (requests.length > 0) {
         ran = true;
         const backend = config.backend!;
-        if (backend.server) servers.add(ctx.verificationId, await launcher.start(backend.server, ctx.worktreePath));
+        if (backend.server)
+          servers.add(ctx.verificationId, await launcher.start(backend.server, ctx.worktreePath));
         const samples = [];
         for (const req of requests) {
           const url = /^https?:\/\//.test(req.url)
             ? req.url
             : new URL(req.url, backend.baseUrl ?? backend.server?.readyUrl).toString();
-          const body = req.body === undefined ? undefined : typeof req.body === "string" ? req.body : JSON.stringify(req.body);
-          const headers = { ...(body !== undefined && typeof req.body !== "string" ? { "content-type": "application/json" } : {}), ...req.headers };
+          const body =
+            req.body === undefined
+              ? undefined
+              : typeof req.body === "string"
+                ? req.body
+                : JSON.stringify(req.body);
+          const headers = {
+            ...(body !== undefined && typeof req.body !== "string"
+              ? { "content-type": "application/json" }
+              : {}),
+            ...req.headers,
+          };
           const started = Date.now();
           try {
             const res = await http({ method: req.method, url, headers, body });
             const ok = req.expectStatus === undefined || res.status === req.expectStatus;
-            if (!ok) failures.push(`${req.name}: expected ${req.expectStatus}, got ${res.status}`);
+            if (!ok) failures.push(`${req.name}: 预期状态 ${req.expectStatus}，实际 ${res.status}`);
             samples.push({
               name: req.name,
               request: { method: req.method, url, headers, body },
-              response: { status: res.status, headers: res.headers, body: truncate(res.body, MAX_BODY_CHARS) },
+              response: {
+                status: res.status,
+                headers: res.headers,
+                body: truncate(res.body, MAX_BODY_CHARS),
+              },
               expectStatus: req.expectStatus,
               ok,
               durationMs: Date.now() - started,
             });
           } catch (e) {
-            failures.push(`${req.name}: request failed (${String(e)})`);
-            samples.push({ name: req.name, request: { method: req.method, url, headers, body }, error: String(e), ok: false });
+            failures.push(`${req.name}: 请求失败（${String(e)})`);
+            samples.push({
+              name: req.name,
+              request: { method: req.method, url, headers, body },
+              error: String(e),
+              ok: false,
+            });
           }
         }
         artifacts.push(
-          writeArtifact(ctx, "report", `${prefix}request-samples.json`, JSON.stringify(samples, null, 2), "request/response samples"),
+          writeArtifact(
+            ctx,
+            "report",
+            `${prefix}request-samples.json`,
+            JSON.stringify(samples, null, 2),
+            "request/response samples",
+          ),
         );
-        notes.push(`${samples.filter((s) => s.ok).length}/${samples.length} request sample(s) matched expectations`);
+        notes.push(`${samples.filter((s) => s.ok).length}/${samples.length} 项请求采样符合预期`);
       }
 
       const perf = ctx.check ? undefined : config.backend?.perf;
       if (perf) {
         ran = true;
         const cmp = await comparePerf(ctx, perf, options.testTimeoutMs ?? 600_000);
-        const pct = cmp.improvement === undefined ? "" : ` (${(cmp.improvement * 100).toFixed(1)}% faster)`;
-        const line = `perf ${perf.label}: before ${cmp.beforeMs ?? "n/a"}ms (${cmp.beforeSource}) -> after ${cmp.afterMs ?? "failed"}ms${pct}`;
+        const pct =
+          cmp.improvement === undefined ? "" : ` (${(cmp.improvement * 100).toFixed(1)}% faster)`;
+        const line = `性能 ${perf.label}：改动前 ${cmp.beforeMs ?? "无"}ms (${cmp.beforeSource}) → 改动后 ${cmp.afterMs ?? "失败"}ms${pct}`;
         artifacts.push(
           writeArtifact(
             ctx,
@@ -284,7 +338,11 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
                   runs: cmp.before && "runs" in cmp.before ? cmp.before.runs : undefined,
                   baseline: perf.baseline,
                 },
-                after: { medianMs: cmp.afterMs, runs: "runs" in cmp.after ? cmp.after.runs : undefined, commitHash: ctx.commitHash },
+                after: {
+                  medianMs: cmp.afterMs,
+                  runs: "runs" in cmp.after ? cmp.after.runs : undefined,
+                  commitHash: ctx.commitHash,
+                },
                 improvement: cmp.improvement,
                 judgement: cmp.judgement,
                 reasons: cmp.reasons,
@@ -293,7 +351,7 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
               null,
               2,
             ),
-            `before/after: ${line}`,
+            `前后对比：${line}`,
           ),
         );
         notes.push(line, ...cmp.reasons);
@@ -302,7 +360,12 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
       }
 
       if (!ran) {
-        return { artifacts, judgement: "doubt", notes: [...notes, "Nothing to run for this collection"], degraded: false };
+        return {
+          artifacts,
+          judgement: "doubt",
+          notes: [...notes, "本次采集没有可运行的检查"],
+          degraded: false,
+        };
       }
       return {
         artifacts,

@@ -52,9 +52,7 @@ const Speed = z.object({
 });
 
 const TaskRow = z.object({
-  cardId: z.string(),
-  key: z.string(),
-  title: z.string(),
+  workspaceId: z.string(),
   tokens: z.number(),
   cost: z.number(),
   unpricedTokens: z.number(),
@@ -70,6 +68,8 @@ export const OverviewSchema = z.object({
   byProvider: z.array(Group),
   byModel: z.array(Group),
   byProject: z.array(Group),
+  byWorkspace: z.array(Group),
+  byRole: z.array(Group),
   byDay: z.array(Group),
   speed: z.object({ overall: Speed, byProvider: z.array(Speed) }),
   tasks: z.array(TaskRow),

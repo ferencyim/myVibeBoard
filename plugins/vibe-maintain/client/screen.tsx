@@ -27,13 +27,32 @@ import {
 } from "../shared/rules";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
 import { addCustomRule, applyRuleEdit, draftFromDef, emptyDef, removeCustomRule } from "./edit";
-import { BLOCKED_TEXT, FIELD_LABEL, ORIGIN_TEXT, lastRunText, parseStatus, type RuleGroup, type RuleRow } from "./format";
+import {
+  BLOCKED_TEXT,
+  FIELD_LABEL,
+  ORIGIN_TEXT,
+  lastRunText,
+  parseStatus,
+  type RuleGroup,
+  type RuleRow,
+} from "./format";
 import { RuleEditor } from "./rule-editor";
 import { FieldsCard, Group, type Field as SettingField } from "./settings-kit";
 
-const ALL_BUILTIN = Object.fromEntries(FIELD_KEYS.map((k) => [k, "builtin"])) as Record<FieldKey, FieldSource>;
+const ALL_BUILTIN = Object.fromEntries(FIELD_KEYS.map((k) => [k, "builtin"])) as Record<
+  FieldKey,
+  FieldSource
+>;
 
-function Section({ theme, title, children }: { theme: PluginTheme; title: string; children: ReactNode }) {
+function Section({
+  theme,
+  title,
+  children,
+}: {
+  theme: PluginTheme;
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <View
       style={{
@@ -45,7 +64,9 @@ function Section({ theme, title, children }: { theme: PluginTheme; title: string
         gap: 8,
       }}
     >
-      <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>{title}</Text>
+      <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>
+        {title}
+      </Text>
       {children}
     </View>
   );
@@ -84,7 +105,15 @@ function Button({
 }
 
 const SCOPE_CHIP = (theme: PluginTheme, label: string) => (
-  <View key={label} style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: theme.colors.surface2 }}>
+  <View
+    key={label}
+    style={{
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+      borderRadius: 999,
+      backgroundColor: theme.colors.surface2,
+    }}
+  >
     <Text style={{ color: theme.colors.foreground, fontSize: 11 }}>{label}</Text>
   </View>
 );
@@ -126,9 +155,15 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
   const runNow = (group: RuleGroup, row?: RuleRow) =>
     act(`run:${row?.id ?? group.key}`, async () => {
       const r = await runCall(
-        row ? { ruleId: row.id } : group.readOnly ? { ruleId: group.rows[0]!.id } : { ruleName: group.name },
+        row
+          ? { ruleId: row.id }
+          : group.readOnly
+            ? { ruleId: group.rows[0]!.id }
+            : { ruleName: group.name },
       );
-      const results = r.results.length ? r.results : [{ projectId: row?.projectId ?? "", status: r.status, why: r.why }];
+      const results = r.results.length
+        ? r.results
+        : [{ projectId: row?.projectId ?? "", status: r.status, why: r.why }];
       const lines = results.map((x) =>
         x.status === "fired"
           ? `「${projectName(x.projectId)}」已运行一次`
@@ -166,20 +201,30 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
   const scopeNames = (g: RuleGroup) =>
     g.scope === "all" ? ["全部项目"] : g.scope.length ? g.scope.map(projectName) : ["未选择项目"];
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
+      contentContainerStyle={{ padding: 16, gap: 12 }}
+    >
       <Muted theme={theme}>
-        自动维护按规则定期检查项目，把结果放进看板。每条规则只定义一份，在规则上选择适用的项目（或全部项目）；改一次，所有适用项目都生效。
-        进度、运行记录和每日上限按「规则 × 项目」分别统计。规则的值按优先级叠加：内置默认，其次是这里的界面配置，最后是项目里的
+        自动维护按规则定期检查项目，把发现送到新的原生 workspace 中规划，等待用户显式
+        /执行。每条规则只定义一份，在规则上选择适用的项目（或全部项目）；改一次，所有适用项目都生效。
+        进度、运行记录和每日上限按「规则 ×
+        项目」分别统计。规则的值按优先级叠加：内置默认，其次是这里的界面配置，最后是项目里的
         .vibe/maintenance.yml（只对该项目生效的局部覆盖）。
       </Muted>
       {status.error ? (
-        <Text style={{ color: theme.colors.statusDanger }}>无法加载自动维护状态：{formatRpcError(status.error)}</Text>
+        <Text style={{ color: theme.colors.statusDanger }}>
+          无法加载自动维护状态：{formatRpcError(status.error)}
+        </Text>
       ) : null}
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
-      {message ? <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{message}</Text> : null}
+      {message ? (
+        <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{message}</Text>
+      ) : null}
       {s?.configErrors.map((c) => (
         <Text key={c.project} style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
-          规则配置有问题（{s.projects.find((p) => p.id === c.project)?.name ?? c.project}）：{c.errors.join("；")}
+          规则配置有问题（{s.projects.find((p) => p.id === c.project)?.name ?? c.project}）：
+          {c.errors.join("；")}
         </Text>
       ))}
       {s && s.groups.length === 0 ? <Muted theme={theme}>还没有维护规则。</Muted> : null}
@@ -195,7 +240,8 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
           </View>
           {group.splitFrom ? (
             <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
-              迁移时因各项目配置不同而拆分：这条规则原来是「{group.splitFrom}」，不同项目的配置不一样，所以拆成了几条。
+              迁移时因各项目配置不同而拆分：这条规则原来是「{group.splitFrom}
+              」，不同项目的配置不一样，所以拆成了几条。
             </Text>
           ) : null}
           <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
@@ -205,14 +251,20 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
             检查内容：{describeCheck(group.def.check as { type: string } & Record<string, unknown>)}
           </Muted>
           <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
-            {group.def.output === "fix" ? "直接修复（新建 worktree 让 agent 动手）" : "生成建议草稿卡"}
-            {group.def.agent ? ` · 执行 agent ${group.def.agent}` : " · 不调用模型"} · 优先级 {group.def.priority} ·
-            每日上限 {group.def.daily_cap}（每个项目分别计）
+            {group.def.output === "fix" ? "生成修复方案，等待确认" : "生成建议方案，等待确认"}
+            {group.def.agent ? ` · 规划 agent ${group.def.agent}` : " · 使用默认规划模型"} · 优先级{" "}
+            {group.def.priority} · 每日上限 {group.def.daily_cap}（每个项目分别计）
           </Text>
           <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
             <Button
               theme={theme}
-              label={busy === `run:${group.key}` ? "运行中..." : group.rows.length > 1 ? "立即运行（全部适用项目）" : "立即运行"}
+              label={
+                busy === `run:${group.key}`
+                  ? "运行中..."
+                  : group.rows.length > 1
+                    ? "立即运行（全部适用项目）"
+                    : "立即运行"
+              }
               disabled={busy !== null || !group.def.enabled || group.rows.length === 0}
               onPress={() => void runNow(group)}
             />
@@ -235,7 +287,7 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
                   void saveConfig(
                     `delete:${group.key}`,
                     (config) => ({ config: removeCustomRule(config, group.name) }),
-                    `已删除自定义规则「${group.name}」（只删配置，不影响文件和历史卡片）`,
+                    `已删除自定义规则「${group.name}」（只删配置，不影响文件和历史任务）`,
                   )
                 }
               />
@@ -243,25 +295,36 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
           </View>
           {expanded[group.key] ? (
             <View style={{ gap: 8 }}>
-              {group.rows.length === 0 ? <Muted theme={theme}>没有适用的项目，规则不会运行。</Muted> : null}
+              {group.rows.length === 0 ? (
+                <Muted theme={theme}>没有适用的项目，规则不会运行。</Muted>
+              ) : null}
               {group.rows.map((row) => (
                 <View
                   key={row.id}
-                  style={{ gap: 3, borderLeftWidth: 2, borderLeftColor: theme.colors.border, paddingLeft: 8 }}
+                  style={{
+                    gap: 3,
+                    borderLeftWidth: 2,
+                    borderLeftColor: theme.colors.border,
+                    paddingLeft: 8,
+                  }}
                 >
                   <Text style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}>
                     {row.projectName}
                     {row.enabled ? "" : " · 已停用"}
                   </Text>
                   {row.progressText ? (
-                    <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>当前进度：{row.progressText}</Text>
+                    <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
+                      当前进度：{row.progressText}
+                    </Text>
                   ) : null}
                   <Muted theme={theme}>
-                    今天已运行 {row.runsToday} 次（每日上限 {row.dailyCap}）· 上次运行：{lastRunText(row.lastRun)}
+                    今天已运行 {row.runsToday} 次（每日上限 {row.dailyCap}）· 上次运行：
+                    {lastRunText(row.lastRun)}
                   </Muted>
                   {row.ymlFields.length ? (
                     <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
-                      此项目有 maintenance.yml 局部覆盖：{row.ymlFields.map((k) => FIELD_LABEL[k]).join("、")}
+                      此项目有 maintenance.yml 局部覆盖：
+                      {row.ymlFields.map((k) => FIELD_LABEL[k]).join("、")}
                     </Text>
                   ) : null}
                   {row.blocked ? (
@@ -285,7 +348,9 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
                     ) : null}
                     <Button
                       theme={theme}
-                      label={busy === `run:${row.id}` ? "运行中..." : `只运行「${row.projectName}」`}
+                      label={
+                        busy === `run:${row.id}` ? "运行中..." : `只运行「${row.projectName}」`
+                      }
                       disabled={busy !== null || !row.enabled}
                       onPress={() => void runNow(group, row)}
                     />
@@ -311,7 +376,11 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
                   (config) => ({
                     config: applyRuleEdit(
                       config,
-                      { name: group.name, origin: group.origin === "custom" ? "custom" : "builtin", base: group.base },
+                      {
+                        name: group.name,
+                        origin: group.origin === "custom" ? "custom" : "builtin",
+                        base: group.base,
+                      },
                       fields,
                       scope,
                     ),
@@ -386,10 +455,19 @@ export function MaintainSidebarItem({ currentScreen, openScreen }: PluginSidebar
 
 /** Defaults equal the values that used to be hard-coded (WP-99). */
 export const ADVANCED_FIELDS: readonly SettingField[] = [
-  { kind: "number", key: "subAgentTimeoutMinutes", label: "规则的只读分析 agent 单次运行超时（分钟，1-240）", min: 1, max: 240 },
-  { kind: "int", key: "commitPollSeconds", label: "检查“合入提交数”触发条件的最小间隔（秒，5-3600）", min: 5, max: 3600 },
-  { kind: "map", key: "unattendedModes", valueType: "string", label: "无人值守修复 agent 的权限模式，按 provider，如 claude=acceptEdits, codex=auto-review（未列出的用 provider 默认）" },
-  { kind: "map", key: "readOnlyModes", valueType: "string", label: "只读分析 agent 的权限模式，按 provider，如 claude=plan, codex=read-only" },
+  {
+    kind: "int",
+    key: "commitPollSeconds",
+    label: "检查“合入提交数”触发条件的最小间隔（秒，5-3600）",
+    min: 5,
+    max: 3600,
+  },
+  {
+    kind: "map",
+    key: "readOnlyModes",
+    valueType: "string",
+    label: "只读分析 agent 的权限模式，按 provider，如 claude=plan, codex=read-only",
+  },
 ];
 
 export function MaintainSettingsScreen({ theme }: PluginSurfaceProps) {
@@ -427,7 +505,7 @@ export function MaintainSettingsScreen({ theme }: PluginSurfaceProps) {
           }}
         />
         <SettingsInput
-          label="连续被驳回多少张卡后暂停规则"
+          label="连续被驳回多少个任务后暂停规则"
           hint="1 到 20"
           initialValue={String(values.pauseAfterRejections)}
           onChangeText={(text) => {
@@ -441,9 +519,52 @@ export function MaintainSettingsScreen({ theme }: PluginSurfaceProps) {
           onChangeText={(text) => save({ ...values, defaultAgent: text.trim() || "claude/sonnet" })}
         />
       </SettingsCard>
+      <MaintenanceDiagnostics theme={theme} />
       <Group theme={theme} title="高级">
         <FieldsCard fields={ADVANCED_FIELDS} values={values} save={save} />
       </Group>
     </SettingsSection>
+  );
+}
+
+const DIAGNOSTIC_ROW_STYLE = { gap: 3 };
+
+function MaintenanceDiagnostics({ theme }: { theme: PluginTheme }) {
+  const statusCall = useRpc(statusRpc);
+  const status = useQuery({
+    queryKey: ["vibe-maintain", "status"],
+    queryFn: async () => parseStatus(await statusCall({})),
+    refetchInterval: 5_000,
+  });
+  return (
+    <Group theme={theme} title="运行诊断">
+      <Muted theme={theme}>
+        所有规则输出均先规划，等待用户 /执行；运行次数与每日上限按规则 × 项目保留。
+      </Muted>
+      {status.error ? (
+        <Muted theme={theme}>无法读取诊断：{formatRpcError(status.error)}</Muted>
+      ) : null}
+      {status.data?.configErrors.map((item) => (
+        <Muted key={item.project} theme={theme}>
+          {item.project}：{item.errors.join("；")}
+        </Muted>
+      ))}
+      {status.data?.groups.flatMap((group) =>
+        group.rows.map((row) => (
+          <View key={row.id} style={DIAGNOSTIC_ROW_STYLE}>
+            <Muted theme={theme}>
+              {row.projectName} · {row.name}
+            </Muted>
+            <Muted theme={theme}>
+              今日 {row.runsToday}/{row.dailyCap} 次 · {row.progressText ?? "按触发条件运行"}
+            </Muted>
+            <Muted theme={theme}>
+              {row.blocked ? (BLOCKED_TEXT[row.blocked] ?? row.blocked) : "可运行"} ·{" "}
+              {lastRunText(row.lastRun)}
+            </Muted>
+          </View>
+        )),
+      )}
+    </Group>
   );
 }
