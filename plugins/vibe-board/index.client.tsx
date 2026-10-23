@@ -2,10 +2,47 @@ import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { BoardScreen } from "./client/board/BoardScreen";
 import { SessionsScreen } from "./client/sessions/SessionsScreen";
 import { BehaviourScreen } from "./client/behaviour/BehaviourScreen";
-import { BehaviourSidebarItem, BoardSettingsScreen, BoardSidebarItem, SessionsSidebarItem } from "./client/sidebar";
+import {
+  BehaviourSidebarItem,
+  BoardSettingsScreen,
+  BoardSidebarItem,
+  SessionsSidebarItem,
+} from "./client/sidebar";
+import { TaskConversationPanel } from "./client/task-conversation/TaskConversationPanel";
+import { newCommandRequestId, TASK_ACTIONS } from "./client/task-conversation/logic";
+import { taskConversationCommandRpc } from "./shared/task-conversation";
+import { registerTaskRecipients } from "./client/task-conversation/recipients";
 
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
+    registerTaskRecipients(client),
+    client.addWorkspacePanel({
+      id: "task-flow",
+      title: "任务流程",
+      icon: "ListChecks",
+      context: "agent",
+      locations: ["conversation"],
+      Component: TaskConversationPanel,
+    }),
+    ...TASK_ACTIONS.map(({ command, label, action }) =>
+      client.addSlashCommand({
+        name: command,
+        description: `任务流程：${label}`,
+        argumentHint: "[原因或修改要求]",
+        context: "agent",
+        async onSubmit({ workspace, conversationId, args, rpc, openPanel }) {
+          if (!conversationId) throw new Error("请在任务会话中使用此命令");
+          await rpc(taskConversationCommandRpc, {
+            workspaceId: workspace.id,
+            conversationId,
+            action,
+            requestId: newCommandRequestId(),
+            ...(args ? { reason: args } : {}),
+          });
+          openPanel("task-flow", { location: "conversation" });
+        },
+      }),
+    ),
     // `params`: { project?: <id|prefix>, card?: <key> } open a project tab / a card detail directly.
     client.addScreen({
       id: "board",
@@ -21,11 +58,19 @@ export default function contribute(client: PluginClientContext) {
 
     // 会话汇总: waiting sessions on top, offline-capable (data from the phone replica).
     client.addScreen({ id: "sessions", title: "会话汇总", Component: SessionsScreen }),
-    client.addSidebarHeaderItem({ id: "sessions", title: "会话汇总", Component: SessionsSidebarItem }),
+    client.addSidebarHeaderItem({
+      id: "sessions",
+      title: "会话汇总",
+      Component: SessionsSidebarItem,
+    }),
 
     // Agent 行为: every prompt of every agent, editable globally or per project.
     client.addScreen({ id: "behaviour", title: "Agent 行为", Component: BehaviourScreen }),
-    client.addSidebarHeaderItem({ id: "behaviour", title: "Agent 行为", Component: BehaviourSidebarItem }),
+    client.addSidebarHeaderItem({
+      id: "behaviour",
+      title: "Agent 行为",
+      Component: BehaviourSidebarItem,
+    }),
 
     client.addSettingsScreen({
       id: "preferences",
@@ -80,7 +125,7 @@ export default function contribute(client: PluginClientContext) {
   ];
 
   // The host requires a cleanup function back.
-  return () => {
-    for (const cleanup of cleanups) void cleanup();
+  return async () => {
+    for (const cleanup of cleanups) await cleanup();
   };
 }

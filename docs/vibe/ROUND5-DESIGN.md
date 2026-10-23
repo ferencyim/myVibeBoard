@@ -190,6 +190,21 @@ WP-113 仍只做**新任务首消息 outbox**：保存 host、projectId、稳定
 - **单测**：按钮/slash 同权；普通赞同不执行，模型/引用/重放不通过；最新 planner 完整源与旧按钮拒绝、缺格式拒绝、重复确认只派一次、改方案重确认、选 worker 不绕授权；每步沉淀历史/去重/重启补漏；模型变更记录实际覆盖；验证 commit 失效；ff/merge、脏树、冲突、push 失败与重复验收均不误收尾。
 - **隔离实测**：首发→探路/方案复核→修改→面板执行→主子代理→复核/验证→面板通过或独立“通过”；全程一个 tab，面板能查看旧步骤和证据。临时仓库配本地裸 origin，核对本地 main 与 push、失败重试及 worktree 保留；Web 侧面板/Android sheet、重启、停止各覆盖。
 
+#### WP-115 实施接口与验收边界（2026-10-23，尚未整体验收）
+
+- 增量 core v13 续接现有迁移：task 新增会话绑定、完整方案来源、任务角色选择和控制资料；`store.taskArtifacts` 负责里程碑去重、待 publish 与发布回执。公开聊天全文仍只在宿主。
+- `vibe-board` 注册原生 prepare/admit/beforeControl hooks；`vibe.task.conversation.panel`、`vibe.task.conversation.command`、`vibe.task.conversation.select_role` 为面板、slash 和接手设置的插件 RPC。所有流程动作复用 command 服务，确认读取最新已完成 planner 的完整源；确认后的实际模型覆盖另存包含权限、环境和指令的冻结快照，不再依赖可变预设。
+- 主代理用只读固定格式 `vibe-delegate` 登记方案内子任务，成员保留 `parentMemberId`；`vibe-delivery` 明确完成或受阻。复核与验证仍归 WP-112 pipeline，成员与产物留在同一容器。Stop、未知投递和未知压缩结果不释放未经确认结束的资源；历史“通过”不重放。
+- 缓存估算取宿主成员 `lastRequestAt` 与 context 持久策略 `context:compaction_policy`；原生 compact 必须等 provider 明确完成，不能把发出请求当压缩成功。重启恢复的公开源以宿主稳定投递身份去重，不能复用 provider 重启后从零计数的 turn ID 覆盖旧发言。
+- 复核输入仅复用最近一份同确认、同 commit 的已完成采集原文与采集备注，从证据库校验归属、目录与内容校验值；旧复核判词、汇总结论和中断报告只留历史，不能混入当前证据索引。角色内部上下文仅取当前确认轮次每成员最新交付，明确属于其它 commit 的交付排除，无 commit 交付只是待核实声称；复核与验证成员配置带当前 confirmedAt/commit，避免跨范围复用旧 provider 私有上下文。旧 doubt 不改写，本次必验证仍重新采集。同确认的完成报告即使任务已暂停也沉淀，但不恢复阶段或继续派发。显式制定新方案创建新成员，后续接手不复活 ended 成员，原历史保留；复核/验证的 closed 或缺少正常完成结束证据的成员也须新建。原生复核/验证成员正常收口保持 idle 供同范围缓存管理；旧版本误结束的正常 completed 叶子成员仅在宿主重新核对身份并准入后经专用命令恢复，failed、取消或已有接续者不能恢复。
+- 真实便宜 Codex 已覆盖首发、普通赞同不授权、探路、方案复核/修改、主子代理、证据 pipeline、停止和原生压缩；首次复核混读旧失败记录产生的 doubt 原样保留。Web 侧面板/412px sheet 截图及本地 main 合并/push 尚须完成独立验收，不能以 RPC 或 Git 模拟单测代替。最终证据及限制以隔离 home 的 `WP-115-REPORT.md` 为准。
+
+开发经验：中文 slash 应使用独立名称校验，不能放宽其它 contribution ID；旧历史是复核材料，不是重演其它角色指令的授权；模型自身工具被拒绝不能直接推翻本轮已有成功证据，矛盾须定位到具体来源与 commit。联接 dist 的检出通过隔离源码覆盖验证必要 core 改动，不构建共享输出。
+
+宿主恢复核对必须使用与 prepare 相同的有效配置，保留 sandbox/approval 强制限制，不能拿请求中的模式别名与原生成员逐字比较。原生 compact 的 turn_ended 早于完整结束，由 compact settled 唯一释放租约；未绑定租约只有在原生工作区可读且所有成员明确停止时才能释放，不能把空 agentId 当作成员失踪，也不能放宽已绑定成员的未知运行保护。
+
+普通回合连续投递用准入代次与原生 turnId 关联租约，异步核对后复查代次及 sourceTurnId，迟到旧结束事件不得释放后继租约或推进新回合；Stop settled 使旧 token 失效。无 token 的重启源恢复不猜当前租约。验证 setup 必须严格校验配置回执，不能把误回复核 JSON 静默剥成空配置；旧报告结论保留溯源，本轮仍按具体原始证据独立判断。
+
 ### WP-112：调度、验证、维护、上下文与统计（调整现有并行包）
 
 - **保留范围/目录**：plugins/vibe-scheduler、plugins/vibe-master/server/{dispatch,wake,master,subscription,memory}、skills/vibe-master、plugins/vibe-{verify,maintain,context,stats}。task/workspace 准入、并发/冲突、证据 pipeline、规则计数、记忆/统计改造继续，毋需推倒。

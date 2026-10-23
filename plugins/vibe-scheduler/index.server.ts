@@ -19,8 +19,8 @@ export default function contribute(server: PluginServerContext) {
   migrateOwner(db, "scheduler");
   const settings = server.registerSettings(schedulerSettings);
 
-  // The SDK handle only reaches plugins through hook/RPC contexts: keep the newest one.
-  let paseo: PaseoApi | null = null;
+  // Recovery and resource admission can run before any new hook or UI RPC.
+  let paseo: PaseoApi | null = server.paseo;
   const remember = (api: PaseoApi) => void (paseo = api);
 
   const runtime = createSchedulerRuntime({

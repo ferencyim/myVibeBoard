@@ -35,6 +35,7 @@ describe("publishEvent", () => {
         requestId: "r",
         workspaceId: "w",
         action: "acquire",
+        operation: "compact",
         role: "master",
         files: [".vibe/**", "PRODUCT-REQUIREMENTS.md"],
         hostLease: true,
@@ -54,6 +55,7 @@ describe("publishEvent", () => {
     expect(events[0]?.payload).toMatchObject({
       files: [".vibe/**", "PRODUCT-REQUIREMENTS.md"],
       hostLease: true,
+      operation: "compact",
     });
     expect(events[1]?.payload).toMatchObject({ retryable: true });
     db.close();

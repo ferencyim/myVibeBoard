@@ -13,6 +13,8 @@ import {
 } from "../server/runtime";
 import { readState, writeState } from "../server/complexity";
 import { createCompactionScheduler } from "../server/compaction";
+import { persistCachePolicy } from "../server/compaction/cache-policy";
+import { isTaskContinuationChain } from "../server/runtime/continuation-chain";
 import {
   createVibeStore,
   createTaskRuntimeCommands,
@@ -230,6 +232,79 @@ describe("task continuation", () => {
 });
 
 describe("workspace runtime wiring", () => {
+  it("accepts a continued result through the real rejected-candidate chain", async () => {
+    const s = setup();
+    const report = vi.fn();
+    const service = createTaskContextService({ ...s, report });
+    writeState(s.db, s.session.id, {
+      windows: [],
+      baselineTs: null,
+      longCompactions: 2,
+      floor: "multi",
+    });
+    s.store.sessions.setComplexity(s.session.id, "long");
+    await service.requestContinuation(s.session, "context", "需要压缩", "接续提示");
+    const request = readEvents(s.db, 0, { types: ["context.continuation_requested"] })[0]!
+      .payload as { requestId: string };
+    const rejected = s.runtime.recordContinuation({
+      fromSessionId: s.session.id,
+      agentId: "rejected",
+      provider: "codex",
+      model: "second",
+      candidateIndex: 1,
+      reason: "context",
+    }).to;
+    const next = s.runtime.recordContinuation({
+      fromSessionId: rejected.id,
+      agentId: "accepted",
+      provider: "codex",
+      model: "third",
+      candidateIndex: 2,
+      reason: "context",
+    }).to;
+    await service.completeContinuation({
+      requestId: request.requestId,
+      workspaceId: "workspace",
+      status: "continued",
+      reason: "候选已接手",
+      sessionId: next.id,
+      agentId: next.agentId,
+    });
+    expect(report).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: next.id }),
+      "会话已接续：候选已接手",
+    );
+    expect(readState(s.db, next.id)).toMatchObject({ longCompactions: 3, floor: "multi" });
+    expect(s.runtime.getSession(next.id)?.previousSessionId).toBe(rejected.id);
+  });
+  it("rejects crossed task identity, stale confirmation and cyclic continuation ancestry", () => {
+    const s = setup();
+    const middle = { ...s.session, id: "middle", previousSessionId: s.session.id };
+    const next = { ...s.session, id: "next", previousSessionId: middle.id };
+    const ancestry = new Map([
+      [middle.id, middle],
+      [s.session.id, s.session],
+    ]);
+    const lookup = (id: string) => ancestry.get(id);
+    expect(isTaskContinuationChain(s.session, next, lookup)).toBe(true);
+    for (const foreign of [
+      { ...middle, workspaceId: "other" },
+      { ...middle, role: "reviewer" as const },
+      { ...middle, confirmedAt: "other-confirmation" },
+      { ...middle, previousSessionId: next.id },
+    ]) {
+      const sessions = new Map([
+        [next.id, next],
+        [middle.id, foreign],
+        [s.session.id, s.session],
+      ]);
+      expect(isTaskContinuationChain(s.session, next, (id) => sessions.get(id))).toBe(false);
+    }
+    expect(isTaskContinuationChain(s.session, s.session, lookup)).toBe(false);
+    expect(
+      isTaskContinuationChain(s.session, { ...next, previousSessionId: "missing" }, lookup),
+    ).toBe(false);
+  });
   it("queues a deduplicated request, freezes dispatch and exposes the missing owner", async () => {
     const s = setup("reviewer");
     const report = vi.fn();
@@ -370,6 +445,112 @@ describe("workspace runtime wiring", () => {
     s.store.sessions.touch(s.session.id, { cacheExpiresAt: new Date(2000).toISOString() });
     expect((await scheduler.tick())[0]).toMatchObject({ action: "skipped", reason: "failed" });
     expect(readEvents(s.db, 0, { types: ["session.compacted"] })).toEqual([]);
+  });
+  it("compacts a managed member by its request time and preserves deduplication on restart", async () => {
+    const s = setup();
+    s.store.sessions.setState(s.session.id, "idle");
+    let requestAt = new Date(0).toISOString();
+    let now = 250_000;
+    const compact = vi.fn(async () => {
+      requestAt = new Date(now).toISOString();
+      return requestAt;
+    });
+    const run = vi.fn();
+    const handoff = vi.fn();
+    const config = { enabled: true, ttlSeconds: {} };
+    const create = () =>
+      createCompactionScheduler({
+        store: s.store,
+        usageDb: s.db,
+        now: () => now,
+        config: () => config,
+        buildContext: () => null,
+        host: {
+          describeIdleAgent: async () => ({ id: "agent", provider: "codex", cwd: "." }),
+          taskMember: async () => ({
+            conversationId: "conversation",
+            memberId: "member",
+            lastRequestAt: requestAt,
+            idle: true,
+            compact,
+          }),
+          run,
+          handoff,
+          archive: vi.fn(),
+        },
+      });
+    // The legacy session timestamp disagrees: the member request is authoritative.
+    s.store.sessions.touch(s.session.id, { cacheExpiresAt: new Date(9_999_999).toISOString() });
+    expect((await create().tick())[0]?.action).toBe("compact");
+    now += 250_000;
+    expect((await create().tick())[0]).toMatchObject({ reason: "already-compacted" });
+    // An actual subsequent request reopens the compaction window.
+    requestAt = new Date(now - 249_000).toISOString();
+    expect((await create().tick())[0]?.action).toBe("compact");
+    config.enabled = false;
+    expect(await create().tick()).toEqual([]);
+    expect(compact).toHaveBeenCalledTimes(2);
+    expect(run).not.toHaveBeenCalled();
+    expect(handoff).not.toHaveBeenCalled();
+  });
+  it("reconciles an interrupted managed compact request without replaying it", async () => {
+    const s = setup();
+    s.store.sessions.setState(s.session.id, "idle");
+    let requestAt = new Date(0).toISOString();
+    let now = 250_000;
+    const compact = vi.fn(async () => {
+      requestAt = new Date(now).toISOString();
+      throw new Error("投递结果未知");
+    });
+    const create = () =>
+      createCompactionScheduler({
+        store: s.store,
+        usageDb: s.db,
+        now: () => now,
+        config: () => ({ enabled: true, ttlSeconds: {} }),
+        buildContext: () => null,
+        host: {
+          describeIdleAgent: async () => ({ id: "agent", provider: "codex", cwd: "." }),
+          taskMember: async () => ({
+            conversationId: "conversation",
+            memberId: "member",
+            lastRequestAt: requestAt,
+            idle: true,
+            compact,
+          }),
+          run: vi.fn(),
+          handoff: vi.fn(),
+          archive: vi.fn(),
+        },
+      });
+    expect((await create().tick())[0]).toMatchObject({ reason: "failed" });
+    now += 250_000;
+    expect((await create().tick())[0]).toMatchObject({ reason: "already-compacted" });
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(readEvents(s.db, 0, { types: ["session.compacted"] })).toEqual([]);
+  });
+  it("publishes the existing compaction settings as a read-only task-panel policy", () => {
+    const s = setup();
+    persistCachePolicy(s.db, { enabled: true, ttlSeconds: {} });
+    const read = () =>
+      JSON.parse(
+        s.db
+          .prepare<{ value: string }>(
+            "SELECT value FROM vibe_meta WHERE key = 'context:compaction_policy'",
+          )
+          .get()!.value,
+      );
+    expect(read()).toMatchObject({
+      enabled: true,
+      ttlSeconds: { claude: 3600, codex: 300 },
+      fallbackTtlSeconds: 300,
+    });
+    persistCachePolicy(s.db, { enabled: false, ttlSeconds: { codex: 900 }, marginSeconds: 45 });
+    expect(read()).toMatchObject({
+      enabled: false,
+      ttlSeconds: { claude: 3600, codex: 900 },
+      marginSeconds: 45,
+    });
   });
   it("resolves a project override through the agent.create injection callback", async () => {
     const s = setup();

@@ -4,10 +4,140 @@ import {
   resolveTaskRoles,
   freezeTaskSubtaskPresets,
   validateTaskSubtaskPresets,
+  findTaskActualPreset,
 } from "../contract/model-roles";
 import type { TaskPlan } from "../contract/task";
 import { findProjectConfig } from "../db/project-config";
 import { setup } from "./helpers";
+
+describe("frozen actual task role overrides", () => {
+  const confirmedAt = "2026-10-23T12:00:00.000Z";
+  const snapshot = (presetId: string) => ({
+    presetId,
+    source: "task" as const,
+    models: [
+      { provider: "codex", model: presetId, thinking: "low", permissionMode: "auto" as const },
+    ],
+    environmentKind: "project-default" as const,
+    runtimeEnv: null,
+    instructions: "冻结的中文指令",
+  });
+  it("finds the newest matching identity and role only within the current confirmation round", () => {
+    const task = {
+      confirmedAt,
+      control: {
+        actualModels: [
+          {
+            confirmedAt,
+            agentId: "agent",
+            memberId: "member",
+            role: "worker",
+            presetSnapshot: snapshot("first"),
+          },
+          {
+            confirmedAt,
+            agentId: "agent",
+            memberId: "member",
+            role: "worker",
+            presetSnapshot: snapshot("latest"),
+          },
+          {
+            confirmedAt: "older-round",
+            agentId: "agent",
+            memberId: "member",
+            role: "worker",
+            presetSnapshot: snapshot("old-round"),
+          },
+          {
+            confirmedAt,
+            agentId: "other",
+            memberId: "member",
+            role: "worker",
+            presetSnapshot: snapshot("other-agent"),
+          },
+          {
+            confirmedAt,
+            agentId: "agent",
+            memberId: "other",
+            role: "worker",
+            presetSnapshot: snapshot("other-member"),
+          },
+          {
+            confirmedAt,
+            agentId: "agent",
+            memberId: "member",
+            role: "reviewer",
+            presetSnapshot: snapshot("other-role"),
+          },
+        ],
+      },
+    };
+    expect(
+      findTaskActualPreset(task, { agentId: "agent", memberId: "member", role: "worker" }),
+    ).toEqual(snapshot("latest"));
+    expect(findTaskActualPreset(task, { agentId: "missing" })).toBeUndefined();
+    expect(findTaskActualPreset({ confirmedAt: null }, { role: "worker" })).toBeUndefined();
+  });
+  it("isolates subtask overrides and optionally requires admission without excluding legacy admitted entries", () => {
+    const task = {
+      confirmedAt,
+      control: {
+        actualModels: [
+          {
+            confirmedAt,
+            role: "subagent",
+            subtaskId: "one",
+            presetSnapshot: snapshot("legacy-admitted"),
+          },
+          {
+            confirmedAt,
+            role: "subagent",
+            subtaskId: "two",
+            admitted: true,
+            presetSnapshot: snapshot("other-subtask"),
+          },
+          {
+            confirmedAt,
+            role: "subagent",
+            subtaskId: "one",
+            admitted: false,
+            presetSnapshot: snapshot("prepared"),
+          },
+        ],
+      },
+    };
+    expect(findTaskActualPreset(task, { role: "subagent", subtaskId: "one" })).toEqual(
+      snapshot("prepared"),
+    );
+    expect(
+      findTaskActualPreset(task, { role: "subagent", subtaskId: "one", admittedOnly: true }),
+    ).toEqual(snapshot("legacy-admitted"));
+    expect(
+      findTaskActualPreset(task, { role: "subagent", subtaskId: "two", admittedOnly: true }),
+    ).toEqual(snapshot("other-subtask"));
+    expect(findTaskActualPreset(task, { subtaskId: "missing" })).toBeUndefined();
+  });
+  it("skips missing snapshots but rejects a malformed matching snapshot instead of falling back", () => {
+    const task = {
+      confirmedAt: null,
+      control: {
+        actualModels: [
+          { confirmedAt: null, role: "planner", presetSnapshot: snapshot("frozen") },
+          null,
+          { confirmedAt: null, role: "planner", presetId: "legacy" },
+        ] as unknown[],
+      },
+    };
+    expect(findTaskActualPreset(task, { role: "planner" })).toEqual(snapshot("frozen"));
+    task.control.actualModels.push({
+      confirmedAt: null,
+      role: "planner",
+      presetSnapshot: { presetId: "broken" },
+    });
+    expect(() => findTaskActualPreset(task, { role: "planner" })).toThrow(/预设快照无效/);
+    expect(findTaskActualPreset(task, { role: "worker" })).toBeUndefined();
+  });
+});
 
 describe("task roles and native project extensions", () => {
   it("resolves task -> project -> global, preserving candidate order and execution inputs", () => {

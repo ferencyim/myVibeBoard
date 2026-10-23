@@ -142,6 +142,10 @@ describe("workspace task commands", () => {
       rolesSnapshot: null,
       subtaskRuns: [],
       summary: "",
+      conversationId: null,
+      planSource: null,
+      roleSelections: null,
+      control: null,
     });
     expect(() => s.tasks.create({ workspaceId: "workspace-1", anchorAgentId: "other" })).toThrow(
       TaskCommandError,

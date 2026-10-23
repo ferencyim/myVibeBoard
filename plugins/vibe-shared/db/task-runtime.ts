@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { SessionRoleSchema } from "../contract/enums";
+import { EVENT_PAYLOADS } from "../contract/events";
 import { AgentSessionSchema, type AgentSession } from "../contract/model";
 import { publishEvent } from "./events";
 import { decodeRow } from "./rows";
@@ -27,6 +28,12 @@ export interface ContinueTaskSessionInput {
   thinking?: string;
   candidateIndex: number;
   reason: string;
+}
+export interface ResumeCompletedTaskSessionInput {
+  workspaceId: string;
+  agentId: string;
+  role: RegisterTaskSessionInput["role"];
+  confirmedAt: string | null;
 }
 
 /** Additive workspace/session commands; the legacy card session API remains unchanged. */
@@ -95,6 +102,84 @@ export function createTaskRuntimeCommands(db: VibeDb, options: { now?: () => Dat
       ),
     findSessionByAgent,
     registerSession,
+    /** Host validates canonical membership and admits the new turn before calling this repair. */
+    resumeCompletedSession(
+      sessionId: string,
+      input: ResumeCompletedTaskSessionInput,
+    ): AgentSession {
+      const parsed = z
+        .object({
+          workspaceId: z.string().min(1),
+          agentId: z.string().min(1),
+          role: SessionRoleSchema,
+          confirmedAt: z.string().nullable(),
+        })
+        .strict()
+        .parse(input);
+      return db.immediate(() => {
+        const session = requireSession(sessionId);
+        if (
+          session.cardId !== null ||
+          session.workspaceId !== parsed.workspaceId ||
+          session.agentId !== parsed.agentId ||
+          session.role !== parsed.role
+        )
+          throw new Error("仅可恢复同一任务、原生 agent 和角色的正常完成会话");
+        const task = db
+          .prepare<{ conversation_id: string | null; confirmed_at: string | null }>(
+            "SELECT conversation_id,confirmed_at FROM task WHERE workspace_id = ?",
+          )
+          .get(parsed.workspaceId);
+        if (!task?.conversation_id || task.confirmed_at !== parsed.confirmedAt)
+          throw new Error("任务会话绑定或确认已变化，拒绝恢复旧运行");
+        if (db.prepare("SELECT id FROM agent_session WHERE previous_session_id = ?").get(sessionId))
+          throw new Error("会话已有接续替代者，不能恢复旧运行");
+        const ended = db
+          .prepare<{ payload_json: string }>(
+            "SELECT payload_json FROM vibe_event WHERE type = 'session.ended' AND json_extract(payload_json, '$.sessionId') = ? ORDER BY seq DESC LIMIT 1",
+          )
+          .get(sessionId);
+        const event = EVENT_PAYLOADS["session.ended"].safeParse(
+          ended ? JSON.parse(ended.payload_json) : undefined,
+        );
+        if (
+          !event.success ||
+          event.data.agentId !== parsed.agentId ||
+          event.data.outcome !== "completed"
+        )
+          throw new Error("缺少最后一次正常完成的会话结束证据，拒绝恢复");
+        if (
+          ["idle", "working"].includes(session.state) &&
+          session.confirmedAt === parsed.confirmedAt
+        )
+          return session;
+        if (session.state !== "ended" || !session.endedAt)
+          throw new Error("仅可恢复已正常结束的叶子任务会话");
+        const result = db
+          .prepare(
+            "UPDATE agent_session SET state = 'idle', ended_at = NULL, confirmed_at = ?, last_activity_at = ?, waiting_since = NULL, pending_question_json = NULL, stalled_since = NULL WHERE id = ? AND card_id IS NULL AND workspace_id = ? AND agent_id = ? AND role = ? AND state = 'ended' AND NOT EXISTS (SELECT 1 FROM agent_session replacement WHERE replacement.previous_session_id = agent_session.id)",
+          )
+          .run(
+            parsed.confirmedAt,
+            now().toISOString(),
+            sessionId,
+            parsed.workspaceId,
+            parsed.agentId,
+            parsed.role,
+          );
+        if (result.changes !== 1) throw new Error("会话状态已变化，请重新核对后恢复");
+        publishEvent(
+          db,
+          {
+            type: "task.updated",
+            projectId: session.projectId ?? null,
+            payload: { workspaceId: parsed.workspaceId, fields: ["sessions"] },
+          },
+          now,
+        );
+        return requireSession(sessionId);
+      });
+    },
     listSessions(filter: { workspaceId?: string; projectId?: string } = {}): AgentSession[] {
       let rows: Record<string, unknown>[];
       if (filter.workspaceId !== undefined) {

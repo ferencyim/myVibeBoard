@@ -544,4 +544,28 @@ CREATE INDEX idx_agent_session_workspace ON agent_session(workspace_id,role);
 CREATE UNIQUE INDEX idx_agent_session_continuation ON agent_session(previous_session_id) WHERE previous_session_id IS NOT NULL;
 `,
   },
+  {
+    version: 13,
+    name: "task_conversation_artifacts",
+    sql: `
+ALTER TABLE task ADD COLUMN conversation_id TEXT CHECK (conversation_id IS NULL OR length(trim(conversation_id)) > 0);
+CREATE UNIQUE INDEX idx_task_conversation ON task(conversation_id) WHERE conversation_id IS NOT NULL;
+ALTER TABLE task ADD COLUMN plan_source_json TEXT CHECK (plan_source_json IS NULL OR json_valid(plan_source_json));
+ALTER TABLE task ADD COLUMN role_selections_json TEXT CHECK (role_selections_json IS NULL OR json_valid(role_selections_json));
+ALTER TABLE task ADD COLUMN control_json TEXT CHECK (control_json IS NULL OR json_valid(control_json));
+CREATE TABLE task_artifact (
+  workspace_id TEXT NOT NULL REFERENCES task(workspace_id),
+  kind TEXT NOT NULL CHECK (kind IN ('plan','scout','plan_review','delivery','review','verification','git')),
+  source_key TEXT NOT NULL CHECK (length(trim(source_key)) > 0),
+  confirmed_at TEXT,
+  source_json TEXT NOT NULL CHECK (json_valid(source_json)),
+  summary TEXT NOT NULL,
+  data_json TEXT CHECK (data_json IS NULL OR json_valid(data_json)),
+  created_at TEXT NOT NULL,
+  published_json TEXT CHECK (published_json IS NULL OR json_valid(published_json)),
+  PRIMARY KEY (workspace_id, kind, source_key)
+);
+CREATE INDEX idx_task_artifact_history ON task_artifact(workspace_id, created_at);
+`,
+  },
 ];

@@ -110,6 +110,7 @@ import {
 import { publishEvent } from "./events";
 import { findProjectConfig } from "./project-config";
 import { createTaskCommands } from "./tasks";
+import { createTaskArtifactCommands } from "./task-artifacts";
 import { TASK_PLAN_PROMPT } from "../contract/task";
 import { decodeRow, decodeRows } from "./rows";
 import type { Row, SqlParam, VibeDb } from "./sqlite";
@@ -2451,6 +2452,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     projects,
     projectConfigs,
     tasks,
+    taskArtifacts: createTaskArtifactCommands(db, { now }),
     presets,
     tags,
     cards,

@@ -13,6 +13,7 @@ import {
 import type { ContextSettingsValues } from "../../shared/settings/context";
 import { defaultPrompts, type PromptResolver } from "../prompts";
 import { continuationFailure } from "./continuation";
+import { isTaskContinuationChain } from "./continuation-chain";
 import { readState, writeState } from "../complexity";
 import { createTaskWatchdog } from "./watchdog";
 
@@ -155,7 +156,11 @@ export function createTaskContextService(options: {
       if (task && task.confirmedAt !== payload.confirmedAt) return;
       if (input.status === "continued") {
         const next = input.sessionId ? runtime.getSession(input.sessionId) : undefined;
-        if (!next || next.previousSessionId !== old.id || next.agentId !== input.agentId) {
+        if (
+          !next ||
+          next.agentId !== input.agentId ||
+          !isTaskContinuationChain(old, next, runtime.getSession)
+        ) {
           await report(old, "接续结果缺少实际模型或原生会话关联，请核对任务流程插件。");
           return;
         }

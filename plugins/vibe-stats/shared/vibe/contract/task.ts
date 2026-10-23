@@ -1,7 +1,7 @@
 // GENERATED FROM plugins/vibe-shared — DO NOT EDIT (run: node scripts/vibe/sync-shared.mjs)
 // Workspace task orchestration (WP-110). Native messages and project identity stay in Paseo.
 import { z } from "zod";
-import { TaskRoleSnapshotSchema } from "./model-roles";
+import { TaskRoleSelectionsSchema, TaskRoleSnapshotSchema } from "./model-roles";
 import type { PromptDef } from "./prompts";
 import { subtaskListError } from "./subtasks";
 
@@ -118,6 +118,73 @@ export const TaskSubtaskRunSchema = z
     }
   });
 export type TaskSubtaskRun = z.infer<typeof TaskSubtaskRunSchema>;
+/** Public conversation locator. Message contents remain in the host's durable history. */
+export const TaskPlanSourceSchema = z
+  .object({
+    conversationId: Text,
+    sourceKey: Text,
+    memberId: Text.optional(),
+    backendAgentId: Text.optional(),
+    sourceTurnId: Text.optional(),
+    epoch: z.string().optional(),
+    seq: z.number().int().nonnegative().optional(),
+    messageId: Text.optional(),
+    sourceEpoch: z.string().optional(),
+    sourceSeq: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+export type TaskPlanSource = z.infer<typeof TaskPlanSourceSchema>;
+export const TaskControlSchema = z.record(z.string(), z.unknown());
+export type TaskControl = z.infer<typeof TaskControlSchema>;
+export const TaskActionSchema = z.enum([
+  "plan",
+  "review_plan",
+  "execute",
+  "review",
+  "verify",
+  "accept",
+  "stop",
+  "reject",
+]);
+export type TaskAction = z.infer<typeof TaskActionSchema>;
+export const TaskActionInputSchema = z
+  .object({
+    workspaceId: Text,
+    conversationId: Text,
+    requestId: Text,
+    action: TaskActionSchema,
+    source: TaskPlanSourceSchema.optional(),
+    reason: z.string().optional(),
+  })
+  .strict();
+export type TaskActionInput = z.infer<typeof TaskActionInputSchema>;
+
+export const TASK_ARTIFACT_KINDS = [
+  "plan",
+  "scout",
+  "plan_review",
+  "delivery",
+  "review",
+  "verification",
+  "git",
+] as const;
+export const TaskArtifactKindSchema = z.enum(TASK_ARTIFACT_KINDS);
+export type TaskArtifactKind = z.infer<typeof TaskArtifactKindSchema>;
+export const TaskArtifactSchema = z.object({
+  workspaceId: Text,
+  kind: TaskArtifactKindSchema,
+  sourceKey: Text,
+  confirmedAt: z.iso.datetime().nullable(),
+  source: TaskPlanSourceSchema,
+  summary: z.string(),
+  data: z.record(z.string(), z.unknown()).nullable(),
+  createdAt: z.iso.datetime(),
+  published: z
+    .object({ epoch: z.string(), seq: z.number().int().nonnegative() })
+    .strict()
+    .nullable(),
+});
+export type TaskArtifact = z.infer<typeof TaskArtifactSchema>;
 export const TaskSchema = z.object({
   workspaceId: Text,
   anchorAgentId: Text,
@@ -127,6 +194,10 @@ export const TaskSchema = z.object({
   rolesSnapshot: TaskRoleSnapshotSchema.nullable(),
   subtaskRuns: z.array(TaskSubtaskRunSchema),
   summary: z.string(),
+  conversationId: Text.nullable().optional(),
+  planSource: TaskPlanSourceSchema.nullable().optional(),
+  roleSelections: TaskRoleSelectionsSchema.nullable().optional(),
+  control: TaskControlSchema.nullable().optional(),
 });
 export type Task = z.infer<typeof TaskSchema>;
 
@@ -137,7 +208,7 @@ export const TASK_PLAN_PROMPT: PromptDef = {
   role: "planner",
   title: "任务方案固定格式",
   description: "任务确认前必须校验的完整方案段。",
-  whenSent: "规划 anchor 输出可执行方案时",
+  whenSent: "当前规划成员输出可执行方案时",
   audience: "规划 agent",
   defaultText: "",
   fixedSuffix:
