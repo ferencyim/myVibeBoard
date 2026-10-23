@@ -191,6 +191,7 @@ export function toPreset(r: RawRow): Preset {
     provider: str(r.v.provider),
     model: str(r.v.model),
     thinking: str(r.v.thinking),
+    models: json<Preset["models"]>(r.v.models_json, undefined),
     permissionMode: str(r.v.permission_mode, "accept-edits") as Preset["permissionMode"],
     environmentKind: str(r.v.environment_kind, "project-default") as Preset["environmentKind"],
     baseBranch: strOrNull(r.v.base_branch),

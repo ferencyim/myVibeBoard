@@ -60,6 +60,24 @@ describe("local vibe-board RPC", () => {
     expect((await call(rpc, "vibe.attachments.list", { card: "ALP-1" })).attachments).toEqual([]);
   });
 
+  it("keeps the ordered model candidates when reading synced presets offline", async () => {
+    const daemon = createFakeDaemon();
+    seedBoard(daemon);
+    const models = [
+      { provider: "claude", model: "sonnet", thinking: "high", permissionMode: "auto" },
+      { provider: "codex", model: "gpt-5.4", thinking: "medium", permissionMode: "accept-edits" },
+    ];
+    daemon.publish("preset", "PR1", { models_json: JSON.stringify(models) });
+    const local = LocalReplica.open(createTestDb());
+    await createSyncEngine({
+      replica: local,
+      invoke: (method, input) => daemon.invoke(method, input),
+    }).run();
+    expect((await call(createLocalVibeRpc(local), "vibe.presets.list")).presets[0].models).toEqual(
+      models,
+    );
+  });
+
   it("filters, orders and truncates the card list", async () => {
     expect(
       (await call(rpc, "vibe.cards.list", { column: "todo" })).cards.map((c: any) => c.key),
