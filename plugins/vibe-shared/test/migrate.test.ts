@@ -48,6 +48,7 @@ const EXPECTED_TABLES = [
   "usage_cursor",
   "maintenance_rule",
   "maintenance_run",
+  "maintenance_task",
   "work_counter",
   "schema_version",
 ];

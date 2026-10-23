@@ -5,11 +5,16 @@
 // VIBE_ROLE=verifier gives vibe-board only read tools and comment.
 
 import path from "node:path";
-import type { AgentPermissionRequest, AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
+import type {
+  AgentPermissionRequest,
+  AgentPermissionResponse,
+} from "@getpaseo/protocol/agent-types";
 
 export interface PolicyContext {
   /** The only place a verifier may write (verdict/config files, scratch). */
   outputDir: string;
+  /** Native task helpers inspect through read/search tools; collectors own shell execution. */
+  denyShell?: boolean;
 }
 
 const MUTATING_SHELL = [
@@ -50,19 +55,35 @@ export function decideVerifierPermission(
     case "write":
       return inside(ctx.outputDir, detail.filePath)
         ? ALLOW
-        : deny(`Verifiers are read-only. You may only write inside ${ctx.outputDir}.`);
+        : deny(`验证会话为只读；只能在证据目录 ${ctx.outputDir} 内写入。`);
     case "shell":
-      return isMutatingShell(detail.command)
-        ? deny("Verifiers are read-only: this command would change files or repository state.")
+      return ctx.denyShell || isMutatingShell(detail.command)
+        ? deny("验证会话为只读，运行命令交给证据采集器。")
         : ALLOW;
     default:
       break;
   }
   if (request.kind === "question" || request.kind === "plan" || request.kind === "mode") {
-    return deny("There is no user to ask. Decide on your own and finish the task.");
+    return deny("请依据现有方案与证据完成独立判断；无法判断时报告存疑。");
   }
   // Unknown tool kinds (e.g. MCP tools): allow only the board's read/comment tools.
   return /vibe_(projects|list|show|comment)\b/.test(request.name)
     ? ALLOW
-    : deny("Verifiers are read-only: this tool is not allowed.");
+    : deny("验证会话为只读，禁止使用此工具。");
+}
+
+/** Restored native helper tabs remain read-only after their verification has ended. */
+export function restoredVerifierPolicy(
+  session:
+    | { id: string; cardId: string | null; workspaceId: string | null; role: string }
+    | undefined,
+  root: string,
+): PolicyContext | undefined {
+  if (
+    !session?.workspaceId ||
+    session.cardId !== null ||
+    !["reviewer", "verifier"].includes(session.role)
+  )
+    return;
+  return { outputDir: path.join(root, "readonly", session.id), denyShell: true };
 }

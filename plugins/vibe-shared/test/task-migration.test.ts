@@ -11,6 +11,7 @@ import {
   migrateOwner,
   openVibeDb,
   type VibeDb,
+  createTaskRuntimeCommands,
 } from "../db";
 import { openTestDb } from "./helpers";
 
@@ -38,7 +39,15 @@ function legacyFixture(db: VibeDb): void {
     "CREATE TABLE schema_version (owner TEXT NOT NULL, version INTEGER NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY(owner,version))",
   );
   for (const owner of OWNERS) {
-    for (const migration of MIGRATIONS[owner].filter((m) => owner !== "core" || m.version <= 10)) {
+    const historicalVersion = {
+      core: 10,
+      verify: 2,
+      context: 1,
+      scheduler: 1,
+      stats: 1,
+      maintain: 1,
+    }[owner];
+    for (const migration of MIGRATIONS[owner].filter((m) => m.version <= historicalVersion)) {
       if (migration.foreignKeysOff) db.exec("PRAGMA foreign_keys = OFF");
       db.immediate(() => {
         db.exec(migration.sql);
@@ -152,10 +161,22 @@ function legacyFixture(db: VibeDb): void {
 }
 
 function snapshot(db: VibeDb) {
+  const addedColumns: Record<string, string[]> = {
+    usage_event: ["project_id", "workspace_id", "role", "agent_id"],
+    device_lease: ["workspace_id"],
+    maintenance_run: ["workspace_ids_json"],
+  };
   return Object.fromEntries(
     retained.map((table) => [
       table,
-      db.prepare("SELECT * FROM " + table + " ORDER BY rowid").all(),
+      db
+        .prepare("SELECT * FROM " + table + " ORDER BY rowid")
+        .all()
+        .map((row) =>
+          Object.fromEntries(
+            Object.entries(row).filter(([key]) => !addedColumns[table]?.includes(key)),
+          ),
+        ),
     ]),
   );
 }
@@ -179,7 +200,7 @@ describe("WP-110 task migration", () => {
     const counts = maintenanceCounts(db);
     expect(before.project).toHaveLength(7);
     expect(db.prepare("SELECT COUNT(*) AS n FROM card").get()).toEqual({ n: 3 });
-    expect(migrateOwner(db, "core")).toMatchObject({ from: 10, to: 11, applied: [11] });
+    expect(migrateOwner(db, "core")).toMatchObject({ from: 10, to: 12, applied: [11, 12] });
     expect(snapshot(db)).toEqual(before);
     expect(maintenanceCounts(db)).toEqual(counts);
     expect(db.prepare("SELECT COUNT(*) AS n FROM task").get()).toEqual({ n: 0 });
@@ -198,6 +219,7 @@ describe("WP-110 task migration", () => {
     backup.close();
     db.close();
     const restarted = openVibeDb({ path });
+    migrateAll(restarted);
     expect(migrateAll(restarted).every((r) => r.applied.length === 0)).toBe(true);
     expect(snapshot(restarted)).toEqual(before);
     expect(backupFiles(path)).toEqual(backups);
@@ -266,6 +288,122 @@ describe("WP-110 task migration", () => {
     migrateAll(db);
     expect(db.prepare("SELECT COUNT(*) AS n FROM task").get()).toEqual({ n: 0 });
     expect(backupFiles(path)).toEqual([]);
+    db.close();
+  });
+});
+
+describe("WP-112 retained runtime migration", () => {
+  it("preserves old verification evidence and foreign keys while adding workspace evidence", () => {
+    const { db } = openTestDb();
+    legacyFixture(db);
+    db.exec(
+      "INSERT INTO verification(id,card_id,commit_hash,mode,started_at) VALUES ('v','c1','commit','evidence','now'); INSERT INTO verification_item(id,verification_id,check_text) VALUES ('i','v','验证'); INSERT INTO evidence_file(id,verification_id,item_id,kind,path,sha256,captured_at,commit_hash) VALUES ('e','v','i','log','<evidence>','hash','now','commit')",
+    );
+    const evidence = db.prepare("SELECT * FROM evidence_file").all();
+    const items = db.prepare("SELECT * FROM verification_item").all();
+    migrateAll(db);
+    expect(db.prepare("SELECT * FROM evidence_file").all()).toEqual(evidence);
+    expect(db.prepare("SELECT * FROM verification_item").all()).toEqual(items);
+    expect(db.prepare("SELECT id,card_id,project_id FROM verification").get()).toEqual({
+      id: "v",
+      card_id: "c1",
+      project_id: "p1",
+    });
+    expect(db.prepare("SELECT project_id FROM usage_event ORDER BY id").all()).toEqual([
+      { project_id: "p1" },
+      { project_id: "p2" },
+      { project_id: "p3" },
+    ]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(db.prepare("PRAGMA foreign_key_list(verification_item)").all()).toContainEqual(
+      expect.objectContaining({
+        table: "verification",
+        from: "verification_id",
+        to: "id",
+        on_delete: "CASCADE",
+      }),
+    );
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO evidence_file(id,verification_id,kind,path,sha256,captured_at,commit_hash) VALUES ('bad','missing','log','x','x','x','x')",
+        )
+        .run(),
+    ).toThrow(/FOREIGN KEY/);
+    db.exec(
+      "INSERT INTO task(workspace_id,anchor_agent_id) VALUES ('w','a'); INSERT INTO verification(id,workspace_id,confirmed_at,project_id,commit_hash,mode,started_at) VALUES ('tv','w','confirmed','p1','commit','evidence','now')",
+    );
+    expect(db.prepare("SELECT card_id FROM verification WHERE id='tv'").get()).toEqual({
+      card_id: null,
+    });
+    db.prepare("DELETE FROM verification WHERE id='v'").run();
+    expect(db.prepare("SELECT * FROM verification_item").all()).toEqual([]);
+    expect(db.prepare("SELECT * FROM evidence_file").all()).toEqual([]);
+    db.close();
+  });
+  it("registers all task roles and atomically deduplicates continuations with actual model attribution", () => {
+    const { db } = openTestDb();
+    migrateAll(db);
+    const runtime = createTaskRuntimeCommands(db);
+    const old = runtime.registerSession({
+      workspaceId: "w",
+      projectId: "p",
+      agentId: "a",
+      role: "plan_reviewer",
+      provider: "codex",
+      model: "first",
+      candidateIndex: 0,
+      confirmedAt: "confirmed",
+    });
+    expect(
+      runtime.registerSession({
+        workspaceId: "w",
+        agentId: "a",
+        role: "plan_reviewer",
+        provider: "codex",
+        model: "first",
+        candidateIndex: 0,
+      }).id,
+    ).toBe(old.id);
+    const input = {
+      fromSessionId: old.id,
+      agentId: "b",
+      provider: "claude",
+      model: "next",
+      thinking: "high",
+      candidateIndex: 1,
+      reason: "继续",
+    };
+    const next = runtime.recordContinuation(input);
+    expect(next.from.state).toBe("ended");
+    expect(next.to).toMatchObject({
+      workspaceId: "w",
+      projectId: "p",
+      previousSessionId: old.id,
+      confirmedAt: "confirmed",
+    });
+    expect(runtime.recordContinuation(input).to.id).toBe(next.to.id);
+    expect(runtime.getContinuation(old.id)?.id).toBe(next.to.id);
+    expect(() => runtime.recordContinuation({ ...input, agentId: "duplicate" })).toThrow(
+      "请停止重复创建",
+    );
+    expect(runtime.findSessionByAgent("duplicate")).toBeUndefined();
+    expect(runtime.getSelection(next.to.id)).toEqual({
+      candidateIndex: 1,
+      actualModel: { provider: "claude", model: "next", thinking: "high" },
+    });
+    for (const role of ["scout", "reviewer"] as const)
+      expect(
+        runtime.registerSession({
+          workspaceId: "w",
+          agentId: role,
+          role,
+          provider: "codex",
+          model: "m",
+          candidateIndex: 0,
+        }).role,
+      ).toBe(role);
+    expect(runtime.listSessions({ workspaceId: "w" })).toHaveLength(4);
     db.close();
   });
 });

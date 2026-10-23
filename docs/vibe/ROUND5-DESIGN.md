@@ -183,6 +183,23 @@ WP-113 仍只做**新任务首消息 outbox**：保存 host、projectId、稳定
 - **单测**：确认准入/FIFO/总 agent 开关、所有成员计数、并发=1 无死锁、跨任务/同 worktree 写冲突；必验证、fail/doubt/退回上限/commit 失效；维护全模式先方案确认/去重计数；来源、证据索引与 usage 重放不重复。
 - **隔离实测**：三任务在并发=1/2、文件和设备争用下正确排队；执行/复核/验证发言在同一群聊，Web 截图/日志与 Android 至少一项真实证据；验证失败修复再验。Git/性能维护只出方案，核对记忆/需求整理、统计与通知；无设备项明示未测。
 
+#### WP-112 已实现部分（第二版基线，2026-10-23 合入）
+
+**WP-112 接轨边界与验收状态（2026-10-23，待 WP-111 联调）**
+
+- 新运行以 task/workspace 为入口；旧看板 UI 留给 WP-114。调度的资源请求/结果使用 `scheduler.task_resource_request/result`，首个 worker 准入使用 `scheduler.task_admitted`；总 agent 仅回答 `scheduler.task_dispatch_wanted`，不写执行授权。主代理让出名额前必须确认原生回合已停止，再次运行须重新准入。
+- WP-111 编排 owner 需消费 `task.fix_requested`、`task.stop_requested` 和 `context.continuation_requested`，通过同一调度准入启动或接续；停止回复 `task.stop_result`，接续回复 `context.continuation_result`。这些事件是控制请求，不转发普通用户消息。未接入或停止结果不明时暂停并报告，不另起未登记写入者。
+- 验证结果复用 verification/item/evidence，新增 workspace 与本轮 confirmedAt 关联；旧 card 验证类型保持原状。验收与 Git 收尾须读取本轮完成且 pass 的验证，并重新核对已验证 commit。复核严重问题、验证 fail 共用退回上限；doubt 或代码变化不能作为用户验收依据。
+- WP-111 确认入口须先调用 `freezeTaskSubtaskPresets` 和 `validateTaskSubtaskPresets`，将子任务自定预设冻结在角色快照 `subtaskPresets` 中；公共 task 命令仍由 WP-110/111 owner 维护。调度在首个 worker 准入前拒绝缺失或不匹配的快照，运行时不读取可变预设。
+- 全角色运行须经新增共享 task-runtime 命令登记 project/workspace、角色、实际 provider/model 和候选位置，接续使用独立原生会话；统计只做日志幂等索引，不重复计量。维护任务首次消息和补充发现均回到规划，清除旧确认后等待用户再次 `/执行`。
+- 当前宿主仅提供事后的 turn_started 通知，无法原子拦住已打开 tab 的新一轮运行。调度检测后冻结并取消只能缩小窗口；WP-111 需落实回合开始前的准入或等效工具权限边界。不得将事后检测宣称为已满足写锁不变量。共享 SESSION_ROLES 新增探路、方案复核、代码复核后，WP-111 的旧会话角色标签也需同步补齐。
+
+**WP-112 本包检查记录**：共享与六个本包插件 typecheck 通过，共享副本检查覆盖 17 个目标。复核修正后，vibe-board/vibe-context/vibe-shared 的 `npx vitest run` 分别通过 286/110/382 项，三者 typecheck 与共享副本检查通过；保留复核者补齐的三种旧会话角色标签。旧卡冷交接测试显式启用历史路径，并修正旧卡携带 workspaceId 时误入新任务 owner 的判断；新任务冷交接后仍从下一候选继续有回归覆盖，生产默认不恢复旧卡的设计不变。根 lint/format 默认排除 Vibe，已取消排除进行定向检查；本次三个代码文件的 lint 有 17 项诊断，与修正前相同（旧测试 any 与已超限的调度函数复杂度），未扩大重构范围。旧设置页和采集器基线诊断保留。
+
+隔离 daemon 七插件加载成功；三个合成确认任务在真实原生 workspace 中通过并发 1/2、FIFO、主子让出、文件与设备租约争用检查。真实 Node/HTTP 与 Web 浏览器采集器已取得日志、宽窄屏截图和 GIF（隔离 fixture 页面），维护规则仅创建未确认规划，合成用量重扫不重复。Claude 回合超时、Codex 报 workspace routing discovery failed，真实模型成功回合、失败修复完整链、需求文档真实单文件提交和 WP-111 的 Git 收尾尚未实测；Android 缺少采集工具，未实测，不以 Web 窄屏图替代。
+
+开发验证经验：旧迁移 fixture 应固定它要验证的版本边界，不把“倒数一条迁移”当作固定功能迁移；共享源只由 sync-shared 复制，测试启动兼容 Windows PowerShell 5.1 并显式关闭 relay。类型检查不能替代隔离 daemon 的实际插件加载；provider 的 available 仅证明二进制探测，不能当作真实模型回合通过的证据。资源暂满属于排队，停止或回执不明才需要冻结并保留资源。
+
 ### WP-113：[core] 手机首消息 outbox（调整现有并行包）
 
 - **保留范围/目录**：packages/app/src/{composer,runtime,vibe,plugins} 与必要启动/通知入口；正文/附件持久化、重连、幂等/回执逻辑继续，仍只首消息，不扩展离线产品范围。

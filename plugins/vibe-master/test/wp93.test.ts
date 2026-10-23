@@ -46,8 +46,10 @@ function runtimeFor(
 ) {
   const clock = new ManualClock();
   const fake = fakePaseo(script);
-  const settings = defaultSettings(over);
+  const settings = defaultSettings({ permissionMode: "auto", ...over });
   const runtime = createMasterRuntime({
+    admitMaster: async () => async () => undefined,
+    admitMemory: async () => async () => undefined,
     db: board.db,
     store: board.store,
     getPaseo: () => fake.paseo,
@@ -62,7 +64,11 @@ function runtimeFor(
 
 describe("settings upgrade", () => {
   it("fills every new field with its default for values stored by an older version", () => {
-    const old = masterSettings.schema.parse({ enabled: true, provider: "codex", sweepOnStart: false });
+    const old = masterSettings.schema.parse({
+      enabled: true,
+      provider: "codex",
+      sweepOnStart: false,
+    });
     expect(old).toMatchObject({
       provider: "codex",
       sweepOnStart: false,
@@ -92,10 +98,14 @@ describe("settings upgrade", () => {
 
 describe("templates", () => {
   it("renders {{placeholders}} once, blanks unknown ones and reports them", () => {
-    expect(renderPromptTemplate("A {{x}} B {{ y.z }} C {{nope}}", { x: "1", "y.z": "2" })).toBe("A 1 B 2 C ");
+    expect(renderPromptTemplate("A {{x}} B {{ y.z }} C {{nope}}", { x: "1", "y.z": "2" })).toBe(
+      "A 1 B 2 C ",
+    );
     expect(renderPromptTemplate("{{x}}", { x: "$&$1" })).toBe("$&$1");
     const done = masterPromptDefs().find((d) => d.key === "master.wake.card_done")!;
-    expect(unknownPromptPlaceholders("{{card.key}} {{typo}} {{typo}}", done.placeholders ?? [])).toEqual(["typo"]);
+    expect(
+      unknownPromptPlaceholders("{{card.key}} {{typo}} {{typo}}", done.placeholders ?? []),
+    ).toEqual(["typo"]);
   });
 
   it("keeps the reply-format section whatever the owner wrote", () => {
@@ -104,7 +114,10 @@ describe("templates", () => {
     const input = { projectBlock: "PROJ", card, events: [], verification: "", memory: "" };
     board.store.prompts.register(masterPromptDefs());
     board.store.prompts.setOverride("master.wake.card_done", "Look at {{card.key}} only");
-    const custom = buildDoneMessage({ ...input, prompts: { resolve: board.store.prompts.resolve } });
+    const custom = buildDoneMessage({
+      ...input,
+      prompts: { resolve: board.store.prompts.resolve },
+    });
     expect(custom.startsWith(`Look at ${card.key} only\n\n`)).toBe(true);
     expect(custom.endsWith("只回复 card_done JSON 对象。")).toBe(true);
   });
@@ -113,9 +126,15 @@ describe("templates", () => {
     const board = setupBoard();
     const card = board.draft("Done soon");
     const input = { projectBlock: "P", card, events: [], verification: "", memory: "" };
-    const off = buildDoneMessage({ ...input, prompts: defaultPromptPort({ maintainRequirements: false }) });
+    const off = buildDoneMessage({
+      ...input,
+      prompts: defaultPromptPort({ maintainRequirements: false }),
+    });
     expect(off).not.toContain("requirementsUpdate");
-    const on = buildDoneMessage({ ...input, prompts: defaultPromptPort({ maintainRequirements: true }) });
+    const on = buildDoneMessage({
+      ...input,
+      prompts: defaultPromptPort({ maintainRequirements: true }),
+    });
     expect(on).toContain("requirementsUpdate");
     expect(on.endsWith("只回复 card_done JSON 对象。")).toBe(true);
   });
@@ -131,18 +150,32 @@ describe("templates", () => {
 
   it("appends the owner's rule supplement after the static rules", () => {
     expect(composeRules("RULES", "  ")).toBe("RULES");
-    expect(composeRules("RULES", " be brief ")).toContain("RULES\n\n## Owner supplement (from settings)\n\nbe brief");
+    expect(composeRules("RULES", " be brief ")).toContain(
+      "RULES\n\n## Owner supplement (from settings)\n\nbe brief",
+    );
   });
 });
 
 describe("project context", () => {
   it("adds the description, every project type and the requirements excerpt (truncated with a note)", () => {
     const board = setupBoard();
-    board.store.projects.update(board.project.id, { description: "A todo app for cats.", projectTypes: ["web", "android"] });
-    writeFileSync(join(board.repoPath, "PRODUCT-REQUIREMENTS.md"), `# Needs\n${"line\n".repeat(2000)}`);
+    board.store.projects.update(board.project.id, {
+      description: "A todo app for cats.",
+      projectTypes: ["web", "android"],
+    });
+    writeFileSync(
+      join(board.repoPath, "PRODUCT-REQUIREMENTS.md"),
+      `# Needs\n${"line\n".repeat(2000)}`,
+    );
     const project = board.store.projects.get(board.project.id)!;
     const block = (chars?: number) =>
-      buildProjectBlock({ project, tags: [], presets: [], openCards: [], requirementsChars: chars });
+      buildProjectBlock({
+        project,
+        tags: [],
+        presets: [],
+        openCards: [],
+        requirementsChars: chars,
+      });
 
     const full = block(100_000);
     expect(full).toContain("类型 web+android");
@@ -162,9 +195,16 @@ describe("project context", () => {
   it("omits the block when the document is missing or the path escapes the repository", () => {
     const board = setupBoard();
     const project = board.store.projects.get(board.project.id)!;
-    expect(buildProjectBlock({ project, tags: [], presets: [], openCards: [] })).not.toContain("需求文档");
+    expect(buildProjectBlock({ project, tags: [], presets: [], openCards: [] })).not.toContain(
+      "需求文档",
+    );
     expect(
-      buildProjectBlock({ project: { ...project, requirementsPath: "../x.md" }, tags: [], presets: [], openCards: [] }),
+      buildProjectBlock({
+        project: { ...project, requirementsPath: "../x.md" },
+        tags: [],
+        presets: [],
+        openCards: [],
+      }),
     ).not.toContain("需求文档");
   });
 });
@@ -173,9 +213,17 @@ describe("kept history and hand-off", () => {
   it("does not archive the replaced master, lists both sessions and hands the new one a board summary", async () => {
     const board = setupBoard();
     const { runtime, fake, settings } = runtimeFor(board, () => "ok");
-    const done = board.store.cards.create({ projectId: board.project.id, title: "Shipped feature" }, "user");
+    const done = board.store.cards.create(
+      { projectId: board.project.id, title: "Shipped feature" },
+      "user",
+    );
     board.store.cards.move(done.id, { to: "todo", actor: "user" });
-    board.store.cards.dispatch({ cardId: done.id, agentId: "w1", provider: "claude", worktree: null });
+    board.store.cards.dispatch({
+      cardId: done.id,
+      agentId: "w1",
+      provider: "claude",
+      worktree: null,
+    });
     board.store.cards.move(done.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(done.id, { to: "done", actor: "user" });
     await askMaster(runtime, "first");
@@ -188,7 +236,7 @@ describe("kept history and hand-off", () => {
     const first = fake.agents[1]!.prompts[0]!;
     expect(first).toContain("[handoff]");
     expect(first.indexOf("[handoff]")).toBeLessThan(first.indexOf("after the switch"));
-    expect(first).toContain("Shipped feature");
+    expect(first).not.toContain("Shipped feature");
     expect(first).toContain("切换总 agent 预设");
     expect(first).not.toContain("草稿与审查状态");
     // delivered once only
@@ -197,7 +245,12 @@ describe("kept history and hand-off", () => {
 
     const sessions = runtime.sessions();
     expect(sessions).toHaveLength(2);
-    expect(sessions[0]).toMatchObject({ current: true, provider: "codex", model: "gpt-5-codex", thinking: "xhigh" });
+    expect(sessions[0]).toMatchObject({
+      current: true,
+      provider: "codex",
+      model: "gpt-5-codex",
+      thinking: "xhigh",
+    });
     expect(sessions[1]).toMatchObject({
       current: false,
       provider: "claude",
@@ -241,29 +294,43 @@ describe("kept history and hand-off", () => {
     expect(prompts[2]).not.toContain("Always answer in Chinese.");
 
     // and a newly started agent has it in the system prompt
-    const sonnet = board.store.presets.create({ name: "Claude Sonnet", provider: "claude", model: "sonnet-x" });
+    const sonnet = board.store.presets.create({
+      name: "Claude Sonnet",
+      provider: "claude",
+      model: "sonnet-x",
+    });
     await choosePreset({ settings, runtime }, sonnet.id);
-    expect(String(fake.agents[1]!.options.config.systemPrompt)).toContain("Always answer in Chinese.");
+    expect(String(fake.agents[1]!.options.config.systemPrompt)).toContain(
+      "Always answer in Chinese.",
+    );
     await runtime.dispose();
   });
 
-  it("builds a capped summary from the board alone", () => {
+  it("builds a capped task summary without importing legacy cards", () => {
     const board = setupBoard();
     for (let i = 0; i < 40; i++) {
       const card = board.draft(`Done number ${i} ${"x".repeat(80)}`);
       board.store.cards.move(card.id, { to: "todo", actor: "user" });
-      board.store.cards.dispatch({ cardId: card.id, agentId: `w${i}`, provider: "claude", worktree: null });
+      board.store.cards.dispatch({
+        cardId: card.id,
+        agentId: `w${i}`,
+        provider: "claude",
+        worktree: null,
+      });
       board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
       board.store.cards.move(card.id, { to: "done", actor: "user" });
     }
     const text = buildHandoff({
       store: board.store,
       nowMs: Date.now(),
-      switches: Array.from({ length: 30 }, (_, i) => ({ at: `2026-10-${String(i + 1).padStart(2, "0")}T10:00:00Z`, text: "claude -> codex ".repeat(30) + i })),
+      switches: Array.from({ length: 30 }, (_, i) => ({
+        at: `2026-10-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
+        text: "claude -> codex ".repeat(30) + i,
+      })),
     });
     expect(text.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
-    expect(text).toContain("## 近期完成的卡片");
-    expect(text.match(/- DEMO-\d+/g)!.length).toBeLessThanOrEqual(8);
+    expect(text).toContain("## 已完成任务");
+    expect(text.match(/- DEMO-\d+/g)).toBeNull();
   });
 });
 
@@ -273,9 +340,17 @@ describe("trigger switches", () => {
     const { runtime, fake, settings, clock } = runtimeFor(board, () => "ok");
     clock.advance(Date.now() - clock.now()); // the sweep window compares with real board timestamps
     settings.consolidateOnDone = false;
-    const card = board.store.cards.create({ projectId: board.project.id, title: "Finished" }, "user");
+    const card = board.store.cards.create(
+      { projectId: board.project.id, title: "Finished" },
+      "user",
+    );
     board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
+    board.store.cards.dispatch({
+      cardId: card.id,
+      agentId: "w1",
+      provider: "claude",
+      worktree: null,
+    });
     board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(card.id, { to: "done", actor: "user" });
     await runtime.triggers.consumer.poll();
@@ -294,10 +369,15 @@ describe("trigger switches", () => {
     board.store.prompts.setOverride("master.wake.card_done", "CUSTOM {{card.key}}\n{{project}}");
     const card = board.store.cards.create({ projectId: board.project.id, title: "Done" }, "user");
     board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
+    board.store.cards.dispatch({
+      cardId: card.id,
+      agentId: "w1",
+      provider: "claude",
+      worktree: null,
+    });
     board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(card.id, { to: "done", actor: "user" });
-    runtime.wake(card.key, "card_done", true);
+    runtime.queue.enqueue({ kind: "card_done", cardId: card.id, force: true });
     await runtime.queue.idle();
     const prompt = fake.agents[0]!.prompts[0]!;
     expect(prompt.startsWith(`CUSTOM ${card.key}\n## 项目 DEMO`)).toBe(true);
@@ -310,12 +390,23 @@ describe("requirements maintenance", () => {
   function setup(opts: { maintain?: boolean; chars?: number; doc?: string } = {}) {
     const board = setupBoard();
     initRepo(board.repoPath);
-    writeFileSync(join(board.repoPath, "PRODUCT-REQUIREMENTS.md"), opts.doc ?? "# Requirements\n- old\n");
+    writeFileSync(
+      join(board.repoPath, "PRODUCT-REQUIREMENTS.md"),
+      opts.doc ?? "# Requirements\n- old\n",
+    );
     git(board.repoPath, "add", ".");
     git(board.repoPath, "commit", "-q", "-m", "docs");
-    const card = board.store.cards.create({ projectId: board.project.id, title: "Needs change" }, "user");
+    const card = board.store.cards.create(
+      { projectId: board.project.id, title: "Needs change" },
+      "user",
+    );
     board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
+    board.store.cards.dispatch({
+      cardId: card.id,
+      agentId: "w1",
+      provider: "claude",
+      worktree: null,
+    });
     board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(card.id, { to: "done", actor: "user" });
     const replies: string[] = [];
@@ -340,8 +431,8 @@ describe("requirements maintenance", () => {
       onRequirementsFailure: (key, message) => failures.push(`${key}: ${message}`),
     });
     const kinds = () =>
-      board.store
-        .events.list(card.id)
+      board.store.events
+        .list(card.id)
         .map((e) => (e.body as { kind?: string } | null)?.kind)
         .filter(Boolean);
     return { board, card, replies, prompts, consolidator, failures, kinds };
@@ -352,11 +443,16 @@ describe("requirements maintenance", () => {
 
   it("accepts the optional field in the schema", () => {
     expect(MemoryUpdateSchema.parse({ summary: "s" }).requirementsUpdate).toBeUndefined();
-    expect(MemoryUpdateSchema.parse({ summary: "s", requirementsUpdate: { content: "c", summary: "d" } }).requirementsUpdate).toEqual({
+    expect(
+      MemoryUpdateSchema.parse({ summary: "s", requirementsUpdate: { content: "c", summary: "d" } })
+        .requirementsUpdate,
+    ).toEqual({
       content: "c",
       summary: "d",
     });
-    expect(() => MemoryUpdateSchema.parse({ summary: "s", requirementsUpdate: { content: "" , summary: "d" } })).toThrow();
+    expect(() =>
+      MemoryUpdateSchema.parse({ summary: "s", requirementsUpdate: { content: "", summary: "d" } }),
+    ).toThrow();
   });
 
   it("writes the document and commits only that file with the agreed message", async () => {
@@ -364,15 +460,23 @@ describe("requirements maintenance", () => {
     // an unrelated staged change must not be swept into the commit
     writeFileSync(join(t.board.repoPath, "other.txt"), "staged\n");
     git(t.board.repoPath, "add", "other.txt");
-    t.replies.push(reply({ content: "# Requirements\n- new decision\n", summary: "Dark mode is required" }));
+    t.replies.push(
+      reply({ content: "# Requirements\n- new decision\n", summary: "Dark mode is required" }),
+    );
 
     const outcome = await t.consolidator.consolidate(t.card.key);
     expect(outcome.status).toBe("updated");
     expect(t.prompts[0]).toContain("requirementsUpdate");
     expect(t.prompts[0]).toContain("需求文档（PRODUCT-REQUIREMENTS.md，完整）");
-    expect(readFileSync(join(t.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe("# Requirements\n- new decision\n");
-    expect(git(t.board.repoPath, "log", "-1", "--format=%s")).toBe(`docs(requirements): Dark mode is required [${t.card.key}]`);
-    expect(git(t.board.repoPath, "show", "--name-only", "--format=", "HEAD")).toBe("PRODUCT-REQUIREMENTS.md");
+    expect(readFileSync(join(t.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe(
+      "# Requirements\n- new decision\n",
+    );
+    expect(git(t.board.repoPath, "log", "-1", "--format=%s")).toBe(
+      `docs(requirements): Dark mode is required [${t.card.key}]`,
+    );
+    expect(git(t.board.repoPath, "show", "--name-only", "--format=", "HEAD")).toBe(
+      "PRODUCT-REQUIREMENTS.md",
+    );
     expect(git(t.board.repoPath, "diff", "--cached", "--name-only")).toBe("other.txt");
     expect(t.kinds()).toContain("requirements_update");
     expect(t.failures).toEqual([]);
@@ -388,7 +492,9 @@ describe("requirements maintenance", () => {
     const off = setup({ maintain: false });
     off.replies.push(reply({ content: "# Requirements\n- sneaky\n", summary: "x" }));
     expect((await off.consolidator.consolidate(off.card.key)).status).toBe("updated");
-    expect(readFileSync(join(off.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe("# Requirements\n- old\n");
+    expect(readFileSync(join(off.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe(
+      "# Requirements\n- old\n",
+    );
     expect(off.prompts[0]).not.toContain("requirementsUpdate");
     expect(off.kinds()).not.toContain("requirements_update");
   });
@@ -401,7 +507,9 @@ describe("requirements maintenance", () => {
     expect(t.kinds()).toContain("requirements_update_failed");
     expect(t.failures).toHaveLength(1);
     expect(t.failures[0]).toContain("merge");
-    expect(readFileSync(join(t.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe("# Requirements\n- old\n");
+    expect(readFileSync(join(t.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe(
+      "# Requirements\n- old\n",
+    );
     expect(t.replies).toEqual([]); // no extra master call
   });
 
@@ -411,7 +519,9 @@ describe("requirements maintenance", () => {
     await t.consolidator.consolidate(t.card.key);
     expect(t.kinds()).toContain("requirements_update_failed");
     expect(t.failures[0]).toContain("摘录上限");
-    expect(readFileSync(join(t.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toContain("detail");
+    expect(readFileSync(join(t.board.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toContain(
+      "detail",
+    );
     mkdirSync(join(t.board.repoPath, "x"), { recursive: true });
   });
 
@@ -422,17 +532,27 @@ describe("requirements maintenance", () => {
     git(board.repoPath, "add", ".");
     git(board.repoPath, "commit", "-q", "-m", "ignore");
     const { runtime } = runtimeFor(board, () =>
-      JSON.stringify({ summary: "m", requirementsUpdate: { content: "# R\n", summary: "ignored file" } }),
+      JSON.stringify({
+        summary: "m",
+        requirementsUpdate: { content: "# R\n", summary: "ignored file" },
+      }),
     );
     const card = board.store.cards.create({ projectId: board.project.id, title: "Done" }, "user");
     board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    board.store.cards.dispatch({ cardId: card.id, agentId: "w1", provider: "claude", worktree: null });
+    board.store.cards.dispatch({
+      cardId: card.id,
+      agentId: "w1",
+      provider: "claude",
+      worktree: null,
+    });
     board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
     board.store.cards.move(card.id, { to: "done", actor: "user" });
     runtime.queue.enqueue({ kind: "card_done", cardId: card.id });
     await runtime.queue.idle();
     const alerts = board.db
-      .prepare<{ payload_json: string }>("SELECT payload_json FROM vibe_event WHERE type = 'master.alert'")
+      .prepare<{ payload_json: string }>(
+        "SELECT payload_json FROM vibe_event WHERE type = 'master.alert'",
+      )
       .all()
       .map((r) => JSON.parse(r.payload_json) as { kind: string });
     expect(alerts.map((a) => a.kind)).toContain("requirements_failed");

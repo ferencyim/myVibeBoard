@@ -49,9 +49,12 @@ function fakeEnvironment(opts: FakeOptions = {}) {
     const cmd = rest.join(" ");
     if (rest[0] === "pull") writeFileSync(rest[2] as string, `data:${rest[1]}`);
     if (cmd.includes("getprop sys.boot_completed")) return { stdout: "1\n" };
-    if (cmd.includes("resolve-activity")) return { stdout: `priority=0
+    if (cmd.includes("resolve-activity"))
+      return {
+        stdout: `priority=0
 ${PKG}/.MainActivity
-` };
+`,
+      };
     if (cmd.startsWith("shell pm path")) return { stdout: `package:/data/app/${PKG}/base.apk\n` };
     if (cmd.startsWith("shell pidof ") && !cmd.includes("screenrecord")) {
       return (opts.appRunning ?? (() => true))() ? { stdout: "4321\n" } : { exitCode: 1 };
@@ -127,7 +130,7 @@ describe("android collector", () => {
     expect(result.artifacts.find((a) => a.kind === "screenshot")?.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(result.judgement).toBeUndefined();
     expect(result.degraded).toBe(true);
-    expect(result.notes.join("\n")).toContain("Maestro not found");
+    expect(result.notes.join("\n")).toContain("未找到 Maestro");
 
     const cmds = adbCmds(runner);
     const idx = (s: string) => cmds.findIndex((c) => c.includes(s));
@@ -155,13 +158,13 @@ describe("android collector", () => {
     const { runner } = fakeEnvironment({ ffmpeg: true, logcat: crash });
     const result = await createAndroidCollector(baseOptions()).collect(makeCtx(runner));
     expect(result.judgement).toBe("fail");
-    expect(result.notes.join("\n")).toContain("java crash");
+    expect(result.notes.join("\n")).toContain("java 崩溃");
 
     let calls = 0;
     const { runner: r2 } = fakeEnvironment({ ffmpeg: true, appRunning: () => ++calls <= 1 });
     const result2 = await createAndroidCollector(baseOptions()).collect(makeCtx(r2));
     expect(result2.judgement).toBe("fail");
-    expect(result2.notes.join("\n")).toContain("gone at the end");
+    expect(result2.notes.join("\n")).toContain("应用进程已退出");
   });
 
   it("keeps the mp4 and says so when ffmpeg is missing", async () => {
@@ -171,7 +174,7 @@ describe("android collector", () => {
     expect(kinds).toContain("video");
     expect(kinds).not.toContain("gif");
     expect(result.degraded).toBe(true);
-    expect(result.notes.join("\n")).toContain("ffmpeg not found");
+    expect(result.notes.join("\n")).toContain("未找到 ffmpeg");
   });
 
   it("debug-metro mode: starts Metro, reverses the port, warms the bundle, opens the dev client", async () => {
@@ -215,7 +218,7 @@ describe("android collector", () => {
     expect(cmds.find((c) => c.includes("android.intent.action.VIEW"))).toContain(
       encodeURIComponent("http://localhost:8081"),
     );
-    expect(result.notes.join("\n")).toContain("Metro bundle warmed");
+    expect(result.notes.join("\n")).toContain("Metro bundle 预热");
     await collector.dispose?.(ctx);
     expect(killed).toEqual(["npx"]);
   });
@@ -275,7 +278,7 @@ describe("android collector", () => {
       }),
     );
     const ctx = makeCtx(runner);
-    await expect(collector.collect(ctx)).rejects.toThrow("APK not found");
+    await expect(collector.collect(ctx)).rejects.toThrow("未找到 APK");
     await collector.dispose?.(ctx);
     expect(leases.held()).toEqual([]);
   });
@@ -298,7 +301,7 @@ describe("android collector", () => {
     );
     expect(await createAndroidCollector(baseOptions()).detect(makeCtx(none))).toMatchObject({
       available: false,
-      reason: "adb not found",
+      reason: "未找到 adb",
     });
 
     const { runner } = fakeEnvironment({ ffmpeg: false, maestro: false });

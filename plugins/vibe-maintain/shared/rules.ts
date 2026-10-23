@@ -128,7 +128,8 @@ const get = (fields: RuleFields | undefined, key: FieldKey): unknown => {
   return fields[key];
 };
 
-export const scopeIncludes = (scope: RuleScope, projectId: string) => scope === "all" || scope.includes(projectId);
+export const scopeIncludes = (scope: RuleScope, projectId: string) =>
+  scope === "all" || scope.includes(projectId);
 
 function parseScope(raw: unknown): RuleScope {
   if (Array.isArray(raw)) return raw.filter((x): x is string => typeof x === "string");
@@ -145,14 +146,18 @@ function layerMerge(
   name: string,
   layers: Layer[],
 ): { def?: RuleDef; sources: Record<FieldKey, FieldSource>; error?: string } {
-  const sources = Object.fromEntries(FIELD_KEYS.map((k) => [k, "builtin"])) as Record<FieldKey, FieldSource>;
+  const sources = Object.fromEntries(FIELD_KEYS.map((k) => [k, "builtin"])) as Record<
+    FieldKey,
+    FieldSource
+  >;
   const merged: Record<string, unknown> = { name, prompts: {} };
   for (const key of FIELD_KEYS) {
     for (const layer of layers) {
       const value = get(layer.fields, key);
       if (value === undefined) continue;
       sources[key] = layer.source;
-      if (key.startsWith("prompts.")) (merged.prompts as Record<string, unknown>)[key.slice(8)] = value;
+      if (key.startsWith("prompts."))
+        (merged.prompts as Record<string, unknown>)[key.slice(8)] = value;
       else merged[key] = value;
     }
   }
@@ -173,7 +178,10 @@ interface GlobalEntry {
   splitFrom: string | null;
 }
 
-function globalEntries(builtin: RuleDef[], ui: RulesConfig | undefined): { entries: GlobalEntry[]; errors: string[] } {
+function globalEntries(
+  builtin: RuleDef[],
+  ui: RulesConfig | undefined,
+): { entries: GlobalEntry[]; errors: string[] } {
   const errors: string[] = [];
   const stored = ui?.rules ?? {};
   const base = new Map(builtin.map((r) => [r.name, r]));
@@ -187,7 +195,9 @@ function globalEntries(builtin: RuleDef[], ui: RulesConfig | undefined): { entri
       const parsed = RuleFieldsSchema.safeParse(raw);
       if (parsed.success) layers.push({ source: "ui", fields: parsed.data });
       else
-        errors.push(`界面规则「${name}」：${parsed.error.issues.map((x) => `${x.path.join(".")} ${x.message}`).join("; ")}`);
+        errors.push(
+          `界面规则「${name}」：${parsed.error.issues.map((x) => `${x.path.join(".")} ${x.message}`).join("; ")}`,
+        );
     }
     return {
       name,
@@ -255,11 +265,15 @@ export function mergeRuleLayers(input: {
   const errors: string[] = [];
   const yml = input.yml ?? [];
   const { entries } = globalEntries(input.builtin, input.ui);
-  const applicable = new Map(entries.filter((e) => scopeIncludes(e.scope, input.projectId)).map((e) => [e.name, e]));
+  const applicable = new Map(
+    entries.filter((e) => scopeIncludes(e.scope, input.projectId)).map((e) => [e.name, e]),
+  );
   // A yml rule overrides the applicable rule of that name; failing that, the applicable copy the
   // migration split off a rule of that name (its project's yml was written for the original name).
   const target = (y: YmlRule) =>
-    applicable.has(y.name) ? y.name : [...applicable.values()].find((e) => e.splitFrom === y.name)?.name;
+    applicable.has(y.name)
+      ? y.name
+      : [...applicable.values()].find((e) => e.splitFrom === y.name)?.name;
   const names = [...applicable.keys()];
   for (const y of yml) if (!target(y) && !names.includes(y.name)) names.push(y.name);
 
@@ -295,7 +309,9 @@ export const ymlFieldsOf = (sources: Record<FieldKey, FieldSource>): FieldKey[] 
 const stable = (v: unknown): string =>
   JSON.stringify(v, (_k, x) =>
     x && typeof x === "object" && !Array.isArray(x)
-      ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+      ? Object.fromEntries(
+          Object.entries(x as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+        )
       : x,
   );
 
@@ -321,7 +337,11 @@ const LegacyConfigSchema = z.object({
  * Dropped (v1 allowed them, v2 cannot represent them): overrides of rules that only a project's
  * maintenance.yml defines, and custom rules named like a built-in rule (those never took effect).
  */
-export function migrateRulesV1(old: unknown, projectIds: string[], builtin: RuleDef[]): RulesConfig {
+export function migrateRulesV1(
+  old: unknown,
+  projectIds: string[],
+  builtin: RuleDef[],
+): RulesConfig {
   const legacy = LegacyConfigSchema.safeParse(old ?? {});
   const projects = legacy.success ? legacy.data.projects : {};
   const universe = projectIds.length ? projectIds : Object.keys(projects);
@@ -358,7 +378,8 @@ export function migrateRulesV1(old: unknown, projectIds: string[], builtin: Rule
       const complete = !isBuiltin || i > 0;
       const merged = isBuiltin && i > 0 ? { ...builtinByName.get(name), ...g.fields } : g.fields;
       const { name: _name, ...fields } = merged as Record<string, unknown>;
-      if (isBuiltin && !complete && !split && Object.keys(fields).length === 0 && scope === "all") return;
+      if (isBuiltin && !complete && !split && Object.keys(fields).length === 0 && scope === "all")
+        return;
       rules[target] = { ...fields, projects: scope, ...(split ? { splitFrom: name } : {}) };
     });
   };
@@ -372,7 +393,8 @@ export function migrateRulesV1(old: unknown, projectIds: string[], builtin: Rule
     emit(name, groups, true);
   }
   const customNames = new Set<string>();
-  for (const id of universe) for (const n of Object.keys(projects[id]?.custom ?? {})) customNames.add(n);
+  for (const id of universe)
+    for (const n of Object.keys(projects[id]?.custom ?? {})) customNames.add(n);
   for (const name of customNames) {
     if (builtinByName.has(name)) continue;
     const items = universe
@@ -385,13 +407,17 @@ export function migrateRulesV1(old: unknown, projectIds: string[], builtin: Rule
 
 // ---- natural-language description and progress -----------------------------------------------------
 
-export const COUNTER_LABELS = { cards: "已完成卡片", commits: "已合并提交", tokens: "已消耗 token" } as const;
+export const COUNTER_LABELS = {
+  cards: "已完成任务",
+  commits: "已合并提交",
+  tokens: "已消耗 token",
+} as const;
 
 /** One sentence: when does this rule fire. */
 export function describeTrigger(trigger: RuleTrigger): string {
   if (trigger.kind === "workload") {
     const parts = [
-      trigger.cards_done ? `已完成卡片累计达到 ${trigger.cards_done} 张` : "",
+      trigger.cards_done ? `已完成任务累计达到 ${trigger.cards_done} 个` : "",
       trigger.commits_merged ? `已合并提交累计达到 ${trigger.commits_merged} 个` : "",
       trigger.tokens ? `token 消耗累计达到 ${trigger.tokens}` : "",
     ].filter(Boolean);
@@ -403,8 +429,11 @@ export function describeTrigger(trigger: RuleTrigger): string {
   }时触发。`;
 }
 
-/** "已完成卡片 7/10，已合并提交 12/30"; null when the trigger has no counters. */
-export function progressText(trigger: RuleTrigger, counters: Record<string, number>): string | null {
+/** "已完成任务 7/10，已合并提交 12/30"; null when the trigger has no counters. */
+export function progressText(
+  trigger: RuleTrigger,
+  counters: Record<string, number>,
+): string | null {
   if (trigger.kind !== "workload") return null;
   const parts: string[] = [];
   const entry = (kind: keyof typeof COUNTER_LABELS, target: number | undefined) => {

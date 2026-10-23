@@ -25,7 +25,11 @@ describe("backend collector", () => {
   };
 
   it("runs tests through the Runner and writes report, log and samples", async () => {
-    const runner = createScriptedRunner(() => ({ exitCode: 0, stdout: "5 passed", durationMs: 42 }));
+    const runner = createScriptedRunner(() => ({
+      exitCode: 0,
+      stdout: "5 passed",
+      durationMs: 42,
+    }));
     const c = createBackendCollector({ loadConfig: () => config, http: ok });
     const res = await c.collect(makeCtx({ projectType: "backend", runner }));
     expect(runner.calls[0]).toMatchObject({ command: "npm", args: ["test"] });
@@ -49,11 +53,15 @@ describe("backend collector", () => {
     );
     expect(res.judgement).toBe("fail");
     const bad: VerifyConfig = {
-      backend: { requests: [{ name: "m", method: "GET", url: "http://h/missing", expectStatus: 200 }] },
+      backend: {
+        requests: [{ name: "m", method: "GET", url: "http://h/missing", expectStatus: 200 }],
+      },
     };
-    const res2 = await createBackendCollector({ loadConfig: () => bad, http: ok }).collect(makeCtx());
+    const res2 = await createBackendCollector({ loadConfig: () => bad, http: ok }).collect(
+      makeCtx(),
+    );
     expect(res2.judgement).toBe("fail");
-    expect(res2.notes.join()).toContain("expected 200, got 404");
+    expect(res2.notes.join()).toContain("预期状态 200，实际 404");
   });
 
   it("per-check collection replays only that check's requests and skips tests", async () => {
@@ -81,8 +89,12 @@ describe("backend collector", () => {
 
   it("detect needs a test command or requests", async () => {
     const ctx = makeCtx({ worktreePath: "/definitely/not/here" });
-    expect((await createBackendCollector({ loadConfig: () => ({}) }).detect(ctx)).available).toBe(false);
-    expect((await createBackendCollector({ loadConfig: () => config }).detect(ctx)).available).toBe(true);
+    expect((await createBackendCollector({ loadConfig: () => ({}) }).detect(ctx)).available).toBe(
+      false,
+    );
+    expect((await createBackendCollector({ loadConfig: () => config }).detect(ctx)).available).toBe(
+      true,
+    );
   });
   describe("perf before/after comparison", () => {
     const perfConfig = (extra: Record<string, unknown> = {}): VerifyConfig => ({
@@ -103,11 +115,17 @@ describe("backend collector", () => {
     const timed = createScriptedRunner;
 
     it("measures baseline and worktree and records the improvement", async () => {
-      const runner = timed((call) => ({ durationMs: call.options?.cwd?.toString().includes("base") ? 400 : 40 }));
-      const res = await createBackendCollector({ loadConfig: () => perfConfig() }).collect(makeCtx({ runner }));
+      const runner = timed((call) => ({
+        durationMs: call.options?.cwd?.toString().includes("base") ? 400 : 40,
+      }));
+      const res = await createBackendCollector({ loadConfig: () => perfConfig() }).collect(
+        makeCtx({ runner }),
+      );
       expect(runner.calls).toHaveLength(6);
       expect(res.judgement).toBe("pass");
-      const report = JSON.parse(readFileSync(res.artifacts.find((a) => a.path.endsWith("perf-compare.json"))!.path, "utf8"));
+      const report = JSON.parse(
+        readFileSync(res.artifacts.find((a) => a.path.endsWith("perf-compare.json"))!.path, "utf8"),
+      );
       expect(report).toMatchObject({
         label: "GET /items",
         before: { source: "baseline", medianMs: 400, runs: [400, 400, 400] },
@@ -115,28 +133,48 @@ describe("backend collector", () => {
         judgement: "pass",
       });
       expect(report.improvement).toBeCloseTo(0.9);
-      expect(res.notes.join()).toContain("before 400ms (baseline) -> after 40ms");
+      expect(res.notes.join()).toContain("改动前 400ms (baseline) → 改动后 40ms");
     });
 
     it("fails when the fixed code is still above the threshold", async () => {
-      const runner = timed((call) => ({ durationMs: call.options?.cwd?.toString().includes("base") ? 400 : 300 }));
-      const res = await createBackendCollector({ loadConfig: () => perfConfig() }).collect(makeCtx({ runner }));
+      const runner = timed((call) => ({
+        durationMs: call.options?.cwd?.toString().includes("base") ? 400 : 300,
+      }));
+      const res = await createBackendCollector({ loadConfig: () => perfConfig() }).collect(
+        makeCtx({ runner }),
+      );
       expect(res.judgement).toBe("fail");
     });
 
     it("doubts when nothing got faster, or no before timing exists", async () => {
       const same = timed(() => ({ durationMs: 50 }));
-      expect((await createBackendCollector({ loadConfig: () => perfConfig() }).collect(makeCtx({ runner: same }))).judgement).toBe("doubt");
+      expect(
+        (
+          await createBackendCollector({ loadConfig: () => perfConfig() }).collect(
+            makeCtx({ runner: same }),
+          )
+        ).judgement,
+      ).toBe("doubt");
       const noBase = timed(() => ({ durationMs: 50 }));
-      const res = await createBackendCollector({ loadConfig: () => perfConfig({ baseline: undefined }) }).collect(makeCtx({ runner: noBase }));
+      const res = await createBackendCollector({
+        loadConfig: () => perfConfig({ baseline: undefined }),
+      }).collect(makeCtx({ runner: noBase }));
       expect(res.judgement).toBe("doubt");
-      const recorded = await createBackendCollector({ loadConfig: () => perfConfig({ baseline: undefined, beforeMs: 500 }) }).collect(makeCtx({ runner: noBase }));
+      const recorded = await createBackendCollector({
+        loadConfig: () => perfConfig({ baseline: undefined, beforeMs: 500 }),
+      }).collect(makeCtx({ runner: noBase }));
       expect(recorded.judgement).toBe("pass");
     });
 
     it("falls back to the recorded timing when the baseline command fails", async () => {
-      const runner = timed((call) => (call.options?.cwd?.toString().includes("base") ? { exitCode: 2, stderr: "no such file" } : { durationMs: 20 }));
-      const res = await createBackendCollector({ loadConfig: () => perfConfig({ beforeMs: 200 }) }).collect(makeCtx({ runner }));
+      const runner = timed((call) =>
+        call.options?.cwd?.toString().includes("base")
+          ? { exitCode: 2, stderr: "no such file" }
+          : { durationMs: 20 },
+      );
+      const res = await createBackendCollector({
+        loadConfig: () => perfConfig({ beforeMs: 200 }),
+      }).collect(makeCtx({ runner }));
       expect(res.judgement).toBe("pass");
       expect(res.notes.join()).toContain("(recorded)");
     });

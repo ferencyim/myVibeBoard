@@ -1,149 +1,37 @@
 # vibe-maintain
 
-Automatic maintenance for myVibeBoard (docs/vibe/ARCHITECTURE.md WP-36, IMPLEMENTATION-PLAN.md M10).
-Rules are defined once (built-in + a global table in the plugin settings, each rule listing the projects it
-applies to, or "all") and a project's `.vibe/maintenance.yml` is only a local override for that project; when
-a rule fires its check runs and the result becomes a board card. Run state (counters, runs, daily cap, pause)
-is kept per rule x project (`maintenance_rule` has one row per pair; a project removed from a rule gets its
-row disabled, not deleted). Server-only plugin; it talks to the other plugins through the shared SQLite
-file (`vibe.db`) and the `vibe_event` bus.
+维护规则一次定义，选择适用项目或全部项目；项目的 `.vibe/maintenance.yml` 仅覆盖该项目。规则、运行记录、每日上限、暂停和增量游标仍按规则 × 项目保留，移出作用域只停用记录。
 
-```bash
-npm ci && npm run typecheck && npm test      # tests use real temporary git repositories (slow on Windows)
-```
-
-## maintenance.yml (per-project local override)
-
-Layers: built-in default < global UI rule (settings `rules`, version 2: `{ rules: { <name>: { ...fields, projects: "all" | [ids] } } }`,
-built-in rules store only differing fields, custom rules the complete definition) < this file. A rule named
-like an applicable global rule overrides only the fields it writes, in this project only; any other name is a
-rule of this project alone (read-only in the UI). Settings version 1 (keyed by project) is converted once by
-`migrateRulesV1` (identical configs merge, differing ones split into `name`, `name-2`, ...).
+所有 `output: suggest` / `output: fix` 都创建新的原生 Git worktree、workspace 和只读规划 anchor，发送中文首消息，等待用户显式 `/执行`。不创建旧卡片、不预授权、不直接修复。项目必须已关联原生项目且能创建独立 worktree；失败会保留运行诊断与发现，不在项目原目录执行。
 
 ```yaml
 rules:
-  - name: git-health            # the same name as a built-in rule overrides it
-    enabled: true
-    trigger: { kind: workload, cards_done: 10, commits_merged: 30 }   # any reached threshold fires
-    # trigger: { kind: time, cron: "0 3 * * *" }                      # local time, 5 fields
-    # trigger: { kind: event, path: logs/crash.log, pattern: "Exception" }  # newly appended lines only
-    check: { type: git, stale_days: 14, large_file_mb: 5, outdated: true }
-    agent: null                 # null = deterministic only; "claude/sonnet" = read-only sub agent on top
-    output: suggest             # suggest = draft card | fix = worktree + in_progress card
-    priority: low
-    dedupe_key: git-health      # default: the rule name
-    daily_cap: 1                # automatic runs per UTC day
+  - name: git-health
+    trigger: { kind: workload, cards_done: 10, commits_merged: 30 }
+    check: { type: git, outdated: false }
+    agent: null
+    output: suggest
+    daily_cap: 1
 ```
 
-Without a file only the built-in `git-health` rule exists (workload 10 cards / 30 commits, suggest,
-low priority, cap 1/day). A broken file keeps the built-ins and shows up in `maintain.status`
-(`configErrors`). Rules are mirrored into `maintenance_rule`; removing a rule from the file disables it.
+`agent` 可指定预设 ID、名称或 provider/model；未指定使用维护默认模型。规划强制只读，不使用执行预设的写入权限。Codex 使用原生 provider options 的 sandbox_mode=read-only、approval_policy=never，不传不存在的 read-only modeId；Claude 使用 plan 模式。规划也先向调度器申请并绑定资源，原生 turn 结束后请求释放；调度器确认 idle 后才真正回收。调度器不可用或并发已满时保留任务及失败原因。
 
-## Triggers
+同规则、同项目已有未完成任务时只补充新发现，不因新调用点另建 workspace。已确认或运行的任务先经 WP-111 Stop 协调；停止不确定则暂停派发、冻结并保留原租约与确认，将新增发现写入摘要，禁止改方案或按旧文件范围继续执行。停止成功后通过任务命令清除旧确认和角色快照，重新规划并等待 `/执行`。
 
-- **workload**: per-rule counters in `work_counter` (`<ruleId>:cards|commits|tokens`). Cards: every
-  `card.moved -> done` of a non-maintenance card. Commits: `git rev-list --count --no-merges --since=<counter start> <main>`
-  (polled at most once a minute). Tokens: `usage_event` rows of the project's cards (needs vibe-stats).
-  The counters restart when the rule fires.
-- **time**: cron; fires when a scheduled minute lies after the rule's last run (restart safe).
-  Paseo has no schedule API for plugins, so the cron lives here.
-- **event**: polls a file; only lines appended since the last look (matching `pattern`) fire the rule.
+触发方式保留工作量、cron 和新增文件内容。历史键 `cards_done` / `<ruleId>:cards` 继续存储，含义改为完成任务轮次；完成幂等按 workspace + confirmedAt，摘要更新与事件重放不重复累计。token 来自 `usage_event.project_id`，不再关联旧 card。每日上限按 UTC 统计；手动运行忽略门槛、暂停和上限，但依然计入运行次数。
 
-A tick (default every 30 s, setting `tickSeconds`) evaluates all rules. `maintenance.triggered`
-(`ruleId`, `runId`) is published on the bus for every run.
+归档未完成维护 workspace 视为驳回，同一任务仅计一次；连续达到阈值自动暂停。成功完成或手动恢复清除连续驳回数，普通确认和摘要事件不清零。设置页显示每项目进度、当日次数、上次结果、失败原因与配置错误；旧规则 screen 留到 WP-114 统一删除。
 
-## Output and controls
+性能规则 `check.type: perf-slow` 增量读取 JSONL、benchmark JSON、MySQL/PostgreSQL 日志，按调用点聚合。确认前不执行配置的 `repro` 命令；规划包含复现、最小修复和 `.vibe/verify.json` 的 `backend.perf` 配置。用户确认后，执行 agent 将配置纳入提交，vibe-verify 的任务 pipeline 创建基线 worktree，backend collector 分别运行基线和修复后的命令并生成 `perf-compare.json`。没有可靠基线或提升不足时保留 doubt，不假报通过。没有复现配置时先在规划中确定度量方法。
 
-- **suggest**: a `draft` card (`origin=maintenance`, `originRef=<ruleId>`, `dedupeKey`, priority from the
-  rule, default low) whose description is the check report and whose timeline gets a `maintenance`
-  event with the structured findings. The master (vibe-master) assesses drafts like any other. If the rule
-  names an `agent`, a read-only sub agent receives the findings and its plan is added as a note
-  (the engine flags it when `git HEAD`/`status` changed while it ran).
-- **fix**: the dispatcher creates the card directly in `in_progress` and starts a worker in its own
-  worktree (the vibe-shared state machine allows `maintenance` + `dispatcher`). The worker is told never
-  to merge; the normal lifecycle/verification path moves it to `verifying` and only the user's pass merges.
-- **dedupe**: an open (not done, not archived) maintenance card with the same dedupe key only gets a
-  `recurrence` event appended.
-- **daily cap**: counted per UTC day over non-skipped runs; the counters keep accumulating and the
-  rule fires the next day.
-- **auto pause**: a card counts as rejected when the user archives/deletes a never-started maintenance
-  card or sends a fix back from `verifying`; accepting (`draft -> todo`, `done`) resets the streak.
-  After `pauseAfterRejections` (default 3) the rule gets `paused_at` and `maintenance.paused` is published.
-  Resume with RPC `maintain.resume`.
+共享写入集中在新增 `createMaintenanceCommands`；
+`maintenance_task` 保留原生任务去重与发现，`maintenance_run.workspace_ids_json` 保存运行关联。旧规则、计数、旧 `card_ids_json` 历史不丢。
 
-## Git health check (`check.type: git`)
+运行相关测试与类型检查：
 
-Deterministic, no model: stale unmerged branches, merged-but-not-deleted branches, leftover worktrees
-(directory gone / branch merged), uncommitted changes (main checkout and worktrees), unpushed commits
-(only when a remote exists), branches that would conflict with the trunk (`git merge-tree`, git 2.38+),
-large tracked files, outdated npm dependencies (`npm outdated`, set `outdated: false` to skip).
-Findings are grouped per category into one card.
-
-## Performance slow records (`check.type: perf-slow`, WP-47)
-
-Register slow-record sources and thresholds per project; the rule runs on a cron and files what is new.
-
-```yaml
-rules:
-  - name: perf-slow
-    trigger: { kind: time, cron: "0 4 * * *" }
-    check:
-      type: perf-slow
-      sources:
-        - { name: api, kind: jsonl, path: logs/access.jsonl, threshold_ms: 500,
-            fields: { site: route, ms: duration_ms, ts: time, method: method }, unit: ms }
-        - { kind: bench-json, path: bench/result.json, threshold_ms: 50 }   # hyperfine / vitest bench / [{name, ms}]
-        - { kind: mysql-slow, path: /var/log/mysql/slow.log, threshold_ms: 1000 }
-        - { kind: pg-log, path: /var/log/postgresql/postgresql.log, threshold_ms: 1000 }
-      repro: { command: node, args: [bench/run.js, "{site}"], runs: 3 }   # threshold_ms defaults to the source's
-    output: fix        # reproduced -> worktree worker; otherwise a draft card
-    agent: codex
+```powershell
+npm test -- test/engine.test.ts test/launch.test.ts test/rules.test.ts test/perf-slow.test.ts test/client-format.test.ts test/behaviour.test.ts
+npm run typecheck
 ```
 
-- **Incremental**: per source a byte offset (bench files: mtime) is kept in `work_counter`
-  (`<ruleId>:cursor:*`) and advanced only after the card exists. Rotation/truncation restarts at 0; a backlog
-  over 8 MB skips the oldest part (noted in the card). Unterminated last lines/blocks wait for the next run.
-- **Dedupe by call site**: route (query string dropped, ids -> `:id`), SQL fingerprint (literals -> `?`) or
-  benchmark name. The card's `dedupeKey` is `perf-slow:<source>:<site>`; a site with an open card is skipped, so
-  the next site gets its turn. One card per run (worst p95/threshold first), the other slow sites are listed in it.
-- **Reproduce first**: `repro` runs `runs` times in the repository; median above the threshold = reproduced.
-  Reproduced + `output: fix` -> in_progress card, worker prompt with the exact `.vibe/verify.json`
-  `backend.perf` block to merge in. Otherwise (no `repro`, command failed, not reproducible) the card is a
-  **draft** with the investigation notes (`CheckOutput.forceDraft`). The card state machine has no
-  `in_progress -> draft`, so a worker that is unsure instead comments its conclusion and reports
-  `PERF-INCONCLUSIVE:`; the verification then ends in `doubt` for the owner.
-- **Evidence**: vibe-verify's backend collector measures `backend.perf` in the baseline worktree (before)
-  and the fixed worktree (after) and writes `perf-compare.json` (see the vibe-verify README).
-- **Fix agent and permissions** (`server/agent.ts`): `agent` is a preset name/id or `provider/model` (a bare
-  `codex` borrows the model of a preset for that provider, else it is an error). Unset: the shared `selectAgent`
-  ranks the board presets; none usable: the project's default preset, then the `defaultAgent` setting. The
-  permission mode comes from the chosen preset (as in vibe-board dispatch); without a preset it is the
-  unattended accept-edits mode (claude `acceptEdits`, codex `auto-review`), never full access.
-- Limits: MySQL/PostgreSQL parsers cover the stock text formats only; fingerprints are literal-stripped
-  text, not a SQL parse; one reproduction command per rule (use `{site}` to parametrise it).
-
-Checks may also return `dedupeKey`, `instructions`, `acceptance`, `needsEvidence`, `forceDraft` and `commit`
-(called after the card exists); `CheckContext` offers `cursor` and `hasOpenCard`.
-
-## Adding rules / checks
-
-A check is `(ctx) => Promise<CheckOutput | null>` registered in `checks` (see `index.server.ts`);
-the performance rule (`check.type: perf-slow`, `server/checks/perf-slow`) is registered there. Fix-mode and sub agent prompts are
-built from `CheckOutput`.
-
-## RPC
-
-`maintain.status` (rules, counters, runs today, last run, config errors), `maintain.run`
-(manual run; ignores thresholds, cap and pause), `maintain.resume`.
-
-## Known limits
-
-- `maintenance_rule` is marked bidirectional in the sync spec but this plugin does not stamp HLCs;
-  rules are effectively daemon-owned until phone-side rule editing exists.
-- Fix mode: the card and session rows are written before the agent is created, so lifecycle events
-  cannot arrive before the session exists.
-
-## UI
-
-`index.client.tsx` adds a Maintenance screen (rules with their applicable projects and a per-project state list (progress, last run, runs today vs. cap, pause state, yml
-local overrides) with "Resume" and "Run now" (all applicable projects, or one) over `maintain.resume` / `maintain.run`, maintenance.yml problems) and a settings page.
+性能集成测试从规划消息提取配置，使用真实 Node 命令测量合成 baseline/after，覆盖 collector 接口；它不代替完整任务生命周期、真实模型、设备与 Git 收尾的隔离 daemon 验收。测试仓库基线复用当前 HEAD 的 sparse clone，不为夹具新建提交。

@@ -1,12 +1,6 @@
 import type { PluginTheme } from "@getpaseo/plugin";
-import {
-  useRpc,
-  useSettings,
-  type PluginScreenProps,
-  type PluginSidebarItemProps,
-  type PluginSurfaceProps,
-} from "@getpaseo/plugin/client";
-import { SettingsCard, SettingsInput, SettingsSection, SidebarRow } from "@getpaseo/plugin/client/ui";
+import { useRpc, useSettings, type PluginScreenProps } from "@getpaseo/plugin/client";
+import { SettingsCard, SettingsInput, SettingsSection } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
@@ -22,18 +16,20 @@ import {
 import { fmtCostNote, fmtDuration, fmtPct, fmtRate, fmtTokens, shares } from "./format";
 
 const PERIOD_LABELS: Record<Period, string> = {
-  today: "Today",
-  "7d": "7 days",
-  "30d": "30 days",
-  all: "All",
+  today: "今天",
+  "7d": "7 天",
+  "30d": "30 天",
+  all: "全部",
 };
 
-type Dimension = "byProvider" | "byModel" | "byProject" | "byDay";
+type Dimension = "byProvider" | "byModel" | "byProject" | "byWorkspace" | "byRole" | "byDay";
 const DIMENSIONS: ReadonlyArray<readonly [Dimension, string]> = [
-  ["byProvider", "Agent"],
-  ["byModel", "Model"],
-  ["byProject", "Project"],
-  ["byDay", "Day"],
+  ["byProvider", "提供方"],
+  ["byModel", "模型"],
+  ["byProject", "项目"],
+  ["byWorkspace", "工作区"],
+  ["byRole", "角色"],
+  ["byDay", "日期"],
 ];
 
 function Section({
@@ -103,7 +99,7 @@ function Bar({ theme, parts, colors }: { theme: PluginTheme; parts: number[]; co
 }
 
 function GroupList({ theme, groups }: { theme: PluginTheme; groups: StatsGroup[] }) {
-  if (groups.length === 0) return <Muted theme={theme}>No data in this period.</Muted>;
+  if (groups.length === 0) return <Muted theme={theme}>该时段暂无数据。</Muted>;
   const weight = (g: StatsGroup) => g.input + g.output + g.cacheRead + g.cacheWrite;
   const max = Math.max(...groups.map(weight), 1);
   const colors = [
@@ -181,63 +177,67 @@ export function StatsScreen({ theme }: PluginScreenProps) {
           </Pressable>
         ))}
         <Pressable onPress={refresh} style={chip(false)}>
-          <Text style={chipText(false)}>Refresh</Text>
+          <Text style={chipText(false)}>刷新</Text>
         </Pressable>
       </View>
 
       {overview.error ? (
         <Text style={{ color: theme.colors.statusDanger }}>
-          Could not load stats: {String(overview.error)}
+          统计读取失败： {String(overview.error)}
         </Text>
       ) : null}
-      {!o ? <Muted theme={theme}>Loading...</Muted> : null}
+      {!o ? <Muted theme={theme}>加载中……</Muted> : null}
 
       {o ? (
         <>
-          <Section theme={theme} title="Usage">
+          <Section theme={theme} title="用量">
             <Row
               theme={theme}
-              left="Estimated cost"
+              left="估算费用"
               right={fmtCostNote(o.totals.cost, o.totals.unpricedTokens)}
             />
             {o.totals.unpricedTokens > 0 ? (
               <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
-                {fmtTokens(o.totals.unpricedTokens)} tokens are not priced (
+                {fmtTokens(o.totals.unpricedTokens)} 个 token 尚无价格（
                 {o.byModel
                   .filter((g) => g.unpricedTokens > 0)
                   .map((g) => g.label)
                   .join(", ")}
-                ). Provide a LiteLLM-format price file in the Stats settings to include them.
+                ）。可在本页设置 LiteLLM 价格文件。
               </Text>
             ) : null}
-            <Row theme={theme} left="Input" right={fmtTokens(o.totals.input)} />
-            <Row theme={theme} left="Output" right={fmtTokens(o.totals.output)} />
+            <Row theme={theme} left="输入" right={fmtTokens(o.totals.input)} />
+            <Row theme={theme} left="输出" right={fmtTokens(o.totals.output)} />
             <Row
               theme={theme}
-              left="Cache read / write"
+              left="缓存读取 / 写入"
               right={`${fmtTokens(o.totals.cacheRead)} / ${fmtTokens(o.totals.cacheWrite)}`}
             />
             <Muted theme={theme}>
               {o.index.lastScanAt
-                ? `${o.index.files} log files, scanned ${o.index.lastScanAt.slice(11, 19)} UTC`
-                : "Indexing logs..."}
+                ? `${o.index.files} 个日志文件，上次扫描 ${o.index.lastScanAt.slice(11, 19)} UTC`
+                : "正在索引用量日志……"}
             </Muted>
           </Section>
 
-          <Section theme={theme} title="Token distribution">
+          <Section theme={theme} title="Token 分布">
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
               {DIMENSIONS.map(([key, label]) => (
-                <Pressable key={key} onPress={() => setDimension(key)} style={chip(dimension === key)}>
+                <Pressable
+                  key={key}
+                  onPress={() => setDimension(key)}
+                  style={chip(dimension === key)}
+                >
                   <Text style={chipText(dimension === key)}>{label}</Text>
                 </Pressable>
               ))}
             </View>
             <GroupList theme={theme} groups={o[dimension]} />
-            <Muted theme={theme}>Bars: input, output, cache read, cache write.</Muted>
+            <Muted theme={theme}>色条：输入、输出、缓存读取、缓存写入。</Muted>
           </Section>
 
-          <Section theme={theme} title="Output speed">
-            <Row theme={theme} left="Median" right={fmtRate(o.speed.overall.median)} />
+          <Section theme={theme} title="输出速度">
+            <Row theme={theme} left="中位数" right={fmtRate(o.speed.overall.median)} />
             <Row theme={theme} left="P90" right={fmtRate(o.speed.overall.p90)} />
             {o.speed.byProvider.map((s) => (
               <Row
@@ -249,7 +249,7 @@ export function StatsScreen({ theme }: PluginScreenProps) {
             ))}
           </Section>
 
-          <Section theme={theme} title="Quota windows">
+          <Section theme={theme} title="额度窗口">
             {quota.data?.error ? <Muted theme={theme}>{quota.data.error}</Muted> : null}
             {quota.data?.providers.map((p) => (
               <View key={p.providerId} style={{ gap: 4 }}>
@@ -269,7 +269,9 @@ export function StatsScreen({ theme }: PluginScreenProps) {
                           w.usedPct === null
                             ? "-"
                             : `${Math.round(w.usedPct)}%${
-                                w.runsOutAt ? ` · out ${w.runsOutAt.slice(5, 16).replace("T", " ")}` : ""
+                                w.runsOutAt
+                                  ? ` · 预计耗尽 ${w.runsOutAt.slice(5, 16).replace("T", " ")}`
+                                  : ""
                               }`
                         }
                       />
@@ -287,29 +289,27 @@ export function StatsScreen({ theme }: PluginScreenProps) {
               </View>
             ))}
             {quota.data && quota.data.providers.length === 0 && !quota.data.error ? (
-              <Muted theme={theme}>No provider reports quota.</Muted>
+              <Muted theme={theme}>暂无提供方额度数据。</Muted>
             ) : null}
           </Section>
 
-          <Section theme={theme} title="Task efficiency">
+          <Section theme={theme} title="任务用量">
             <Muted theme={theme}>
-              {o.compactions.count} compactions, average context {fmtTokens(o.compactions.avgBefore)}{" "}
-              to {fmtTokens(o.compactions.avgAfter)}
+              {o.compactions.count} 次压缩，平均上下文 {fmtTokens(o.compactions.avgBefore)} 降至{" "}
+              {fmtTokens(o.compactions.avgAfter)}
             </Muted>
-            {o.tasks.length === 0 ? (
-              <Muted theme={theme}>No usage linked to cards yet.</Muted>
-            ) : null}
+            {o.tasks.length === 0 ? <Muted theme={theme}>暂无关联工作区的用量。</Muted> : null}
             {o.tasks.map((t) => (
-              <View key={t.cardId} style={{ gap: 2 }}>
+              <View key={t.workspaceId} style={{ gap: 2 }}>
                 <Row
                   theme={theme}
-                  left={`${t.key} ${t.title}`}
+                  left={t.workspaceId}
                   right={`${fmtTokens(t.tokens)} · ${fmtCostNote(t.cost, t.unpricedTokens)}`}
                 />
                 <Muted theme={theme}>
-                  active {fmtDuration(t.durationMs)} · waiting for you {fmtDuration(t.waitingMs)}
+                  会话时长 {fmtDuration(t.durationMs)} · 等待回复 {fmtDuration(t.waitingMs)}
                   {t.compactions.length
-                    ? ` · compacted ${t.compactions
+                    ? ` · 压缩 ${t.compactions
                         .map((c) => `${fmtTokens(c.before)}>${fmtTokens(c.after)}`)
                         .join(", ")}`
                     : ""}
@@ -318,37 +318,27 @@ export function StatsScreen({ theme }: PluginScreenProps) {
             ))}
           </Section>
 
-          <Section theme={theme} title="Resources">
-            <Row theme={theme} left="Running sessions" right={String(o.resources.runningSessions)} />
-            <Row theme={theme} left="Waiting for you" right={String(o.resources.waitingSessions)} />
+          <Section theme={theme} title="资源">
+            <Row theme={theme} left="运行中会话" right={String(o.resources.runningSessions)} />
+            <Row theme={theme} left="等待回复" right={String(o.resources.waitingSessions)} />
             {o.resources.latest ? (
               <>
                 <Row theme={theme} left="CPU" right={fmtPct(o.resources.latest.cpu)} />
-                <Row theme={theme} left="Memory" right={fmtPct(o.resources.latest.mem)} />
+                <Row theme={theme} left="内存" right={fmtPct(o.resources.latest.mem)} />
                 <Row
                   theme={theme}
-                  left="Device pool"
-                  right={`${o.resources.latest.devicesBusy} / ${o.resources.latest.devicesTotal} busy`}
+                  left="设备池"
+                  right={`${o.resources.latest.devicesBusy} / ${o.resources.latest.devicesTotal} 占用`}
                 />
               </>
             ) : (
-              <Muted theme={theme}>No resource samples yet (the scheduler writes them).</Muted>
+              <Muted theme={theme}>暂无调度资源采样。</Muted>
             )}
           </Section>
         </>
       ) : null}
+      <StatsSettingsScreen theme={theme} />
     </ScrollView>
-  );
-}
-
-export function StatsSidebarItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
-  return (
-    <SidebarRow
-      icon="ChartBar"
-      label="Stats"
-      active={currentScreen?.screenId === "main"}
-      onPress={() => openScreen({ screenId: "main" })}
-    />
   );
 }
 
@@ -358,15 +348,13 @@ const split = (text: string) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-export function StatsSettingsScreen({ theme }: PluginSurfaceProps) {
+function StatsSettingsScreen({ theme }: { theme: PluginTheme }) {
   const settings = useSettings(statsSettings);
   if (settings.status !== "ready") {
     return (
       <View style={{ padding: 16 }}>
         <Text style={{ color: theme.colors.foregroundMuted }}>
-          {settings.status === "loading"
-            ? "Loading..."
-            : `Could not load settings: ${settings.error}`}
+          {settings.status === "loading" ? "加载中……" : `设置读取失败： ${settings.error}`}
         </Text>
       </View>
     );
@@ -374,23 +362,21 @@ export function StatsSettingsScreen({ theme }: PluginSurfaceProps) {
   const { values, revision } = settings;
   const save = (next: typeof values) => void settings.save(next, revision);
   return (
-    <SettingsSection title="Usage log locations (comma separated; empty = default)">
+    <SettingsSection title="用量日志目录（逗号分隔；空白使用默认）">
       <SettingsCard>
         {(["claude", "codex", "kimi", "deepseek"] as const).map((p) => (
           <SettingsInput
             key={p}
             label={p}
-            hint={
-              p === "kimi" || p === "deepseek"
-                ? "Default path is unverified on this machine."
-                : undefined
-            }
+            hint={p === "kimi" || p === "deepseek" ? "默认路径尚未在本机验证。" : undefined}
             initialValue={values.logDirs[p].join(", ")}
-            onChangeText={(text) => save({ ...values, logDirs: { ...values.logDirs, [p]: split(text) } })}
+            onChangeText={(text) =>
+              save({ ...values, logDirs: { ...values.logDirs, [p]: split(text) } })
+            }
           />
         ))}
         <SettingsInput
-          label="Price file (LiteLLM JSON)"
+          label="价格文件（LiteLLM JSON）"
           initialValue={values.pricingFile}
           onChangeText={(text) => save({ ...values, pricingFile: text.trim() })}
         />

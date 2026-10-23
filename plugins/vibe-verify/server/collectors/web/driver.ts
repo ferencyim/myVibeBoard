@@ -43,9 +43,12 @@ export function createPlaywrightDriver(): BrowserDriver {
         const { existsSync } = await import("node:fs");
         return existsSync(chromium.executablePath())
           ? { ok: true }
-          : { ok: false, reason: "Playwright chromium is not installed (npx playwright install chromium)" };
+          : {
+              ok: false,
+              reason: "未安装 Playwright chromium（可运行 npx playwright install chromium）",
+            };
       } catch (e) {
-        return { ok: false, reason: `playwright is not available: ${String(e)}` };
+        return { ok: false, reason: `Playwright 不可用： ${String(e)}` };
       }
     },
     async open(viewport) {
@@ -56,7 +59,9 @@ export function createPlaywrightDriver(): BrowserDriver {
         if (m.type() === "error") errors.push(`console.error: ${m.text()}`);
       });
       page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
-      page.on("requestfailed", (r) => errors.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`));
+      page.on("requestfailed", (r) =>
+        errors.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`),
+      );
       return {
         async goto(url) {
           await page.goto(url, { waitUntil: "load" });

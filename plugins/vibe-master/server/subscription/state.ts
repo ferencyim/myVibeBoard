@@ -23,6 +23,17 @@ export interface MasterAlert {
 }
 
 export interface MasterStateData {
+  taskConsolidations?: Record<
+    string,
+    {
+      status: "pending" | "completed";
+      update: import("../assess/schema").MemoryUpdate;
+      repoPath: string;
+      requirementsPath: string;
+      requirementsAllowed: boolean;
+      requirementsResult?: string;
+    }
+  >;
   /** Candidate progress survives restarts; changing the preset or candidates resets it. */
   presetSelection?: { key: string; index: number; exhausted?: boolean };
   /** Set by a manual permission switch; overrides the settings default until switched back. */
@@ -39,6 +50,7 @@ export interface MasterSessionNote {
   model: string;
   thinking: string | null;
   retiredReason?: string;
+  switchReason?: string;
   retiredAt?: string;
 }
 

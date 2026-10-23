@@ -44,7 +44,7 @@ write this block.
   `app.build` remote `xcodebuild` + install, launch, screenshots, recordVideo (mp4), crash-report scan, GIF,
   pre-running simulator left running. Sample: `docs/vibe/screens/ios-evidence-sample.png`.
   Real run: `VIBE_E2E_IOS=1 VIBE_MAC_HOST=<alias> [VIBE_MAC_DEVELOPER_DIR=...] [VIBE_E2E_IOS_DEVICE="iPhone 16"]
-  [VIBE_E2E_IOS_APP=<local .app>] [VIBE_E2E_IOS_BUILD_CWD=<project dir on the Mac>] npm test`. A test app is a
+[VIBE_E2E_IOS_APP=<local .app>] [VIBE_E2E_IOS_BUILD_CWD=<project dir on the Mac>] npm test`. A test app is a
   single-file SwiftUI project (`EvidenceApp.swift` + a minimal `project.pbxproj`, bundle id
   `com.example.vibeverify.evidence`, `GENERATE_INFOPLIST_FILE=YES`) built with
   `xcodebuild -scheme EvidenceApp -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO build`.
@@ -56,42 +56,31 @@ write this block.
   launcher exits and hands over to another process (e.g. Windows 11 Notepad) need `windowTitle`.
   Real run on this machine: `VIBE_E2E_DESKTOP=1 npm test`.
 
-## Verification pipeline (WP-20)
+## 原生任务验证（WP-112）
 
-A `card.moved to=verifying` event starts `server/pipeline`:
+新流程只接收已确认的 workspace/task，旧 card.moved、旧验证恢复和旧写操作 RPC 已停用；旧 UI 与只读证据保留到 WP-114 清理。不创建伪卡片，也不复制原生聊天。
 
-- The verifier agent runs on the card's verification model (WP-108: `resolveModel("verifier")`, card -> project ->
-  global default). Only when none is set anywhere does the old pick run (a different provider than the worker when
-  possible; `pickVerifier`), and the notes say so.
-- `needs_evidence` cards (mode `evidence`): the independent, read-only verifier agent first replies with a verify config (`VerifyConfigSchema`), the
-  collectors of the project type run (`server/registry.ts`: web, backend, android, ios, desktop; Android leases go
-  through the `device_lease` table), tests/lint run, then the verifier judges each check from the evidence.
-  The verifier never writes: it answers in its reply. Read-only is enforced by the permission policy
-  (`server/verifier/policy.ts`), a `git status` + HEAD snapshot around each round (a changed tree voids the
-  evidence, conclusion `doubt`), and the board MCP for `VIBE_ROLE=verifier` (read + comment).
-- other cards (mode `tests_only`): the project's tests and lint, then the verifier judges each check from their logs.
-- Conclusion = fail > doubt > pass. `fail` sends the card back to `in_progress` (actor `verifier`) and the failing
-  checks go to the worker session as its next prompt; `doubt`/`pass` leave the card in `verifying` for the user.
+任务进入 reviewing/verifying 后，先核对 worktree 的 HEAD 与完整 Git 状态。所有改动（包括 .vibe/verify.json）必须已收口提交。复核模型可选，验证模型必须来自本轮冻结的角色快照；预设后续修改不影响本轮。
 
-Plugin RPCs (`shared/rpc.ts`): `vibe.verify.get`, `vibe.verify.list`, `vibe.verify.evidence`,
-`vibe.verify.approve` (-> done), `vibe.verify.reject` (comment -> in_progress + worker prompt),
-`vibe.verify.rerun`.
+每个辅助会话先通过 scheduler.task_resource_request 申请计算名额与仓库验证屏障，再创建并绑定原生 agent。正常并发、文件、设备或端口争用按 retryable 回执排队；停止或确认变化撤销等待。结果不明保留资源并暂停。主/子写者未停止时不会运行验证，复核与验证的原生 parent 都是规划 anchor。
 
-Evidence lives in `$VIBE_HOME/verify/<card key>/<verification id>/`. Baseline worktrees for web before/after
-go under `$VIBE_WORKTREE_ROOT` (default `$VIBE_HOME/worktrees`; on Windows point it at D:).
+代码复核先运行；严重问题退回修复，其它结果再进入必做证据验证。保留 Web、backend、Android、iOS、desktop 采集器、自动测试/lint、性能基线与设备租约。验证配置由只读模型直接回复，按项目全部平台采集；不可用、降级或缺证据明确记为存疑。每项 pass 都必须引用本轮证据文件，遗漏或重复检查编号不能通过。
 
-## Model review (WP-80)
+结论按 fail > doubt > pass 聚合。相同 workspace 与 confirmedAt 下的复核/验证 fail 共用自动退回上限（maxReviewReturns，0 表示不自动退回）。未超限的 fail 切回 executing 并发布 task.fix_requested，由编排 owner 重新申请写资源；验证器不会直接启动写入者。doubt、超限或停止不明暂停；pass 进入 awaiting_acceptance，Git 收尾由 WP-111 观察原生用户独立「通过」后处理。
 
-A card with `reviewerPresetId` gets an extra read-only reviewer agent (that preset's provider/model, same
-permission hook, tree-snapshot guard and `VIBE_ROLE=verifier` MCP as the verifier) after the checks of every
-verification. It receives the diff (merge-base of HEAD with the preset's base branch / main / master, working tree
-included), the card text and the latest plan, and answers `{verdict, summary, issues[{severity, file?, line?, text}]}`.
-Sequential (after the checks) so the tree is stable and the findings of checks and review go to the worker in one return.
+验证过程中 HEAD 或工作树变化会将本轮全部判定作废为 doubt；验收 owner 仍须在「通过」时再次核对已验证 commit 与工作树。重启把未完成的任务验证标为存疑并暂停，先核对原生状态和资源，绝不回放旧运行。辅助会话保留原生历史，权限策略在结束与重启后仍保持只读；任务辅助会话不允许直接执行 shell，命令由证据采集器负责。
 
-- Items: `verification_item.kind = review`; one per issue with method `review:<severity>`, or one `review` row (pass).
-  `severe` -> `fail` (card verifying -> in_progress, actor verifier, reason "review found severe issues", the
-  reject event carries `reviewReturn: true`; the worker gets the findings as prompt); `major`/`minor` -> `doubt`.
-- Events: `review.started`, `review.finished` (verdict `pass|issues|severe`).
-- Loop guard: after `VIBE_REVIEW_MAX_RETURNS` (default 3) consecutive review-caused returns, severe issues are only
-  `doubt` and a `master.alert` of kind `review_loop` is published (vibe-master notify pushes it).
-- A reviewer that cannot start, answers garbage or modifies the tree gives a `doubt` row, never a return.
+结果回 anchor 的 task-verification timeline 摘要，可按需展开报告、日志与图片；原生问答和工具历史仍在辅助 agent tab。报告及文件在 $VIBE_HOME/verify/tasks/<verification id>/，记录 workspaceId、confirmedAt 与 commitHash。证据读取核对真实路径，拒绝越出证据根目录。
+
+新增 RPC：vibe.verify.task.get({workspaceId, verificationId?})、vibe.verify.task.rerun({workspaceId})。前者只读，后者仅在本轮确认仍有效且当前无验证运行时接受。共享 createTaskVerificationCommands(db).list(workspaceId, confirmedAt) 提供本轮验证 commit/结论，Git owner 只能使用最新已结束的 pass。
+
+模型不可用、额度或登录失败在旧原生会话确认停止后按冻结候选接续，并记录实际 provider/model、candidateIndex 与前序会话；普通测试/工具失败不轮换。上下文冷交接会暂停并要求重新验证，避免把跨代码状态的证据拼为通过。
+
+验证命令：
+
+```bash
+npm test -- test/task-pipeline.test.ts test/task-resources.test.ts test/launcher.test.ts
+npm run typecheck
+```
+
+真实模型、Web/Android 与隔离 daemon 的验收证据由 WP-112 总报告记录；单测使用可注入 runner/模型/采集器，不冒充真实模型或设备实测。

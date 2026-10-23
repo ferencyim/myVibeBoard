@@ -55,6 +55,34 @@ ALTER TABLE verification ADD COLUMN kind TEXT NOT NULL DEFAULT 'check' CHECK (ki
 ALTER TABLE verification_item ADD COLUMN kind TEXT NOT NULL DEFAULT 'check' CHECK (kind IN ('check','review'));
 `,
   },
+  {
+    version: 3,
+    name: "workspace_task_evidence",
+    foreignKeysOff: true,
+    sql: `
+CREATE TABLE verification_new (
+  id TEXT PRIMARY KEY,
+  card_id TEXT REFERENCES card(id) ON DELETE CASCADE,
+  commit_hash TEXT NOT NULL,
+  conclusion TEXT CHECK (conclusion IS NULL OR conclusion IN ('pass','doubt','fail')),
+  verifier_agent_id TEXT,
+  mode TEXT NOT NULL CHECK (mode IN ('evidence','tests_only')),
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  kind TEXT NOT NULL DEFAULT 'check' CHECK (kind IN ('check','review')),
+  workspace_id TEXT REFERENCES task(workspace_id),
+  confirmed_at TEXT,
+  project_id TEXT
+);
+INSERT INTO verification_new (id,card_id,commit_hash,conclusion,verifier_agent_id,mode,started_at,finished_at,kind)
+SELECT id,card_id,commit_hash,conclusion,verifier_agent_id,mode,started_at,finished_at,kind FROM verification;
+UPDATE verification_new SET project_id = (SELECT project_id FROM card WHERE card.id = verification_new.card_id);
+DROP TABLE verification;
+ALTER TABLE verification_new RENAME TO verification;
+CREATE INDEX idx_verification_card ON verification(card_id,started_at);
+CREATE INDEX idx_verification_workspace ON verification(workspace_id,confirmed_at,started_at);
+`,
+  },
 ];
 
 export const CONTEXT_MIGRATIONS: Migration[] = [
@@ -114,6 +142,11 @@ CREATE TABLE device_lease (
 CREATE UNIQUE INDEX idx_device_lease_active ON device_lease(device_id) WHERE released_at IS NULL;
 `,
   },
+  {
+    version: 2,
+    name: "workspace_task_leases",
+    sql: `ALTER TABLE device_lease ADD COLUMN workspace_id TEXT;`,
+  },
 ];
 
 export const STATS_MIGRATIONS: Migration[] = [
@@ -148,6 +181,19 @@ CREATE TABLE usage_cursor (
   mtime_ms INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+`,
+  },
+  {
+    version: 2,
+    name: "workspace_usage_attribution",
+    sql: `
+ALTER TABLE usage_event ADD COLUMN project_id TEXT;
+ALTER TABLE usage_event ADD COLUMN workspace_id TEXT;
+ALTER TABLE usage_event ADD COLUMN role TEXT;
+ALTER TABLE usage_event ADD COLUMN agent_id TEXT;
+UPDATE usage_event SET project_id = (SELECT project_id FROM card WHERE card.id = usage_event.card_id);
+CREATE INDEX idx_usage_event_workspace ON usage_event(workspace_id,ts);
+CREATE INDEX idx_usage_event_project ON usage_event(project_id,ts);
 `,
   },
 ];
@@ -198,6 +244,22 @@ CREATE TABLE work_counter (
   since TEXT NOT NULL,
   PRIMARY KEY (project_id, kind)
 );
+`,
+  },
+  {
+    version: 2,
+    name: "workspace_maintenance_tasks",
+    sql: `
+ALTER TABLE maintenance_run ADD COLUMN workspace_ids_json TEXT NOT NULL DEFAULT '[]';
+CREATE TABLE maintenance_task (
+  workspace_id TEXT PRIMARY KEY REFERENCES task(workspace_id) ON DELETE CASCADE,
+  rule_id TEXT NOT NULL REFERENCES maintenance_rule(id),
+  project_id TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  findings_json TEXT NOT NULL DEFAULT '[]',
+  rejected_at TEXT
+);
+CREATE INDEX idx_maintenance_task_dedupe ON maintenance_task(rule_id,project_id,dedupe_key);
 `,
   },
 ];

@@ -102,27 +102,52 @@ function setup(paseoOpts: Parameters<typeof fakePaseo>[0] = {}, withFallbacks = 
 const failure = { message: "Claude AI usage limit reached", category: "quota" as const };
 
 describe("reassigner", () => {
-  it("continues after the active candidate following a cold context handoff", async () => {
+  it("continues after the active candidate following an explicitly enabled legacy cold context handoff", async () => {
     const t = setup({}, false);
-    t.board.presets.update(t.a.id, { models: [
-      { provider: "claude", model: "opus", thinking: "", permissionMode: "auto" },
-      { provider: "codex", model: "gpt-5", thinking: "", permissionMode: "auto" },
-      { provider: "gemini", model: "pro", thinking: "", permissionMode: "auto" },
-    ] });
-    const r = createReassigner({ board: t.board, getPaseo: () => t.fake.paseo, newAgentId: t.nextId, log: () => {} });
+    t.board.presets.update(t.a.id, {
+      models: [
+        { provider: "claude", model: "opus", thinking: "", permissionMode: "auto" },
+        { provider: "codex", model: "gpt-5", thinking: "", permissionMode: "auto" },
+        { provider: "gemini", model: "pro", thinking: "", permissionMode: "auto" },
+      ],
+    });
+    const r = createReassigner({
+      board: t.board,
+      getPaseo: () => t.fake.paseo,
+      newAgentId: t.nextId,
+      log: () => {},
+    });
     const first = await r.reassign(t.session.id, failure);
     const session = first.reassigned!;
     t.store.sessions.setState(session.id, "idle");
     let now = 0;
+    const handoff = vi.fn(async () => "cold-agent");
+    const requestHandoff = vi.fn();
     const scheduler = createCompactionScheduler({
-      store: t.store, now: () => now, config: () => ({ enabled: true, ttlSeconds: {}, compactProviders: [] }),
-      buildContext: () => "context", pollMs: 0,
-      host: { run: async () => ({ status: "idle" }), handoff: async () => "cold-agent", archive: async () => {} },
+      // Production excludes old cards; this harness still verifies their model cursor survives a handoff.
+      includeLegacyCards: true,
+      store: t.store,
+      now: () => now,
+      config: () => ({ enabled: true, ttlSeconds: {}, compactProviders: [] }),
+      buildContext: () => "context",
+      pollMs: 0,
+      host: {
+        run: async () => ({ status: "idle" }),
+        handoff,
+        requestHandoff,
+        archive: async () => {},
+      },
     });
     scheduler.onTurnEnded({ id: session.agentId, provider: "codex", cwd: t.worktree });
     now = 250_000;
     expect(await scheduler.tick()).toEqual([{ sessionId: session.id, action: "handoff" }]);
+    expect(handoff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining(`${t.card.id}.md`),
+    );
+    expect(requestHandoff).not.toHaveBeenCalled();
     const cold = t.store.sessions.getByAgent("cold-agent")!;
+    expect(cold.workspaceId).toBe(session.workspaceId);
     const second = await r.reassign(cold.id, failure);
     expect(second.reassigned?.currentProvider).toBe("gemini");
     expect(t.fake.created.map((a) => a.config.provider)).toEqual(["codex/gpt-5", "gemini/pro"]);

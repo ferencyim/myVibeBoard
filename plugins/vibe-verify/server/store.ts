@@ -28,7 +28,8 @@ export const SUMMARY: Record<Judgement, string> = {
 /** fail beats doubt beats pass; an unjudged item counts as doubt. */
 export function aggregate(judgements: ReadonlyArray<Judgement | null>): Judgement {
   if (judgements.includes("fail")) return "fail";
-  if (judgements.length === 0 || judgements.some((j) => j === null || j === "doubt")) return "doubt";
+  if (judgements.length === 0 || judgements.some((j) => j === null || j === "doubt"))
+    return "doubt";
   return "pass";
 }
 
@@ -55,7 +56,11 @@ export interface VerifyStore {
     check: { text: string; method: string; kind?: "check" | "review" },
   ): VerificationItem;
   judgeItem(itemId: string, judgement: Judgement, note: string, evidenceIds?: string[]): void;
-  addEvidence(verificationId: string, itemId: string | null, artifact: EvidenceArtifact): EvidenceFile;
+  addEvidence(
+    verificationId: string,
+    itemId: string | null,
+    artifact: EvidenceArtifact,
+  ): EvidenceFile;
   finish(verificationId: string, conclusion: Judgement, projectId: string | null): void;
   writeNotes(verificationId: string, notes: string[]): void;
   detail(verificationId: string): VerificationDetail | undefined;
@@ -94,7 +99,9 @@ export function createVerifyStore(
       });
     },
     get: (id) => {
-      const row = db.prepare("SELECT * FROM verification WHERE id = ?").get(id);
+      const row = db
+        .prepare("SELECT * FROM verification WHERE id = ? AND workspace_id IS NULL")
+        .get(id);
       return row ? decodeRow(VerificationSchema, row) : undefined;
     },
     latest: (cardId) => store.list(cardId).at(-1),
@@ -102,19 +109,25 @@ export function createVerifyStore(
       decodeRows(
         VerificationSchema,
         db
-          .prepare("SELECT * FROM verification WHERE card_id = ? ORDER BY started_at, id")
+          .prepare(
+            "SELECT * FROM verification WHERE card_id = ? AND workspace_id IS NULL ORDER BY started_at, id",
+          )
           .all(cardId),
       ),
     running: () =>
       decodeRows(
         VerificationSchema,
-        db.prepare("SELECT * FROM verification WHERE finished_at IS NULL").all(),
+        db
+          .prepare("SELECT * FROM verification WHERE workspace_id IS NULL AND finished_at IS NULL")
+          .all(),
       ),
     items: (verificationId) =>
       decodeRows(
         VerificationItemSchema,
         db
-          .prepare("SELECT * FROM verification_item WHERE verification_id = ? ORDER BY position, id")
+          .prepare(
+            "SELECT * FROM verification_item WHERE verification_id = ? ORDER BY position, id",
+          )
           .all(verificationId),
       ),
     evidence: (verificationId) =>
@@ -131,11 +144,18 @@ export function createVerifyStore(
     ensureThumb(evidence) {
       if (evidence.thumbPath) return evidence.thumbPath;
       const thumbPath = writeThumbnail(evidence.path);
-      if (thumbPath) db.prepare("UPDATE evidence_file SET thumb_path = ? WHERE id = ?").run(thumbPath, evidence.id);
+      if (thumbPath)
+        db.prepare("UPDATE evidence_file SET thumb_path = ? WHERE id = ?").run(
+          thumbPath,
+          evidence.id,
+        );
       return thumbPath;
     },
     setVerifier(verificationId, agentId) {
-      db.prepare("UPDATE verification SET verifier_agent_id = ? WHERE id = ?").run(agentId, verificationId);
+      db.prepare("UPDATE verification SET verifier_agent_id = ? WHERE id = ?").run(
+        agentId,
+        verificationId,
+      );
     },
     addItem(verificationId, check) {
       const id = newId(now().getTime());
@@ -170,7 +190,8 @@ export function createVerifyStore(
         itemId,
         artifact.kind,
         artifact.path,
-        artifact.thumbPath ?? (artifact.kind === "screenshot" ? writeThumbnail(artifact.path) : null),
+        artifact.thumbPath ??
+          (artifact.kind === "screenshot" ? writeThumbnail(artifact.path) : null),
         artifact.sha256 ?? "",
         artifact.capturedAt,
         artifact.commitHash,
@@ -217,7 +238,9 @@ export function createVerifyStore(
       }
       return {
         verification,
-        summary: verification.conclusion ? SUMMARY[verification.conclusion] : "Verification running",
+        summary: verification.conclusion
+          ? SUMMARY[verification.conclusion]
+          : "Verification running",
         items: store.items(verificationId),
         evidence: store.evidence(verificationId),
         notes,

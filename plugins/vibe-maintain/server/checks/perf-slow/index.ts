@@ -1,29 +1,5 @@
-// "perf-slow" check (WP-47): reads slow records registered in .vibe/maintenance.yml (JSON Lines request
-// logs, benchmark results, MySQL/PostgreSQL slow logs), keeps what is new since the last run, groups
-// it by call site, skips sites that already have an open card, reproduces the worst one and files it.
-//
-//   rules:
-//     - name: perf-slow
-//       trigger: { kind: time, cron: "0 4 * * *" }
-//       check:
-//         type: perf-slow
-//         sources:
-//           - { name: api, kind: jsonl, path: logs/access.jsonl, threshold_ms: 500,
-//               fields: { site: route, ms: duration_ms, ts: time } }
-//           - { kind: bench-json, path: bench/result.json, threshold_ms: 50 }
-//           - { kind: mysql-slow, path: /var/log/mysql/slow.log, threshold_ms: 1000 }
-//         repro: { command: node, args: [bench/run.js, "{site}"], runs: 3 }
-//       output: fix            # reproduced -> worker + before/after evidence; otherwise a draft card
-//       agent: codex
-//       priority: low
-//       daily_cap: 1
-//
-// Reproduction: `repro` is run `runs` times in the repository; its median wall time above the threshold
-// means "reproduced". The same command goes into the card's verify config (backend.perf), so vibe-verify
-// measures it again before (baseline worktree) and after the fix. Without `repro`, or when the slowness
-// does not reproduce, the card is a draft with the investigation notes instead of an automatic fix.
+// 增量读取性能慢记录，只生成维护规划；复现与前后对比由用户确认后的执行和验证阶段完成。
 
-import { execFile } from "node:child_process";
 import { open, stat } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { z } from "zod";
@@ -52,7 +28,10 @@ const SourceSchema = z.object({
   /** Slow samples needed before a call site counts. */
   min_count: z.number().int().positive().default(1),
   /** jsonl only: names of the fields holding the call site, the duration and the timestamp. */
-  fields: z.object({ site: z.string(), ms: z.string(), ts: z.string(), method: z.string() }).partial().optional(),
+  fields: z
+    .object({ site: z.string(), ms: z.string(), ts: z.string(), method: z.string() })
+    .partial()
+    .optional(),
   unit: z.enum(TIME_UNITS as [string, ...string[]]).default("ms"),
 });
 const ReproSchema = z.object({
@@ -69,38 +48,6 @@ const OptionsSchema = z.object({
   max_listed: z.number().int().positive().default(10),
 });
 export type PerfSlowOptions = z.output<typeof OptionsSchema>;
-
-/** Runs a reproduction command once; injectable for tests. */
-export type BenchRunner = (input: {
-  command: string;
-  args: string[];
-  cwd: string;
-  timeoutMs: number;
-}) => Promise<{ exitCode: number; durationMs: number; output: string }>;
-
-export const execBench: BenchRunner = ({ command, args, cwd, timeoutMs }) =>
-  new Promise((resolve) => {
-    const started = Date.now();
-    execFile(
-      command,
-      args,
-      {
-        cwd,
-        timeout: timeoutMs,
-        maxBuffer: 8 * 1024 * 1024,
-        windowsHide: true,
-        shell: process.platform === "win32" && /^(npm|npx|pnpm|yarn)$/.test(command),
-      },
-      (error, stdout, stderr) => {
-        const code = (error as { code?: unknown } | null)?.code;
-        resolve({
-          exitCode: error ? (typeof code === "number" ? code : 1) : 0,
-          durationMs: Date.now() - started,
-          output: `${stdout}${stderr}`.slice(-2000),
-        });
-      },
-    );
-  });
 
 const MAX_READ_BYTES = 8 * 1024 * 1024;
 
@@ -121,7 +68,8 @@ export async function readSource(
   if (!info) return null;
   if (source.kind === "bench-json") {
     const mtime = Math.floor(info.mtimeMs);
-    if (cursor !== undefined && mtime <= cursor) return { samples: [], next: cursor, skippedBytes: 0 };
+    if (cursor !== undefined && mtime <= cursor)
+      return { samples: [], next: cursor, skippedBytes: 0 };
     const handle = await open(file, "r");
     try {
       const buffer = Buffer.alloc(Math.min(info.size, MAX_READ_BYTES));
@@ -168,10 +116,6 @@ export async function readSource(
   return { samples, next: from + complete.length, skippedBytes };
 }
 
-const median = (values: number[]) => {
-  const s = [...values].sort((a, b) => a - b);
-  return s[Math.floor(s.length / 2)]!;
-};
 const round = (n: number) => Math.round(n * 10) / 10;
 
 interface Candidate extends SiteStats {
@@ -180,25 +124,15 @@ interface Candidate extends SiteStats {
   key: string;
 }
 
-interface ReproResult {
-  command: string;
-  args: string[];
-  runs: number[];
-  medianMs: number;
-  failed: boolean;
-  output: string;
-  reproduced: boolean;
-  thresholdMs: number;
-}
-
 const substitute = (text: string, site: string) => text.replaceAll("{site}", site);
 
-export function createPerfSlowCheck(deps: { bench?: BenchRunner } = {}): CheckFn {
-  const bench = deps.bench ?? execBench;
+export function createPerfSlowCheck(): CheckFn {
   return async (ctx: CheckContext): Promise<CheckOutput | null> => {
     const parsed = OptionsSchema.safeParse(ctx.options);
     if (!parsed.success) {
-      throw new Error(`perf-slow options: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`);
+      throw new Error(
+        `perf-slow options: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`,
+      );
     }
     const options = parsed.data;
     const repoPath = ctx.project.repoPath;
@@ -216,7 +150,8 @@ export function createPerfSlowCheck(deps: { bench?: BenchRunner } = {}): CheckFn
         continue;
       }
       nextCursors.set(cursorKey, read.next);
-      if (read.skippedBytes > 0) notes.push(`来源「${name}」积压过多，跳过了最旧的 ${read.skippedBytes} 字节。`);
+      if (read.skippedBytes > 0)
+        notes.push(`来源「${name}」积压过多，跳过了最旧的 ${read.skippedBytes} 字节。`);
       for (const stats of aggregate(read.samples, source.threshold_ms)) {
         if (stats.slowCount < source.min_count) continue;
         candidates.push({
@@ -232,110 +167,94 @@ export function createPerfSlowCheck(deps: { bench?: BenchRunner } = {}): CheckFn
     };
 
     // Compare with the existing cards: a call site that already has an open card is not filed again.
-    const open = candidates.filter((c) => ctx.hasOpenCard(c.key));
-    const fresh = candidates.filter((c) => !ctx.hasOpenCard(c.key)).sort((a, b) => b.p95Ms / b.thresholdMs - a.p95Ms / a.thresholdMs);
+    const fresh = candidates.sort((a, b) => b.p95Ms / b.thresholdMs - a.p95Ms / a.thresholdMs);
     if (fresh.length === 0) {
       commit();
       return null;
     }
     const top = fresh[0]!;
     const others = fresh.slice(1);
-    if (open.length) notes.push(`${open.length} 个调用点已有未完成的卡片，已跳过：${open.map((c) => c.site).join("、")}`);
 
-    // ---- reproduce ----------------------------------------------------------------------------
-    let repro: ReproResult | null = null;
-    if (options.repro) {
-      const cfg = options.repro;
-      const args = cfg.args.map((a) => substitute(a, top.site));
-      const command = substitute(cfg.command, top.site);
-      const runs: number[] = [];
-      let failed = false;
-      let output = "";
-      for (let n = 0; n < cfg.runs; n++) {
-        const res = await bench({ command, args, cwd: repoPath, timeoutMs: cfg.timeout_s * 1000 });
-        runs.push(res.durationMs);
-        output = res.output;
-        if (res.exitCode !== 0) {
-          failed = true;
-          break;
-        }
-      }
-      const thresholdMs = cfg.threshold_ms ?? top.thresholdMs;
-      const medianMs = median(runs);
-      repro = { command, args, runs, medianMs, failed, output, reproduced: !failed && medianMs > thresholdMs, thresholdMs };
-    }
-
-    const automatic = repro?.reproduced === true;
     const findings: Finding[] = [top, ...others].slice(0, options.max_listed).map((c, i) => ({
       category: i === 0 ? "slow_primary" : "slow_other",
       subject: c.site,
-      detail: `${c.source}: ${c.slowCount}/${c.count} 次超过 ${c.thresholdMs}ms，p95 ${round(c.p95Ms)}ms，最大 ${round(c.maxMs)}ms`,
-      data: { source: c.source, thresholdMs: c.thresholdMs, count: c.count, slowCount: c.slowCount, p95Ms: round(c.p95Ms), maxMs: round(c.maxMs), meanMs: round(c.meanMs), lastTs: c.lastTs, dedupeKey: c.key },
-    }));
-    if (repro) {
-      findings.push({
-        category: "repro",
-        subject: top.site,
-        detail: repro.failed
-          ? `复现命令失败：${repro.output.trim().slice(-300)}`
-          : `复现命令 ${repro.runs.length} 次耗时 ${repro.runs.join("/")}ms，中位 ${round(repro.medianMs)}ms，阈值 ${repro.thresholdMs}ms，${repro.reproduced ? "已复现" : "未复现"}`,
-        data: repro,
-      });
-    }
-
-    const verifyJson = repro && {
-      backend: {
-        perf: {
-          label: top.site,
-          command: repro.command,
-          args: repro.args,
-          runs: options.repro!.runs,
-          thresholdMs: repro.thresholdMs,
-          beforeMs: round(repro.medianMs),
-        },
+      detail:
+        c.source +
+        ": " +
+        c.slowCount +
+        "/" +
+        c.count +
+        " 次超过 " +
+        c.thresholdMs +
+        "ms，p95 " +
+        round(c.p95Ms) +
+        "ms",
+      data: {
+        source: c.source,
+        thresholdMs: c.thresholdMs,
+        count: c.count,
+        slowCount: c.slowCount,
+        p95Ms: round(c.p95Ms),
+        maxMs: round(c.maxMs),
+        lastTs: c.lastTs,
+        dedupeKey: c.key,
       },
-    };
-
+    }));
+    const repro = options.repro;
+    const verifyJson = repro
+      ? {
+          backend: {
+            perf: {
+              label: top.site,
+              command: substitute(repro.command, top.site),
+              args: repro.args.map((arg) => substitute(arg, top.site)),
+              runs: repro.runs,
+              thresholdMs: repro.threshold_ms ?? top.thresholdMs,
+            },
+          },
+        }
+      : null;
     const body = [
-      `## 性能慢记录：${top.site}`,
-      "",
-      `- 来源：${top.source}；新增记录中 ${top.slowCount}/${top.count} 次超过阈值 ${top.thresholdMs}ms，p95 ${round(top.p95Ms)}ms，最大 ${round(top.maxMs)}ms${top.lastTs ? `，最近一次 ${top.lastTs}` : ""}`,
+      "## 性能慢记录：" + top.site,
+      "- 来源：" +
+        top.source +
+        "；新增慢记录 " +
+        top.slowCount +
+        "/" +
+        top.count +
+        " 次，p95 " +
+        round(top.p95Ms) +
+        "ms，阈值 " +
+        top.thresholdMs +
+        "ms。",
       repro
-        ? repro.failed
-          ? `- 复现：命令 \`${[repro.command, ...repro.args].join(" ")}\` 执行失败，未能复现。`
-          : `- 复现：\`${[repro.command, ...repro.args].join(" ")}\` 运行 ${repro.runs.length} 次（${repro.runs.join("/")}ms），中位 ${round(repro.medianMs)}ms，${repro.reproduced ? "**已复现**（超过" : "**未复现**（未超过"} ${repro.thresholdMs}ms）`
-        : "- 复现：规则未配置 `repro` 命令，无法自动复现与度量修复效果。",
-      automatic ? "" : "- **结论：没有把握自动修复，已降级为草稿卡**，供人工或总 agent 评估后再决定。",
-      "",
-      ...(others.length
+        ? "- 已配置复现命令；当前未执行，待用户确认方案后复现、修复并生成前后对比证据。"
+        : "- 尚未配置复现命令，请在规划中确定复现与度量方法。",
+      ...others
+        .slice(0, options.max_listed)
+        .map(
+          (candidate) =>
+            "- 其它调用点：" + candidate.site + "，p95 " + round(candidate.p95Ms) + "ms",
+        ),
+      ...notes.map((note) => "- " + note),
+    ].join("\n");
+    const instructions = [
+      "先只读规划，等待用户 /执行 后才进行以下工作：",
+      "1. 复现慢调用并记录修复前耗时；若复现失败，向用户说明并调整方案，禁止假报已修复。",
+      "2. 做最小修复并跑项目测试。",
+      "3. 验证阶段在基线提交与修复提交分别运行复现命令，生成 perf-compare.json 前后耗时对比证据。",
+      ...(verifyJson
         ? [
-            "### 其它超阈值调用点",
-            ...others.slice(0, options.max_listed).map((c) => `- ${c.site}（${c.source}）：p95 ${round(c.p95Ms)}ms，${c.slowCount}/${c.count} 次超阈值`),
-            "",
+            "在确认后的执行阶段合并以下配置到 .vibe/verify.json，保留其它键；需要新增脚本时列入 copyToBaseline。",
+            "\x60\x60\x60json",
+            JSON.stringify(verifyJson, null, 2),
+            "\x60\x60\x60",
           ]
         : []),
-      ...(notes.length ? ["### 说明", ...notes.map((n) => `- ${n}`), ""] : []),
-      "_已知限制：数据库慢日志按语句指纹（字面量替换为 ?）去重；非标准日志格式可能无法解析。_",
-    ]
-      .filter((l) => l !== "")
-      .join("\n");
-
-    const instructions = automatic
-      ? [
-          "# 性能慢记录修复任务",
-          `1. 先复现并记录“修复前”耗时：运行 \`${[repro!.command, ...repro!.args].join(" ")}\`（中位 ${round(repro!.medianMs)}ms，阈值 ${repro!.thresholdMs}ms）。`,
-          "2. 定位热点（查询、循环里的 IO、缺索引、重复计算等），做最小修复，不改变行为；补/调整测试。",
-          "3. 在 worktree 的 `.vibe/verify.json` 合并写入下面的 backend.perf 段（保留文件里已有的其它键）。验证阶段会在基线（修复前的提交）和当前提交上各跑一遍该命令，生成「修复前 vs 修复后」耗时对比证据。",
-          "   如果复现命令需要你新增的脚本，把脚本相对路径列入 `copyToBaseline`，验证时会复制到基线目录。",
-          "```json",
-          JSON.stringify(verifyJson, null, 2),
-          "```",
-          "4. 修复后再跑一遍复现命令与项目测试，在最终报告里写出前后耗时。",
-          "5. 如果找不到有把握的修复：不要提交代码改动，用 `vibe_comment` 写下排查结论（复现步骤、怀疑的热点、已排除项、建议），并在最终报告以 `PERF-INCONCLUSIVE:` 开头，由人工决定下一步。",
-        ].join("\n")
-      : undefined;
-
-    const title = `性能慢：${top.site}（p95 ${round(top.p95Ms)}ms，阈值 ${top.thresholdMs}ms）${automatic ? "" : repro && !repro.failed ? "（未复现）" : ""}`;
+      "4. 无法确定安全修复时，在原生会话报告排查结果和下一步建议，等待用户决定。",
+    ].join("\n");
+    const title =
+      "性能慢：" + top.site + "（p95 " + round(top.p95Ms) + "ms，阈值 " + top.thresholdMs + "ms）";
     return {
       title,
       body,
@@ -343,15 +262,9 @@ export function createPerfSlowCheck(deps: { bench?: BenchRunner } = {}): CheckFn
       notes,
       dedupeKey: top.key,
       instructions,
-      forceDraft: !automatic,
-      needsEvidence: automatic ? true : undefined,
-      acceptance: automatic
-        ? [
-            `- [ ] 复现命令修复后中位耗时 ≤ ${repro!.thresholdMs}ms，且明显低于修复前（${round(repro!.medianMs)}ms）`,
-            "- [ ] 证据包含「修复前 vs 修复后」耗时对比（perf-compare.json）",
-            "- [ ] 项目测试通过，行为不变",
-          ].join("\n")
-        : undefined,
+      needsEvidence: true,
+      acceptance:
+        "- [ ] 使用同一复现命令取得基线与修复后 perf-compare.json\n- [ ] 项目测试通过且行为不变",
       commit,
     };
   };

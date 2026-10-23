@@ -66,11 +66,17 @@ describe("wake queue", () => {
   });
 });
 
-function runtimeFor(board: ReturnType<typeof setupBoard>, replies: (prompt: string) => string, over = {}) {
+function runtimeFor(
+  board: ReturnType<typeof setupBoard>,
+  replies: (prompt: string) => string,
+  over = {},
+) {
   const clock = new ManualClock();
   const fake = fakePaseo(({ prompt }) => replies(prompt));
   const settings = defaultSettings(over);
   const runtime = createMasterRuntime({
+    admitMaster: async () => async () => undefined,
+    admitMemory: async () => async () => undefined,
     db: board.db,
     store: board.store,
     getPaseo: () => fake.paseo,
@@ -91,11 +97,18 @@ const CONSOLIDATED = JSON.stringify({
 function finish(board: ReturnType<typeof setupBoard>, title: string) {
   const card = board.store.cards.create({ projectId: board.project.id, title }, "user");
   board.store.cards.move(card.id, { to: "todo", actor: "user" });
-  const dispatched = board.store.cards.dispatch({ cardId: card.id, agentId: `worker-${title}`, provider: "claude", worktree: null });
+  const dispatched = board.store.cards.dispatch({
+    cardId: card.id,
+    agentId: `worker-${title}`,
+    provider: "claude",
+    worktree: null,
+  });
   return { card, dispatched };
 }
 const memoryNote = (board: ReturnType<typeof setupBoard>, cardId: string) =>
-  board.store.events.list(cardId).find((e) => (e.body as { kind?: string })?.kind === "memory_update");
+  board.store.events
+    .list(cardId)
+    .find((e) => (e.body as { kind?: string })?.kind === "memory_update");
 
 describe("wake triggers", () => {
   it("stays out of the card flow: creating, editing, review requests and questions wake nobody", async () => {
@@ -112,8 +125,15 @@ describe("wake triggers", () => {
       payload: { cardId: card.id, requestedBy: "user" },
     });
     board.store.cards.move(card.id, { to: "todo", actor: "user" });
-    const dispatched = board.store.cards.dispatch({ cardId: card.id, agentId: "worker-1", provider: "claude", worktree: null });
-    board.store.sessions.setState(dispatched.session.id, "waiting", { question: { requestId: "r1", title: "Which theme?" } });
+    const dispatched = board.store.cards.dispatch({
+      cardId: card.id,
+      agentId: "worker-1",
+      provider: "claude",
+      worktree: null,
+    });
+    board.store.sessions.setState(dispatched.session.id, "waiting", {
+      question: { requestId: "r1", title: "Which theme?" },
+    });
 
     await runtime.triggers.consumer.poll();
     clock.advance(300_000);
@@ -123,7 +143,7 @@ describe("wake triggers", () => {
     await runtime.dispose();
   });
 
-  it("consolidates memory when a card is done", async () => {
+  it("does not activate the legacy card completion path", async () => {
     const board = setupBoard();
     const { runtime, fake } = runtimeFor(board, () => CONSOLIDATED);
     const { card, dispatched } = finish(board, "Ship it");
@@ -132,11 +152,8 @@ describe("wake triggers", () => {
     board.store.cards.move(card.id, { to: "done", actor: "user" });
     await runtime.triggers.consumer.poll();
     await runtime.queue.idle();
-    expect(memoryNote(board, card.id)).toBeTruthy();
-    expect(fake.agents).toHaveLength(1);
-    expect(fake.agents[0]!.prompts[0]).toContain("[wake:card_done]");
-    // a master session is never mistaken for a worker
-    expect(board.store.sessions.list({ role: "master" })).toHaveLength(1);
+    expect(memoryNote(board, card.id)).toBeUndefined();
+    expect(fake.agents).toHaveLength(0);
     await runtime.dispose();
   });
 
@@ -152,12 +169,14 @@ describe("wake triggers", () => {
     await runtime.dispose();
   });
 
-  it("holds jobs until a daemon handle exists, then runs them", async () => {
+  it("does not queue legacy cards before or after a daemon handle arrives", async () => {
     const board = setupBoard();
     const clock = new ManualClock();
     const fake = fakePaseo(() => CONSOLIDATED);
     let handle: typeof fake.paseo | null = null;
     const runtime = createMasterRuntime({
+      admitMaster: async () => async () => undefined,
+      admitMemory: async () => async () => undefined,
       db: board.db,
       store: board.store,
       getPaseo: () => handle,
@@ -172,17 +191,17 @@ describe("wake triggers", () => {
     board.store.cards.move(card.id, { to: "done", actor: "user" });
     await runtime.triggers.consumer.poll();
     await runtime.queue.idle();
-    expect(runtime.queue.snapshot().blocked).toHaveLength(1);
+    expect(runtime.queue.snapshot().blocked).toHaveLength(0);
     expect(memoryNote(board, card.id)).toBeUndefined();
 
     handle = fake.paseo;
     runtime.onPaseoAvailable();
     await runtime.queue.idle();
-    expect(memoryNote(board, card.id)).toBeTruthy();
+    expect(memoryNote(board, card.id)).toBeUndefined();
     await runtime.dispose();
   });
 
-  it("sweeps recently done cards without a memory update on start", async () => {
+  it("does not sweep legacy cards into the task completion path", async () => {
     const board = setupBoard();
     const { runtime, fake, clock } = runtimeFor(board, () => CONSOLIDATED);
     clock.advance(Date.now() - clock.now()); // the sweep window compares with real board timestamps
@@ -193,11 +212,11 @@ describe("wake triggers", () => {
       return card;
     });
     board.draft("A draft is never swept");
-    expect(runtime.sweep()).toBe(2);
+    expect(runtime.sweep()).toBe(0);
     await runtime.queue.idle();
-    expect(fake.agents[0]!.prompts).toHaveLength(2);
+    expect(fake.agents).toHaveLength(0);
     // everything consolidated is not queued again
-    expect(done.every((c) => memoryNote(board, c.id))).toBe(true);
+    expect(done.every((c) => !memoryNote(board, c.id))).toBe(true);
     expect(runtime.sweep()).toBe(0);
     await runtime.dispose();
   });

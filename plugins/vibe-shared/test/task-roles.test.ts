@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { TaskRoleSelectionsSchema, resolveTaskRoles } from "../contract/model-roles";
+import {
+  TaskRoleSelectionsSchema,
+  resolveTaskRoles,
+  freezeTaskSubtaskPresets,
+  validateTaskSubtaskPresets,
+} from "../contract/model-roles";
+import type { TaskPlan } from "../contract/task";
 import { findProjectConfig } from "../db/project-config";
 import { setup } from "./helpers";
 
@@ -112,6 +118,96 @@ describe("task roles and native project extensions", () => {
         plan_reviewer: null,
         reviewer: null,
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("freezes custom subtask candidates, permissions, environment and instructions", () => {
+    const { store, db } = setup();
+    try {
+      const main = store.presets.create({
+        name: "默认子代理",
+        provider: "codex",
+        model: "default",
+      });
+      const custom = store.presets.create({
+        name: "自定子代理",
+        provider: "claude",
+        model: "custom",
+        models: [
+          { provider: "claude", model: "custom", thinking: "high", permissionMode: "accept-edits" },
+          { provider: "codex", model: "fallback", thinking: "low", permissionMode: "auto" },
+        ],
+        environmentKind: "new-worktree",
+        runtimeEnv: "task-env",
+        instructions: "自定义指令",
+      });
+      const roles = resolveTaskRoles(
+        {},
+        null,
+        { planner: main.id, worker: main.id, verifier: main.id },
+        store.presets.get,
+      );
+      const plan: TaskPlan = {
+        goal: "测试",
+        approach: "冻结子任务预设",
+        files: [],
+        checks: [{ text: "通过", method: "测试" }],
+        subtasks: [
+          {
+            id: "custom",
+            goal: "自定",
+            method: "执行",
+            notes: "",
+            dependsOn: [],
+            files: [],
+            acceptance: "完成",
+            presetId: custom.id,
+          },
+          {
+            id: "default",
+            goal: "默认",
+            method: "执行",
+            notes: "",
+            dependsOn: [],
+            files: [],
+            acceptance: "完成",
+            presetId: main.id,
+          },
+        ],
+      };
+      expect(() => validateTaskSubtaskPresets(plan, roles)).toThrow("缺少自定预设快照");
+      const frozen = freezeTaskSubtaskPresets(plan, roles, store.presets.get);
+      expect(frozen.subtaskPresets?.custom).toMatchObject({
+        presetId: custom.id,
+        source: "task",
+        environmentKind: "new-worktree",
+        runtimeEnv: "task-env",
+        instructions: "自定义指令",
+        models: [
+          { provider: "claude", model: "custom", thinking: "high", permissionMode: "accept-edits" },
+          { provider: "codex", model: "fallback", thinking: "low", permissionMode: "auto" },
+        ],
+      });
+      expect(frozen.subtaskPresets?.default).toBeUndefined();
+      expect(() => validateTaskSubtaskPresets(plan, frozen)).not.toThrow();
+      store.presets.update(custom.id, {
+        models: [{ provider: "codex", model: "changed", thinking: "", permissionMode: "full" }],
+        runtimeEnv: "changed",
+        instructions: "更改后的指令",
+      });
+      expect(frozen.subtaskPresets?.custom?.models[0]?.model).toBe("custom");
+      expect(frozen.subtaskPresets?.custom?.instructions).toBe("自定义指令");
+      expect(frozen.subtaskPresets?.custom?.runtimeEnv).toBe("task-env");
+      expect(() =>
+        validateTaskSubtaskPresets(plan, { ...frozen, subtaskPresets: { custom: roles.subagent } }),
+      ).toThrow("快照与方案不匹配");
+      const missingPreset = () => undefined;
+      expect(() => freezeTaskSubtaskPresets(plan, roles, missingPreset)).toThrow("预设不存在");
+      expect(() =>
+        validateTaskSubtaskPresets({ ...plan, subtasks: [plan.subtasks[1]!] }, roles),
+      ).not.toThrow();
     } finally {
       db.close();
     }

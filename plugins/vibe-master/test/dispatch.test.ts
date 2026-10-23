@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { createMasterRuntime } from "../server/runtime";
-import { publishEvent } from "../server/vibe/db";
-import { ManualClock, defaultSettings, fakePaseo, setupBoard, tempDir, tick, type Script } from "./helpers";
+import {
+  ManualClock,
+  defaultSettings,
+  fakePaseo,
+  setupBoard,
+  tempDir,
+  tick,
+  type Script,
+} from "./helpers";
 
 function build(script: Script, over: Parameters<typeof defaultSettings>[0] = {}) {
   const board = setupBoard();
   const fake = fakePaseo(script);
   const settings = defaultSettings(over);
   const runtime = createMasterRuntime({
+    admitMaster: async () => async () => undefined,
+    admitMemory: async () => async () => undefined,
     db: board.db,
     store: board.store,
     getPaseo: () => fake.paseo,
@@ -27,7 +36,8 @@ function build(script: Script, over: Parameters<typeof defaultSettings>[0] = {})
 
 type Built = ReturnType<typeof build>;
 const FENCE = "```";
-const reply = (order: string[], reason = "because") => `${FENCE}json\n${JSON.stringify({ order, reason })}\n${FENCE}`;
+const reply = (order: string[], reason = "because") =>
+  `${FENCE}json\n${JSON.stringify({ order, reason })}\n${FENCE}`;
 
 const answers = (t: Built) =>
   t.board.db
@@ -35,19 +45,22 @@ const answers = (t: Built) =>
       "SELECT type, payload_json FROM vibe_event WHERE type IN ('master.dispatch_chosen','master.dispatch_failed') ORDER BY seq",
     )
     .all()
-    .map((r) => ({ type: r.type, ...(JSON.parse(r.payload_json) as Record<string, unknown>) }));
+    .map((r) =>
+      Object.assign({ type: r.type }, JSON.parse(r.payload_json) as Record<string, unknown>),
+    );
 
-/** What the scheduler publishes when slots are free, and the master's answer on the bus. */
+/** Historical card dispatcher remains readable until WP-114; it is no longer wired to runtime events. */
 async function ask(t: Built, slots: number, cardIds = t.cards.map((c) => c.id), requestId = "r1") {
-  publishEvent(t.board.db, { type: "scheduler.dispatch_wanted", payload: { requestId, slots, cardIds } });
-  await t.runtime.triggers.consumer.poll();
+  await t.runtime.dispatcher.handle({ requestId, slots, cardIds });
   for (let i = 0; i < 100 && answers(t).length === 0; i++) await tick(10);
   return answers(t);
 }
 
 describe("master dispatch", () => {
   it("answers a dispatch request with the cards it picked, in its order", async () => {
-    const t = build(({ prompt }) => (prompt.includes("[dispatch]") ? reply(["demo-3", "DEMO-1"], "gamma first") : "ok"));
+    const t = build(({ prompt }) =>
+      prompt.includes("[dispatch]") ? reply(["demo-3", "DEMO-1"], "gamma first") : "ok",
+    );
     const [first] = await ask(t, 2);
     expect(first).toMatchObject({
       type: "master.dispatch_chosen",
@@ -66,14 +79,20 @@ describe("master dispatch", () => {
   it("never picks more than the slots, cards it was not offered, or the same card twice", async () => {
     const t = build(() => reply(["DEMO-2", "DEMO-2", "DEMO-9", "DEMO-1", "DEMO-3"]));
     const [first] = await ask(t, 2, [t.cards[0]!.id, t.cards[1]!.id]);
-    expect(first).toMatchObject({ type: "master.dispatch_chosen", cardIds: [t.cards[1]!.id, t.cards[0]!.id] });
+    expect(first).toMatchObject({
+      type: "master.dispatch_chosen",
+      cardIds: [t.cards[1]!.id, t.cards[0]!.id],
+    });
     await t.runtime.dispose();
   });
 
   it("asks once to repair an unreadable reply, then reports a failure", async () => {
     let calls = 0;
     const t = build(() => (++calls === 1 ? "no json at all" : reply(["DEMO-1"])));
-    expect((await ask(t, 1))[0]).toMatchObject({ type: "master.dispatch_chosen", cardIds: [t.cards[0]!.id] });
+    expect((await ask(t, 1))[0]).toMatchObject({
+      type: "master.dispatch_chosen",
+      cardIds: [t.cards[0]!.id],
+    });
     await t.runtime.dispose();
 
     const bad = build(() => "never json");
@@ -84,7 +103,11 @@ describe("master dispatch", () => {
   });
 
   it("fails with a reason the scheduler can show when the master cannot answer", async () => {
-    const quota = build(() => ({ status: "error", lastMessage: null, error: "Claude usage limit reached. Your limit resets at 5pm." }));
+    const quota = build(() => ({
+      status: "error",
+      lastMessage: null,
+      error: "Claude usage limit reached. Your limit resets at 5pm.",
+    }));
     expect(String((await ask(quota, 1))[0]!.reason)).toContain("额度已用完");
     const timeout = build(() => ({ status: "timeout", lastMessage: null, error: null }));
     expect(String((await ask(timeout, 1))[0]!.reason)).toContain("没有及时回复");
@@ -117,9 +140,16 @@ describe("master dispatch", () => {
 describe("dispatch mode published to the scheduler", () => {
   it("says whether the master can dispatch and why not", async () => {
     const on = build(() => "ok");
-    expect(on.board.store.masterDispatch.get()).toMatchObject({ enabled: true, available: true, reason: "" });
+    expect(on.board.store.masterDispatch.get()).toMatchObject({
+      enabled: true,
+      available: true,
+      reason: "",
+    });
     const none = build(() => "ok", { provider: "" });
-    expect(none.board.store.masterDispatch.get()).toMatchObject({ enabled: true, available: false });
+    expect(none.board.store.masterDispatch.get()).toMatchObject({
+      enabled: true,
+      available: false,
+    });
     expect(none.board.store.masterDispatch.get().reason).toContain("预设");
     const off = build(() => "ok", { dispatch: false });
     expect(off.board.store.masterDispatch.get().enabled).toBe(false);
@@ -127,7 +157,10 @@ describe("dispatch mode published to the scheduler", () => {
     on.settings.dispatch = false;
     on.settings.dispatchTimeoutSeconds = 30;
     await on.runtime.onSettingsChanged();
-    expect(on.board.store.masterDispatch.get()).toMatchObject({ enabled: false, timeoutSeconds: 30 });
+    expect(on.board.store.masterDispatch.get()).toMatchObject({
+      enabled: false,
+      timeoutSeconds: 30,
+    });
     for (const t of [on, none, off]) await t.runtime.dispose();
   });
 });

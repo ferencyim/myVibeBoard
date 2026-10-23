@@ -131,7 +131,8 @@ export function createGitCheck(deps: { outdated?: OutdatedFn } = {}): CheckFn {
       cwd,
     );
     const branches: BranchInfo[] = lines(refs.stdout).map((line) => {
-      const [name = "", unix = "0", upstream = "", track = "", worktreePath = ""] = line.split("\t");
+      const [name = "", unix = "0", upstream = "", track = "", worktreePath = ""] =
+        line.split("\t");
       return { name, commitUnix: Number(unix), upstream, track, worktreePath };
     });
 
@@ -139,7 +140,8 @@ export function createGitCheck(deps: { outdated?: OutdatedFn } = {}): CheckFn {
     const mergedBranches = new Set<string>();
     if (trunk) {
       for (const b of branches) {
-        if (b.name !== trunk && (await isMerged(git, cwd, b.name, trunk))) mergedBranches.add(b.name);
+        if (b.name !== trunk && (await isMerged(git, cwd, b.name, trunk)))
+          mergedBranches.add(b.name);
       }
     }
 
@@ -318,7 +320,8 @@ const CATEGORY_GUIDE: Record<string, CategoryGuide> = {
   },
   leftover_worktree: {
     impact: "占用磁盘，并且让对应分支无法被删除或在别处检出。",
-    advice: "目录已消失的先执行 `git worktree prune`；分支已合并的用 `git worktree remove <路径>` 移除。",
+    advice:
+      "目录已消失的先执行 `git worktree prune`；分支已合并的用 `git worktree remove <路径>` 移除。",
     verify: "`git worktree list` 里不再出现这些路径。",
   },
   uncommitted: {
@@ -368,7 +371,7 @@ export function renderGitOutput(
   );
   const count = (category: string) => findings.filter((f) => f.category === category).length;
   const out = [
-    "## 为什么出现这张卡",
+    "## 为什么出现此维护任务",
     whyText(ctx),
     "",
     "## 发现了什么",
@@ -385,16 +388,19 @@ export function renderGitOutput(
     }
   }
   out.push("", "## 影响");
-  for (const [category, label] of present) out.push(`- ${label}：${CATEGORY_GUIDE[category]!.impact}`);
+  for (const [category, label] of present)
+    out.push(`- ${label}：${CATEGORY_GUIDE[category]!.impact}`);
   out.push("", "## 建议怎么做");
-  for (const [category, label] of present) out.push(`- ${label}：${CATEGORY_GUIDE[category]!.advice}`);
+  for (const [category, label] of present)
+    out.push(`- ${label}：${CATEGORY_GUIDE[category]!.advice}`);
   out.push("", "## 怎么验证");
-  for (const [category, label] of present) out.push(`- ${label}：${CATEGORY_GUIDE[category]!.verify}`);
+  for (const [category, label] of present)
+    out.push(`- ${label}：${CATEGORY_GUIDE[category]!.verify}`);
   if (notes.length) out.push("", "## 说明", ...notes.map((n) => `- ${n}`));
   out.push(
     "",
     "---",
-    `这张卡只是整理建议，不会自动改动任何分支或文件。同类问题会合并在本卡，不会重复建卡。` +
+    `此任务先在新的原生 workspace 中规划，等待用户显式 /执行。同规则同项目未完成任务只补充新发现，方案变化后需重新确认。` +
       `不想再收到：在维护页停用或调整规则「${ctx.rule.name}」。`,
   );
   return {

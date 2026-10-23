@@ -82,7 +82,7 @@ describe("web collector", () => {
       expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
     }
     expect(res.judgement).toBe("pass");
-    expect(res.notes.join()).toContain("No baseline");
+    expect(res.notes.join()).toContain("未配置基线");
     await c.dispose!(ctx);
     expect(l.stoppedCount()).toBe(1);
   });
@@ -99,7 +99,11 @@ describe("web collector", () => {
         ],
       },
     };
-    const c = createWebCollector({ driver, launcher: launcher().launcher, loadConfig: () => config });
+    const c = createWebCollector({
+      driver,
+      launcher: launcher().launcher,
+      loadConfig: () => config,
+    });
     const res = await c.collect(makeCtx({ check: { id: "chk1", text: "t", method: "m" } }));
     const gif = res.artifacts.find((a) => a.kind === "gif")!;
     expect(gif.path).toContain("chk1-interaction.gif");
@@ -145,7 +149,7 @@ describe("web collector", () => {
     expect(names(res)).toEqual(
       expect.arrayContaining(["before-desktop.png", "compare-desktop.png", "compare-mobile.png"]),
     );
-    expect(res.notes.join()).toContain("100.00% of pixels changed vs baseline base000");
+    expect(res.notes.join()).toContain("100.00% 的像素相较基线发生变化 base000");
   });
 
   it("starts the baseline server from the baseline worktree", async () => {
@@ -164,13 +168,16 @@ describe("web collector", () => {
     const { driver } = fakeDriver();
     const ctx = makeCtx();
     const cfg: VerifyConfig = { web: { url: "http://x", entry: "/", steps: [] } };
-    expect((await createWebCollector({ driver, loadConfig: () => ({}) }).detect(ctx)).available).toBe(
-      false,
-    );
+    expect(
+      (await createWebCollector({ driver, loadConfig: () => ({}) }).detect(ctx)).available,
+    ).toBe(false);
     expect(
       (await createWebCollector({ driver, loadConfig: () => cfg }).detect(ctx)).available,
     ).toBe(true);
-    const noBrowser: BrowserDriver = { ...driver, probe: async () => ({ ok: false, reason: "no chromium" }) };
+    const noBrowser: BrowserDriver = {
+      ...driver,
+      probe: async () => ({ ok: false, reason: "no chromium" }),
+    };
     expect(
       await createWebCollector({ driver: noBrowser, loadConfig: () => cfg }).detect(ctx),
     ).toEqual({ available: false, reason: "no chromium" });

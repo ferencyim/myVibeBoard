@@ -5,8 +5,15 @@ import { join } from "node:path";
 import { createMaintenanceEngine, type EngineOptions } from "../server/engine";
 import { createGitCheck } from "../server/git/check";
 import { execGit } from "../server/git/exec";
-import type { CardView, Project } from "../server/vibe/contract";
-import { createVibeStore, migrateOwner, openVibeDb, readEvents } from "../server/vibe/db";
+import type { CardView, Project, Task, TaskRoleSnapshot } from "../server/vibe/contract";
+import {
+  createVibeStore,
+  createMaintenanceCommands,
+  createTaskRuntimeCommands,
+  migrateOwner,
+  openVibeDb,
+  readEvents,
+} from "../server/vibe/db";
 
 export const tempDir = (prefix = "vibe-maintain-") => mkdtempSync(join(tmpdir(), prefix));
 
@@ -14,7 +21,17 @@ export const tempDir = (prefix = "vibe-maintain-") => mkdtempSync(join(tmpdir(),
 export function sh(cwd: string, args: string[], date?: string): string {
   return execFileSync(
     "git",
-    ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args],
+    [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.autocrlf=false",
+      ...args,
+    ],
     {
       cwd,
       encoding: "utf8",
@@ -40,8 +57,12 @@ export function commit(repo: string, file: string, text: string, message: string
 /** A real repository with one commit on `main`. */
 export function makeRepo(prefix = "vibe-maintain-repo-"): string {
   const repo = tempDir(prefix);
-  sh(repo, ["init", "-b", "main"]);
-  commit(repo, "README.md", "hello\n", "init");
+  // Reuse existing objects instead of creating fixture commits.
+  sh(repo, ["clone", "--shared", "--no-checkout", join(import.meta.dirname, "../../.."), "."]);
+  sh(repo, ["sparse-checkout", "init", "--no-cone"]);
+  sh(repo, ["sparse-checkout", "set", "--no-cone", "/README.md"]);
+  sh(repo, ["branch", "-M", "main"]);
+  sh(repo, ["read-tree", "-mu", "HEAD"]);
   return repo;
 }
 
@@ -64,16 +85,59 @@ export interface Harness {
   complete(count?: number): void;
   events(type?: string): ReturnType<typeof readEvents>;
   maintenanceCards(): CardView[];
+  maintenanceTasks(): Task[];
+  prompts: string[];
 }
 
 /** Completes `count` cards of a project (todo -> in progress -> verifying -> done). */
-export function complete(h: Pick<Harness, "store" | "clock">, project: Project, count = 1): void {
+export const plan = {
+  goal: "测试任务",
+  approach: "最小修改",
+  files: ["file.ts"],
+  subtasks: [],
+  checks: [{ text: "测试通过", method: "运行单测" }],
+};
+export const roles = (() => {
+  const preset = {
+    presetId: "p",
+    source: "global" as const,
+    models: [{ provider: "codex", model: "test", thinking: "", permissionMode: "auto" as const }],
+    environmentKind: "project-default" as const,
+    runtimeEnv: null,
+    instructions: "",
+  };
+  return {
+    scout: null,
+    planner: preset,
+    plan_reviewer: null,
+    worker: preset,
+    subagent: { ...preset, source: "worker" as const },
+    reviewer: null,
+    verifier: preset,
+  } satisfies TaskRoleSnapshot;
+})();
+export function complete(
+  h: Pick<Harness, "store" | "clock" | "db">,
+  project: Project,
+  count = 1,
+): void {
+  const runtime = createTaskRuntimeCommands(h.db);
   for (let i = 0; i < count; i++) {
-    const card = h.store.cards.create({ projectId: project.id, title: `Task ${i}-${h.clock.t}` });
-    h.store.cards.move(card.id, { to: "todo", actor: "user" });
-    h.store.cards.dispatch({ cardId: card.id, agentId: `agent-${card.id}`, provider: "claude", worktree: null });
-    h.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
-    h.store.cards.move(card.id, { to: "done", actor: "user" });
+    const workspaceId =
+      "completed-" + project.id + "-" + h.clock.t + "-" + i + "-" + h.store.tasks.list().length;
+    h.store.tasks.create({ workspaceId, anchorAgentId: "anchor-" + workspaceId });
+    runtime.registerSession({
+      workspaceId,
+      projectId: project.id,
+      agentId: "anchor-" + workspaceId,
+      role: "planner",
+      provider: "codex",
+      model: "test",
+      candidateIndex: 0,
+    });
+    h.store.tasks.confirm(workspaceId, { plan, rolesSnapshot: roles });
+    for (const phase of ["executing", "verifying", "awaiting_acceptance", "completed"] as const)
+      h.store.tasks.setPhase(workspaceId, phase);
   }
 }
 
@@ -89,7 +153,10 @@ export function addProject(
     mkdirSync(join(repo, ".vibe"), { recursive: true });
     write(join(repo, ".vibe"), "maintenance.yml", options.yml);
   }
-  return { project: h.store.projects.create({ name, prefix, repoPath: repo, projectType: "other" }), repo };
+  return {
+    project: h.store.projects.create({ name, prefix, repoPath: repo, projectType: "other" }),
+    repo,
+  };
 }
 
 export function setup(
@@ -110,24 +177,43 @@ export function setup(
     mkdirSync(join(repo, ".vibe"), { recursive: true });
     write(join(repo, ".vibe"), "maintenance.yml", options.yml);
   }
-  const project = store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: repo, projectType: "other" });
+  const project = store.projects.create({
+    name: "Demo",
+    prefix: "DEMO",
+    repoPath: repo,
+    projectType: "other",
+  });
+  const prompts: string[] = [];
+  const taskLauncher = {
+    launch: async ({
+      prompt,
+      onCreated,
+    }: {
+      prompt: string;
+      onCreated: (task: { workspaceId: string; anchorAgentId: string }) => void;
+    }) => {
+      const workspaceId = "maintenance-" + store.tasks.list().length;
+      const anchorAgentId = "anchor-" + workspaceId;
+      store.tasks.create({ workspaceId, anchorAgentId });
+      onCreated({ workspaceId, anchorAgentId });
+      prompts.push(prompt);
+      return { workspaceId, anchorAgentId };
+    },
+    append: async ({ prompt }: { prompt: string }) => {
+      prompts.push(prompt);
+    },
+  };
   const engine = createMaintenanceEngine({
     db,
     store,
     now: clock.now,
     git: execGit,
+    taskLauncher,
+    projectIdOfTask: async (workspaceId) =>
+      createTaskRuntimeCommands(db).listSessions({ workspaceId })[0]?.projectId ?? undefined,
     checks: { git: createGitCheck({ outdated: async () => null }) },
     ...options.engine,
   });
-  const complete = (count = 1) => {
-    for (let i = 0; i < count; i++) {
-      const card = store.cards.create({ projectId: project.id, title: `Task ${i}-${clock.t}` });
-      store.cards.move(card.id, { to: "todo", actor: "user" });
-      store.cards.dispatch({ cardId: card.id, agentId: `agent-${card.id}`, provider: "claude", worktree: null });
-      store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
-      store.cards.move(card.id, { to: "done", actor: "user" });
-    }
-  };
   return {
     db,
     store,
@@ -135,9 +221,17 @@ export function setup(
     project,
     repo,
     engine,
-    complete,
+    prompts,
+    complete: (count = 1) => complete({ store, clock, db }, project, count),
     events: (type) => readEvents(db, 0, { limit: 5000 }).filter((e) => !type || e.type === type),
+    maintenanceTasks: () =>
+      createMaintenanceCommands(db)
+        .links()
+        .map((link) => store.tasks.get(link.workspaceId)!)
+        .filter(Boolean),
     maintenanceCards: () =>
-      store.cards.list({ projectId: project.id, includeArchived: true }).filter((c) => c.origin === "maintenance"),
+      store.cards
+        .list({ projectId: project.id, includeArchived: true })
+        .filter((c) => c.origin === "maintenance"),
   };
 }
