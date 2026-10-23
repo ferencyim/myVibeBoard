@@ -151,7 +151,6 @@ export function SubtaskEditor({
           ) : null}
           <ModelPicker
             label="模型"
-            role="worker"
             presets={presets}
             value={s.presetId}
             noneLabel="子代理默认模型"

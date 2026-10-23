@@ -9,7 +9,6 @@ import {
   PRESET_ENVIRONMENT_KINDS,
   PRESET_PERMISSION_MODES,
   PROJECT_TYPES,
-  ROLE_HINTS,
   presetModels,
   type ModelDefaults,
   type Preset,
@@ -28,7 +27,6 @@ import {
   movePresetModel,
   PERMISSION_LABELS,
   PROJECT_TYPE_LABELS,
-  ROLE_HINT_LABELS,
   draftToPayload,
   emptyProjectDraft,
   presetToDraft,
@@ -37,7 +35,6 @@ import {
   thinkingAfterModelChange,
   thinkingChoices,
   toggleProjectType,
-  toggleRoleHint,
   validateDraft,
   validateProjectDraft,
   type PresetDraft,
@@ -257,76 +254,50 @@ function PresetModelEditor({
   onChange: (change: Partial<PresetModelDraft>) => void;
 }) {
   const models = providers.find((p) => p.id === value.provider)?.models ?? [];
-  const customModel = !models.some((m) => m.id === value.model);
   return (
     <View style={{ gap: 10 }}>
-      <Field label="Agent（provider）">
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-          {providers.map((p) => (
-            <Chip
-              key={p.id}
-              label={`${p.id}${p.available ? "" : "（不可用）"}`}
-              selected={value.provider === p.id}
-              onPress={() => patch({ provider: p.id, model: "", thinking: "" })}
-            />
-          ))}
-        </View>
-        <Muted>其它 provider（上面的目录里没有时在这里手填 id）</Muted>
-        <TextField
-          value={value.provider}
-          onChangeText={(provider) => patch({ provider, model: "", thinking: "" })}
-          placeholder="provider id，例如 codex"
-          autoCapitalize="none"
-        />
-      </Field>
-      <View style={{ gap: 6 }}>
-        <SettingsSelect
-          label="模型（必填）"
-          value={value.model}
-          options={[
-            ...models.map((m) => ({ value: m.id, label: m.name })),
-            ...(customModel && value.model ? [{ value: value.model, label: value.model }] : []),
-            { value: "", label: "手动输入模型 ID" },
-          ]}
-          onValueChange={(model) =>
-            patch({ model, thinking: thinkingAfterModelChange(models, model, value.thinking) })
+      <SettingsSelect
+        label="Agent（provider）"
+        value={value.provider}
+        options={[
+          ...(!value.provider ? [{ value: "", label: "请选择" }] : []),
+          ...providers.map((p) => ({ value: p.id, label: `${p.id}${p.available ? "" : "（不可用）"}` })),
+          ...(value.provider && !providers.some((p) => p.id === value.provider)
+            ? [{ value: value.provider, label: `${value.provider}（已保存）` }]
+            : []),
+        ]}
+        onValueChange={(provider) => {
+          if (provider !== value.provider) patch({ provider, model: "", thinking: "" });
+        }}
+      />
+      <SettingsSelect
+        label="模型（必填）"
+        value={value.model}
+        options={[
+          ...(!value.model ? [{ value: "", label: "请选择" }] : []),
+          ...models.map((m) => ({ value: m.id, label: m.name })),
+          ...(value.model && !models.some((m) => m.id === value.model)
+            ? [{ value: value.model, label: `${value.model}（已保存）` }]
+            : []),
+        ]}
+        onValueChange={(model) => {
+          if (model !== value.model) {
+            patch({ model, thinking: thinkingAfterModelChange(models, model, value.thinking) });
           }
-        />
-        {customModel ? (
-          <TextField
-            value={value.model}
-            onChangeText={(model) =>
-              patch({ model, thinking: thinkingAfterModelChange(models, model, value.thinking) })
-            }
-            placeholder="必填：输入模型 ID"
-            autoCapitalize="none"
-          />
-        ) : null}
-      </View>
-      <Field label="思考强度">
-        <Row>
-          {thinkingChoices(models, value.model, value.thinking).map((o) => (
-            <Chip
-              key={o.id || "default"}
-              label={o.label}
-              selected={value.thinking === o.id}
-              onPress={() => patch({ thinking: o.id })}
-            />
-          ))}
-        </Row>
-      </Field>
-      <Field label="权限模式">
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-          {PRESET_PERMISSION_MODES.map((m) => (
-            <Chip
-              key={m}
-              label={PERMISSION_LABELS[m]}
-              selected={value.permissionMode === m}
-              onPress={() => patch({ permissionMode: m })}
-            />
-          ))}
-        </View>
-      </Field>
+        }}
+      />
+      <SettingsSelect
+        label="思考强度"
+        value={value.thinking}
+        options={thinkingChoices(models, value.model, value.thinking).map((o) => ({ value: o.id, label: o.label }))}
+        onValueChange={(thinking) => patch({ thinking })}
+      />
+      <SettingsSelect
+        label="权限模式"
+        value={value.permissionMode}
+        options={PRESET_PERMISSION_MODES.map((m) => ({ value: m, label: PERMISSION_LABELS[m] }))}
+        onValueChange={(permissionMode) => patch({ permissionMode })}
+      />
     </View>
   );
 }
@@ -414,18 +385,6 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
             onPress={() => patch({ models: [...draft.models, { ...EMPTY_MODEL_DRAFT }] })}
           />
         </Field>
-        <Field label="用途（可多选，都不选表示不指定）">
-          <Row>
-            {ROLE_HINTS.map((hint) => (
-              <Chip
-                key={hint}
-                label={ROLE_HINT_LABELS[hint]}
-                selected={draft.roleHints.includes(hint)}
-                onPress={() => patch({ roleHints: toggleRoleHint(draft.roleHints, hint) })}
-              />
-            ))}
-          </Row>
-        </Field>
         <Field label="运行环境">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {PRESET_ENVIRONMENT_KINDS.map((k) => (
@@ -486,9 +445,6 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
               {presetModels(p)
                 .map((m) => `${m.provider} / ${m.model}`)
                 .join(" → ")}
-              {p.roleHints.length
-                ? `  [${p.roleHints.map((h) => ROLE_HINT_LABELS[h]).join("/")}]`
-                : ""}
             </Muted>
           </View>
           <View style={{ gap: 4 }}>

@@ -80,7 +80,6 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, scop
     <View style={{ gap: 14 }}>
       <ModelPicker
         label="主代理模型"
-        role="worker"
         presets={presets}
         value={card.presetId}
         fallback={defaultChoice("worker", scope)}
@@ -94,7 +93,6 @@ export function ExecTab({ api, card: serverCard, events, sessions, presets, scop
       />
       <ModelPicker
         label="子代理默认模型"
-        role="worker"
         presets={presets}
         value={card.subagentPresetId}
         {...(subagentDefault ? { fallback: subagentDefault } : { noneLabel: "同主代理模型" })}

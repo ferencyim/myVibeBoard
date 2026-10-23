@@ -12,7 +12,6 @@ import {
   thinkingAfterModelChange,
   thinkingChoices,
   toggleProjectType,
-  toggleRoleHint,
   validateProjectDraft,
 } from "../client/presets/logic";
 import { createRequirementsService, toRequirementsError } from "../server/requirements";
@@ -107,12 +106,6 @@ describe("preset purposes and thinking", () => {
     { id: "m2", thinkingOptions: [{ id: "high", label: "High" }] },
     { id: "m3" },
   ];
-
-  it("toggles purposes in canonical order", () => {
-    expect(toggleRoleHint([], "reviewer")).toEqual(["reviewer"]);
-    expect(toggleRoleHint(["reviewer"], "worker")).toEqual(["worker", "reviewer"]);
-    expect(toggleRoleHint(["worker", "reviewer"], "worker")).toEqual(["reviewer"]);
-  });
 
   it("offers default + model levels and keeps an unlisted saved value", () => {
     expect(thinkingChoices(models, "m1", "").map((o) => o.id)).toEqual(["", "low", "high"]);

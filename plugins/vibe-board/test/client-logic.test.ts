@@ -279,7 +279,6 @@ describe("preset persistence round trip", () => {
       runtimeEnv: "",
       instructions: "be brief",
       fallbackPresetIds: [] as string[],
-      roleHints: ["scout" as const],
     };
     expect(validateDraft(draft)).toBeNull();
     expect(
@@ -290,9 +289,11 @@ describe("preset persistence round trip", () => {
     expect(presetToDraft(listed)).toEqual(draft);
     const updated = board.presets.update(preset.id, draftToPayload({ ...draft, baseBranch: "" }));
     expect(updated.preset.baseBranch).toBeNull();
-    expect(updated.preset.roleHint).toBe("scout");
-    expect(listed.roleHint).toBe("scout");
-    const cleared = board.presets.update(preset.id, draftToPayload({ ...draft, roleHints: [] }));
+    board.presets.update(preset.id, { roleHints: ["scout", "reviewer"] });
+    const legacy = board.presets.list().presets.find((p) => p.id === preset.id)!;
+    expect(legacy.roleHints).toEqual(["scout", "reviewer"]);
+    const cleared = board.presets.update(preset.id, draftToPayload(presetToDraft(legacy)));
+    expect(cleared.preset.roleHints).toEqual([]);
     expect(cleared.preset.roleHint).toBeNull();
   });
 

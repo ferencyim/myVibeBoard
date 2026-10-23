@@ -39,7 +39,6 @@ export function ReviewTab({
     <View style={{ gap: 14 }}>
       <ModelPicker
         label="复核模型"
-        role="reviewer"
         presets={presets}
         value={card.reviewerPresetId}
         noneLabel="不复核"

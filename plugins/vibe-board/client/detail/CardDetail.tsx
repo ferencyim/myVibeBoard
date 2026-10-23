@@ -224,7 +224,6 @@ function VerifyTab({
     <View style={{ gap: 14 }}>
       <ModelPicker
         label="验证模型"
-        role="verifier"
         presets={scope.presets}
         value={card.verifierPresetId}
         fallback={defaultChoice("verifier", scope)}

@@ -10,7 +10,7 @@ import { errorMessage } from "../board/logic";
 import { queryKey, type BoardApi } from "../common/api";
 import { Btn, Muted } from "../common/ui";
 import { ModelPicker } from "../planning/ModelPicker";
-import { MODEL_ROLE_LABELS, roleHintOf } from "../planning/logic";
+import { MODEL_ROLE_LABELS } from "../planning/logic";
 import { setDefault } from "./logic";
 
 /** Seven pickers. `inherited` (project level) names the global default each job follows when empty. */
@@ -32,7 +32,6 @@ export function DefaultModelsEditor({
         <ModelPicker
           key={role}
           label={MODEL_ROLE_LABELS[role]}
-          role={roleHintOf(role)}
           presets={presets}
           value={value[role] ?? null}
           noneLabel={

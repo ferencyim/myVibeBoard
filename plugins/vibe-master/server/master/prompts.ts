@@ -58,7 +58,7 @@ export function buildProjectBlock(input: ProjectBlockInput): string {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
       (p) =>
-        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` 思考档=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}${p.roleHints.length ? ` role=${p.roleHints.join("+")}` : ""}`,
+        `- ${p.name}: ${p.provider}/${p.model}${p.thinking && p.thinking !== "default" ? ` 思考档=${p.thinking}` : ""}${p.runtimeEnv ? ` env=${p.runtimeEnv}` : ""}`,
     );
   const cards = [...input.openCards]
     .sort(

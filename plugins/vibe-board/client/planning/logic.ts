@@ -4,7 +4,6 @@
 // Tool calls and other details stay in the full agent session and the timeline tab.
 
 import {
-  MODEL_ROLE_HINT,
   chatThreadOf,
   resolveModel,
   type AgentSession,
@@ -19,7 +18,6 @@ import {
   type Project,
   type ProposalChanges,
   type ProposalStatus,
-  type RoleHint,
 } from "../../shared/vibe/contract";
 import { COLUMN_LABELS } from "../board/logic";
 import { subtasksText } from "./subtask-logic";
@@ -253,9 +251,6 @@ export function defaultChoice(role: ModelRole, scope: ModelScope, ownerLevel: "c
   return `${name}（${source === "project" ? "项目默认" : "全局默认"}）`;
 }
 
-/** The preset purpose a job's picker filters by. */
-export const roleHintOf = (role: ModelRole): RoleHint => MODEL_ROLE_HINT[role];
-
 export interface FieldDiff {
   field: ProposalField | "subtasks";
   label: string;
@@ -297,11 +292,6 @@ export function proposalDiff(
 /** An owner message the other side has not answered yet: show "thinking". */
 export function waitingForReply(items: readonly ChatItem[]): boolean {
   return items.some((i) => i.kind === "message" && i.author === "user" && !i.answered);
-}
-
-/** Presets offered for a job: those whose purposes include it, or that have no purpose set. */
-export function presetsFor(presets: readonly Preset[], role: RoleHint): Preset[] {
-  return presets.filter((p) => p.roleHints.length === 0 || p.roleHints.includes(role));
 }
 
 const RUNNING = new Set(["starting", "working", "waiting", "idle"]);

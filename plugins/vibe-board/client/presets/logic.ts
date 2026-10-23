@@ -3,7 +3,6 @@
 import {
   DEFAULT_REQUIREMENTS_PATH,
   presetModels,
-  ROLE_HINTS,
   isSafeRepoRelativePath,
   type ModelDefaults,
   type Preset,
@@ -11,7 +10,6 @@ import {
   type PresetPermissionMode,
   type Project,
   type ProjectType,
-  type RoleHint,
 } from "../../shared/vibe/contract";
 import { thinkingLabel } from "../../shared/vibe/ui/thinking";
 
@@ -77,15 +75,6 @@ export const ENVIRONMENT_LABELS: Record<PresetEnvironmentKind, string> = {
   "new-worktree": "新建 worktree",
 };
 
-/** Preset purposes (multi-select; none selected = unspecified). */
-export const ROLE_HINT_LABELS: Record<RoleHint, string> = {
-  worker: "执行",
-  scout: "探路",
-  planner: "规划",
-  reviewer: "复核",
-  verifier: "验证",
-};
-
 export type PresetModelDraft = Pick<Preset, "provider" | "model" | "thinking" | "permissionMode">;
 
 export const EMPTY_MODEL_DRAFT: PresetModelDraft = {
@@ -104,7 +93,6 @@ export interface PresetDraft {
   instructions: string;
   /** Ordered preset ids to continue on when an agent on this preset fails (quota, login, ...). */
   fallbackPresetIds: string[];
-  roleHints: RoleHint[];
 }
 
 export const EMPTY_PRESET_DRAFT: PresetDraft = {
@@ -115,7 +103,6 @@ export const EMPTY_PRESET_DRAFT: PresetDraft = {
   runtimeEnv: "",
   instructions: "",
   fallbackPresetIds: [],
-  roleHints: [],
 };
 
 export function presetToDraft(p: Preset): PresetDraft {
@@ -127,7 +114,6 @@ export function presetToDraft(p: Preset): PresetDraft {
     runtimeEnv: p.runtimeEnv ?? "",
     instructions: p.instructions,
     fallbackPresetIds: p.fallbackPresetIds ?? [],
-    roleHints: [...p.roleHints],
   };
 }
 
@@ -166,14 +152,8 @@ export function draftToPayload(d: PresetDraft) {
     runtimeEnv: d.runtimeEnv.trim() || null,
     instructions: d.instructions,
     fallbackPresetIds: d.fallbackPresetIds.length ? d.fallbackPresetIds : null,
-    roleHints: d.roleHints,
+    roleHints: [],
   };
-}
-
-/** Toggle a purpose; the result keeps the canonical ROLE_HINTS order. */
-export function toggleRoleHint(hints: readonly RoleHint[], hint: RoleHint): RoleHint[] {
-  const next = hints.includes(hint) ? hints.filter((h) => h !== hint) : [...hints, hint];
-  return ROLE_HINTS.filter((h) => next.includes(h));
 }
 
 export interface ThinkingOption {

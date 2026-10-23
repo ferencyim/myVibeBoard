@@ -4,7 +4,6 @@ import {
   canExecute,
   chatItemsOf,
   executingLabel,
-  presetsFor,
   proposalDiff,
   reviewItemsOf,
   runningWorkerOf,
@@ -12,7 +11,7 @@ import {
   type MessageItem,
   type ProposalItem,
 } from "../client/planning/logic";
-import type { AgentSession, CardView, Preset } from "../shared/vibe/contract";
+import type { AgentSession, CardView } from "../shared/vibe/contract";
 import { chatEv, resetEvents } from "./chat-helpers";
 
 beforeEach(resetEvents);
@@ -141,15 +140,6 @@ describe("conversation state", () => {
     const a = chatEv("master", { text: "a", thread: "plan", answers: [u.id] });
     expect(waitingForReply(chatItemsOf([u, a], "plan"))).toBe(false);
     expect(waitingForReply([])).toBe(false);
-  });
-
-  it("presetsFor filters by purpose; a preset without purposes fits every job", () => {
-    const p = (id: string, roleHints: Preset["roleHints"]) => ({ id, roleHints }) as Preset;
-    const all = [p("any", []), p("w", ["worker"]), p("r", ["reviewer"]), p("multi", ["scout", "worker"])];
-    expect(presetsFor(all, "worker").map((x) => x.id)).toEqual(["any", "w", "multi"]);
-    expect(presetsFor(all, "reviewer").map((x) => x.id)).toEqual(["any", "r"]);
-    expect(presetsFor(all, "scout").map((x) => x.id)).toEqual(["any", "multi"]);
-    expect(presetsFor([], "worker")).toEqual([]);
   });
 
   it("executingLabel names the running model, or nothing when no worker runs", () => {

@@ -82,7 +82,6 @@ export function PlanTab({ api, card: serverCard, events, sessions, presets, scop
     <View style={{ gap: 14 }}>
       <ModelPicker
         label="探路模型"
-        role="scout"
         presets={presets}
         value={card.scoutPresetId}
         noneLabel="不探路"
@@ -91,7 +90,6 @@ export function PlanTab({ api, card: serverCard, events, sessions, presets, scop
       />
       <ModelPicker
         label="规划模型"
-        role="planner"
         presets={presets}
         value={card.plannerPresetId}
         fallback={defaultChoice("planner", scope)}
@@ -100,7 +98,6 @@ export function PlanTab({ api, card: serverCard, events, sessions, presets, scop
       />
       <ModelPicker
         label="方案复核模型"
-        role="reviewer"
         presets={presets}
         value={card.planReviewerPresetId}
         fallback={defaultChoice("plan_reviewer", scope)}
