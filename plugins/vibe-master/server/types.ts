@@ -11,7 +11,7 @@ export interface RunResult {
 
 export interface MasterAgentHandle {
   readonly id: string;
-  run(text: string, options?: { timeoutMs?: number }): Promise<RunResult>;
+  run(text: string, options?: { timeoutMs?: number; sourceAgentId?: string }): Promise<RunResult>;
   refresh(): Promise<unknown>;
   archive(): Promise<unknown>;
   /** Hosts older than v0.12.1 do not have it. */
@@ -34,7 +34,11 @@ export interface UsageProviderLike {
   providerId: string;
   displayName?: string;
   status?: string;
-  windows: Array<{ remainingPct?: number | null; usedPct?: number | null; resetsAt?: string | null }>;
+  windows: Array<{
+    remainingPct?: number | null;
+    usedPct?: number | null;
+    resetsAt?: string | null;
+  }>;
   error?: string | null;
 }
 
@@ -46,13 +50,20 @@ export interface MasterPaseo {
     create(options: CreateAgentOptions): Promise<MasterAgentHandle>;
     ref(agentId: string): MasterAgentHandle;
   };
+  workspaces?: {
+    ref(workspaceId: string): {
+      refresh(): Promise<{ projectId: string; workspaceDirectory: string | null } | null>;
+    };
+  };
   providers: {
     listModels(provider: string): Promise<{ models?: ModelInfoLike[]; error?: string | null }>;
     listUsage(): Promise<{ providers: UsageProviderLike[] }>;
     /** Optional like listModes: every provider Paseo knows (built in or from a plugin). */
     listAvailable?(): Promise<{ providers: Array<{ provider: string; available?: boolean }> }>;
     /** Optional so hand-written fakes stay small; the real PaseoApi always has it. */
-    listModes?(provider: string): Promise<{ modes?: Array<{ id: string; label: string }>; error?: string | null }>;
+    listModes?(
+      provider: string,
+    ): Promise<{ modes?: Array<{ id: string; label: string }>; error?: string | null }>;
   };
 }
 
@@ -62,6 +73,7 @@ export class MasterError extends Error {
   constructor(
     readonly kind: MasterErrorKind,
     message: string,
+    readonly retryable?: boolean,
   ) {
     super(message);
     this.name = "MasterError";
@@ -74,12 +86,11 @@ export interface MasterAsk {
 }
 
 /** WP-105: only memory consolidation is left; the master no longer reviews drafts or advises workers. */
-export type WakeKind = "card_done";
-export interface WakeJob {
-  kind: WakeKind;
-  cardId: string;
-  /** Skip "already consolidated" checks. */
-  force?: boolean;
-}
-
-export const jobKey = (job: Pick<WakeJob, "kind" | "cardId">) => `${job.kind}:${job.cardId}`;
+export type WakeKind = "card_done" | "task_done";
+export type WakeJob = (
+  | { kind: "card_done"; cardId: string }
+  | { kind: "task_done"; workspaceId: string }
+) & { force?: boolean };
+export const wakeTarget = (job: WakeJob) =>
+  job.kind === "task_done" ? job.workspaceId : job.cardId;
+export const jobKey = (job: WakeJob) => job.kind + ":" + wakeTarget(job);

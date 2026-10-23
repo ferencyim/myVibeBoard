@@ -7,15 +7,11 @@ import type { PromptDef } from "../vibe/contract";
 const PLUGIN = "vibe-context";
 
 const COMPACT_NOTES =
-  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、" +
-  "关键文件与决策、未解决的问题。" +
-  "使用 `vibe-board` MCP 服务的 `vibe_session_note` 工具{{keyClause}}（它会覆盖写入 " +
-  "`{{mdPath}}`，无需批准）；只有该工具不存在时，才自己写这个文件" +
-  '（创建或覆盖）。除此之外什么都不要做。完成后回复“saved”。';
+  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、关键文件与决策、未解决的问题。请将笔记写到 `{{mdPath}}`（创建或覆盖）；若当前原生任务提供支持该路径的会话笔记工具，可使用它。会话定位信息：{{keyClause}}。除此之外什么都不要做。完成后回复“saved”。";
 
 const COMPACT_RESTORE =
   "上下文已压缩。下面的项目上下文是权威依据；请根据你的会话笔记继续。" +
-  '只回复“ok”。\n\n{{block}}';
+  "只回复“ok”。\n\n{{block}}";
 
 const COLD_START =
   "你接续会话 {{oldSessionId}}：它因为上下文变长或缓存即将过期而被交接。" +
@@ -25,10 +21,27 @@ const COLD_START =
 const INJECT_FRAME =
   "# 项目上下文（myVibeBoard）\n\n" +
   "以下内容在本会话启动时由 `.vibe/` 下的文件生成，是权威依据，对你只读：" +
-  "不要编辑这些文件；需要更正时告知总 agent（看板任务则写在卡片评论里）。";
-
+  "不要编辑这些文件；需要更正时在任务的原生会话里告知总 agent。";
 
 export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
+  {
+    key: "context.failure_handoff",
+    plugin: PLUGIN,
+    role: "handoff",
+    title: "模型失败接续",
+    description: "额度、登录或模型不可用后，同工作区的新会话交接。",
+    whenSent: "旧会话停止已确认且新候选已获调度准入后",
+    audience: "接手的新 agent",
+    defaultText:
+      "你接续工作区 {{workspaceId}} 中的 {{role}} 会话。旧原生会话：{{oldAgentId}}。继续使用同一工作区和 worktree，不扩大已确认方案范围。先查原生会话链接和项目记忆，再按以下摘要继续：\n{{summary}}",
+    placeholders: [
+      { name: "workspaceId", description: "工作区编号" },
+      { name: "role", description: "角色" },
+      { name: "oldAgentId", description: "旧原生会话编号" },
+      { name: "summary", description: "方案、子任务进度与上下文摘要" },
+    ],
+    order: 5,
+  },
   {
     key: "context.compact_notes",
     plugin: PLUGIN,
@@ -40,7 +53,7 @@ export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
     audience: "被压缩的 agent",
     defaultText: COMPACT_NOTES,
     placeholders: [
-      { name: "keyClause", description: "有卡片时为 `，key 为 \"ABC-1\"`，否则为空" },
+      { name: "keyClause", description: '有工作区时为 `，key 为 "ABC-1"`，否则为空' },
       { name: "mdPath", description: "会话笔记文件路径" },
     ],
     order: 10,
@@ -54,7 +67,9 @@ export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
     whenSent: "压缩命令完成后",
     audience: "刚被压缩的 agent",
     defaultText: COMPACT_RESTORE,
-    placeholders: [{ name: "block", description: "项目上下文块（项目目标与状态）；没有时为“（无项目上下文）”" }],
+    placeholders: [
+      { name: "block", description: "项目上下文块（项目目标与状态）；没有时为“（无项目上下文）”" },
+    ],
     order: 20,
   },
   {

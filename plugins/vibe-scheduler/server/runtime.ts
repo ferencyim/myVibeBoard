@@ -12,7 +12,13 @@ import {
   type SessionTarget,
   type SystemProbe,
 } from "./resources";
-import { createScheduler, DEFAULT_CONFIG, type SchedulerConfig } from "./scheduler";
+import { DEFAULT_CONFIG, type SchedulerConfig } from "./scheduler";
+import {
+  createTaskScheduler,
+  type NativeTaskWorkspace,
+  type TaskResourceRequest,
+} from "./task-scheduler";
+import type { EventType, NewEvent } from "./vibe/contract";
 import {
   mergeProfiles,
   presetModels,
@@ -26,6 +32,8 @@ import {
   createDeviceLeases,
   createEventConsumer,
   createVibeStore,
+  createResourceSampleCommands,
+  publishEvent,
   type VibeDb,
 } from "./vibe/db";
 
@@ -63,6 +71,7 @@ export interface RuntimeOptions {
   fetchUsage?: () => Promise<readonly UsageProviderLike[]> | null;
   settings?: RuntimeSettings;
   onError?: (error: unknown) => void;
+  native?: (workspaceId: string) => Promise<NativeTaskWorkspace | null>;
 }
 
 export function createSchedulerRuntime(options: RuntimeOptions) {
@@ -73,6 +82,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
 
   const store = createVibeStore(db, { now });
   const leases = createDeviceLeases(db, { now });
+  const resourceSamples = createResourceSampleCommands(db);
   const ports: PortAllocator = createPortAllocator({
     file: join(options.dataDir, "ports.json"),
     base: settings.devPortBase,
@@ -94,52 +104,71 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   /** WP-106: the board checks sub-agent starts against the same limits (vibe_meta, see contract/subtasks.ts). */
   const publishLimits = () => {
     try {
-      store.limits.publish({ globalLimit: settings.globalLimit, providerLimits: settings.providerLimits });
+      store.limits.publish({
+        globalLimit: settings.globalLimit,
+        providerLimits: settings.providerLimits,
+      });
     } catch (error) {
       onError(error);
     }
   };
   publishLimits();
 
-  const scheduler = createScheduler({
-    db,
+  const scheduler = createTaskScheduler({
     store,
     leases,
     ports,
     now,
+    file: join(options.dataDir, "task-resources.json"),
     config: () => settings,
-    resources: () => latest,
+    memory: () => latest?.mem ?? null,
     quota: () => quota,
+    native:
+      options.native ??
+      (async () => {
+        throw new Error("尚未连接原生宿主，暂停派发");
+      }),
+    emit: (type, payload) =>
+      publishEvent(db, { type: type as EventType, payload } as NewEvent, now),
   });
 
   const consumer = createEventConsumer({
     db,
-    consumer: "vibe-scheduler",
-    types: ["scheduler.dispatch_failed", "master.dispatch_chosen", "master.dispatch_failed"],
+    consumer: "vibe-scheduler-tasks",
+    types: [
+      "scheduler.task_resource_request",
+      "master.task_dispatch_chosen",
+      "master.task_dispatch_failed",
+    ],
     startAt: "now",
     now,
-    handler: (event) => {
-      if (event.type === "scheduler.dispatch_failed") {
-        scheduler.handleDispatchFailed((event.payload as { cardId: string }).cardId);
-      } else if (event.type === "master.dispatch_chosen") {
-        scheduler.handleMasterChosen(event.payload as Parameters<typeof scheduler.handleMasterChosen>[0]);
-      } else if (event.type === "master.dispatch_failed") {
-        scheduler.handleMasterFailed(event.payload as Parameters<typeof scheduler.handleMasterFailed>[0]);
+    handler: async (event) => {
+      if (event.type === "scheduler.task_resource_request") {
+        const output = await scheduler.requestResource(event.payload as TaskResourceRequest);
+        publishEvent(
+          db,
+          {
+            type: "scheduler.task_resource_result",
+            payload: { ...output },
+            dedupeKey: "task-resource-result:" + output.requestId,
+          },
+          now,
+        );
+      } else if (event.type === "master.task_dispatch_chosen") {
+        scheduler.handleMasterChosen(
+          event.payload as Parameters<typeof scheduler.handleMasterChosen>[0],
+        );
+      } else if (event.type === "master.task_dispatch_failed") {
+        scheduler.handleMasterFailed(
+          event.payload as Parameters<typeof scheduler.handleMasterFailed>[0],
+        );
       }
     },
-    onError: (e) => onError(e),
+    onError: (error) => onError(error),
   });
 
   function targets(): SessionTarget[] {
-    return store.sessions.list({ states: ["starting", "working", "waiting", "idle"] }).map((s) => {
-      const card = s.cardId ? store.cards.get(s.cardId) : undefined;
-      const project = card ? store.projects.get(card.projectId) : undefined;
-      return {
-        sessionId: s.id,
-        cardKey: card?.key ?? null,
-        path: card?.worktree ?? project?.repoPath ?? null,
-      };
-    });
+    return scheduler.targets();
   }
 
   /** Take one sample and persist it as resource_sample (cpu/mem 0-1, per-session and pool JSON). */
@@ -148,13 +177,17 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     latest = snap;
     const perSession: Record<string, unknown> = {};
     for (const [id, u] of Object.entries(snap.perSession)) perSession[id] = u;
-    db.prepare(
-      "INSERT INTO resource_sample (ts, cpu, mem, per_session_json, device_pool_json) VALUES (?, ?, ?, ?, ?)",
-    ).run(snap.ts, snap.cpu, snap.mem, JSON.stringify(perSession), JSON.stringify(leases.poolStatus()));
+    resourceSamples.record({
+      ts: snap.ts,
+      cpu: snap.cpu,
+      mem: snap.mem,
+      perSession,
+      devicePool: leases.poolStatus(),
+    });
     if (now().getTime() - lastPrune > 3_600_000) {
       lastPrune = now().getTime();
       const cutoff = new Date(now().getTime() - settings.sampleRetentionDays * 86_400_000);
-      db.prepare("DELETE FROM resource_sample WHERE ts < ?").run(cutoff.toISOString());
+      resourceSamples.prune(cutoff.toISOString());
     }
     return snap;
   }
@@ -201,7 +234,10 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   /** Entry for the master agent (WP-32) through the `scheduler.selectAgent` RPC. */
   async function select(task: TaskNeeds, repoPath?: string) {
     // Providers come from what exists: the usage catalog and the presets in use.
-    const providerIds = [...Object.keys(quota), ...store.presets.list().flatMap((p) => presetModels(p).map((m) => m.provider))];
+    const providerIds = [
+      ...Object.keys(quota),
+      ...store.presets.list().flatMap((p) => presetModels(p).map((m) => m.provider)),
+    ];
     const profiles = mergeProfiles(settings.agentProfiles, providerIds);
     const running = scheduler.status().running.byProvider;
     const devicesFree: Record<string, number> = {};
@@ -223,13 +259,15 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   let sampleTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = true;
 
-  const loop = (run: () => Promise<unknown>, seconds: () => number, set: (t: ReturnType<typeof setTimeout>) => void) => {
+  const loop = (
+    run: () => Promise<unknown>,
+    seconds: () => number,
+    set: (t: ReturnType<typeof setTimeout>) => void,
+  ) => {
     const next = () => {
       if (stopped) return;
       const t = setTimeout(() => {
-        run()
-          .catch(onError)
-          .finally(next);
+        run().catch(onError).finally(next);
       }, seconds() * 1000);
       (t as unknown as { unref?: () => void }).unref?.();
       set(t);
@@ -250,13 +288,23 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     quota: () => quota,
     setSettings(next: RuntimeSettings) {
       settings = next;
+      ports.configure({ base: settings.devPortBase, span: settings.devPortSpan });
       publishLimits();
     },
     start() {
       stopped = false;
+      consumer.start();
       void sampleNow().catch(onError);
-      loop(sampleNow, () => settings.sampleSeconds, (t) => (sampleTimer = t));
-      loop(tickOnce, () => settings.tickSeconds, (t) => (tickTimer = t));
+      loop(
+        sampleNow,
+        () => settings.sampleSeconds,
+        (t) => (sampleTimer = t),
+      );
+      loop(
+        tickOnce,
+        () => settings.tickSeconds,
+        (t) => (tickTimer = t),
+      );
     },
     async stop() {
       stopped = true;

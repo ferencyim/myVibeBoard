@@ -81,7 +81,11 @@ function setup(options: {
     mkdirSync(path.join(worktree, ".vibe"), { recursive: true });
     writeFileSync(
       path.join(worktree, ".vibe", "verify.json"),
-      JSON.stringify({ backend: { perf: { label: "GET /x", command: "node", args: ["bench.js"], thresholdMs: 100 } } }),
+      JSON.stringify({
+        backend: {
+          perf: { label: "GET /x", command: "node", args: ["bench.js"], thresholdMs: 100 },
+        },
+      }),
     );
   }
   const project = board.projects.create({
@@ -110,13 +114,18 @@ function setup(options: {
   const runner = createScriptedRunner((call) => {
     if (call.command === "git" && call.args[0] === "rev-parse") return { stdout: "deadbeefcafe\n" };
     if (call.command === "git" && call.args[0] === "merge-base") return { stdout: "base1111\n" };
-    if (call.command === "git" && call.args[0] === "status") return { stdout: statuses.shift() ?? "" };
+    if (call.command === "git" && call.args[0] === "status")
+      return { stdout: statuses.shift() ?? "" };
     if (call.command === "npm") return { exitCode: options.testExit ?? 0, stdout: "tests ran" };
     return undefined;
   });
 
   const configs: RunConfigs = new Map();
-  const harness = { sent: [] as Harness["sent"], launched: 0, providers: [] as string[] } as Harness;
+  const harness = {
+    sent: [] as Harness["sent"],
+    launched: 0,
+    providers: [] as string[],
+  } as Harness;
   const collector: EvidenceCollector = {
     id: "fake-backend",
     projectTypes: ["backend"],
@@ -124,10 +133,10 @@ function setup(options: {
     collect: async (ctx) => {
       harness.seenConfig = configs.get(ctx.verificationId) as Harness["seenConfig"];
       return {
-      artifacts: [writeArtifact(ctx, "report", "samples.json", "{}", "request samples")],
-      judgement: "pass",
-      notes: ["1/1 request sample(s) matched"],
-      degraded: false,
+        artifacts: [writeArtifact(ctx, "report", "samples.json", "{}", "request samples")],
+        judgement: "pass",
+        notes: ["1/1 request sample(s) matched"],
+        degraded: false,
       };
     },
   };
@@ -135,8 +144,14 @@ function setup(options: {
   registry.register(collector);
 
   if (options.verifierPreset) {
-    const preset = board.presets.create({ name: "Verifier", provider: "kimi", model: "k2", roleHints: ["verifier"] });
-    if (options.verifierPreset === "card") board.cards.update(card.id, { verifierPresetId: preset.id });
+    const preset = board.presets.create({
+      name: "Verifier",
+      provider: "kimi",
+      model: "k2",
+      roleHints: ["verifier"],
+    });
+    if (options.verifierPreset === "card")
+      board.cards.update(card.id, { verifierPresetId: preset.id });
     else board.modelDefaults.setGlobal({ verifier: preset.id });
   }
 
@@ -152,8 +167,14 @@ function setup(options: {
           // The judge round asks for "judgement"s; the setup round (evidence mode only) does not.
           const round = prompt.includes("judgement") ? 2 : 1;
           if (options.reply) {
-            const json = round === 1 ? { backend: { requests: [] } } : (options.verdict?.(2) ?? { items: [] });
-            return { status: "idle" as const, text: ["Here you go:", "```json", JSON.stringify(json), "```"].join(String.fromCharCode(10)) };
+            const json =
+              round === 1 ? { backend: { requests: [] } } : (options.verdict?.(2) ?? { items: [] });
+            return {
+              status: "idle" as const,
+              text: ["Here you go:", "```json", JSON.stringify(json), "```"].join(
+                String.fromCharCode(10),
+              ),
+            };
           }
           if (round === 1) {
             writeFileSync(
@@ -234,7 +255,12 @@ describe("verification pipeline", () => {
       needsEvidence: true,
       verdict: () => ({
         items: [
-          { check: 1, judgement: "fail", note: "GET /hello returned 404", evidence: ["samples.json"] },
+          {
+            check: 1,
+            judgement: "fail",
+            note: "GET /hello returned 404",
+            evidence: ["samples.json"],
+          },
           { check: 2, judgement: "pass", note: "n/a", evidence: [] },
         ],
       }),
@@ -259,7 +285,11 @@ describe("verification pipeline", () => {
       thresholdMs: 100,
       baseline: { commitHash: "base1111" },
     });
-    expect(h.runnerCalls.some((c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add")).toBe(true);
+    expect(
+      h.runnerCalls.some(
+        (c) => c.command === "git" && c.args[0] === "worktree" && c.args[1] === "add",
+      ),
+    ).toBe(true);
   });
 
   it("reads the verdict from the verifier reply when it writes no file", async () => {
@@ -273,7 +303,12 @@ describe("verification pipeline", () => {
       needsEvidence: false,
       hasTestScript: true,
       verifierPreset: "card",
-      verdict: () => ({ items: [{ check: 1, judgement: "pass" }, { check: 2, judgement: "pass" }] }),
+      verdict: () => ({
+        items: [
+          { check: 1, judgement: "pass" },
+          { check: 2, judgement: "pass" },
+        ],
+      }),
     });
     const result = await h.pipeline.run(h.cardId);
     expect(result!.conclusion).toBe("pass");
@@ -281,27 +316,42 @@ describe("verification pipeline", () => {
     expect(h.providers).toEqual(["kimi"]);
     const detail = h.verify.detail(result!.verificationId)!;
     expect(detail.verification.mode).toBe("tests_only");
-    expect(detail.items.map((i) => i.checkText)).toEqual(["GET /hello returns 200", "body says hello", "Tests pass"]);
+    expect(detail.items.map((i) => i.checkText)).toEqual([
+      "GET /hello returns 200",
+      "body says hello",
+      "测试通过",
+    ]);
     expect(detail.notes.join(" ")).toContain("验证模型：Verifier");
     expect(h.runnerCalls.some((c) => c.command === "npm")).toBe(true);
   });
 
   it("WP-108: evidence mode uses the global default verification model; without any it picks one and says so", async () => {
-    const withDefault = setup({ needsEvidence: true, verifierPreset: "global", verdict: () => passing });
+    const withDefault = setup({
+      needsEvidence: true,
+      verifierPreset: "global",
+      verdict: () => passing,
+    });
     await withDefault.pipeline.run(withDefault.cardId);
     expect(withDefault.providers).toEqual(["kimi"]);
     const without = setup({ needsEvidence: false, hasTestScript: true });
     const result = await without.pipeline.run(without.cardId);
     expect(without.launched).toBe(1);
-    expect(without.verify.detail(result!.verificationId)!.notes.join(" ")).toContain("没有选验证模型");
+    expect(without.verify.detail(result!.verificationId)!.notes.join(" ")).toContain(
+      "没有选验证模型",
+    );
   });
 
   it("failing tests in tests_only mode send the card back", async () => {
-    const h = setup({ needsEvidence: false, hasTestScript: true, testExit: 1, verifierPreset: "card" });
+    const h = setup({
+      needsEvidence: false,
+      hasTestScript: true,
+      testExit: 1,
+      verifierPreset: "card",
+    });
     const result = await h.pipeline.run(h.cardId);
     expect(result).toMatchObject({ conclusion: "fail", returned: true });
     expect(h.board.cards.get(h.cardId)!.column).toBe("in_progress");
-    expect(h.sent[0]!.prompt).toContain("Tests pass");
+    expect(h.sent[0]!.prompt).toContain("测试通过");
   });
 
   it("a verifier that changes the tree voids the evidence and is not blamed on the worker", async () => {
@@ -333,7 +383,10 @@ describe("check splitting and read-only policy", () => {
   it("splits acceptance criteria per line and strips bullets", () => {
     const h = setup({ needsEvidence: true });
     const card = h.board.cards.get(h.cardId)!;
-    expect(splitChecks(card).map((c) => c.text)).toEqual(["GET /hello returns 200", "body says hello"]);
+    expect(splitChecks(card).map((c) => c.text)).toEqual([
+      "GET /hello returns 200",
+      "body says hello",
+    ]);
     expect(splitChecks({ ...card, acceptance: "" })[0]!.text).toContain(card.title);
   });
 
@@ -345,8 +398,12 @@ describe("check splitting and read-only policy", () => {
       decideVerifierPermission(req(d, kind), ctx).behavior === "allow";
     expect(allowed({ type: "read", filePath: "/repo/a.ts" })).toBe(true);
     expect(allowed({ type: "edit", filePath: "/repo/a.ts" })).toBe(false);
-    expect(allowed({ type: "write", filePath: path.join(ctx.outputDir, "verdict.json") })).toBe(true);
-    expect(allowed({ type: "write", filePath: path.join(ctx.outputDir, "..", "evil") })).toBe(false);
+    expect(allowed({ type: "write", filePath: path.join(ctx.outputDir, "verdict.json") })).toBe(
+      true,
+    );
+    expect(allowed({ type: "write", filePath: path.join(ctx.outputDir, "..", "evil") })).toBe(
+      false,
+    );
     expect(allowed({ type: "shell", command: "git status --porcelain" })).toBe(true);
     expect(allowed({ type: "shell", command: "git checkout -- src" })).toBe(false);
     expect(allowed({ type: "shell", command: "echo hi > file.txt" })).toBe(false);

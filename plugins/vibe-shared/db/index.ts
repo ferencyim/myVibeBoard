@@ -10,3 +10,9 @@ export * from "./tasks";
 
 export * from "./backup";
 export * from "./project-config";
+export * from "./task-runtime";
+export * from "./task-verification";
+export * from "./maintenance";
+export * from "./usage";
+export * from "./context-state";
+export * from "./resource-samples";

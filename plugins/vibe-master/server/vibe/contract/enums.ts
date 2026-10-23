@@ -91,7 +91,16 @@ export const PresetPermissionModeSchema = z.enum(PRESET_PERMISSION_MODES);
 
 // --- agent sessions --------------------------------------------------------------------
 /** `worker` is a card's (main) executing agent; `subagent` runs one subtask of it (WP-106). */
-export const SESSION_ROLES = ["master", "planner", "worker", "verifier", "subagent"] as const;
+export const SESSION_ROLES = [
+  "master",
+  "scout",
+  "planner",
+  "plan_reviewer",
+  "worker",
+  "subagent",
+  "reviewer",
+  "verifier",
+] as const;
 export type SessionRole = (typeof SESSION_ROLES)[number];
 export const SessionRoleSchema = z.enum(SESSION_ROLES);
 

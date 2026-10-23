@@ -20,10 +20,10 @@ with `rebuildMemoryIndex`. Entry point: `createMemoryStore` in `server/memory/in
 `agent.create` hook that injects project context (user directives -> project instructions ->
 memory; the task brief follows in the prompt) into agents whose cwd contains `.vibe/`:
 
-| provider | channel |
-| --- | --- |
-| claude | `systemPrompt` (block prepended once, marker `vibe:context`) |
-| codex | generated `AGENTS.override.md` (AGENTS.md text + block), git-excluded; verified against a real Codex |
+| provider       | channel                                                                                                        |
+| -------------- | -------------------------------------------------------------------------------------------------------------- |
+| claude         | `systemPrompt` (block prepended once, marker `vibe:context`)                                                   |
+| codex          | generated `AGENTS.override.md` (AGENTS.md text + block), git-excluded; verified against a real Codex           |
 | kimi, deepseek | marked block in `AGENTS.md`; tracked file: `skip-worktree`, only in a linked worktree; untracked: git-excluded |
 
 Unlisted providers and non-`.vibe` directories are left alone; failures never block agent start.
@@ -83,3 +83,21 @@ session's `complexity`), this module writes no extra note.
 - A handoff session inherits the complexity (long as multi, since its context is fresh), the
   early-compaction count, and starts counting turns from zero.
 - `complexity.enabled=false` turns the whole policy off (TTL behaviour only).
+
+## 第五轮：workspace/task 上下文（WP-112）
+
+新运行使用原生 workspace 和 agent_session 归因，不读取旧卡片作为任务恢复依据。记忆文件及 prompt_override 保留，创建 linked worktree 中的 agent 时按 Git 仓库身份匹配项目覆盖；匹配不唯一不猜项目。默认压缩笔记直接写该会话的 .vibe/sessions/<session id>.md，多个角色不覆盖同一任务笔记。
+
+index.server 实际注册原生生命周期和全角色看门狗；权限等待不会标为卡死。卡死只记状态并给 anchor 一条中文摘要，不绕过调度开启新回合。context 设置保留记忆预算并提供看门狗开关、分钟阈值和按 provider 覆盖。
+
+模型额度/登录/明确模型或 provider 不可用时向 context.continuation_requested 总线发去重请求，并暂停和冻结派发。普通测试/工具错误不轮换。总 agent 及代码复核/验证由各自 owner 执行候选轮换，避免两个插件同时接续同一会话。冷上下文交接同样交回 owner；旧会话停止结果未知时，保留锁和名额。没有支持该事件的任务流程插件时，anchor 摘要明确要求升级，不直接创建新的写入者。
+
+WP-111 消费请求后必须核对 confirmedAt、当前阶段和旧 session，然后确认取消、申请 scheduler.task_resource_request(acquire)、创建同 workspace/worktree 会话、bind、通过 createTaskRuntimeCommands.recordContinuation 原子保存实际模型和候选索引。context.continuation_result 回报真实结果；不能从已改动的实时预设重算确认快照。主代理交接还须带方案、子任务状态和原生会话链接。
+
+通用 createTaskContinuation 控制器覆盖七角色和 master；冷交接保持当前候选，provider 失败才按冻结候选顺序前进，候选耗尽报告。recordContinuation 重放时读取已有替代 session，不再次创建 agent 或复制 usage_event；用量由统计插件按独立原生 CLI session 和日志去重键采集。复杂度状态及记忆派生索引写入统一走 vibe-shared/db/context-state 命令，历史键和值不变。
+
+压缩只对核实空闲且未归档的原生 agent 发起；重启后先刷新状态，不自动恢复已关闭会话。压缩命令超时/权限未解决不会被记作成功。旧卡片压缩适配暂留给 WP-114 清理，新路径不依赖它。
+
+压缩的笔记、压缩命令和恢复回合也会走 acquire → bind（当前原生 agent）→ run → idle 后 yield。已有主代理计算名额尚未让出时延后压缩，不占第二份名额，也不释放主代理已有租约。调度回执不明或确认变化时冻结并保留资源；候选失败、冷交接及实际模型记录仍交各自 owner。
+
+生产压缩调度默认排除 cardId 非空的旧卡会话，不会为旧卡自动发压缩回合或创建交接 writer；历史读取仍保留。历史压缩流程测试通过 includeLegacyCards 显式注入，不用于生产注册。旧卡会话也可能携带 workspaceId，交接路由、笔记路径和压缩计数须先按 cardId 区分旧卡与新任务，不能只看 workspaceId。内部压缩消息始终携带 sourceAgentId，保持原生 agent-message 身份。

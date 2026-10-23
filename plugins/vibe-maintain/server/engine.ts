@@ -1,12 +1,5 @@
-// The maintenance engine: syncs rules from .vibe/maintenance.yml, counts work, decides when a rule
-// fires (workload / cron / file change), runs its check and files the result as a board card.
-//
-// Controls (docs/vibe/IMPLEMENTATION-PLAN.md M10): maintenance cards are low priority, every rule
-// has a daily cap, an open card with the same dedupe key only gets a note appended, and a rule
-// whose cards the user keeps rejecting is paused (with a `maintenance.paused` event).
-//
-// Everything time- or IO-dependent is injected (clock, git runner, checks, sub agent, launcher), so
-// the tests drive it with a fake clock and real temporary git repositories.
+// 维护规则按项目保留触发计数与运行历史；发现只进入原生 workspace 的规划会话。
+// 同规则未完成任务补充新发现，方案变更须先停止、清除确认并重新等待用户 /执行。
 
 import { randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
@@ -25,29 +18,21 @@ import {
   type RuleDef,
   type RulesConfig,
 } from "../shared/rules";
-import { buildPrompt, type PromptVars } from "../shared/prompts";
+import { MAINTENANCE_PROMPTS, buildPrompt, type PromptVars } from "../shared/prompts";
 import { trunkOf } from "./git/check";
 import type { GitRunner } from "./git/exec";
-import type {
-  CheckOutput,
-  CheckRegistry,
-  Finding,
-  FixLauncher,
-  SubAgentRunner,
-} from "./types";
+import type { CheckOutput, CheckRegistry, Finding, MaintenanceTaskLauncher } from "./types";
 import {
-  CARD_PRIORITIES,
   MaintenanceRuleSchema,
   MaintenanceRunSchema,
   isEvent,
-  type CardPriority,
-  type CardView,
   type MaintenanceRule,
   type MaintenanceRun,
   type Project,
 } from "./vibe/contract";
 import {
   createEventConsumer,
+  createMaintenanceCommands,
   decodeRows,
   publishEvent,
   type EventConsumer,
@@ -57,7 +42,7 @@ import {
 
 export interface EngineSettings {
   enabled: boolean;
-  /** Pause a rule after this many consecutive rejected cards. */
+  /** 连续驳回达到此次数后暂停规则。 */
   pauseAfterRejections: number;
 }
 
@@ -70,8 +55,11 @@ export interface EngineOptions {
   settings?: () => EngineSettings;
   /** The global UI rule table (plugin settings); read on every sync. */
   uiRules?: () => RulesConfig;
-  subAgent?: SubAgentRunner;
-  fixLauncher?: FixLauncher;
+
+  taskLauncher?: MaintenanceTaskLauncher;
+  /** Waits until WP-111 has actually stopped every native task agent. */
+  stopTask?: (workspaceId: string) => Promise<boolean>;
+  projectIdOfTask?: (workspaceId: string) => Promise<string | undefined>;
   newId?: () => string;
   /** Minimum seconds between `git rev-list` polls per rule (commit-count triggers). */
   commitPollSeconds?: number | (() => number);
@@ -81,7 +69,12 @@ export interface EngineOptions {
 
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = { enabled: true, pauseAfterRejections: 3 };
 
-type WorkloadTrigger = { kind: "workload"; cards_done?: number; commits_merged?: number; tokens?: number };
+type WorkloadTrigger = {
+  kind: "workload";
+  cards_done?: number;
+  commits_merged?: number;
+  tokens?: number;
+};
 type TimeTrigger = { kind: "time"; cron: string };
 type EventTrigger = { kind: "event"; path: string; pattern?: string };
 
@@ -100,6 +93,8 @@ export const GLOBAL_ERRORS = "(界面规则)";
 
 export function createMaintenanceEngine(options: EngineOptions) {
   const { db, store, git, checks } = options;
+  const commands = createMaintenanceCommands(db, { now: options.now });
+  store.prompts.register(MAINTENANCE_PROMPTS);
   const now = options.now ?? (() => new Date());
   const settings = options.settings ?? (() => DEFAULT_ENGINE_SETTINGS);
   const newId = options.newId ?? randomUUID;
@@ -122,30 +117,15 @@ export function createMaintenanceEngine(options: EngineOptions) {
   const iso = () => now().toISOString();
   const ruleKey = (rule: MaintenanceRule, kind: string) => `${rule.id}:${kind}`;
 
-  function getCounter(projectId: string, kind: string): { count: number; since: string } | undefined {
-    const row = db
-      .prepare<{ count: number; since: string }>(
-        "SELECT count, since FROM work_counter WHERE project_id = ? AND kind = ?",
-      )
-      .get(projectId, kind);
-    return row ? { count: row.count, since: row.since } : undefined;
-  }
-  function setCounter(projectId: string, kind: string, count: number, since?: string): void {
-    db.prepare(
-      `INSERT INTO work_counter (project_id, kind, count, since) VALUES (?, ?, ?, ?)
-       ON CONFLICT (project_id, kind) DO UPDATE SET count = excluded.count,
-         since = COALESCE(?, work_counter.since)`,
-    ).run(projectId, kind, count, since ?? iso(), since ?? null);
-  }
-  function bump(projectId: string, kind: string): number {
-    const next = (getCounter(projectId, kind)?.count ?? 0) + 1;
-    setCounter(projectId, kind, next);
-    return next;
-  }
+  const getCounter = commands.counter;
+  const setCounter = commands.setCounter;
+  const bump = commands.bump;
 
   function listRules(projectId?: string): MaintenanceRule[] {
     const rows = projectId
-      ? db.prepare("SELECT * FROM maintenance_rule WHERE project_id = ? ORDER BY name").all(projectId)
+      ? db
+          .prepare("SELECT * FROM maintenance_rule WHERE project_id = ? ORDER BY name")
+          .all(projectId)
       : db.prepare("SELECT * FROM maintenance_rule ORDER BY project_id, name").all();
     return decodeRows(MaintenanceRuleSchema, rows);
   }
@@ -157,7 +137,9 @@ export function createMaintenanceEngine(options: EngineOptions) {
     return decodeRows(
       MaintenanceRunSchema,
       db
-        .prepare("SELECT * FROM maintenance_run WHERE rule_id = ? ORDER BY triggered_at DESC, id DESC LIMIT ?")
+        .prepare(
+          "SELECT * FROM maintenance_run WHERE rule_id = ? ORDER BY triggered_at DESC, id DESC LIMIT ?",
+        )
         .all(ruleId, limit),
     );
   }
@@ -176,42 +158,26 @@ export function createMaintenanceEngine(options: EngineOptions) {
   // ---- rules from maintenance.yml --------------------------------------------------------------
 
   function upsertRule(project: Project, def: RuleDef): void {
-    const id = `${project.id}:${def.name}`;
-    const row = {
-      trigger_kind: def.trigger.kind,
-      trigger_json: JSON.stringify(def.trigger),
-      check_json: JSON.stringify(def.check),
+    const id = project.id + ":" + def.name;
+    commands.upsertRule({
+      id,
+      projectId: project.id,
+      name: def.name,
+      triggerKind: def.trigger.kind,
+      trigger: def.trigger,
+      check: def.check,
       agent: def.agent ?? null,
-      output_mode: def.output,
+      outputMode: def.output,
       priority: def.priority,
-      dedupe_key: def.dedupe_key ?? null,
-      daily_cap: def.daily_cap,
-      enabled: def.enabled ? 1 : 0,
-    };
-    const existing = db.prepare<Record<string, unknown>>("SELECT * FROM maintenance_rule WHERE id = ?").get(id);
-    if (!existing) {
-      db.prepare(
-        `INSERT INTO maintenance_rule (id, project_id, name, trigger_kind, trigger_json, check_json, agent,
-           output_mode, priority, dedupe_key, daily_cap, enabled, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        id, project.id, def.name, row.trigger_kind, row.trigger_json, row.check_json, row.agent,
-        row.output_mode, row.priority, row.dedupe_key, row.daily_cap, row.enabled, iso(), iso(),
-      );
-    } else if (Object.entries(row).some(([k, v]) => existing[k] !== v)) {
-      db.prepare(
-        `UPDATE maintenance_rule SET trigger_kind = ?, trigger_json = ?, check_json = ?, agent = ?, output_mode = ?,
-           priority = ?, dedupe_key = ?, daily_cap = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-      ).run(
-        row.trigger_kind, row.trigger_json, row.check_json, row.agent, row.output_mode, row.priority,
-        row.dedupe_key, row.daily_cap, row.enabled, iso(), id,
-      );
-    }
+      dedupeKey: def.dedupe_key ?? null,
+      dailyCap: def.daily_cap,
+      enabled: def.enabled,
+    });
     const rule = getRule(id)!;
     if (def.trigger.kind === "workload") {
-      for (const kind of ["cards", "commits", "tokens"]) {
-        if (!getCounter(project.id, ruleKey(rule, kind))) setCounter(project.id, ruleKey(rule, kind), 0);
-      }
+      for (const kind of ["cards", "commits", "tokens"])
+        if (!getCounter(project.id, ruleKey(rule, kind)))
+          setCounter(project.id, ruleKey(rule, kind), 0);
     }
   }
 
@@ -228,7 +194,12 @@ export function createMaintenanceEngine(options: EngineOptions) {
       const signature = `${config.signature}|ui|${JSON.stringify(ui)}`;
       const cached = configCache.get(project.id);
       if (cached?.signature === signature) continue;
-      const merged = mergeRuleLayers({ builtin: BUILTIN_RULES, ui, projectId: project.id, yml: config.yml });
+      const merged = mergeRuleLayers({
+        builtin: BUILTIN_RULES,
+        ui,
+        projectId: project.id,
+        yml: config.yml,
+      });
       const errors = [...config.errors, ...merged.errors];
       configCache.set(project.id, {
         signature,
@@ -240,7 +211,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
       for (const layered of merged.rules) upsertRule(project, layered.def);
       for (const rule of listRules(project.id)) {
         if (!names.has(rule.name) && rule.enabled) {
-          db.prepare("UPDATE maintenance_rule SET enabled = 0, updated_at = ? WHERE id = ?").run(iso(), rule.id);
+          commands.setRuleEnabled(rule.id, false);
         }
       }
     }
@@ -255,97 +226,65 @@ export function createMaintenanceEngine(options: EngineOptions) {
     setCounter(projectId, `${ruleId}:rejects`, 0);
   }
 
-  function reject(ruleId: string, projectId: string, cardId: string): void {
-    const rule = getRule(ruleId);
+  function rejectWorkspace(workspaceId: string): void {
+    const link = commands.links({ workspaceId })[0];
+    if (
+      !link ||
+      store.tasks.get(workspaceId)?.phase === "completed" ||
+      !commands.rejectTask(workspaceId)
+    )
+      return;
+    const rule = getRule(link.ruleId);
     if (!rule) return;
-    // Each card counts once even if it is archived and later deleted.
-    const marker = db
-      .prepare("INSERT OR IGNORE INTO work_counter (project_id, kind, count, since) VALUES (?, ?, 1, ?)")
-      .run(projectId, `rejected:${cardId}`, iso());
-    if (marker.changes === 0) return;
-    const count = bump(projectId, `${ruleId}:rejects`);
+    const count = bump(link.projectId, rule.id + ":rejects");
     if (count >= settings().pauseAfterRejections && !rule.pausedAt) {
-      db.prepare("UPDATE maintenance_rule SET paused_at = ?, updated_at = ? WHERE id = ?").run(iso(), iso(), ruleId);
+      commands.setRulePaused(rule.id, true);
       publishEvent(
         db,
         {
           type: "maintenance.paused",
-          projectId,
-          payload: { ruleId, ruleName: rule.name, reason: "rejections", rejections: count },
-          dedupeKey: `maintenance.paused:${ruleId}:${count}`,
+          projectId: link.projectId,
+          payload: {
+            ruleId: rule.id,
+            ruleName: rule.name,
+            reason: "rejections",
+            rejections: count,
+          },
+          dedupeKey: "maintenance.paused:" + rule.id + ":" + count,
         },
         now,
       );
-      if (store.cards.get(cardId)) {
-        store.events.add({
-          cardId,
-          type: "maintenance",
-          authorKind: "system",
-          author: rule.name,
-          body: {
-            kind: "rule_paused",
-            ruleId,
-            text: `规则「${rule.name}」连续 ${count} 张卡被驳回，已自动暂停。需要时在维护面板里恢复。`,
-          },
-        });
-      }
-    }
-  }
-
-  function ruleOfDeletedCard(cardId: string): string | undefined {
-    return db
-      .prepare<{ rule_id: string }>(
-        "SELECT rule_id FROM maintenance_run WHERE card_ids_json LIKE ? ORDER BY triggered_at DESC LIMIT 1",
-      )
-      .get(`%"${cardId}"%`)?.rule_id;
-  }
-
-  function onCardDone(projectId: string): void {
-    for (const rule of listRules(projectId)) {
-      if (rule.triggerKind === "workload") bump(projectId, ruleKey(rule, "cards"));
+      store.tasks.setSummary(
+        workspaceId,
+        "维护规则「" + rule.name + "」连续 " + count + " 个任务被驳回，已暂停，可在维护设置恢复。",
+      );
     }
   }
 
   const consumer: EventConsumer = createEventConsumer({
     db,
-    consumer: "vibe-maintain",
-    types: ["card.moved", "card.updated", "card.deleted"],
-    startAt: "now",
+    consumer: "vibe-maintain-task",
+    types: ["task.updated"],
+    startAt: "beginning",
     now,
     pollIntervalMs: options.pollIntervalMs,
-    onError: (error, seq) => log(`event ${seq} failed`, error),
+    onError: (error, seq) => log("维护事件 " + seq + " 处理失败", error),
     handler: async (event) => {
-      const cardId = event.cardId;
-      if (!cardId) return;
-      if (isEvent(event, "card.deleted")) {
-        const ruleId = ruleOfDeletedCard(cardId);
-        if (ruleId && event.projectId) reject(ruleId, event.projectId, cardId);
+      if (!isEvent(event, "task.updated")) return;
+      const task = store.tasks.get(event.payload.workspaceId);
+      if (!task) return;
+      const link = commands.links({ workspaceId: task.workspaceId })[0];
+      if (task.phase !== "completed") return;
+      if (link && !link.rejectedAt) resetRejections(link.ruleId, link.projectId);
+      const projectId = link?.projectId ?? (await options.projectIdOfTask?.(task.workspaceId));
+      if (
+        !projectId ||
+        !commands.once(projectId, "completed-task:" + task.workspaceId + ":" + task.confirmedAt)
+      )
         return;
-      }
-      const card = store.cards.get(cardId);
-      if (!card) return;
-      if (card.origin === "maintenance" && card.originRef) {
-        if (isEvent(event, "card.moved")) {
-          const { from, to, actor } = event.payload;
-          if (to === "done" || (from === "draft" && to === "todo")) {
-            resetRejections(card.originRef, card.projectId);
-          } else if (from === "verifying" && to === "in_progress" && actor === "user") {
-            reject(card.originRef, card.projectId, card.id);
-          }
-        } else if (
-          isEvent(event, "card.updated") &&
-          event.payload.fields.includes("archivedAt") &&
-          card.archivedAt &&
-          (card.column === "draft" || card.column === "todo")
-        ) {
-          reject(card.originRef, card.projectId, card.id);
-        }
-        return;
-      }
-      if (isEvent(event, "card.moved") && event.payload.to === "done") {
-        // A brand-new project has no rules until the next sync: do not lose its first cards.
-        if (listRules(card.projectId).length === 0) await syncRules();
-        onCardDone(card.projectId);
+      if (listRules(projectId).length === 0) await syncRules();
+      for (const rule of listRules(projectId)) {
+        if (rule.triggerKind === "workload") bump(projectId, ruleKey(rule, "cards"));
       }
     },
   });
@@ -353,13 +292,14 @@ export function createMaintenanceEngine(options: EngineOptions) {
   // ---- triggers -------------------------------------------------------------------------------------
 
   function tokensSince(projectId: string, since: string): number {
-    const has = db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'usage_event'").get();
+    const has = db
+      .prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'usage_event'")
+      .get();
     if (!has) return 0;
     return (
       db
         .prepare<{ n: number | null }>(
-          `SELECT SUM(u.tokens_in + u.tokens_out) AS n FROM usage_event u
-           JOIN card c ON c.id = u.card_id WHERE c.project_id = ? AND u.ts >= ?`,
+          `SELECT SUM(u.tokens_in + u.tokens_out) AS n FROM usage_event u WHERE u.project_id = ? AND u.ts >= ?`,
         )
         .get(projectId, since)?.n ?? 0
     );
@@ -368,16 +308,22 @@ export function createMaintenanceEngine(options: EngineOptions) {
   async function commitsSince(project: Project, since: string): Promise<number> {
     const trunk = await trunkOf(git, project.repoPath);
     if (!trunk) return 0;
-    const res = await git(["rev-list", "--count", "--no-merges", `--since=${since}`, trunk], project.repoPath);
+    const res = await git(
+      ["rev-list", "--count", "--no-merges", `--since=${since}`, trunk],
+      project.repoPath,
+    );
     return res.code === 0 ? Number(res.stdout.trim()) || 0 : 0;
   }
 
-  async function workloadReason(rule: MaintenanceRule, project: Project): Promise<TriggerReason | null> {
+  async function workloadReason(
+    rule: MaintenanceRule,
+    project: Project,
+  ): Promise<TriggerReason | null> {
     const t = rule.trigger as WorkloadTrigger;
     const reasons: string[] = [];
     const cards = getCounter(project.id, ruleKey(rule, "cards"));
     if (t.cards_done && (cards?.count ?? 0) >= t.cards_done) {
-      reasons.push(`已完成卡片 ${cards!.count} 张，达到阈值 ${t.cards_done}`);
+      reasons.push(`已完成任务 ${cards!.count} 个，达到阈值 ${t.cards_done}`);
     }
     if (t.commits_merged) {
       const c = getCounter(project.id, ruleKey(rule, "commits"));
@@ -406,7 +352,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
       const fire = latestFire(t.cron, new Date(last), now());
       return fire ? { reason: `定时 ${t.cron}（${fire.toISOString()}）` } : null;
     } catch (error) {
-      log(`rule ${rule.name}: bad cron`, error);
+      log(`规则「${rule.name}」cron 配置无效`, error);
       return null;
     }
   }
@@ -464,210 +410,148 @@ export function createMaintenanceEngine(options: EngineOptions) {
     return null;
   }
 
-  const priorityOf = (rule: MaintenanceRule): CardPriority =>
-    (CARD_PRIORITIES as readonly string[]).includes(rule.priority) ? (rule.priority as CardPriority) : "low";
+  const openTaskFor = (rule: MaintenanceRule) =>
+    commands
+      .links({ ruleId: rule.id })
+      .find((link) => !link.rejectedAt && store.tasks.get(link.workspaceId)?.phase !== "completed");
 
-  const openCardFor = (project: Project, key: string): CardView | undefined =>
-    store.cards
-      .list({ projectId: project.id })
-      .find((c) => c.origin === "maintenance" && c.dedupeKey === key && c.column !== "done");
-
-  function recordFindings(card: CardView, rule: MaintenanceRule, runId: string, out: CheckOutput, kind: string): void {
-    store.events.add({
-      cardId: card.id,
-      type: "maintenance",
-      authorKind: "system",
-      author: rule.name,
-      body: { kind, ruleId: rule.id, runId, text: out.body, findings: out.findings, notes: out.notes },
-    });
-  }
-
-  async function repoState(project: Project): Promise<string> {
-    const [head, status] = await Promise.all([
-      git(["rev-parse", "HEAD"], project.repoPath),
-      git(["status", "--porcelain"], project.repoPath),
-    ]);
-    return `${head.stdout.trim()}\n${status.stdout}`;
-  }
-
-  function promptVars(rule: MaintenanceRule, project: Project, trigger: TriggerReason, out: CheckOutput): PromptVars {
+  function promptVars(
+    rule: MaintenanceRule,
+    project: Project,
+    trigger: TriggerReason,
+    out: CheckOutput,
+  ): PromptVars {
     return {
       project: project.name,
       rule: rule.name,
       trigger_reason: trigger.reason,
       check_description: describeCheck(rule.check as { type: string } & Record<string, unknown>),
       card_title: out.title,
-      summary: out.body,
+      summary: out.body + (out.acceptance ? "\n\n验收要求：\n" + out.acceptance : ""),
       findings_json: JSON.stringify(out.findings),
       findings_count: String(out.findings.length),
       date: iso().slice(0, 10),
     };
   }
 
-  async function askSubAgent(
-    card: CardView,
+  async function plan(
     rule: MaintenanceRule,
     project: Project,
-    out: CheckOutput,
-    trigger: TriggerReason,
-  ) {
-    if (!rule.agent || !options.subAgent) return;
-    const before = await repoState(project);
-    const prompt = buildPrompt("review", layeredOf(rule)?.def.prompts.review, promptVars(rule, project, trigger, out));
-    try {
-      const reply = await options.subAgent.run({ rule, project, prompt });
-      const violated = (await repoState(project)) !== before;
-      store.events.add({
-        cardId: card.id,
-        type: "note",
-        authorKind: "agent",
-        author: rule.agent,
-        body: {
-          kind: "maintenance_analysis",
-          text: reply ?? "",
-          ...(violated ? { warning: "The read-only sub agent changed the repository state." } : {}),
-        },
-      });
-    } catch (error) {
-      log(`sub agent for ${rule.name} failed`, error);
-      store.events.add({
-        cardId: card.id,
-        type: "maintenance",
-        authorKind: "system",
-        author: rule.name,
-        body: { kind: "sub_agent_failed", text: `子 agent 分析失败：${error instanceof Error ? error.message : String(error)}` },
-      });
-    }
-  }
-
-  async function suggest(
-    rule: MaintenanceRule,
-    project: Project,
-    runId: string,
     out: CheckOutput,
     trigger: TriggerReason,
   ): Promise<string[]> {
-    const key = out.dedupeKey ?? rule.dedupeKey ?? rule.name;
-    const existing = openCardFor(project, key);
-    if (existing) {
-      recordFindings(existing, rule, runId, out, "recurrence");
-      return [existing.id];
-    }
-    const card = store.cards.create(
-      {
-        projectId: project.id,
-        title: out.title,
-        description: out.body,
-        ...(out.acceptance ? { acceptance: out.acceptance } : {}),
-        column: "draft",
-        priority: priorityOf(rule),
-        origin: "maintenance",
-        originRef: rule.id,
-        dedupeKey: key,
-      },
-      "dispatcher",
-      rule.name,
-    );
-    recordFindings(card, rule, runId, out, "created");
-    await askSubAgent(card, rule, project, out, trigger);
-    return [card.id];
-  }
-
-  async function fix(
-    rule: MaintenanceRule,
-    project: Project,
-    runId: string,
-    out: CheckOutput,
-    trigger: TriggerReason,
-  ): Promise<string[]> {
-    const key = out.dedupeKey ?? rule.dedupeKey ?? rule.name;
-    const existing = openCardFor(project, key);
-    if (existing) {
-      recordFindings(existing, rule, runId, out, "recurrence");
-      return [existing.id];
-    }
-    const launcher = options.fixLauncher;
-    if (!launcher) throw new Error("This rule has output=fix but no worker launcher is available");
-    const provider = launcher.provider(rule, project); // fails before any card exists
-    const agentId = newId();
-    const card = store.cards.create(
-      {
-        projectId: project.id,
-        title: out.title,
-        description: out.body,
-        ...(out.acceptance ? { acceptance: out.acceptance } : {}),
-        ...(out.needsEvidence !== undefined ? { needsEvidence: out.needsEvidence } : {}),
-        column: "in_progress",
-        priority: priorityOf(rule),
-        origin: "maintenance",
-        originRef: rule.id,
-        dedupeKey: key,
-      },
-      "dispatcher",
-      rule.name,
-    );
-    const session = store.sessions.start({
-      cardId: card.id,
-      agentId,
-      role: "worker",
-      provider,
-    });
-    recordFindings(card, rule, runId, out, "created");
+    const launcher = options.taskLauncher;
+    if (!launcher) throw new Error("维护任务需要已连接的原生规划入口");
+    const existing = openTaskFor(rule);
+    const keys = new Set(existing?.findings.map((finding) => JSON.stringify(finding)) ?? []);
+    const findings = out.findings.filter((finding) => !keys.has(JSON.stringify(finding)));
+    if (existing && findings.length === 0) return [existing.workspaceId];
+    const kind = rule.outputMode === "fix" ? "fix" : "review";
+    const template =
+      layeredOf(rule)?.def.prompts[kind] ??
+      store.prompts.body("maintenance." + kind, { projectId: project.id }).text;
     const prompt = buildPrompt(
-      "fix",
-      layeredOf(rule)?.def.prompts.fix,
-      promptVars(rule, project, trigger, out),
+      kind,
+      template,
+      promptVars(rule, project, trigger, {
+        ...out,
+        findings,
+        body: existing ? "维护检查补充新发现，请据此更新方案。原有发现仍保留在会话中。" : out.body,
+      }),
       out.instructions,
     );
-    try {
-      const launched = await launcher.launch({
-        agentId,
-        cardKey: card.key,
-        cardId: card.id,
+
+    if (!existing) {
+      const created = await launcher.launch({
         rule,
         project,
         prompt,
+        onCreated: (task) =>
+          commands.linkTask({
+            workspaceId: task.workspaceId,
+            ruleId: rule.id,
+            projectId: project.id,
+            dedupeKey: out.dedupeKey ?? rule.dedupeKey ?? rule.name,
+            findings,
+          }),
       });
-      if (launched.presetId)
-        store.cards.update(card.id, { presetId: launched.presetId });
-      let activeSession = session;
-      if (launched.agentId && launched.agentId !== agentId) {
-        activeSession = store.sessions.recordReassign({
-          fromSessionId: session.id,
-          agentId: launched.agentId,
-          workspaceId: launched.workspaceId,
-          provider: launched.provider ?? provider,
-          reason: "维护预设首选模型不可用，按顺序切换",
-          presetId: launched.presetId,
-        }).to;
-      }
-      if (launched.presetId) store.events.add({
-        cardId: card.id, type: "status", authorKind: "system", author: "failover",
-        body: { kind: "model_selected", sessionId: activeSession.id, presetId: launched.presetId, modelIndex: launched.modelIndex ?? 0, provider: launched.provider ?? provider, model: launched.model },
-      });
-      if (launched.worktree) store.cards.update(card.id, { worktree: launched.worktree });
-    } catch (error) {
-      store.sessions.setState(session.id, "ended", { outcome: "launch_failed" });
-      store.cards.archive(card.id);
-      throw error;
+      store.tasks.setSummary(created.workspaceId, "维护检查已发起规划；方案完成后等待用户 /执行。");
+      return [created.workspaceId];
     }
-    return [card.id];
+    // Persist new findings before requesting Stop so a timeout cannot lose the discovery.
+    const task = store.tasks.get(existing.workspaceId)!;
+    const active =
+      task.confirmedAt !== null ||
+      task.subtaskRuns.some((run) => ["running", "waiting"].includes(run.state));
+    let stopped = !active;
+    if (active) {
+      try {
+        stopped = (await options.stopTask?.(task.workspaceId)) === true;
+      } catch (error) {
+        log("维护任务停止请求失败", error);
+      }
+    }
+    if (!stopped) {
+      if (store.tasks.get(task.workspaceId)?.phase !== "paused")
+        store.tasks.setPhase(task.workspaceId, "paused");
+      publishEvent(
+        db,
+        {
+          type: "scheduler.task_resource_request",
+          payload: { requestId: newId(), workspaceId: task.workspaceId, action: "freeze" },
+        },
+        now,
+      );
+      store.tasks.setSummary(
+        task.workspaceId,
+        "维护补充发现已保存；任务已暂停派发，但停止尚未落实，原租约仍保留。禁止按旧文件范围继续执行；停止后须重新规划并确认。\n新增发现：\n" +
+          JSON.stringify(findings) +
+          "",
+      );
+      throw new Error("维护发现已保留，停止状态不确定；禁止替换已确认方案");
+    }
+    const currentTask = store.tasks.get(task.workspaceId)!;
+    if (!["planning", "awaiting_confirmation", "paused", "failed"].includes(currentTask.phase))
+      store.tasks.setPhase(task.workspaceId, "paused");
+    if (store.tasks.get(task.workspaceId)!.phase !== "planning")
+      store.tasks.setPhase(task.workspaceId, "planning");
+    store.tasks.setSummary(
+      task.workspaceId,
+      "维护发现有变化，旧执行确认已清除；请重新规划并等待用户 /执行。",
+    );
+    await launcher.append({
+      workspaceId: task.workspaceId,
+      anchorAgentId: task.anchorAgentId,
+      prompt,
+    });
+    commands.appendFindings(existing.workspaceId, findings);
+    return [task.workspaceId];
   }
 
-  function finishRun(runId: string, status: "done" | "failed" | "skipped", findings: unknown, cardIds: string[]): MaintenanceRun {
-    db.prepare(
-      "UPDATE maintenance_run SET status = ?, finished_at = ?, findings_json = ?, card_ids_json = ? WHERE id = ?",
-    ).run(status, iso(), JSON.stringify(findings), JSON.stringify(cardIds), runId);
-    return decodeRows(MaintenanceRunSchema, [db.prepare("SELECT * FROM maintenance_run WHERE id = ?").get(runId)!])[0]!;
+  function finishRun(
+    runId: string,
+    status: "done" | "failed" | "skipped",
+    findings: unknown,
+    workspaceIds: string[],
+  ): MaintenanceRun {
+    commands.finishRun(runId, status, findings, workspaceIds);
+    return decodeRows(MaintenanceRunSchema, [
+      db.prepare("SELECT * FROM maintenance_run WHERE id = ?").get(runId)!,
+    ])[0]!;
   }
 
   function resetCounters(rule: MaintenanceRule): void {
     if (rule.triggerKind !== "workload") return;
-    for (const kind of ["cards", "commits", "tokens"]) setCounter(rule.projectId, ruleKey(rule, kind), 0, iso());
+    for (const kind of ["cards", "commits", "tokens"])
+      setCounter(rule.projectId, ruleKey(rule, kind), 0, iso());
     lastCommitPoll.delete(rule.id);
   }
 
-  async function execute(rule: MaintenanceRule, trigger: TriggerReason, force = false): Promise<FireOutcome> {
+  async function execute(
+    rule: MaintenanceRule,
+    trigger: TriggerReason,
+    force = false,
+  ): Promise<FireOutcome> {
     const blocked = gate(rule);
     if (blocked && !(force && (blocked === "paused" || blocked === "daily_cap"))) {
       return { status: "blocked", why: blocked };
@@ -678,21 +562,29 @@ export function createMaintenanceEngine(options: EngineOptions) {
     inflight.add(rule.id);
     const runId = newId();
     try {
-      db.prepare(
-        `INSERT INTO maintenance_run (id, rule_id, project_id, triggered_at, status, dedupe_key)
-         VALUES (?, ?, ?, ?, 'running', ?)`,
-      ).run(runId, rule.id, project.id, iso(), rule.dedupeKey ?? rule.name);
+      commands.startRun({
+        id: runId,
+        ruleId: rule.id,
+        projectId: project.id,
+        dedupeKey: rule.dedupeKey ?? rule.name,
+      });
       publishEvent(
         db,
-        { type: "maintenance.triggered", projectId: project.id, payload: { ruleId: rule.id, runId }, dedupeKey: `maintenance.triggered:${runId}` },
+        {
+          type: "maintenance.triggered",
+          projectId: project.id,
+          payload: { ruleId: rule.id, runId },
+          dedupeKey: `maintenance.triggered:${runId}`,
+        },
         now,
       );
       resetCounters(rule);
+      let output: CheckOutput | null = null;
       try {
         const { type, ...checkOptions } = rule.check as { type: string } & Record<string, unknown>;
         const check = checks[type];
-        if (!check) throw new Error(`Unknown check type "${type}"`);
-        const out = await check({
+        if (!check) throw new Error(`未知维护检查类型「${type}」`);
+        const out = (output = await check({
           project,
           rule,
           options: checkOptions,
@@ -703,19 +595,35 @@ export function createMaintenanceEngine(options: EngineOptions) {
             get: (key) => getCounter(project.id, `${rule.id}:cursor:${key}`)?.count,
             set: (key, value) => setCounter(project.id, `${rule.id}:cursor:${key}`, value),
           },
-          hasOpenCard: (key) => openCardFor(project, key) !== undefined,
-        });
+          hasOpenTask: (key) =>
+            commands
+              .links({ ruleId: rule.id })
+              .some(
+                (link) =>
+                  link.dedupeKey === key &&
+                  !link.rejectedAt &&
+                  store.tasks.get(link.workspaceId)?.phase !== "completed",
+              ),
+        }));
         if (!out) return { status: "fired", run: finishRun(runId, "done", [], []) };
-        const cardIds =
-          rule.outputMode === "fix" && !out.forceDraft
-            ? await fix(rule, project, runId, out, trigger)
-            : await suggest(rule, project, runId, out, trigger);
+        const workspaceIds = await plan(rule, project, out, trigger);
         out.commit?.();
-        return { status: "fired", run: finishRun(runId, "done", out.findings as Finding[], cardIds) };
+        return {
+          status: "fired",
+          run: finishRun(runId, "done", out.findings as Finding[], workspaceIds),
+        };
       } catch (error) {
-        log(`rule ${rule.name} failed`, error);
+        log(`规则「${rule.name}」运行失败`, error);
         const message = error instanceof Error ? error.message : String(error);
-        return { status: "fired", run: finishRun(runId, "failed", [{ error: message }], []) };
+        return {
+          status: "fired",
+          run: finishRun(
+            runId,
+            "failed",
+            [...(output?.findings ?? []), { error: message }],
+            openTaskFor(rule) ? [openTaskFor(rule)!.workspaceId] : [],
+          ),
+        };
       }
     } finally {
       inflight.delete(rule.id);
@@ -749,13 +657,14 @@ export function createMaintenanceEngine(options: EngineOptions) {
           }
         }
       } catch (error) {
-        log(`rule ${rule.name}: trigger evaluation failed`, error);
+        log(`规则「${rule.name}」触发检查失败`, error);
       }
     }
   }
 
   return {
     tick,
+    rejectWorkspace,
     syncRules,
     listRules,
     getRule,
@@ -764,23 +673,34 @@ export function createMaintenanceEngine(options: EngineOptions) {
     /** Manual run of one rule x project row (ignores thresholds, the daily cap and a pause). */
     async runNow(ruleId: string): Promise<FireOutcome> {
       const rule = getRule(ruleId);
-      if (!rule) throw new Error(`Unknown rule: ${ruleId}`);
+      if (!rule) throw new Error(`维护规则不存在：${ruleId}`);
       return execute(rule, { reason: "手动触发" }, true);
     },
     /** Manual run of a rule by name for one project, or for every project it applies to. */
-    async runRuleNow(name: string, projectId?: string): Promise<Array<{ projectId: string; outcome: FireOutcome }>> {
+    async runRuleNow(
+      name: string,
+      projectId?: string,
+    ): Promise<Array<{ projectId: string; outcome: FireOutcome }>> {
       const rows = listRules().filter(
-        (r) => r.name === name && (!projectId || r.projectId === projectId) && layeredOf(r) !== undefined,
+        (r) =>
+          r.name === name &&
+          (!projectId || r.projectId === projectId) &&
+          layeredOf(r) !== undefined,
       );
-      if (rows.length === 0) throw new Error(`Rule ${name} does not apply to ${projectId ?? "any project"}`);
+      if (rows.length === 0)
+        throw new Error(`维护规则「${name}」不适用于${projectId ?? "任何项目"}`);
       const results: Array<{ projectId: string; outcome: FireOutcome }> = [];
-      for (const row of rows) results.push({ projectId: row.projectId, outcome: await execute(row, { reason: "手动触发" }, true) });
+      for (const row of rows)
+        results.push({
+          projectId: row.projectId,
+          outcome: await execute(row, { reason: "手动触发" }, true),
+        });
       return results;
     },
     resume(ruleId: string): MaintenanceRule {
       const rule = getRule(ruleId);
-      if (!rule) throw new Error(`Unknown rule: ${ruleId}`);
-      db.prepare("UPDATE maintenance_rule SET paused_at = NULL, updated_at = ? WHERE id = ?").run(iso(), ruleId);
+      if (!rule) throw new Error(`维护规则不存在：${ruleId}`);
+      commands.setRulePaused(ruleId, false);
       resetRejections(ruleId, rule.projectId);
       return getRule(ruleId)!;
     },
@@ -802,7 +722,10 @@ export function createMaintenanceEngine(options: EngineOptions) {
             sources: layered?.sources ?? null,
             ymlFields: layered ? ymlFieldsOf(layered.sources) : [],
             base: layered?.base ?? null,
-            prompts: { review: layered?.def.prompts.review ?? null, fix: layered?.def.prompts.fix ?? null },
+            prompts: {
+              review: layered?.def.prompts.review ?? null,
+              fix: layered?.def.prompts.fix ?? null,
+            },
             triggerText: describeTrigger(trigger),
             progressText: progressText(trigger, counters),
             checkText: describeCheck(rule.check as { type: string } & Record<string, unknown>),
@@ -818,7 +741,9 @@ export function createMaintenanceEngine(options: EngineOptions) {
         configErrors: {
           ...(globalErrors.length ? { [GLOBAL_ERRORS]: globalErrors } : {}),
           ...Object.fromEntries(
-            [...configCache.entries()].filter(([, v]) => v.errors.length).map(([k, v]) => [k, v.errors]),
+            [...configCache.entries()]
+              .filter(([, v]) => v.errors.length)
+              .map(([k, v]) => [k, v.errors]),
           ),
         },
       };
@@ -828,6 +753,7 @@ export function createMaintenanceEngine(options: EngineOptions) {
     },
     async stop(): Promise<void> {
       await consumer.stop();
+      while (inflight.size > 0) await new Promise((resolve) => setTimeout(resolve, 25));
     },
   };
 }

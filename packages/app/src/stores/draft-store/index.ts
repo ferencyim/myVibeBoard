@@ -143,7 +143,18 @@ async function runAttachmentGc(): Promise<void> {
     };
   });
 
-  const referencedIds = new Set<string>();
+  // Hydrate the durable outbox before GC: its native draft may already be cleared.
+  let outboxAttachmentIds: ReadonlySet<string>;
+  try {
+    const { firstMessageOutbox } = await import("@/runtime/first-message-outbox");
+    const { collectOutboxAttachmentIds } = await import("@/composer/outbox/attachments");
+    await firstMessageOutbox.hydrate();
+    outboxAttachmentIds = collectOutboxAttachmentIds(firstMessageOutbox.getSnapshot());
+  } catch (error) {
+    console.warn("[DraftStore] 待发送附件尚未恢复，跳过清理", error);
+    return;
+  }
+  const referencedIds = new Set<string>(outboxAttachmentIds);
   for (const id of useDraftStore.getState().collectActiveAttachmentIds()) {
     referencedIds.add(id);
   }

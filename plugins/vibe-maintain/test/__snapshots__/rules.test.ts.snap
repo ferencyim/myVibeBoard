@@ -8,8 +8,8 @@ exports[`default draft card text > explains which rule fired, why, what was foun
 `;
 
 exports[`default draft card text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > body 1`] = `
-"## 为什么出现这张卡
-自动维护规则「git-health」检查了项目「Demo」的 git 状态。触发原因：已完成卡片 10 张，达到阈值 10。这是自动生成的维护建议，不是你提出的需求。
+"## 为什么出现此维护任务
+自动维护规则「git-health」检查了项目「Demo」的 git 状态。触发原因：已完成任务 10 个，达到阈值 10。这是自动生成的维护建议，不是你提出的需求。
 
 ## 发现了什么
 共 3 项：长期未合并的分支 1，已合并但未删除的分支 1，未提交的改动 1。
@@ -42,37 +42,37 @@ exports[`default draft card text > explains which rule fired, why, what was foun
 - 未检查过期依赖。
 
 ---
-这张卡只是整理建议，不会自动改动任何分支或文件。同类问题会合并在本卡，不会重复建卡。不想再收到：在维护页停用或调整规则「git-health」。"
+此任务先在新的原生 workspace 中规划，等待用户显式 /执行。同规则同项目未完成任务只补充新发现，方案变化后需重新确认。不想再收到：在维护页停用或调整规则「git-health」。"
 `;
 
 exports[`prompt templates > renders the default templates (snapshot) > fix 1`] = `
-"自动维护规则「git-health」在项目「Demo」中发现了需要处理的问题，触发原因：已完成卡片 10 张，达到阈值 10。
+"自动维护规则「git-health」在项目「Demo」中发现了需要处理的问题，触发原因：已完成任务 10 个，达到阈值 10。
 规则检查的内容：Git 体检
 
-请在当前 worktree 里调查并修复下面的问题。完成后用中文写一份简短报告：改了什么、为什么这样改、怎么验证的。
+请只读调查下面的问题，提出最小修复方案和验证方法。方案输出后等待用户显式 /执行，当前不得修改文件。
 
-卡片内容：
+任务发现：
 SUMMARY {{project}}
 
 发现明细（JSON，共 1 条）：
 [{"a":1}]
 
 【系统约束，不可更改】
-- 只在当前 worktree 的分支上提交；不得合并到主分支，不得 push。负责人会查看证据后自行合并。
+- 当前仅规划：不得修改文件、提交、合并或 push，不得自行执行修复；必须等待用户显式 /执行。
 - 只处理上面列出的问题，不做无关的重构或改动。
-- 结束时必须给出简短报告：改了什么、如何验证。"
+- 说明拟改内容、风险与验证方法；生成方案不代表获得执行授权。"
 `;
 
 exports[`prompt templates > renders the default templates (snapshot) > review 1`] = `
-"你是项目「Demo」的维护复核员。自动维护规则「git-health」刚刚触发，原因：已完成卡片 10 张，达到阈值 10。
+"你是项目「Demo」的维护复核员。自动维护规则「git-health」刚刚触发，原因：已完成任务 10 个，达到阈值 10。
 规则检查的内容：Git 体检
 
-下面是检查产出的卡片内容和发现明细。请用中文写一份简短的整理方案，按优先级排序。每一项说明：
+下面是检查产出的任务发现和发现明细。请用中文写一份简短的整理方案，按优先级排序。每一项说明：
 1. 问题是什么、影响是什么；
 2. 建议怎么处理（哪些可以放心处理，哪些需要负责人决定）；
 3. 处理完后怎么验证。
 
-卡片内容：
+任务发现：
 SUMMARY {{project}}
 
 发现明细（JSON，共 1 条）：
@@ -80,5 +80,5 @@ SUMMARY {{project}}
 
 【系统约束，不可更改】
 - 你是只读复核员：不得修改任何文件、分支或 worktree，不得提交，不得执行会改变仓库状态的命令。
-- 只输出一段 Markdown 文本作为回复（用中文），不要创建卡片，也不要询问用户。"
+- 输出中文维护方案；有歧义时向用户提问。方案完成后等待用户显式 /执行。"
 `;

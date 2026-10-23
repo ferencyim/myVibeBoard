@@ -7,6 +7,7 @@ import {
   sessionsRpc,
   statusRpc,
   wakeRpc,
+  taskWakeRpc,
   promptsListRpc,
   promptsSetRpc,
   promptsClearRpc,
@@ -41,6 +42,7 @@ export default function contribute(server: PluginServerContext) {
     applySettings(state);
     // One-time move of prompts edited in the old settings page into the prompt registry.
     runtime?.migrateLegacyPrompts();
+    return undefined;
   });
   const stopSettings = settings.subscribe(applySettings);
 
@@ -69,7 +71,9 @@ export default function contribute(server: PluginServerContext) {
       onPaseo(api);
       return master
         .onPermissionRequest(agent.id, request, (requestId) =>
-          api.agents.ref(agent.id).respondToPermission({ requestId, response: { behavior: "allow" } }),
+          api.agents
+            .ref(agent.id)
+            .respondToPermission({ requestId, response: { behavior: "allow" } }),
         )
         .then(
           () => undefined,
@@ -97,7 +101,16 @@ export default function contribute(server: PluginServerContext) {
   server.handle(wakeRpc, async (input, { paseo: api }) => {
     onPaseo(api);
     const upper = input.card.toUpperCase();
-    return master.wake(CARD_KEY_PATTERN.test(upper) ? upper : input.card, input.reason, input.force);
+    return master.wake(
+      CARD_KEY_PATTERN.test(upper) ? upper : input.card,
+      input.reason,
+      input.force,
+    );
+  });
+
+  server.handle(taskWakeRpc, (input, { paseo: api }) => {
+    onPaseo(api);
+    return master.wake(input.workspaceId, "card_done", input.force);
   });
 
   const masterPrompt = (key: string) => {
@@ -106,7 +119,9 @@ export default function contribute(server: PluginServerContext) {
     }
   };
   server.handle(promptsListRpc, ({ projectId }) => ({
-    prompts: store.prompts.list({ projectId: projectId ?? null }).filter((prompt) => prompt.role === "master"),
+    prompts: store.prompts
+      .list({ projectId: projectId ?? null })
+      .filter((prompt) => prompt.role === "master"),
     projects: store.projects.list(false).map(({ id, name, prefix }) => ({ id, name, prefix })),
   }));
   server.handle(promptsSetRpc, ({ key, text, projectId }) => {

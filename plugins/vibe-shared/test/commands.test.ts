@@ -1,3 +1,4 @@
+import { createResourceSampleCommands } from "../db/resource-samples";
 import { describe, expect, it } from "vitest";
 import { compareHlc, isHlc } from "../contract/hlc";
 import { CardSchema, AgentSessionSchema } from "../contract/model";
@@ -22,16 +23,43 @@ describe("projects and cards", () => {
     const s = setup();
     const p = seedProject(s);
     const card = s.store.cards.create(
-      { id: "01CARDFROMPHONE000000000A", createdAt: "2025-12-31T23:00:00.000Z", projectId: p.id, title: "Offline" },
+      {
+        id: "01CARDFROMPHONE000000000A",
+        createdAt: "2025-12-31T23:00:00.000Z",
+        projectId: p.id,
+        title: "Offline",
+      },
       "phone",
     );
     expect(card.id).toBe("01CARDFROMPHONE000000000A");
     expect(card.createdAt).toBe("2025-12-31T23:00:00.000Z");
-    const ev = s.store.events.add({ id: "01EVENTFROMPHONE00000000A", createdAt: "2025-12-31T23:30:00.000Z", cardId: card.id, type: "note", authorKind: "user" });
-    expect(ev).toMatchObject({ id: "01EVENTFROMPHONE00000000A", createdAt: "2025-12-31T23:30:00.000Z" });
-    expect(s.store.tags.create("mine", false, "01TAGFROMPHONE00000000AA").id).toBe("01TAGFROMPHONE00000000AA");
-    expect(s.store.presets.create({ id: "01PRESETFROMPHONE000000A", name: "p", provider: "x", model: "y" }).id).toBe("01PRESETFROMPHONE000000A");
-    const meta = s.db.prepare<{ n: number }>("SELECT COUNT(*) AS n FROM sync_meta WHERE table_name = 'card_event' AND row_id = ?").get(ev.id);
+    const ev = s.store.events.add({
+      id: "01EVENTFROMPHONE00000000A",
+      createdAt: "2025-12-31T23:30:00.000Z",
+      cardId: card.id,
+      type: "note",
+      authorKind: "user",
+    });
+    expect(ev).toMatchObject({
+      id: "01EVENTFROMPHONE00000000A",
+      createdAt: "2025-12-31T23:30:00.000Z",
+    });
+    expect(s.store.tags.create("mine", false, "01TAGFROMPHONE00000000AA").id).toBe(
+      "01TAGFROMPHONE00000000AA",
+    );
+    expect(
+      s.store.presets.create({
+        id: "01PRESETFROMPHONE000000A",
+        name: "p",
+        provider: "x",
+        model: "y",
+      }).id,
+    ).toBe("01PRESETFROMPHONE000000A");
+    const meta = s.db
+      .prepare<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM sync_meta WHERE table_name = 'card_event' AND row_id = ?",
+      )
+      .get(ev.id);
     expect(meta?.n).toBe(6); // every synced field of a new event is stamped
   });
 
@@ -404,12 +432,18 @@ describe("presets and tags", () => {
     const t = s.store.tags.create("spike", false, undefined, "#ff0000");
     expect(t.color).toBe("#ff0000");
     const card = s.store.cards.create({ projectId: p.id, title: "c", tagIds: [t.id] });
-    const next = s.store.tags.update(t.id, { name: "experiment", color: "#00ff00", evidence: true });
+    const next = s.store.tags.update(t.id, {
+      name: "experiment",
+      color: "#00ff00",
+      evidence: true,
+    });
     expect(next).toMatchObject({ id: t.id, name: "experiment", color: "#00ff00", evidence: true });
     expect(s.store.tags.list().filter((x) => !x.builtin)).toHaveLength(1);
     expect(s.store.cards.get(card.id)?.tags).toEqual([t.id]);
     const stamped = s.db
-      .prepare<{ column_name: string }>("SELECT column_name FROM sync_meta WHERE table_name='tag' AND row_id=?")
+      .prepare<{ column_name: string }>(
+        "SELECT column_name FROM sync_meta WHERE table_name='tag' AND row_id=?",
+      )
       .all(t.id)
       .map((r) => r.column_name)
       .sort();
@@ -588,5 +622,31 @@ describe("agent sessions", () => {
     });
     expect(second).toMatchObject({ branch: "dev", behind: 3 });
     expect(s.store.gitSnapshots.get(p.id)?.branch).toBe("dev");
+  });
+});
+
+describe("resource sample commands", () => {
+  it("records attribution JSON and prunes only samples before the cutoff", () => {
+    const { db } = setup();
+    const commands = createResourceSampleCommands(db);
+    const sample = {
+      cpu: 0.2,
+      mem: 0.3,
+      perSession: { session: { bytes: 12 } },
+      devicePool: { device: "空闲" },
+    };
+    commands.record({ ...sample, ts: "2026-10-23T10:00:00.000Z" });
+    commands.record({ ...sample, ts: "2026-10-23T11:00:00.000Z" });
+    expect(commands.prune("2026-10-23T11:00:00.000Z")).toBe(1);
+    expect(
+      db.prepare("SELECT ts,per_session_json,device_pool_json FROM resource_sample").all(),
+    ).toEqual([
+      {
+        ts: "2026-10-23T11:00:00.000Z",
+        per_session_json: JSON.stringify(sample.perSession),
+        device_pool_json: JSON.stringify(sample.devicePool),
+      },
+    ]);
+    db.close();
   });
 });

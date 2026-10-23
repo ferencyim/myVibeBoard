@@ -1,12 +1,9 @@
+import type { CollectorContext } from "./collectors/context";
 // Default CollectorRegistry: web, backend and android collectors, all reading the verify config
 // of the running verification first (written by the verifier agent into its output directory),
 // then `<worktree>/.vibe/verify.json`.
 
-import {
-  createCollectorRegistry,
-  type CollectorContext,
-  type CollectorRegistry,
-} from "./vibe/contract";
+import { createCollectorRegistry, type CollectorRegistry } from "./vibe/contract";
 import {
   createAndroidCollector,
   createBackendCollector,

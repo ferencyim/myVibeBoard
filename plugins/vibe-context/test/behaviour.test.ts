@@ -35,13 +35,9 @@ const store = () => {
 
 // The default (Chinese) texts.
 const ORIGINAL_NOTES = (mdPath: string, cardRef?: string) =>
-  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、" +
-  "关键文件与决策、未解决的问题。" +
-  "使用 `vibe-board` MCP 服务的 `vibe_session_note` 工具" +
-  (cardRef ? `，key 为 "${cardRef}"` : "") +
-  "（它会覆盖写入 " +
-  `\`${mdPath}\`，无需批准）；只有该工具不存在时，才自己写这个文件` +
-  '（创建或覆盖）。除此之外什么都不要做。完成后回复“saved”。';
+  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、关键文件与决策、未解决的问题。请将笔记写到 `{{mdPath}}`（创建或覆盖）；若当前原生任务提供支持该路径的会话笔记工具，可使用它。会话定位信息：{{keyClause}}。除此之外什么都不要做。完成后回复“saved”。"
+    .replace("{{mdPath}}", mdPath)
+    .replace("{{keyClause}}", cardRef ? '，key 为 "' + cardRef + '"' : "");
 const ORIGINAL_RESTORE = (block: string | null) =>
   "上下文已压缩。下面的项目上下文是权威依据；请根据你的会话笔记继续。" +
   `只回复“ok”。\n\n${block ?? "（无项目上下文）"}`;
@@ -52,7 +48,7 @@ const ORIGINAL_COLD = (oldSessionId: string, mdPath: string, block: string | nul
 const ORIGINAL_FRAME =
   "# 项目上下文（myVibeBoard）\n\n" +
   "以下内容在本会话启动时由 `.vibe/` 下的文件生成，是权威依据，对你只读：" +
-  "不要编辑这些文件；需要更正时告知总 agent（看板任务则写在卡片评论里）。";
+  "不要编辑这些文件；需要更正时在任务的原生会话里告知总 agent。";
 
 describe("prompt registry", () => {
   it("registers every context prompt with its metadata", () => {
@@ -62,6 +58,7 @@ describe("prompt registry", () => {
     expect(listed.map((p) => p.key).sort()).toEqual(
       [
         "context.cold_start",
+        "context.failure_handoff",
         "context.compact_notes",
         "context.compact_restore",
         "context.inject_frame",
@@ -71,7 +68,7 @@ describe("prompt registry", () => {
       expect(p.plugin).toBe("vibe-context");
       expect(p.title && p.description && p.whenSent && p.audience).toBeTruthy();
     }
-    expect(CONTEXT_PROMPT_DEFS).toHaveLength(4);
+    expect(CONTEXT_PROMPT_DEFS).toHaveLength(5);
   });
 
   it("the defaults resolve to the old hard-coded texts, registry or not", () => {
@@ -79,12 +76,18 @@ describe("prompt registry", () => {
     const registry = createContextPrompts(board);
     registry.register();
     for (const prompts of [registry, defaultPrompts]) {
-      expect(notesPrompt("/wt/.vibe/sessions/c1.md", "DEMO-3", prompts)).toBe(ORIGINAL_NOTES("/wt/.vibe/sessions/c1.md", "DEMO-3"));
+      expect(notesPrompt("/wt/.vibe/sessions/c1.md", "DEMO-3", prompts)).toBe(
+        ORIGINAL_NOTES("/wt/.vibe/sessions/c1.md", "DEMO-3"),
+      );
       expect(notesPrompt("/wt/x.md", null, prompts)).toBe(ORIGINAL_NOTES("/wt/x.md"));
       expect(restorePrompt("BLOCK", prompts)).toBe(ORIGINAL_RESTORE("BLOCK"));
       expect(restorePrompt(null, prompts)).toBe(ORIGINAL_RESTORE(null));
-      expect(coldStartPrompt("s1", "/wt/x.md", "BLOCK", prompts)).toBe(ORIGINAL_COLD("s1", "/wt/x.md", "BLOCK"));
-      expect(coldStartPrompt("s1", "/wt/x.md", null, prompts)).toBe(ORIGINAL_COLD("s1", "/wt/x.md", null));
+      expect(coldStartPrompt("s1", "/wt/x.md", "BLOCK", prompts)).toBe(
+        ORIGINAL_COLD("s1", "/wt/x.md", "BLOCK"),
+      );
+      expect(coldStartPrompt("s1", "/wt/x.md", null, prompts)).toBe(
+        ORIGINAL_COLD("s1", "/wt/x.md", null),
+      );
       expect(prompts.resolve("context.inject_frame")).toBe(ORIGINAL_FRAME);
     }
   });
@@ -98,14 +101,19 @@ describe("prompt registry", () => {
 
     const root = mkdtempSync(join(tmpdir(), "vibe-ctx-"));
     mkdirSync(join(root, ".vibe"));
-    const block = buildContextBlock(createMemoryStore({ projectRoot: root, userHome: root, contextWindowTokens: 100_000 }), { prompts })!;
+    const block = buildContextBlock(
+      createMemoryStore({ projectRoot: root, userHome: root, contextWindowTokens: 100_000 }),
+      { prompts },
+    )!;
     expect(block).toContain("# My frame");
     expect(block).not.toContain("由 `.vibe/` 下的文件生成");
     expect(block.startsWith("<!-- vibe:context:start -->")).toBe(true); // the markers stay code
     expect(block.endsWith("<!-- vibe:context:end -->")).toBe(true);
     expect(notesPrompt("/m.md", "DEMO-1", prompts)).toBe(`Save notes to /m.md，key 为 "DEMO-1".`);
     // the default block is unchanged without overrides
-    const plain = buildContextBlock(createMemoryStore({ projectRoot: root, userHome: root, contextWindowTokens: 100_000 }))!;
+    const plain = buildContextBlock(
+      createMemoryStore({ projectRoot: root, userHome: root, contextWindowTokens: 100_000 }),
+    )!;
     expect(plain).toContain(ORIGINAL_FRAME);
     expect(plain).not.toContain("vibe_scout");
   });

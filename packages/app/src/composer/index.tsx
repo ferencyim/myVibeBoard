@@ -120,7 +120,7 @@ import { resolveActiveSendBehavior } from "./input/state";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
-import { submitAgentInput } from "@/composer/submit";
+import { agentInputOfflineError, submitAgentInput } from "@/composer/submit";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
 import { ComposerKeyboardScopeProvider, useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { useAppSettings } from "@/hooks/use-settings";
@@ -1681,6 +1681,7 @@ function ComposerContentImpl({
         canSubmit:
           (taskConversation?.canSend ?? true) &&
           Boolean(sendAgentMessageRef.current || onSubmitMessageRef.current),
+        connection: { hasAgent, isConnected },
         queueMessage: ({ message: queuedText, attachments: queuedAttachments }) => {
           queueMessage(queuedText, queuedAttachments);
         },
@@ -1713,6 +1714,8 @@ function ComposerContentImpl({
       clearDraft,
       completeSubmit,
       hasExternalContent,
+      hasAgent,
+      isConnected,
       isAgentRunning,
       queueMessage,
       setSelectedAttachments,
@@ -1726,6 +1729,12 @@ function ComposerContentImpl({
 
   const handleSubmit = useCallback(
     (payload: MessagePayload) => {
+      const offlineError = agentInputOfflineError(hasAgent, isConnected);
+      if (offlineError) {
+        setSendError(offlineError);
+        return;
+      }
+
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
@@ -1747,6 +1756,8 @@ function ComposerContentImpl({
       void sendMessageWithContent(payload.text, outgoingAttachments, payload.forceSend);
     },
     [
+      hasAgent,
+      isConnected,
       attachments,
       blurOnSubmit,
       buildOutgoingAttachments,
@@ -1972,6 +1983,12 @@ function ComposerContentImpl({
   const handleSendQueuedNow = useCallback(
     async (id: string) => {
       if (!agentId) return;
+      const offlineError = agentInputOfflineError(hasAgent, isConnected);
+      if (offlineError) {
+        setSendError(offlineError);
+        return;
+      }
+
       if (!sendAgentMessageRef.current && !onSubmitMessageRef.current) return;
       // Reuse the regular send path; server-side send atomically interrupts any active run.
       const result = await sendQueuedComposerMessageNow({
@@ -1986,7 +2003,7 @@ function ComposerContentImpl({
         setSendError(result.errorMessage);
       }
     },
-    [agentId, queueWriter, submitMessage, t],
+    [agentId, hasAgent, isConnected, queueWriter, submitMessage, t],
   );
 
   const handleQueue = useCallback(
@@ -1995,6 +2012,12 @@ function ComposerContentImpl({
         handleSubmit({ ...payload, forceSend: true });
         return;
       }
+      const offlineError = agentInputOfflineError(hasAgent, isConnected);
+      if (offlineError) {
+        setSendError(offlineError);
+        return;
+      }
+
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
@@ -2012,6 +2035,8 @@ function ComposerContentImpl({
       queueMessage(payload.text, outgoingAttachments);
     },
     [
+      hasAgent,
+      isConnected,
       attachments,
       taskConversation,
       handleSubmit,
@@ -2528,7 +2553,7 @@ function ComposerContentImpl({
                   voiceAgentId={agentId}
                   isAgentRunning={isAgentRunning}
                   defaultSendBehavior={activeSendBehavior}
-                  onQueue={handleQueue}
+                  onQueue={hasAgent && !isConnected ? undefined : handleQueue}
                   onSubmitLoadingPress={submitLoadingPressHandler}
                   onKeyPress={handleCommandKeyPress}
                   onSelectionChange={handleSelectionChange}

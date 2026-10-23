@@ -6,8 +6,8 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
 import { getHostRuntimeStore, isHostRuntimeConnected } from "@/runtime/host-runtime";
 import { resolveAppVersion } from "@/utils/app-version";
-import { invokeOfflineVibeRpc } from "@/vibe/rpc/provider";
 import { createPluginClientRuntime } from "./client-runtime";
+import { invokeConnectedPluginRpc } from "./rpc";
 import { runPluginClientBundle } from "./evaluate";
 import type { InstalledPlugin } from "./types";
 
@@ -16,7 +16,7 @@ export type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>
 /** Stands in for the daemon-bound Paseo API while a host is offline: every call fails loudly. */
 function createOfflinePaseoApi(): PaseoApi {
   const offline = (): never => {
-    throw new Error("[offline] Paseo is not reachable right now");
+    throw new Error("[offline] 主机未连接，请联网后重试");
   };
   const node = (): unknown =>
     new Proxy(offline, {
@@ -44,13 +44,6 @@ export class PluginRegistry {
       createRuntime: typeof createPluginClientRuntime;
       /** The host's client while it is connected; null = offline. Default: the install-time client. */
       getLiveClient?: (serverId: string) => DaemonClient | null;
-      /** Answers a plugin RPC while the host is offline (local replica); default: reject. */
-      invokeOffline?: (
-        serverId: string,
-        pluginId: string,
-        method: string,
-        input: unknown,
-      ) => Promise<unknown>;
     },
   ) {}
 
@@ -202,11 +195,9 @@ export class PluginRegistry {
     method: string,
     input: unknown,
   ): Promise<unknown> {
-    const { getLiveClient, invokeOffline } = this.dependencies;
+    const { getLiveClient } = this.dependencies;
     const live = getLiveClient ? getLiveClient(serverId) : installClient;
-    if (live) return live.invokePluginRpc(pluginId, method, input);
-    if (invokeOffline) return invokeOffline(serverId, pluginId, method, input);
-    return Promise.reject(new Error("[offline] Plugin host is offline"));
+    return invokeConnectedPluginRpc(live, pluginId, method, input);
   }
 
   removeHost(serverId: string): void {
@@ -251,7 +242,6 @@ export const pluginRegistry = new PluginRegistry({
     const snapshot = getHostRuntimeStore().getSnapshot(serverId);
     return isHostRuntimeConnected(snapshot) ? (snapshot?.client ?? null) : null;
   },
-  invokeOffline: invokeOfflineVibeRpc,
 });
 
 export function useInstalledPlugins(): InstalledPlugin[] {

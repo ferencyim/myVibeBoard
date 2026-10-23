@@ -30,7 +30,7 @@ import { addProject, complete, setup, sh, type Harness } from "./helpers";
 const vars: PromptVars = {
   project: "Demo",
   rule: "git-health",
-  trigger_reason: "已完成卡片 10 张，达到阈值 10",
+  trigger_reason: "已完成任务 10 个，达到阈值 10",
   check_description: "Git 体检",
   card_title: "Git 体检：发现 2 项待整理",
   summary: "SUMMARY {{project}}",
@@ -91,17 +91,28 @@ describe("rule layers: built-in < global UI rule < project maintenance.yml", () 
   });
 
   it("replaces trigger as a whole instead of merging its parameters", () => {
-    const { rules } = merge({ ui: ui({ "git-health": { trigger: { kind: "time", cron: "0 3 * * *" } } }) });
+    const { rules } = merge({
+      ui: ui({ "git-health": { trigger: { kind: "time", cron: "0 3 * * *" } } }),
+    });
     expect(rules[0]!.def.trigger).toEqual({ kind: "time", cron: "0 3 * * *" });
   });
 
   it("applies a global rule only to the projects in its scope", () => {
     const config = ui({
       "git-health": { daily_cap: 2, projects: ["p1"] },
-      mine: { trigger: { kind: "time", cron: "0 3 * * *" }, check: { type: "git" }, projects: ["p2"] },
-      everywhere: { trigger: { kind: "time", cron: "0 4 * * *" }, check: { type: "git" }, projects: "all" },
+      mine: {
+        trigger: { kind: "time", cron: "0 3 * * *" },
+        check: { type: "git" },
+        projects: ["p2"],
+      },
+      everywhere: {
+        trigger: { kind: "time", cron: "0 4 * * *" },
+        check: { type: "git" },
+        projects: "all",
+      },
     });
-    const names = (projectId: string) => merge({ ui: config, projectId }).rules.map((r) => r.def.name);
+    const names = (projectId: string) =>
+      merge({ ui: config, projectId }).rules.map((r) => r.def.name);
     expect(names("p1")).toEqual(["git-health", "everywhere"]);
     expect(names("p2")).toEqual(["mine", "everywhere"]);
     expect(names("p3")).toEqual(["everywhere"]);
@@ -110,7 +121,10 @@ describe("rule layers: built-in < global UI rule < project maintenance.yml", () 
 
   it("keeps yml-only rules to their own project and a yml override to its own project", () => {
     const config = ui({
-      mine: { trigger: { kind: "event", path: "logs/a.log", pattern: "ERR" }, check: { type: "git" } },
+      mine: {
+        trigger: { kind: "event", path: "logs/a.log", pattern: "ERR" },
+        check: { type: "git" },
+      },
     });
     const yml1 = [
       yml("mine", { enabled: false }),
@@ -136,11 +150,23 @@ describe("rule layers: built-in < global UI rule < project maintenance.yml", () 
   it("applies a yml rule written for the original name to the copy a migration split off", () => {
     const config = ui({
       "git-health": { projects: ["p1"], splitFrom: "git-health" },
-      "git-health-2": { ...BUILTIN_RULES[0], name: undefined, daily_cap: 3, projects: ["p2"], splitFrom: "git-health" },
+      "git-health-2": {
+        ...BUILTIN_RULES[0],
+        name: undefined,
+        daily_cap: 3,
+        projects: ["p2"],
+        splitFrom: "git-health",
+      },
     });
-    const { rules, errors } = merge({ ui: config, projectId: "p2", yml: [yml("git-health", { priority: "high" })] });
+    const { rules, errors } = merge({
+      ui: config,
+      projectId: "p2",
+      yml: [yml("git-health", { priority: "high" })],
+    });
     expect(errors).toEqual([]);
-    expect(rules.map((r) => [r.def.name, r.def.priority, r.def.daily_cap])).toEqual([["git-health-2", "high", 3]]);
+    expect(rules.map((r) => [r.def.name, r.def.priority, r.def.daily_cap])).toEqual([
+      ["git-health-2", "high", 3],
+    ]);
   });
 
   it("reports a broken global rule once and keeps the others", () => {
@@ -190,14 +216,31 @@ describe("migration of the per-project (v1) configuration", () => {
 
   it("splits a rule configured differently per project into name, name-2, name-3", () => {
     const out = migrate({
-      p1: { overrides: { "git-health": { daily_cap: 3 } }, custom: { tidy: { ...custom, daily_cap: 1 } } },
-      p2: { overrides: { "git-health": { daily_cap: 5 } }, custom: { tidy: { ...custom, daily_cap: 2 } } },
-      p3: { overrides: { "git-health": { daily_cap: 3 } }, custom: { tidy: { ...custom, daily_cap: 1 } } },
+      p1: {
+        overrides: { "git-health": { daily_cap: 3 } },
+        custom: { tidy: { ...custom, daily_cap: 1 } },
+      },
+      p2: {
+        overrides: { "git-health": { daily_cap: 5 } },
+        custom: { tidy: { ...custom, daily_cap: 2 } },
+      },
+      p3: {
+        overrides: { "git-health": { daily_cap: 3 } },
+        custom: { tidy: { ...custom, daily_cap: 1 } },
+      },
     });
     expect(Object.keys(out).sort()).toEqual(["git-health", "git-health-2", "tidy", "tidy-2"]);
     // no project is unmodified: the first group keeps the name (and the built-in default for the rest)
-    expect(out["git-health"]).toEqual({ daily_cap: 3, projects: ["p1", "p3"], splitFrom: "git-health" });
-    expect(out["git-health-2"]).toMatchObject({ daily_cap: 5, projects: ["p2"], splitFrom: "git-health" });
+    expect(out["git-health"]).toEqual({
+      daily_cap: 3,
+      projects: ["p1", "p3"],
+      splitFrom: "git-health",
+    });
+    expect(out["git-health-2"]).toMatchObject({
+      daily_cap: 5,
+      projects: ["p2"],
+      splitFrom: "git-health",
+    });
     expect(out["git-health-2"]).toHaveProperty("trigger");
     expect(out.tidy).toMatchObject({ daily_cap: 1, projects: ["p1", "p3"], splitFrom: "tidy" });
     expect(out["tidy-2"]).toMatchObject({ daily_cap: 2, projects: ["p2"], splitFrom: "tidy" });
@@ -208,7 +251,10 @@ describe("migration of the per-project (v1) configuration", () => {
   it("does not reuse a taken name for a split copy and drops what v2 cannot represent", () => {
     const out = migrate(
       {
-        p1: { overrides: { ghost: { enabled: false } }, custom: { tidy: custom, "tidy-2": custom, "git-health": custom } },
+        p1: {
+          overrides: { ghost: { enabled: false } },
+          custom: { tidy: custom, "tidy-2": custom, "git-health": custom },
+        },
         p2: { overrides: {}, custom: { tidy: { ...custom, daily_cap: 4 } } },
       },
       ["p1", "p2"],
@@ -224,7 +270,7 @@ describe("trigger text and progress", () => {
   const builtin = BUILTIN_RULES[0]!.trigger;
   it("describes the built-in trigger in words", () => {
     expect(describeTrigger(builtin)).toBe(
-      "已完成卡片累计达到 10 张，或已合并提交累计达到 30 个时触发（任一条件达到即触发，触发后计数清零）。",
+      "已完成任务累计达到 10 个，或已合并提交累计达到 30 个时触发（任一条件达到即触发，触发后计数清零）。",
     );
     expect(describeTrigger({ kind: "time", cron: "0 3 * * *" })).toContain("0 3 * * *");
     expect(describeTrigger({ kind: "event", path: "logs/crash.log", pattern: "Exception" })).toBe(
@@ -233,22 +279,30 @@ describe("trigger text and progress", () => {
   });
 
   it("computes progress against the thresholds", () => {
-    expect(progressText(builtin, { cards: 7, commits: 12 })).toBe("已完成卡片 7/10，已合并提交 12/30");
-    expect(progressText(builtin, {})).toBe("已完成卡片 0/10，已合并提交 0/30");
-    expect(progressText({ kind: "workload", tokens: 1000 }, { tokens: 250 })).toBe("已消耗 token 250/1000");
+    expect(progressText(builtin, { cards: 7, commits: 12 })).toBe(
+      "已完成任务 7/10，已合并提交 12/30",
+    );
+    expect(progressText(builtin, {})).toBe("已完成任务 0/10，已合并提交 0/30");
+    expect(progressText({ kind: "workload", tokens: 1000 }, { tokens: 250 })).toBe(
+      "已消耗 token 250/1000",
+    );
     expect(progressText({ kind: "time", cron: "0 3 * * *" }, { cards: 3 })).toBeNull();
   });
 
   it("describes checks with their parameters", () => {
     expect(describeCheck({ type: "git", stale_days: 30, outdated: false })).toContain("超过 30 天");
-    expect(describeCheck({ type: "git", stale_days: 30, outdated: false })).not.toContain("过期的 npm");
+    expect(describeCheck({ type: "git", stale_days: 30, outdated: false })).not.toContain(
+      "过期的 npm",
+    );
     expect(describeCheck({ type: "git" })).toContain("大于 5 MB");
   });
 });
 
 describe("prompt templates", () => {
   it("substitutes known placeholders once and leaves unknown ones", () => {
-    expect(renderTemplate("{{ project }}/{{rule}}/{{nope}}", vars)).toBe("Demo/git-health/{{nope}}");
+    expect(renderTemplate("{{ project }}/{{rule}}/{{nope}}", vars)).toBe(
+      "Demo/git-health/{{nope}}",
+    );
     // values are not scanned again
     expect(renderTemplate("{{summary}}", vars)).toBe("SUMMARY {{project}}");
     expect(unknownPlaceholders("{{rule}} {{nope}} {{nope}} {{x1}}")).toEqual(["nope", "x1"]);
@@ -285,7 +339,11 @@ describe("prompt templates", () => {
 
 describe("default draft card text", () => {
   const findings: Finding[] = [
-    { category: "stale_branch", subject: "feat/old", detail: "领先 main 1 个提交，最后提交于 30 天前" },
+    {
+      category: "stale_branch",
+      subject: "feat/old",
+      detail: "领先 main 1 个提交，最后提交于 30 天前",
+    },
     { category: "merged_branch", subject: "feat/finished", detail: "已合并进 main，可以删除" },
     { category: "uncommitted", subject: "主工作区", detail: "1 个文件有未提交改动：dirty.txt" },
   ];
@@ -296,11 +354,22 @@ describe("default draft card text", () => {
   });
 
   it("explains which rule fired, why, what was found, impact, advice and verification (snapshot)", () => {
-    const out = renderGitOutput(ctx("已完成卡片 10 张，达到阈值 10"), findings, ["未检查过期依赖。"], {
-      maxPerCategory: 15,
-    });
+    const out = renderGitOutput(
+      ctx("已完成任务 10 个，达到阈值 10"),
+      findings,
+      ["未检查过期依赖。"],
+      {
+        maxPerCategory: 15,
+      },
+    );
     expect(out.title).toBe("Git 体检：发现 3 项待整理");
-    for (const heading of ["为什么出现这张卡", "发现了什么", "影响", "建议怎么做", "怎么验证"]) {
+    for (const heading of [
+      "为什么出现此维护任务",
+      "发现了什么",
+      "影响",
+      "建议怎么做",
+      "怎么验证",
+    ]) {
       expect(out.body).toContain(`## ${heading}`);
     }
     expect(out.body).toMatchSnapshot("body");
@@ -319,23 +388,12 @@ describe("engine: one global rule, run per project", () => {
     sh(repo, ["branch", "feat/finished"]);
     writeFileSync(join(repo, "dirty.txt"), "dirty\n");
   };
-  const reviewer = () => {
-    const prompts: string[] = [];
-    return {
-      prompts,
-      run: async ({ prompt }: { prompt: string }) => {
-        prompts.push(prompt);
-        return "ok";
-      },
-    };
-  };
   const rowOf = (h: Harness, projectId: string, name = "git-health") =>
     h.engine.status().rules.find((r) => r.rule.projectId === projectId && r.rule.name === name)!;
 
   it("applies a UI threshold, a custom review prompt and the new reason wording", async () => {
-    const subAgent = reviewer();
     let ui: RulesConfig = { rules: {} };
-    const h = setup({ engine: { subAgent, uiRules: () => ui } });
+    const h = setup({ engine: { uiRules: () => ui } });
     dirty(h.repo);
     ui = {
       rules: {
@@ -347,46 +405,63 @@ describe("engine: one global rule, run per project", () => {
       },
     };
     await h.engine.tick();
-    expect(h.engine.listRules(h.project.id)[0]).toMatchObject({ triggerKind: "workload", agent: "claude/sonnet" });
+    expect(h.engine.listRules(h.project.id)[0]).toMatchObject({
+      triggerKind: "workload",
+      agent: "claude/sonnet",
+    });
     h.complete(1);
     h.clock.advance(60_000);
     await h.engine.tick();
-    expect(h.maintenanceCards()).toHaveLength(0);
+    expect(h.maintenanceTasks()).toHaveLength(0);
     h.complete(1);
     h.clock.advance(60_000);
     await h.engine.tick();
 
-    expect(h.maintenanceCards()).toHaveLength(1);
-    expect(subAgent.prompts).toHaveLength(1);
-    expect(subAgent.prompts[0]!.startsWith("规则 git-health：已完成卡片 2 张，达到阈值 2")).toBe(true);
-    expect(subAgent.prompts[0]).toContain(SYSTEM_CONSTRAINTS.review);
+    expect(h.maintenanceTasks()).toHaveLength(1);
+    expect(h.prompts).toHaveLength(1);
+    expect(h.prompts[0]!.startsWith("规则 git-health：已完成任务 2 个，达到阈值 2")).toBe(true);
+    expect(h.prompts[0]).toContain(SYSTEM_CONSTRAINTS.review);
     const status = h.engine.status().rules[0]!;
-    expect(status).toMatchObject({ origin: "builtin", progressText: "已完成卡片 0/2" });
+    expect(status).toMatchObject({ origin: "builtin", progressText: "已完成任务 0/2" });
     expect(status.sources).toMatchObject({ trigger: "ui", agent: "ui", output: "builtin" });
   });
 
   it("expands a rule over its projects with independent progress, runs and daily caps", async () => {
-    const ui: RulesConfig = { rules: { "git-health": { trigger: { kind: "workload", cards_done: 2 }, projects: "all" } } };
+    const ui: RulesConfig = {
+      rules: { "git-health": { trigger: { kind: "workload", cards_done: 2 }, projects: "all" } },
+    };
     const h = setup({ engine: { uiRules: () => ui } });
     const p2 = addProject(h, "Other", "OTH");
     dirty(h.repo);
     dirty(p2.repo);
     await h.engine.tick();
     expect(h.engine.listRules().map((r) => [r.projectId, r.name])).toEqual(
-      [[h.project.id, "git-health"], [p2.project.id, "git-health"]].sort((a, b) => a[0]!.localeCompare(b[0]!)),
+      [
+        [h.project.id, "git-health"],
+        [p2.project.id, "git-health"],
+      ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
     );
 
     h.complete(2);
     h.clock.advance(60_000);
     await h.engine.tick();
-    expect(h.maintenanceCards()).toHaveLength(1);
-    expect(rowOf(h, h.project.id)).toMatchObject({ runsToday: 1, blocked: "daily_cap", progressText: "已完成卡片 0/2" });
+    expect(h.maintenanceTasks()).toHaveLength(1);
+    expect(rowOf(h, h.project.id)).toMatchObject({
+      runsToday: 1,
+      blocked: "daily_cap",
+      progressText: "已完成任务 0/2",
+    });
     // the other project is untouched: no run, its own counter
-    expect(rowOf(h, p2.project.id)).toMatchObject({ runsToday: 0, blocked: null, lastRun: null, progressText: "已完成卡片 0/2" });
+    expect(rowOf(h, p2.project.id)).toMatchObject({
+      runsToday: 0,
+      blocked: null,
+      lastRun: null,
+      progressText: "已完成任务 0/2",
+    });
     complete(h, p2.project, 1);
     h.clock.advance(60_000);
     await h.engine.tick();
-    expect(rowOf(h, p2.project.id)).toMatchObject({ runsToday: 0, progressText: "已完成卡片 1/2" });
+    expect(rowOf(h, p2.project.id)).toMatchObject({ runsToday: 0, progressText: "已完成任务 1/2" });
     complete(h, p2.project, 1);
     h.clock.advance(60_000);
     await h.engine.tick();
@@ -398,7 +473,11 @@ describe("engine: one global rule, run per project", () => {
     let ui: RulesConfig = {
       rules: {
         "git-health": { trigger: { kind: "workload", cards_done: 2 } },
-        tidy: { trigger: { kind: "time", cron: "0 3 * * *" }, check: { type: "git" }, projects: "all" },
+        tidy: {
+          trigger: { kind: "time", cron: "0 3 * * *" },
+          check: { type: "git" },
+          projects: "all",
+        },
       },
     };
     const h = setup({ engine: { uiRules: () => ui } });
@@ -412,13 +491,17 @@ describe("engine: one global rule, run per project", () => {
     h.clock.advance(60_000);
     await h.engine.tick();
     const before = rowOf(h, p2.project.id);
-    expect(before.progressText).toBe("已完成卡片 1/2");
+    expect(before.progressText).toBe("已完成任务 1/2");
 
     // remove the project from both rules
     ui = {
       rules: {
         "git-health": { trigger: { kind: "workload", cards_done: 2 }, projects: [h.project.id] },
-        tidy: { trigger: { kind: "time", cron: "0 3 * * *" }, check: { type: "git" }, projects: [h.project.id] },
+        tidy: {
+          trigger: { kind: "time", cron: "0 3 * * *" },
+          check: { type: "git" },
+          projects: [h.project.id],
+        },
       },
     };
     await h.engine.tick();
@@ -431,12 +514,15 @@ describe("engine: one global rule, run per project", () => {
     // the removed row stays in the table with its counters, and a manual run by name skips it
     expect(h.engine.listRules(p2.project.id)).toHaveLength(2);
     expect(rowOf(h, p2.project.id).counters).toMatchObject({ cards: 1 });
-    await expect(h.engine.runRuleNow("git-health", p2.project.id)).rejects.toThrow("does not apply");
+    await expect(h.engine.runRuleNow("git-health", p2.project.id)).rejects.toThrow("不适用于");
 
     // scope back: the same row is enabled again with its old progress
     ui = { rules: { ...ui.rules, "git-health": { trigger: { kind: "workload", cards_done: 2 } } } };
     await h.engine.tick();
-    expect(rowOf(h, p2.project.id)).toMatchObject({ rule: { enabled: true }, progressText: "已完成卡片 1/2" });
+    expect(rowOf(h, p2.project.id)).toMatchObject({
+      rule: { enabled: true },
+      progressText: "已完成任务 1/2",
+    });
   });
 
   it("lets a project's maintenance.yml override only that project", async () => {
@@ -445,7 +531,12 @@ describe("engine: one global rule, run per project", () => {
     daily_cap: 5
     priority: high
 `;
-    const h = setup({ yml, engine: { uiRules: () => ({ rules: { "git-health": { daily_cap: 2, priority: "medium" } } }) } });
+    const h = setup({
+      yml,
+      engine: {
+        uiRules: () => ({ rules: { "git-health": { daily_cap: 2, priority: "medium" } } }),
+      },
+    });
     const p2 = addProject(h, "Other", "OTH");
     await h.engine.tick();
     const mine = rowOf(h, h.project.id);
@@ -459,16 +550,23 @@ describe("engine: one global rule, run per project", () => {
     expect(global.def).toMatchObject({ daily_cap: 2, priority: "medium" });
 
     // a rule only defined in one project's yml stays in that project
-    const h2 = setup({ yml: "rules:\n  - name: only-here\n    trigger: { kind: time, cron: '0 4 * * *' }\n    check: { type: git }\n" });
+    const h2 = setup({
+      yml: "rules:\n  - name: only-here\n    trigger: { kind: time, cron: '0 4 * * *' }\n    check: { type: git }\n",
+    });
     const q2 = addProject(h2, "Other", "OTH");
     await h2.engine.tick();
-    expect(h2.engine.listRules(h2.project.id).map((r) => r.name)).toEqual(["git-health", "only-here"]);
+    expect(h2.engine.listRules(h2.project.id).map((r) => r.name)).toEqual([
+      "git-health",
+      "only-here",
+    ]);
     expect(h2.engine.listRules(q2.project.id).map((r) => r.name)).toEqual(["git-health"]);
     expect(rowOf(h2, h2.project.id, "only-here").origin).toBe("yml");
   });
 
   it("runs now for one chosen project or for every applicable project", async () => {
-    const h = setup({ engine: { uiRules: () => ({ rules: { "git-health": { projects: "all" } } }) } });
+    const h = setup({
+      engine: { uiRules: () => ({ rules: { "git-health": { projects: "all" } } }) },
+    });
     const p2 = addProject(h, "Other", "OTH");
     const p3 = addProject(h, "Third", "THI");
     await h.engine.tick();
@@ -479,7 +577,9 @@ describe("engine: one global rule, run per project", () => {
     expect(rowOf(h, p3.project.id).lastRun).toBeNull();
 
     const every = await h.engine.runRuleNow("git-health");
-    expect(every.map((r) => r.projectId).sort()).toEqual([h.project.id, p2.project.id, p3.project.id].sort());
+    expect(every.map((r) => r.projectId).sort()).toEqual(
+      [h.project.id, p2.project.id, p3.project.id].sort(),
+    );
     expect(every.every((r) => r.outcome.status === "fired")).toBe(true);
     expect(rowOf(h, h.project.id).lastRun).not.toBeNull();
     expect(rowOf(h, p3.project.id).lastRun).not.toBeNull();

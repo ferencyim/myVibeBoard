@@ -8,6 +8,7 @@ import {
   JudgementSchema,
   ReviewVerdictSchema,
   SessionComplexitySchema,
+  SessionRoleSchema,
 } from "./enums";
 import { MOVE_ACTORS } from "./state-machine";
 
@@ -15,6 +16,98 @@ const SessionRef = z.object({ sessionId: z.string(), agentId: z.string().optiona
 
 /** payload schema per event type */
 export const EVENT_PAYLOADS = {
+  "task.fix_requested": z.object({
+    workspaceId: z.string(),
+    confirmedAt: z.string(),
+    verificationId: z.string(),
+    commitHash: z.string(),
+    prompt: z.string(),
+    sourceAgentId: z.string().optional(),
+  }),
+  "task.stop_requested": z.object({
+    workspaceId: z.string(),
+    requestId: z.string(),
+    reason: z.string(),
+  }),
+  "task.stop_result": z.object({
+    workspaceId: z.string(),
+    requestId: z.string(),
+    stopped: z.boolean(),
+    reason: z.string(),
+  }),
+  "scheduler.task_dispatch_wanted": z.object({
+    requestId: z.string(),
+    workspaceIds: z.array(z.string()),
+    slots: z.number().int().nonnegative(),
+  }),
+  "master.task_dispatch_chosen": z.object({
+    requestId: z.string(),
+    workspaceIds: z.array(z.string()),
+    reason: z.string(),
+  }),
+  "master.task_dispatch_failed": z.object({ requestId: z.string(), reason: z.string() }),
+  "scheduler.task_admitted": z.object({
+    workspaceId: z.string(),
+    confirmedAt: z.string(),
+    role: z.literal("worker"),
+    reservationId: z.string(),
+    presetId: z.string(),
+    provider: z.string(),
+    model: z.string(),
+    port: z.number().int(),
+    deviceIds: z.array(z.string()),
+  }),
+  "scheduler.task_resource_request": z.object({
+    requestId: z.string(),
+    workspaceId: z.string(),
+    action: z.enum(["acquire", "bind", "yield", "release", "freeze", "reconcile"]),
+    role: SessionRoleSchema.optional(),
+    subtaskId: z.string().optional(),
+    agentId: z.string().optional(),
+    reservationId: z.string().optional(),
+    candidateIndex: z.number().int().nonnegative().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    presetId: z.string().optional(),
+    files: z.array(z.string()).optional(),
+    hostLease: z.boolean().optional(),
+  }),
+  "scheduler.task_resource_result": z.object({
+    requestId: z.string(),
+    workspaceId: z.string(),
+    ok: z.boolean(),
+    reason: z.string(),
+    retryable: z.boolean().optional(),
+    reservationId: z.string().optional(),
+    presetId: z.string().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    port: z.number().int().optional(),
+    deviceIds: z.array(z.string()).optional(),
+  }),
+  "context.continuation_requested": z.object({
+    requestId: z.string(),
+    workspaceId: z.string().nullable(),
+    sessionId: z.string(),
+    agentId: z.string(),
+    role: SessionRoleSchema,
+    reason: z.enum(["failure", "context"]),
+    message: z.string(),
+    summary: z.string(),
+    candidateIndex: z.number().int().nonnegative(),
+    confirmedAt: z.string().nullable(),
+    prompt: z.string(),
+  }),
+  "context.continuation_result": z.object({
+    requestId: z.string(),
+    workspaceId: z.string().nullable(),
+    status: z.enum(["continued", "paused", "exhausted", "deferred"]),
+    reason: z.string(),
+    agentId: z.string().optional(),
+    sessionId: z.string().optional(),
+    candidateIndex: z.number().int().nonnegative().optional(),
+  }),
+
   "task.updated": z.object({ workspaceId: z.string().min(1), fields: z.array(z.string()) }),
   "card.created": z.object({
     key: z.string(),
@@ -96,9 +189,15 @@ export const EVENT_PAYLOADS = {
     files: z.array(z.string()).optional(),
     summary: z.string().optional(),
   }),
-  "verification.started": z.object({ verificationId: z.string() }),
+  "verification.started": z.object({
+    verificationId: z.string(),
+    workspaceId: z.string().optional(),
+    confirmedAt: z.string().optional(),
+  }),
   "verification.finished": z.object({
     verificationId: z.string(),
+    workspaceId: z.string().optional(),
+    confirmedAt: z.string().optional(),
     conclusion: JudgementSchema,
   }),
   // The UI (vibe-board, which cannot call another plugin's RPC) asks vibe-verify to act on a

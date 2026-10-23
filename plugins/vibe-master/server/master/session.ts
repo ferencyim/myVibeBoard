@@ -12,9 +12,18 @@ import { buildHandoff, type SwitchNote } from "./handoff";
 import { reviveAgent } from "./revive";
 import { hashText, rulesUpdateMessage, type PromptPort } from "../prompts/port";
 import { defaultTuning, type TuningSource } from "../tuning";
-import { isModelUnavailableError, presetModels, withPresetModel, type AgentSession } from "../vibe/contract";
-import type { VibeStore } from "../vibe/db";
-import { FOLLOW_SETTINGS, type PermissionResolver, type ResolvedPermission } from "../subscription/permission";
+import {
+  isModelUnavailableError,
+  presetModels,
+  withPresetModel,
+  type AgentSession,
+} from "../vibe/contract";
+import { publishEvent, createTaskRuntimeCommands, type VibeDb, type VibeStore } from "../vibe/db";
+import {
+  FOLLOW_SETTINGS,
+  type PermissionResolver,
+  type ResolvedPermission,
+} from "../subscription/permission";
 import { isQuotaError } from "../subscription/quota";
 import type { Alerts } from "../subscription/alerts";
 import type { MasterSessionNote, MasterStateFile } from "../subscription/state";
@@ -23,6 +32,7 @@ import { providerSpec, sameTarget } from "../subscription/target";
 import { MasterError, type MasterAgentHandle, type MasterAsk, type MasterPaseo } from "../types";
 
 export interface MasterSessionDeps {
+  db: VibeDb;
   store: VibeStore;
   getPaseo(): MasterPaseo | null;
   settings(): MasterSettings;
@@ -34,6 +44,7 @@ export interface MasterSessionDeps {
   prompts: PromptPort;
   tuning?: TuningSource;
   workspace(): string;
+  admit?(agent: MasterAgentHandle, target: MasterTarget): Promise<() => Promise<void>>;
   alerts: Alerts;
   log(message: string, error?: unknown): void;
 }
@@ -46,9 +57,14 @@ export interface MasterSession extends MasterAsk {
   /** Provider of the live master, if any. */
   activeProvider(): string | null;
   failover(reason: string): Promise<boolean>;
+  restart(reason: string): Promise<boolean>;
   liveSession(): AgentSession | undefined;
   /** The permission mode the master runs (or will run) with, and where the choice comes from. */
-  permission(): Promise<{ setting: string; source: "settings" | "switched"; resolved: ResolvedPermission }>;
+  permission(): Promise<{
+    setting: string;
+    source: "settings" | "switched";
+    resolved: ResolvedPermission;
+  }>;
   /**
    * Manual permission switch (`FOLLOW_SETTINGS` = back to the settings default). A running master
    * is replaced by a fresh agent in the new mode (the Paseo plugin API has no in-place mode change).
@@ -103,7 +119,8 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
 
   function selection() {
     const { preset } = resolveMasterPreset(deps.settings(), store.presets.list());
-    if (!preset) throw new MasterError("unavailable", "没有为总 agent 选择预设（请在总 agent 设置页选择）");
+    if (!preset)
+      throw new MasterError("unavailable", "没有为总 agent 选择预设（请在总 agent 设置页选择）");
     const models = presetModels(preset);
     const key = JSON.stringify([preset.id, models]);
     let progress = deps.state.read().presetSelection;
@@ -119,7 +136,10 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     const key = JSON.stringify([progress.key, progress.index]);
     if (presetTarget?.key === key) return presetTarget.value;
     // A preset with a model needs no catalog; an empty model is resolved through the daemon.
-    const value = await targetOfPreset(deps.getPaseo(), withPresetModel(preset, models[progress.index]!));
+    const value = await targetOfPreset(
+      deps.getPaseo(),
+      withPresetModel(preset, models[progress.index]!),
+    );
     presetTarget = { key, value };
     return value;
   }
@@ -151,16 +171,23 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
         const target = await currentTarget();
         const fresh = await spawn(paseo, target, reason);
         if (previous && previous.id !== fresh.id) {
-          if (previous.currentProvider !== target.provider) store.sessions.switchProvider(previous.id, target.provider, reason);
           await retire(previous, reason);
         }
         return true;
       } catch (error) {
-        if (!isModelUnavailableError(error) && !isQuotaError(error instanceof Error ? error.message : String(error))) throw error;
+        if (
+          !isModelUnavailableError(error) &&
+          !isQuotaError(error instanceof Error ? error.message : String(error))
+        )
+          throw error;
         deps.log("总 agent 候选启动失败", error);
       }
     }
-    deps.alerts.raise("provider_error", "master", `总 agent 预设内所有模型均不可用，已停止自动切换。${reason}`);
+    deps.alerts.raise(
+      "provider_error",
+      "master",
+      `总 agent 预设内所有模型均不可用，已停止自动切换。${reason}`,
+    );
     return false;
   }
 
@@ -175,6 +202,18 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   async function retire(session: AgentSession | undefined, outcome: string): Promise<void> {
     if (!session) return;
     moveSession(session, "ended", { outcome });
+    const next = liveSession();
+    if (next && next.id !== session.id && next.currentProvider !== session.currentProvider) {
+      publishEvent(deps.db, {
+        type: "session.switched",
+        payload: {
+          sessionId: session.id,
+          agentId: session.agentId,
+          from: session.currentProvider,
+          to: next.currentProvider,
+        },
+      });
+    }
     note(session.id, { retiredReason: outcome, retiredAt: new Date(nowMs()).toISOString() });
     const day = new Date(nowMs()).toISOString().slice(0, 10);
     try {
@@ -187,12 +226,18 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   function handoffFor(reason: string): string {
     const history = store.sessions.list({ role: "master" });
     const switches: SwitchNote[] = history.flatMap((h) =>
-      h.switchHistory.map((e) => ({ at: e.at, text: `${e.from} -> ${e.to}${e.reason ? `: ${e.reason}` : ""}` })),
+      h.switchHistory.map((e) => ({
+        at: e.at,
+        text: `${e.from} -> ${e.to}${e.reason ? `: ${e.reason}` : ""}`,
+      })),
     );
     const retired = Object.values(deps.state.read().sessions ?? {})
       .filter((n) => n.retiredAt && n.retiredReason)
       .map((n) => ({ at: n.retiredAt!, text: `旧会话结束: ${n.retiredReason}` }));
-    switches.push(...retired, { at: new Date(nowMs()).toISOString(), text: `本次更换原因: ${reason}` });
+    switches.push(...retired, {
+      at: new Date(nowMs()).toISOString(),
+      text: `本次更换原因: ${reason}`,
+    });
     switches.sort((a, b) => a.at.localeCompare(b.at));
     return buildHandoff({
       store,
@@ -204,7 +249,11 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     });
   }
 
-  async function spawn(paseo: MasterPaseo, target: MasterTarget, reason: string): Promise<AgentSession> {
+  async function spawn(
+    paseo: MasterPaseo,
+    target: MasterTarget,
+    reason: string,
+  ): Promise<AgentSession> {
     const hadPredecessor = store.sessions.list({ role: "master" }).length > 0;
     const { modeId } = await resolvePermission(target);
     const cwd = deps.workspace();
@@ -222,15 +271,26 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
         ...(modeId ? { modeId } : {}),
       },
     });
-    const session = store.sessions.start({
-      cardId: null,
+    const session = createTaskRuntimeCommands(deps.db).registerSession({
+      workspaceId: null,
+      projectId: null,
       agentId: created.id,
       role: "master",
       provider: target.provider,
+      model: target.model,
+      thinking: target.thinking ?? undefined,
+      candidateIndex: selection().progress.index,
+      previousSessionId: liveSession()?.id ?? null,
     });
     deps.state.update((s) => ({
       ...s,
-      agent: { agentId: created.id, sessionId: session.id, target, modeId, rulesHash: hashText(systemPrompt) },
+      agent: {
+        agentId: created.id,
+        sessionId: session.id,
+        target,
+        modeId,
+        rulesHash: hashText(systemPrompt),
+      },
     }));
     note(session.id, { provider: target.provider, model: target.model, thinking: target.thinking });
     handle = created;
@@ -244,13 +304,18 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   /** The agent for the wanted subscription: reuse the live one or start a fresh one. */
   async function ensure(): Promise<MasterAgentHandle> {
     const paseo = deps.getPaseo();
-    if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
-    if (selection().progress.exhausted) throw new MasterError("unavailable", "总 agent 预设内所有模型均不可用，请更换预设或调整候选列表");
+    if (!paseo) throw new MasterError("unavailable", "尚未取得 daemon 连接");
+    if (selection().progress.exhausted)
+      throw new MasterError(
+        "unavailable",
+        "总 agent 预设内所有模型均不可用，请更换预设或调整候选列表",
+      );
     const target = await currentTarget();
     const record = deps.state.read().agent;
     const live = liveSession();
     const { modeId } = await resolvePermission(target);
-    const current = (r: typeof record) => !!r && sameTarget(r.target, target) && (r.modeId ?? null) === modeId;
+    const current = (r: typeof record) =>
+      !!r && sameTarget(r.target, target) && (r.modeId ?? null) === modeId;
 
     if (handle && live && record?.agentId === handle.id && current(record)) {
       return handle;
@@ -266,10 +331,10 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       }
     }
     // The recorded agent is still the wanted one but could not be brought back: say so in the hand-off.
-    const unrecoverable = !!live && record?.agentId === live.agentId && current(record);
+    const unrecoverable = record?.agentId === live?.agentId && current(record);
     const reason = unrecoverable ? "restart_recovery_failed" : "replaced";
-    const fresh = await spawn(paseo, target, reason);
-    if (live && live.id !== fresh.id) await retire(live, reason);
+    await spawn(paseo, target, reason);
+    await retire(live, reason);
     return handle!;
   }
 
@@ -287,6 +352,14 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   return {
     currentTarget,
     failover,
+    async restart(reason) {
+      const paseo = deps.getPaseo();
+      if (!paseo) return false;
+      const previous = liveSession();
+      await spawn(paseo, await currentTarget(), reason);
+      await retire(previous, reason);
+      return true;
+    },
     liveSession,
     activeProvider: () => liveSession()?.currentProvider ?? null,
 
@@ -307,7 +380,8 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       });
       const live = liveSession();
       const record = deps.state.read().agent;
-      if (!live || record?.agentId !== live.agentId) return { changed: false, sessionId: live?.id ?? null };
+      if (!live || record?.agentId !== live.agentId)
+        return { changed: false, sessionId: live?.id ?? null };
       const paseo = deps.getPaseo();
       if (!paseo) throw new MasterError("unavailable", "No daemon handle yet");
       const target = await currentTarget();
@@ -320,9 +394,14 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       try {
         fresh = await spawn(paseo, target, "mode_changed");
       } catch (error) {
-        if (!isModelUnavailableError(error) && !isQuotaError(error instanceof Error ? error.message : String(error))) throw error;
+        if (
+          !isModelUnavailableError(error) &&
+          !isQuotaError(error instanceof Error ? error.message : String(error))
+        )
+          throw error;
         const message = error instanceof Error ? error.message : String(error);
-        if (!(await failover(message))) throw new MasterError("unavailable", `总 agent 预设内所有模型均不可用：${message}`);
+        if (!(await failover(message)))
+          throw new MasterError("unavailable", `总 agent 预设内所有模型均不可用：${message}`);
         return { changed: true, sessionId: liveSession()!.id };
       }
       await retire(live, "mode_changed");
@@ -331,71 +410,94 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
 
     async ask(prompt, options = {}) {
       const askOnce = async (): Promise<string> => {
-      let agent: MasterAgentHandle;
-      try {
-        agent = await ensure();
-      } catch (error) {
-        if (error instanceof MasterError) throw error;
-        const failure = classify(error instanceof Error ? error.message : String(error));
-        if (failure.kind === "quota") {
-          deps.alerts.raise("quota_error", await providerLabel(), failure.message);
+        let agent: MasterAgentHandle;
+        try {
+          agent = await ensure();
+        } catch (error) {
+          if (error instanceof MasterError) throw error;
+          const failure = classify(error instanceof Error ? error.message : String(error));
+          if (failure.kind === "quota") {
+            deps.alerts.raise("quota_error", await providerLabel(), failure.message);
+          }
+          throw failure;
         }
-        throw failure;
-      }
-      const session = liveSession();
-      moveSession(session, "working");
-      const rulesText = deps.rules();
-      const rulesHash = hashText(rulesText);
-      const parts: string[] = [];
-      if (!rulesSent) parts.push(rulesText);
-      else if (rulesHash !== deliveredRules) parts.push(rulesUpdateMessage(deps.prompts, rulesText));
-      const handoff = pendingHandoff;
-      if (handoff) parts.push(handoff);
-      parts.push(prompt);
-      const message = parts.join("\n\n---\n\n");
+        const session = liveSession();
+        const rulesText = deps.rules();
+        const rulesHash = hashText(rulesText);
+        const parts: string[] = [];
+        if (!rulesSent) parts.push(rulesText);
+        else if (rulesHash !== deliveredRules)
+          parts.push(rulesUpdateMessage(deps.prompts, rulesText));
+        const handoff = pendingHandoff;
+        if (handoff) parts.push(handoff);
+        parts.push(prompt);
+        const message = parts.join("\n\n---\n\n");
 
-      const fail = (failure: MasterError): never => {
-        moveSession(session, "error", { message: failure.message });
-        if (failure.kind === "quota") {
-          deps.alerts.raise("quota_error", session?.currentProvider ?? "unknown", failure.message);
+        const fail = (failure: MasterError): never => {
+          moveSession(session, "error", { message: failure.message });
+          if (failure.kind === "quota") {
+            deps.alerts.raise(
+              "quota_error",
+              session?.currentProvider ?? "unknown",
+              failure.message,
+            );
+          }
+          throw failure;
+        };
+
+        let result;
+        const release = await deps.admit?.(agent, await currentTarget());
+        moveSession(session, "working");
+        try {
+          result = await agent.run(message, {
+            sourceAgentId: agent.id,
+            timeoutMs: options.timeoutMs ?? tuning().askTimeoutMs,
+          });
+        } catch (error) {
+          return fail(classify(error instanceof Error ? error.message : String(error)));
+        } finally {
+          await release?.();
         }
-        throw failure;
-      };
-
-      let result;
-      try {
-        result = await agent.run(message, { timeoutMs: options.timeoutMs ?? tuning().askTimeoutMs });
-      } catch (error) {
-        return fail(classify(error instanceof Error ? error.message : String(error)));
-      }
-      if (result.status === "error") {
-        return fail(classify(result.error ?? "The master agent failed without a message"));
-      }
-      if (result.status === "permission") {
-        return fail(new MasterError("permission", "The master agent is waiting for a permission"));
-      }
-      if (result.status === "timeout") {
-        return fail(new MasterError("timeout", "The master agent did not answer in time"));
-      }
-      if (!result.lastMessage?.trim()) {
-        return fail(new MasterError("agent", "The master agent returned an empty reply"));
-      }
-      rulesSent = true;
-      deliveredRules = rulesHash;
-      deps.state.update((s) => (s.agent ? { ...s, agent: { ...s.agent, rulesHash } } : s));
-      if (pendingHandoff === handoff) pendingHandoff = null;
-      moveSession(session, "idle");
-      return result.lastMessage;
+        if (result.status === "error") {
+          return fail(classify(result.error ?? "总 agent 运行失败，未返回错误说明"));
+        }
+        if (result.status === "permission") {
+          return fail(new MasterError("permission", "总 agent 正在等待权限批准"));
+        }
+        if (result.status === "timeout") {
+          return fail(new MasterError("timeout", "总 agent 未及时回复"));
+        }
+        if (!result.lastMessage?.trim()) {
+          return fail(new MasterError("agent", "总 agent 回复为空"));
+        }
+        rulesSent = true;
+        deliveredRules = rulesHash;
+        deps.state.update((s) => (s.agent ? { ...s, agent: { ...s.agent, rulesHash } } : s));
+        if (pendingHandoff === handoff) pendingHandoff = null;
+        moveSession(session, "idle");
+        return result.lastMessage;
       };
       while (true) {
         try {
           return await askOnce();
         } catch (error) {
           if (!deps.getPaseo()) throw error;
-          const failure = error instanceof MasterError ? error : classify(error instanceof Error ? error.message : String(error));
-          if (failure.kind === "permission" || failure.kind === "timeout" || (!isModelUnavailableError(failure) && failure.kind !== "quota")) throw failure;
+          const failure =
+            error instanceof MasterError
+              ? error
+              : classify(error instanceof Error ? error.message : String(error));
+          if (
+            failure.kind === "permission" ||
+            failure.kind === "timeout" ||
+            (!isModelUnavailableError(failure) && failure.kind !== "quota")
+          )
+            throw failure;
           if (selection().progress.exhausted) throw failure;
-          if (!(await failover(failure.message))) throw new MasterError(failure.kind, `总 agent 预设内所有模型均不可用：${failure.message}`);
+          if (!(await failover(failure.message)))
+            throw new MasterError(
+              failure.kind,
+              `总 agent 预设内所有模型均不可用：${failure.message}`,
+            );
         }
       }
     },
@@ -405,7 +507,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       const liveId = liveSession()?.id;
       return store.sessions
         .list({ role: "master" })
-        .reverse()
+        .toReversed()
         .slice(0, limit)
         .map((x) => ({
           sessionId: x.id,
@@ -422,7 +524,8 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
     },
 
     async applyPreset(reason) {
-      if (selection().progress.exhausted) return { changed: false, sessionId: liveSession()?.id ?? null };
+      if (selection().progress.exhausted)
+        return { changed: false, sessionId: liveSession()?.id ?? null };
       const live = liveSession();
       if (!live) return { changed: false, sessionId: null };
       const paseo = deps.getPaseo();
@@ -430,7 +533,11 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       const target = await currentTarget();
       const record = deps.state.read().agent;
       const { modeId } = await resolvePermission(target);
-      if (record?.agentId === live.agentId && sameTarget(record.target, target) && (record.modeId ?? null) === modeId) {
+      if (
+        record?.agentId === live.agentId &&
+        sameTarget(record.target, target) &&
+        (record.modeId ?? null) === modeId
+      ) {
         return { changed: false, sessionId: live.id };
       }
       // Start the new agent first: if the provider is unavailable the old one keeps working.
@@ -438,19 +545,18 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
       try {
         fresh = await spawn(paseo, target, reason ?? "switch");
       } catch (error) {
-        if (!isModelUnavailableError(error) && !isQuotaError(error instanceof Error ? error.message : String(error))) throw error;
+        if (
+          !isModelUnavailableError(error) &&
+          !isQuotaError(error instanceof Error ? error.message : String(error))
+        )
+          throw error;
         const message = error instanceof Error ? error.message : String(error);
-        if (!(await failover(message))) throw new MasterError("unavailable", `总 agent 预设内所有模型均不可用：${message}`);
+        if (!(await failover(message)))
+          throw new MasterError("unavailable", `总 agent 预设内所有模型均不可用：${message}`);
         return { changed: true, sessionId: liveSession()!.id };
       }
       if (live.id !== fresh.id) {
-        if (live.currentProvider !== target.provider) {
-          try {
-            store.sessions.switchProvider(live.id, target.provider, reason);
-          } catch (error) {
-            deps.log("could not record the provider switch", error);
-          }
-        }
+        note(live.id, { switchReason: reason ?? "switched" });
         await retire(live, "switched");
       }
       return { changed: true, sessionId: fresh.id };

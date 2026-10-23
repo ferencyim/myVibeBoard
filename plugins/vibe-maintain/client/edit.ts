@@ -102,11 +102,11 @@ export function draftToFields(draft: RuleDraft): DraftResult {
       if (n === null) errors.push(`${label}要填正整数`);
       return n ?? undefined;
     };
-    const cards = parse("完成卡片数阈值", draft.cardsDone);
+    const cards = parse("完成任务数阈值", draft.cardsDone);
     const commits = parse("合并提交数阈值", draft.commitsMerged);
     const tokens = parse("token 阈值", draft.tokens);
     if (!cards && !commits && !tokens && errors.length === 0) {
-      errors.push("按工作量触发至少要填一个阈值（完成卡片数、合并提交数或 token）");
+      errors.push("按工作量触发至少要填一个阈值（完成任务数、合并提交数或 token）");
     }
     trigger = {
       kind: "workload",
@@ -115,7 +115,8 @@ export function draftToFields(draft: RuleDraft): DraftResult {
       ...(tokens ? { tokens } : {}),
     };
   } else if (draft.triggerKind === "time") {
-    if (draft.cron.trim().split(/\s+/).length !== 5) errors.push("cron 要写 5 段，例如 0 3 * * *（每天 3 点）");
+    if (draft.cron.trim().split(/\s+/).length !== 5)
+      errors.push("cron 要写 5 段，例如 0 3 * * *（每天 3 点）");
     trigger = { kind: "time", cron: draft.cron.trim() };
   } else {
     if (!draft.eventPath.trim()) errors.push("要填写监视的文件路径");
@@ -146,7 +147,8 @@ export function draftToFields(draft: RuleDraft): DraftResult {
   if (draft.checkExtra.trim()) {
     try {
       const extra: unknown = JSON.parse(draft.checkExtra);
-      if (typeof extra !== "object" || extra === null || Array.isArray(extra)) throw new Error("not an object");
+      if (typeof extra !== "object" || extra === null || Array.isArray(extra))
+        throw new Error("not an object");
       Object.assign(check, { ...extra, type: check.type });
     } catch {
       errors.push("检查参数要写成 JSON 对象");
@@ -160,7 +162,10 @@ export function draftToFields(draft: RuleDraft): DraftResult {
     ["修复提示词", draft.fixPrompt],
   ] as const) {
     const unknown = tpl ? unknownPlaceholders(tpl) : [];
-    if (unknown.length) warnings.push(`${label}里有未知占位符：${unknown.map((n) => `{{${n}}}`).join("、")}，将原样发给 agent`);
+    if (unknown.length)
+      warnings.push(
+        `${label}里有未知占位符：${unknown.map((n) => `{{${n}}}`).join("、")}，将原样发给 agent`,
+      );
   }
   if (errors.length) return { errors, warnings };
 
@@ -250,7 +255,12 @@ export function addCustomRule(
   if (!trimmed) return { config, error: "规则名称不能为空" };
   if (trimmed.includes(":")) return { config, error: "规则名称不能包含冒号" };
   if (takenNames.includes(trimmed)) return { config, error: `已有叫「${trimmed}」的规则` };
-  return { config: { ...config, rules: { ...config.rules, [trimmed]: { ...(fields as Stored), projects: scope } } } };
+  return {
+    config: {
+      ...config,
+      rules: { ...config.rules, [trimmed]: { ...(fields as Stored), projects: scope } },
+    },
+  };
 }
 
 /** Removes only the configuration entry; files and history stay. */

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeOverview, detectCompactions, percentile, periodStart, readPool } from "../server/aggregate";
+import {
+  computeOverview,
+  detectCompactions,
+  percentile,
+  periodStart,
+  readPool,
+} from "../server/aggregate";
 import { createIndexer } from "../server/indexer";
 import { estimateCost, parseLiteLlmPrices, priceFor } from "../server/pricing";
 import { buildSessionMap } from "../server/session-map";
@@ -45,12 +51,14 @@ describe("period filter", () => {
 describe("compaction detection", () => {
   it("flags a sharp context drop inside one session", () => {
     const rows = [
-      { session_id: "a", card_id: "c1", ctx: 150_000 },
-      { session_id: "a", card_id: "c1", ctx: 30_000 },
-      { session_id: "a", card_id: "c1", ctx: 40_000 },
-      { session_id: "b", card_id: null, ctx: 5_000 },
+      { session_id: "a", workspace_id: "c1", ctx: 150_000 },
+      { session_id: "a", workspace_id: "c1", ctx: 30_000 },
+      { session_id: "a", workspace_id: "c1", ctx: 40_000 },
+      { session_id: "b", workspace_id: null, ctx: 5_000 },
     ];
-    expect(detectCompactions(rows)).toEqual([{ cardId: "c1", before: 150_000, after: 30_000 }]);
+    expect(detectCompactions(rows)).toEqual([
+      { workspaceId: "c1", before: 150_000, after: 30_000 },
+    ]);
   });
 });
 
@@ -64,23 +72,40 @@ describe("resources", () => {
        VALUES ('2026-10-01T00:00:00Z', 0.5, 0.25, '{"a":1,"b":2}', '{"emu1":{"leased":true},"emu2":{"leased":false}}')`,
     ).run();
     const r = computeOverview(db, "all").resources;
-    expect(r.latest).toMatchObject({ cpu: 0.5, mem: 0.25, sessions: 2, devicesBusy: 1, devicesTotal: 2 });
+    expect(r.latest).toMatchObject({
+      cpu: 0.5,
+      mem: 0.25,
+      sessions: 2,
+      devicesBusy: 1,
+      devicesTotal: 2,
+    });
     expect(r.history).toHaveLength(1);
     expect(readPool('{"busy":2,"total":3}')).toEqual({ busy: 2, total: 3 });
     expect(readPool("garbage")).toEqual({ busy: 0, total: 0 });
   });
 });
 
-describe("cards, sessions and tasks", () => {
-  it("links CLI sessions to cards and reports per-task efficiency", async () => {
+describe("native sessions and tasks", () => {
+  it("links CLI sessions to workspaces without cards and reports per-task efficiency", async () => {
     const base = tempDir();
     const db = openVibeDb({ path: ":memory:" });
     migrateOwner(db, "stats");
     let clock = Date.parse("2026-10-01T10:00:00Z");
     const store = createVibeStore(db, { now: () => new Date(clock) });
-    const project = store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: "<repo>", projectType: "web" });
-    const card = store.cards.create({ projectId: project.id, title: "Task one" });
-    const session = store.sessions.start({ cardId: card.id, agentId: "agent-1", role: "worker", provider: "claude" });
+    const project = store.projects.create({
+      name: "Demo",
+      prefix: "DEMO",
+      repoPath: "<repo>",
+      projectType: "web",
+    });
+    store.projectConfigs.link("native-project", "<repo>");
+    const session = store.sessions.start({
+      cardId: null,
+      workspaceId: "workspace-1",
+      agentId: "agent-1",
+      role: "worker",
+      provider: "claude",
+    });
     clock += 1000;
     store.sessions.setState(session.id, "working");
     clock += 60_000;
@@ -100,25 +125,45 @@ describe("cards, sessions and tasks", () => {
     );
     const indexer = createIndexer({ db, roots: () => rootsFor(base) });
     await indexer.scan();
-    expect(computeOverview(db, "all").byProject[0]?.label).toBe("(unlinked)");
+    expect(computeOverview(db, "all").byProject[0]?.label).toBe("未关联");
 
     const fakePaseo = {
+      workspaces: { ref: () => ({ refresh: async () => ({ projectId: "native-project" }) }) },
       agents: {
         list: async () => ({
-          entries: [{ agent: { id: "agent-1", persistence: { provider: "claude", sessionId: "sess-claude-1" } } }],
+          entries: [
+            {
+              agent: {
+                id: "agent-1",
+                persistence: { provider: "claude", sessionId: "sess-claude-1" },
+              },
+            },
+          ],
           pageInfo: { hasMore: false, nextCursor: null, prevCursor: null },
         }),
       },
     };
     const map = await buildSessionMap(fakePaseo as never, store);
-    expect(map.get("sess-claude-1")).toBe(card.id);
+    expect(map).toContainEqual({
+      provider: "claude",
+      sessionId: "sess-claude-1",
+      workspaceId: "workspace-1",
+      projectId: project.id,
+      role: "worker",
+      agentId: "agent-1",
+    });
     expect(indexer.relink(map)).toBe(2);
     expect(indexer.relink(map)).toBe(0);
 
     const o = computeOverview(db, "all");
     expect(o.byProject[0]).toMatchObject({ label: "Demo", events: 2 });
     expect(o.tasks).toHaveLength(1);
-    expect(o.tasks[0]).toMatchObject({ key: "DEMO-1", tokens: 180_020, waitingMs: 120_000, durationMs: 211_000 });
+    expect(o.tasks[0]).toMatchObject({
+      workspaceId: "workspace-1",
+      tokens: 180_020,
+      waitingMs: 120_000,
+      durationMs: 211_000,
+    });
     expect(o.tasks[0]?.compactions).toEqual([{ before: 150_000, after: 30_000 }]);
     expect(o.compactions).toEqual({ count: 1, avgBefore: 150_000, avgAfter: 30_000 });
   });
@@ -127,7 +172,13 @@ describe("cards, sessions and tasks", () => {
 describe("unpriced models", () => {
   it("has no built-in price for Claude 5 / gpt-6 models but accepts a price file", () => {
     const t = { tokensIn: 1_000_000, tokensOut: 0, tokensCacheRead: 0, tokensCacheWrite: 0 };
-    for (const m of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "gpt-6.1-codex"]) {
+    for (const m of [
+      "claude-fable-5-1",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+      "gpt-6.1-codex",
+    ]) {
       expect(estimateCost(m, t)).toBeNull();
     }
     const overrides = parseLiteLlmPrices({ "claude-opus-5-5": { input_cost_per_token: 0.000004 } });
@@ -137,7 +188,15 @@ describe("unpriced models", () => {
   it("reports the tokens that could not be priced instead of a silent zero cost", async () => {
     const base = tempDir();
     const db = openTestDb();
-    const fixture = lines(claudeLine("2026-10-01T10:00:00.000Z", "msg_x", "req_x", [1000, 500, 0, 0], "claude-opus-5-5"));
+    const fixture = lines(
+      claudeLine(
+        "2026-10-01T10:00:00.000Z",
+        "msg_x",
+        "req_x",
+        [1000, 500, 0, 0],
+        "claude-opus-5-5",
+      ),
+    );
     write(join(base, "claude", "projects", "p", "s.jsonl"), fixture);
     await createIndexer({ db, roots: () => rootsFor(base) }).scan();
     const { totals, byModel } = computeOverview(db, "all");
@@ -146,7 +205,9 @@ describe("unpriced models", () => {
     expect(byModel[0]?.unpricedTokens).toBe(1500);
 
     // A price file added later prices the old rows on the next full re-scan.
-    const prices = parseLiteLlmPrices({ "claude-opus-5-5": { input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 } });
+    const prices = parseLiteLlmPrices({
+      "claude-opus-5-5": { input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 },
+    });
     const indexer = createIndexer({ db, roots: () => rootsFor(base), prices: () => prices });
     indexer.resetCursors();
     await indexer.scan();
@@ -158,11 +219,19 @@ describe("unpriced models", () => {
 
 describe("pricing", () => {
   it("prices known families, returns null for unknown models, honours LiteLLM overrides", () => {
-    const t = { tokensIn: 1_000_000, tokensOut: 1_000_000, tokensCacheRead: 0, tokensCacheWrite: 0 };
+    const t = {
+      tokensIn: 1_000_000,
+      tokensOut: 1_000_000,
+      tokensCacheRead: 0,
+      tokensCacheWrite: 0,
+    };
     expect(estimateCost("claude-sonnet-4-5-20250929", t)).toBeCloseTo(18);
     expect(estimateCost("totally-unknown", t)).toBeNull();
     const overrides = parseLiteLlmPrices({
-      "anthropic/claude-sonnet-4-5": { input_cost_per_token: 0.000002, output_cost_per_token: 0.00001 },
+      "anthropic/claude-sonnet-4-5": {
+        input_cost_per_token: 0.000002,
+        output_cost_per_token: 0.00001,
+      },
     });
     expect(priceFor("claude-sonnet-4-5", overrides)).toMatchObject({ input: 2, output: 10 });
   });

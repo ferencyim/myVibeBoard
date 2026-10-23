@@ -1,91 +1,15 @@
 # vibe-master
 
-myVibeBoard master agent (WP-32). Supported Paseo versions: see `requirements.paseo` in
-`paseo-plugin.json`. Rules for the agent itself: `skills/vibe-master/SKILL.md` (single source;
-`npm run gen:rules` regenerates `server/master/rules.generated.ts`, a test fails when stale).
+总 agent 只为已确认任务排序，并在完成后整理项目记忆与需求文档。方案问答、执行、复核、验证和用户验收属于原生 workspace 的对应角色。
 
-```bash
-npm ci && npm run typecheck && npm test
-```
+- 调度器发布 `scheduler.task_dispatch_wanted {requestId,slots,workspaceIds}`，总 agent 回复 `master.task_dispatch_chosen` 或 `master.task_dispatch_failed`。派发默认开启；关闭、不可用、超时或格式错误由调度器按确认时间 FIFO。回复只建议顺序，最终准入、文件锁与设备租约始终归调度器。
+- `task.updated` 的完成状态触发整理；启动补扫所有尚未整理的完成任务。模型只看 task 的方案、子任务结果和摘要，不读取旧卡片。结果追加到 `task.summary`，原生流程 owner 统一将摘要投递到 anchor。
+- 模型调用在原生 agent 创建后、回合开始前申请并绑定计算租约。完成整理的文件写入另申请任务仓库的 `.vibe/**` 与需求文件锁，等待文件锁时不保留模型计算租约。租约释放须由调度器确认原生已停止；请求超时会冻结并核对，不能静默放行。
+- 完成整理的已校验 JSON 与阶段持久化在 `<VIBE_HOME>/master/state.json`。文件锁忙时保留 pending 结果并定时重试，重启复用结果；已完成的整理按 workspace 与确认时间去重。需求文档仍只提交该文件，绝不 push；截断的摘录和关闭的维护开关都不会重写需求文档。
+- 总 agent 使用预设的有序候选；实际模型、思考档和候选序号记入会话。失败、额度耗尽与不可用切换候选；上下文冷交接使用同一候选。旧原生会话保留可打开，交接只用 task 快照和持久化摘要，旧会话的 provider 不被重写。
 
-## What it does
+提示词统一注册：`master.task_dispatch`、`master.wake.task_done`、系统规则、JSON 修复与交接提示均支持既有全局/项目覆盖。规则单一来源为 `skills/vibe-master/SKILL.md`，修改后运行 `npm run gen:rules`。
 
-- **One long-lived master agent** (a normal Paseo agent, `VIBE_ROLE=master`, recorded in
-  `agent_session` with `role=master`, no card). WP-109: it runs on an **agent preset** chosen in the
-  master panel (`presetId`; provider, model and thinking follow the preset's ordered model candidates).
-  An owner who never picked one keeps working through the matching preset of the old `provider/model/thinking`
-  settings (shown as "migrated" until confirmed); with no preset the master reports `unavailable` and its jobs
-  are parked. The cwd is an empty scratch directory (`<VIBE_HOME>/master/workspace`).
-  The static rules are the system prompt; the wake message is a deterministic per-project block (tags,
-  presets, open cards) followed by the dynamic card/quota part, for prefix-cache hits.
-- **Wake-ups** come from the `vibe_event` bus only (`server/wake`): `card.moved -> done` consolidates project
-  memory; `scheduler.dispatch_wanted` asks for a dispatch pick (below); scheduler and maintenance signals raise
-  reminders. Since WP-105 the master takes **no part in the card flow**: no draft review, no advice on worker
-  questions, no acceptance, no planning. One serial queue; jobs that cannot run (no daemon handle yet, quota exhausted) are parked and resumed on the next handle or
-  switch. On start, recently finished cards without a memory update are swept.
-- **Master dispatch** (WP-109, setting `dispatch`, default on; `server/dispatch`): when vibe-scheduler has free
-  slots it publishes `scheduler.dispatch_wanted {requestId, slots, cardIds}` (cards that passed its side-effect-free
-  checks). The master answers with the registered prompt `master.dispatch` and replies
-  `{"order": ["PROD-3", ...], "reason": ""}`; the pick is cut to the offered cards, deduplicated and capped at the slots,
-  then published as `master.dispatch_chosen`. Anything else (switch off, no preset, quota, error, timeout, unreadable reply) is
-  `master.dispatch_failed {reason}`. The scheduler admits the pick through its normal checks (it never skips them) and, on
-  failure, dispatches by its own rules for a while and writes the reason on each card it admits. The master publishes
-  `{enabled, available, reason, timeoutSeconds}` to `vibe_meta['master.dispatch']` (`store.masterDispatch`) on start and on
-  every settings change, so the scheduler knows without calling the plugin.
-- **Preset switch** (master panel; no RPC): `runtime.onSettingsChanged` starts the new agent first, then retires the old
-  one (`session.switched` event); the queue and the board carry on unchanged, so the same cards are processed.
-- **Permission mode** (WP-71, setting `permissionMode`, RPC `master.permission`, status screen, command palette): the
-  master's (planning sessions run read-only on their own preset, see below). `auto` (default) = the provider's own automatic mode taken from the Paseo
-  mode catalog (`providers.listModes`): Claude `auto` (classifier), Codex `auto-review` (older Codex without it: `auto`,
-  Default Permissions, still below Full Access); a provider without an automatic mode keeps its own default. Anything
-  else is a concrete modeId of the provider (a mode the provider lacks falls back to auto). The UI shows the concrete
-  mode in effect. A manual switch is kept in `state.json` and wins over the settings default until set back
-  (`settings`). The plugin API has no in-place mode change, so a running master is replaced like a subscription switch
-  (new agent first, then the old one retires, same cards continue). The hook `agent.permission_requested` approves **only** calls of the
-  `vibe-board` MCP server (Claude `mcp__vibe-board__*`, Codex `CodexMcpElicitation` with `serverName=vibe-board`) by
-  the master and planners; any other request of those agents waits for the owner and raises a `master.alert`
-  (`kind=permission_wait`, pushed like the others).
-- **Model availability**: low quota raises a reminder; exhausted quota, login failures and unavailable models
-  advance through the selected preset's ordered candidates. Progress survives restarts. A replacement receives
-  the hand-off summary, and previous conversations stay openable. Exhausting all candidates raises a `provider_error`
-  alert instead of retrying the list. Ordinary task errors keep the current model.
-  `scheduler.paused/resumed` are shown in the status.
-- **Maintenance events**: `maintenance.paused` (rule paused after repeated rejections) raises a
-  `master.alert` of kind `maintenance_paused` (pushed like the others); `maintenance.triggered` is only
-  logged.
-- **Memory** (`server/memory`): on card done the master replies with a `MemoryUpdate` (state, decisions,
-  lessons, index, archive); `files.ts` writes the same marker format vibe-context reads. Budget
-  enforcement stays in vibe-context.
+RPC 保留状态、权限和会话历史入口；新手动整理入口为 `master.task.wake {workspaceId,force=false}`。旧卡片 UI、合同和历史组件保留到 WP-114，旧卡片 wake 返回入口停用，旧卡片事件不再自动触发运行，旧规划运行器不随总 agent 启动。
 
-## Card planning sessions (WP-33, reworked by WP-105, `server/planning`)
-
-- **The plan tab of a card.** One planning session per card: a separate Paseo agent (`role=planner`,
-  `card.plan_session_id`) on the card's **planning model** (`card.planner_preset_id`, a preset the owner picks), in the
-  project repository in read-only mode (claude `plan`, codex `read-only`, else the provider's read-only mode). Its system
-  prompt is the registered `master.plan.system` (reply format in the fixed suffix), not the master rules.
-- **The channel is the card**: plan-thread `chat` events (`thread: "plan"`). 制定方案 is an owner message with
-  `action: "make_plan"`: when the card has a **scout model** (`card.scout_preset_id`) a read-only scout explores first
-  (`master.plan.explore`), then the planner gets the full context (`master.plan.start`). Later owner messages are
-  answers or change requests (`master.plan.turn`). The planner may ask the scout model for research (max 3 questions,
-  `maxResearchRounds` rounds). "Unanswered" is derived from `answers`, so restarts and late offline arrivals work.
-- **Write-back** (`cards.setPlan`): the card's single plan is overwritten (`plan_json`, a `plan_updated` note for the
-  timeline); acceptance criteria are written directly unless the owner edited them since the model last wrote them
-  (`model_acceptance`), then they become a pending proposal in the plan chat. Title/description changes are proposals.
-- **Switching the planning model** archives the old session; the new one starts with the plan conversation, the plan
-  and the criteria (all on the card). The session ends when the card is done or archived. No hand-off file: the
-  executor's brief reads the plan from the card.
-
-## RPCs
-
-`master.status` (queue, session, target, preset, dispatch state, switch history, presets with quota),
-`master.permission {mode: auto|<modeId>|settings}`,
-`master.wake {card, reason: "card_done"}`, `master.sessions`.
-
-## Notes for other work packages
-
-- The plugin API hands out the daemon handle only inside hooks and RPC calls, so the master learns it
-  from `agent.*`/`workspace.created` hooks or any `master.*` RPC (the UI polls `master.status`). Until
-  then jobs wait in the queue.
-- Memory: plugins cannot import vibe-context, so `server/memory/files.ts` duplicates the entry
-  format. Proposal: move the memory core into `vibe-shared` and use the budgeted store here.
-
+相关验证：在插件目录运行 `npm run typecheck`、`npm test -- test/task-runtime.test.ts test/master-resources.test.ts`。原生 anchor 的完整 timeline 展示、执行到验收和 Git 收尾由 WP-111 接入，隔离 daemon 联调需同时加载调度器与共享合同最新副本。

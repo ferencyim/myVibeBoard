@@ -130,7 +130,9 @@ function setup(
     migrateOwner(db, "stats"); // normally vibe-stats creates usage_event
   }
   const store = shared?.store ?? createVibeStore(db, { now: () => new Date(time.t) });
-  const project = shared ? null : store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: "" });
+  const project = shared
+    ? null
+    : store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: "" });
   const card = shared?.card ?? store.cards.create({ projectId: project!.id, title: "Work" });
   const agent: AgentInfo = shared?.agent ?? {
     id: "agent-1",
@@ -169,6 +171,7 @@ function setup(
     },
   };
   const scheduler = createCompactionScheduler({
+    includeLegacyCards: true,
     store,
     host,
     config: () => config,
@@ -324,7 +327,11 @@ describe("complexity policy in the scheduler", () => {
 
     const c = setup();
     c.turns(4, 30, { read: 80_000 }); // each call 80k: contexts add up per call, not per turn
-    expect(classifyComplexity(buildTurnStats(readState(c.db, c.session.id).windows, queryCallUsage(c.db, ["cli-1"])))).toBe("long"); // 9.6 M cacheRead
+    expect(
+      classifyComplexity(
+        buildTurnStats(readState(c.db, c.session.id).windows, queryCallUsage(c.db, ["cli-1"])),
+      ),
+    ).toBe("long"); // 9.6 M cacheRead
   });
 
   it("turns started by the plugin or announced as system turns are not counted", async () => {
@@ -338,12 +345,16 @@ describe("complexity policy in the scheduler", () => {
     expect(readState(s.db, s.session.id).windows).toHaveLength(2);
 
     // Our own compaction turns (hooks fire while the flow is busy) do not count either.
-    const c = setup("codex", {}, {
-      onRun: (_t, x) => {
-        x.scheduler.onTurnStarted(x.agent);
-        x.scheduler.onTurnEnded(x.agent);
+    const c = setup(
+      "codex",
+      {},
+      {
+        onRun: (_t, x) => {
+          x.scheduler.onTurnStarted(x.agent);
+          x.scheduler.onTurnEnded(x.agent);
+        },
       },
-    });
+    );
     c.turns(15);
     await c.scheduler.tick();
     expect(c.prompts).toHaveLength(3);
@@ -374,7 +385,11 @@ describe("complexity policy in the scheduler", () => {
     const next = s.store.sessions.getByAgent("agent-1-next")!;
     expect(next.cardId).toBe(s.card.id);
     expect(next.complexity).toBe("multi");
-    expect(readState(s.db, next.id)).toMatchObject({ windows: [], longCompactions: 3, floor: "multi" });
+    expect(readState(s.db, next.id)).toMatchObject({
+      windows: [],
+      longCompactions: 3,
+      floor: "multi",
+    });
     // New agents in that directory get the tight budget from the injection hook.
     expect(tightBudgetFor(s.db, s.agent.cwd)).toBe(100);
   });
@@ -418,7 +433,11 @@ describe("agent.create injection budget", () => {
     const home = join(base, "home");
     mkdirSync(repo);
     mkdirSync(home);
-    const mem = createMemoryStore({ projectRoot: repo, userHome: home, contextWindowTokens: 100_000 });
+    const mem = createMemoryStore({
+      projectRoot: repo,
+      userHome: home,
+      contextWindowTokens: 100_000,
+    });
     mem.writeProjectState({ role: "master" }, "Phase: M5. The harbor module is half done.");
     writeFileSync(join(repo, ".vibe", "touch"), "");
     const request = { config: { provider: "claude", cwd: repo } };

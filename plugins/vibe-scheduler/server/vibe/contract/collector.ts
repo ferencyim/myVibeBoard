@@ -156,3 +156,10 @@ export function createScriptedRunner(
     },
   };
 }
+
+/** Evidence capture for a confirmed workspace task. */
+export type TaskCollectorContext = Omit<CollectorContext, "cardId"> & {
+  cardId: null;
+  workspaceId: string;
+  confirmedAt: string;
+};

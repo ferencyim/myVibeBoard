@@ -41,6 +41,8 @@ export interface AgentInfo {
 
 /** What the scheduler needs from the daemon; tests pass a fake. */
 export interface CompactionHost {
+  /** Rehydrate only a native idle, unarchived agent after daemon restart. */
+  describeIdleAgent?(agentId: string): Promise<AgentInfo | null>;
   /** Sends a prompt and resolves with how the turn ended; "permission" only after giving up on an approval. */
   run(
     agentId: string,
@@ -49,6 +51,8 @@ export interface CompactionHost {
   /** Starts a fresh agent of the same kind with this prompt; returns its agent id. */
   handoff(agent: AgentInfo, prompt: string): Promise<string>;
   archive(agentId: string): Promise<void>;
+  /** A workspace cold handoff is delegated to its owner so admission and stopping cannot be bypassed. */
+  requestHandoff?(session: AgentSession, prompt: string): Promise<void>;
   /** CLI session ids behind an agent (the ids usage_event rows carry); enables complexity. */
   cliSessionIds?(agentId: string): Promise<string[]>;
 }
@@ -70,11 +74,13 @@ export interface CompactionConfig {
 }
 
 export interface SchedulerOptions {
+  /** Historical card harnesses must opt in explicitly; production never resumes old card writers. */
+  includeLegacyCards?: boolean;
   store: Pick<VibeStore, "sessions" | "events" | "cards">;
   host: CompactionHost;
   config: () => CompactionConfig;
   /** Project goals + PROJECT_STATE.md block for a working directory (server/inject). */
-  buildContext: (cwd: string, maxMemoryTokens?: number) => string | null;
+  buildContext: (cwd: string, maxMemoryTokens?: number, projectId?: string | null) => string | null;
   /** Shared vibe.db handle: usage_event rows (vibe-stats) and the persisted complexity state. */
   usageDb?: Pick<VibeDb, "prepare">;
   /** True when a plugin announced it is about to start a turn on this agent (not counted). */
@@ -93,12 +99,17 @@ export interface SchedulerOptions {
 
 type Skipped = SkipReason | "native" | "untracked" | "failed" | "deferred";
 export type TickOutcome =
-  | { sessionId: string; action: "compact" | "handoff" }
+  | { sessionId: string; action: "compact" | "handoff" | "requested" }
   | { sessionId: string; action: "skipped"; reason: Skipped };
 
 export const ttlFor = (config: CompactionConfig, provider: string): number => {
   const id = baseProvider(provider);
-  return config.ttlSeconds[id] ?? DEFAULT_TTL_SECONDS[id] ?? config.fallbackTtlSeconds ?? FALLBACK_TTL_SECONDS;
+  return (
+    config.ttlSeconds[id] ??
+    DEFAULT_TTL_SECONDS[id] ??
+    config.fallbackTtlSeconds ??
+    FALLBACK_TTL_SECONDS
+  );
 };
 
 /** Seconds before expiry at which the compaction window opens. */
@@ -117,14 +128,23 @@ export const compactCommandFor = (config: CompactionConfig, provider: string): s
 export const canCompact = (config: CompactionConfig, provider: string): boolean =>
   supportsCompact(provider, config.compactProviders ?? COMPACT_PROVIDERS);
 
-export function notesPrompt(mdPath: string, cardRef?: string | null, prompts: PromptResolver = defaultPrompts): string {
+export function notesPrompt(
+  mdPath: string,
+  cardRef?: string | null,
+  prompts: PromptResolver = defaultPrompts,
+): string {
   return prompts.resolve("context.compact_notes", {
     vars: { mdPath, keyClause: cardRef ? `，key 为 "${cardRef}"` : "" },
   });
 }
 
-export function restorePrompt(block: string | null, prompts: PromptResolver = defaultPrompts): string {
-  return prompts.resolve("context.compact_restore", { vars: { block: block ?? "（无项目上下文）" } });
+export function restorePrompt(
+  block: string | null,
+  prompts: PromptResolver = defaultPrompts,
+): string {
+  return prompts.resolve("context.compact_restore", {
+    vars: { block: block ?? "（无项目上下文）" },
+  });
 }
 
 export function coldStartPrompt(
@@ -134,9 +154,15 @@ export function coldStartPrompt(
   prompts: PromptResolver = defaultPrompts,
 ): string {
   return prompts.resolve("context.cold_start", {
-    vars: { oldSessionId, mdPath, block: block ? `
+    vars: {
+      oldSessionId,
+      mdPath,
+      block: block
+        ? `
 
-${block}` : "" },
+${block}`
+        : "",
+    },
   });
 }
 
@@ -155,19 +181,32 @@ export function createCompactionScheduler(options: SchedulerOptions) {
 
   const track = (agent: AgentInfo) =>
     void agents.set(agent.id, { id: agent.id, provider: agent.provider, cwd: agent.cwd });
-  const compactionEvents = (s: AgentSession) =>
-    s.cardId
-      ? store.events
-          .list(s.cardId)
-          .filter(
-            (e) => e.type === "compaction" && (e.body as { sessionId?: string })?.sessionId === s.id,
-          ).length
-      : 0;
+  const compactionEvents = (session: AgentSession) => {
+    if (!session.cardId && session.workspaceId && options.usageDb)
+      return (
+        options.usageDb
+          .prepare<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM vibe_event WHERE type = 'session.compacted' AND json_extract(payload_json, '$.sessionId') = ?",
+          )
+          .get(session.id)?.count ?? 0
+      );
+    if (!session.cardId) return 0;
+    return store.events
+      .list(session.cardId)
+      .filter(
+        (event) =>
+          event.type === "compaction" &&
+          (event.body as { sessionId?: string })?.sessionId === session.id,
+      ).length;
+  };
   const sleep = (ms: number) =>
     ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 
   /** Re-classifies the session from usage_event and stores it (emits an event on change). */
-  async function refreshComplexity(s: AgentSession, agent: AgentInfo): Promise<AgentSession["complexity"]> {
+  async function refreshComplexity(
+    s: AgentSession,
+    agent: AgentInfo,
+  ): Promise<AgentSession["complexity"]> {
     const cx = options.config().complexity;
     if (!cx?.enabled || !options.usageDb || !host.cliSessionIds) return s.complexity;
     let ids = cliIds.get(agent.id) ?? [];
@@ -185,11 +224,50 @@ export function createCompactionScheduler(options: SchedulerOptions) {
     return next;
   }
 
+  function recordLegacyHandoff(s: AgentSession, next: AgentSession, newAgentId: string) {
+    if (s.cardId) {
+      // A cold context preserves the current model, including its place in the fallback order.
+      const selection = store.events
+        .list(s.cardId)
+        .map(
+          (event) =>
+            event.body as {
+              kind?: string;
+              sessionId?: string;
+            } | null,
+        )
+        .toReversed()
+        .find((body) => body?.kind === "model_selected" && body.sessionId === s.id);
+      if (selection)
+        store.events.add({
+          cardId: s.cardId,
+          type: "status",
+          authorKind: "system",
+          author: "context",
+          body: { ...selection, sessionId: next.id },
+        });
+      if (s.role === "subagent") {
+        const card = store.cards.get(s.cardId);
+        const subtaskId = Object.entries(card?.subtaskRuns ?? {}).find(
+          ([, run]) => run.sessionId === s.id,
+        )?.[0];
+        if (subtaskId)
+          store.cards.setSubtaskRun(s.cardId, subtaskId, {
+            sessionId: next.id,
+            agentId: newAgentId,
+          });
+      }
+    }
+  }
+
   async function flow(
     s: AgentSession,
     agent: AgentInfo,
     opts: { forceHandoff: boolean; tight: boolean; wasLong: boolean },
-  ): Promise<"compact" | "handoff" | "failed" | "deferred"> {
+  ): Promise<"compact" | "handoff" | "requested" | "failed" | "deferred"> {
+    const sessionPrompts: PromptResolver = {
+      resolve: (key, input = {}) => prompts().resolve(key, { projectId: s.projectId, ...input }),
+    };
     const mdPath = createLayout(agent.cwd).sessionMd(s.cardId ?? s.id);
     mkdirSync(dirname(mdPath), { recursive: true });
     // The lifecycle hooks that mark the session idle can trail the end of the turn by a moment.
@@ -203,15 +281,21 @@ export function createCompactionScheduler(options: SchedulerOptions) {
       return false;
     };
 
-    const notes = await host.run(agent.id, notesPrompt(mdPath, s.cardId, prompts()));
+    const notes = await host.run(agent.id, notesPrompt(mdPath, s.cardId, sessionPrompts));
     // Waiting for an approval is not a failure: try again once the user has answered.
     if (notes.status === "permission") return "deferred";
     if (notes.status !== "idle" || !(await stillIdle())) return "failed";
     const tightTokens = opts.tight ? options.config().complexity?.tightMemoryTokens : undefined;
-    const block = options.buildContext(agent.cwd, tightTokens);
+    const block = options.buildContext(agent.cwd, tightTokens, s.projectId);
 
     const config = options.config();
     if (opts.forceHandoff || !canCompact(config, agent.provider)) {
+      if (!s.cardId && s.workspaceId) {
+        if (!host.requestHandoff)
+          throw new Error("工作区交接需要任务编排插件支持，请升级任务流程插件");
+        await host.requestHandoff(s, coldStartPrompt(s.id, mdPath, block, sessionPrompts));
+        return "requested";
+      }
       const newAgentId = await host.handoff(agent, coldStartPrompt(s.id, mdPath, block, prompts()));
       const next = store.sessions.start({
         cardId: s.cardId,
@@ -220,21 +304,7 @@ export function createCompactionScheduler(options: SchedulerOptions) {
         role: s.role,
         provider: s.currentProvider,
       });
-      if (s.cardId) {
-        // A cold context preserves the current model, including its place in the fallback order.
-        const selection = store.events.list(s.cardId).map((event) => event.body as {
-          kind?: string; sessionId?: string;
-        } | null).reverse().find((body) => body?.kind === "model_selected" && body.sessionId === s.id);
-        if (selection) store.events.add({
-          cardId: s.cardId, type: "status", authorKind: "system", author: "context",
-          body: { ...selection, sessionId: next.id },
-        });
-        if (s.role === "subagent") {
-          const card = store.cards.get(s.cardId);
-          const subtaskId = Object.entries(card?.subtaskRuns ?? {}).find(([, run]) => run.sessionId === s.id)?.[0];
-          if (subtaskId) store.cards.setSubtaskRun(s.cardId, subtaskId, { sessionId: next.id, agentId: newAgentId });
-        }
-      }
+      recordLegacyHandoff(s, next, newAgentId);
       if (options.usageDb && options.config().complexity?.enabled) {
         // The new session inherits the complexity (a "long" one as "multi": its context is fresh)
         // and the early-compaction count; its turn counting starts at zero.
@@ -255,7 +325,9 @@ export function createCompactionScheduler(options: SchedulerOptions) {
     }
 
     const before = compactionEvents(s);
-    if ((await host.run(agent.id, compactCommandFor(config, agent.provider))).status === "error") return "failed";
+    const compact = await host.run(agent.id, compactCommandFor(config, agent.provider));
+    if (compact.status === "permission") return "deferred";
+    if (compact.status !== "idle" || !(await stillIdle())) return "failed";
     await sleep(options.settleMs ?? 1500);
     if (compactionEvents(s) === before) store.sessions.recordCompaction(s.id, "compact");
     if (options.usageDb) {
@@ -266,8 +338,21 @@ export function createCompactionScheduler(options: SchedulerOptions) {
         if (opts.wasLong) st.longCompactions += 1;
       });
     }
-    if (await stillIdle()) await host.run(agent.id, restorePrompt(block, prompts()));
+    if (await stillIdle()) await host.run(agent.id, restorePrompt(block, sessionPrompts));
     return "compact";
+  }
+
+  async function idleAgent(s: AgentSession) {
+    let agent = agents.get(s.agentId);
+    if (!agent && host.describeIdleAgent) {
+      try {
+        agent = (await host.describeIdleAgent(s.agentId)) ?? undefined;
+        if (agent) track(agent);
+      } catch {
+        /* Unknown native state stays untracked. */
+      }
+    }
+    return agent;
   }
 
   return {
@@ -313,9 +398,13 @@ export function createCompactionScheduler(options: SchedulerOptions) {
       const config = options.config();
       const out: TickOutcome[] = [];
       if (!config.enabled) return out;
-      for (const s of store.sessions.list({ states: ["idle"] })) {
-        const skipped = (reason: Skipped) => out.push({ sessionId: s.id, action: "skipped", reason });
-        const agent = agents.get(s.agentId);
+      for (const s of store.sessions
+        .list({ states: ["idle"] })
+        .filter((session) => options.includeLegacyCards || !session.cardId)) {
+        const skipped = (reason: Skipped) =>
+          out.push({ sessionId: s.id, action: "skipped", reason });
+
+        const agent = await idleAgent(s);
         if (!agent || busy.has(agent.id)) {
           skipped("untracked");
           continue;
@@ -337,8 +426,7 @@ export function createCompactionScheduler(options: SchedulerOptions) {
           state: s.state,
           cacheExpiresAtMs: s.cacheExpiresAt ? Date.parse(s.cacheExpiresAt) : null,
           nowMs: now(),
-          marginMs:
-            marginFor(config, ttlFor(config, agent.provider)) * 1000,
+          marginMs: marginFor(config, ttlFor(config, agent.provider)) * 1000,
           alreadyCompacted: compacted.has(s.id),
           force,
         });

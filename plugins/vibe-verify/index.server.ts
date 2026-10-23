@@ -1,3 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { taskVerifyGetRpc, taskVerifyRerunRpc } from "./shared/task-rpc";
+import { createTaskPipeline } from "./server/task-pipeline";
+import { createTaskVerifyStore } from "./server/task-store";
+import { createTaskResources } from "./server/task-resources";
 import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -6,18 +11,23 @@ import { verifySettings } from "./shared/settings";
 import { createVerifyPrompts } from "./server/prompts";
 import { tuningOf, type VerifyTuning } from "./server/tuning";
 import { isEvent } from "./server/vibe/contract";
-import { createPipeline } from "./server/pipeline";
 import { createVerifyRegistry, type RunConfigs } from "./server/registry";
 import { registerVerifyRpcs } from "./server/rpc";
 import { createVerifyStore } from "./server/store";
 import { createPaseoVerifierLauncher, type VerifierLauncher } from "./server/verifier/agent";
-import { decideVerifierPermission } from "./server/verifier/policy";
+import {
+  decideVerifierPermission,
+  restoredVerifierPolicy,
+  type PolicyContext,
+} from "./server/verifier/policy";
 import {
   createDeviceLeases,
   createEventConsumer,
   createVibeStore,
   migrateOwner,
   openVibeDb,
+  publishEvent,
+  createTaskRuntimeCommands,
   resolveVibeHome,
 } from "./server/vibe/db";
 
@@ -51,7 +61,8 @@ export default function contribute(server: PluginServerContext) {
   }
 
   // Verifier agents -> where they may write (their output directory); read-only otherwise.
-  const verifierDirs = new Map<string, string>();
+  const taskRuntime = createTaskRuntimeCommands(db);
+  const verifierDirs = new Map<string, PolicyContext>();
   const inner = createPaseoVerifierLauncher({
     getPaseo: () => paseo,
     prompts,
@@ -59,88 +70,217 @@ export default function contribute(server: PluginServerContext) {
   });
   const launcher: VerifierLauncher = {
     async launch(input) {
-      const agent = await inner.launch(input);
-      verifierDirs.set(agent.agentId, input.outputDir);
+      const ids = new Set<string>();
+      const register = (agentId: string) => {
+        ids.add(agentId);
+        verifierDirs.set(agentId, { outputDir: input.outputDir, denyShell: !!input.task });
+      };
+      const agent = await inner.launch({
+        ...input,
+        onCreated: (selection) => {
+          register(selection.agentId);
+          input.onCreated?.(selection);
+        },
+        onReplacement: (next) => {
+          register(next.agentId);
+          input.onReplacement?.(next);
+        },
+      });
+      register(agent.agentId);
       return {
         ...agent,
         run: agent.run.bind(agent),
         close: async () => {
           await agent.close();
-          verifierDirs.delete(agent.agentId);
+          if (!input.task) for (const id of ids) verifierDirs.delete(id);
         },
       };
     },
   };
   server.on("agent.permission_requested", async ({ agent, request }, { paseo: api }) => {
     remember(api);
-    const outputDir = verifierDirs.get(agent.id);
-    if (!outputDir) return;
-    const response = decideVerifierPermission(request, { outputDir });
+    let policy = verifierDirs.get(agent.id);
+    if (!policy) {
+      const session = taskRuntime.findSessionByAgent(agent.id);
+      policy = restoredVerifierPolicy(session, join(home, "verify"));
+    }
+    if (!policy) return;
+    const response = decideVerifierPermission(request, policy);
     await api.agents
       .ref(agent.id)
       .respondToPermission({ requestId: request.id, response })
       .catch((error) => log("answering a verifier permission request failed", error));
   });
 
-  const pipeline = createPipeline({
+  const taskVerify = createTaskVerifyStore(db, join(home, "verify"));
+  const resources = createTaskResources(db, {
+    log,
+    current: (workspaceId) => board.tasks.get(workspaceId),
+    waiting: async (workspaceId, reason) => {
+      const task = board.tasks.get(workspaceId);
+      if (!task) return;
+      const text = "验证排队：" + reason;
+      board.tasks.setSummary(workspaceId, text);
+      if (paseo)
+        await paseo.agents.ref(task.anchorAgentId).timeline.append({
+          type: "plugin",
+          id: randomUUID(),
+          kind: "task-verification",
+          version: 1,
+          data: { workspaceId, text },
+        });
+    },
+  });
+  const taskPipeline = createTaskPipeline({
     board,
-    verify,
+    verify: taskVerify,
+    runner: createNodeRunner(),
+    launcher,
+    configs,
+    prompts,
+    tuning: getTuning,
+    log,
     registry: createVerifyRegistry({
       configs,
       leases: createDeviceLeases(db).provider,
       readyTimeoutMs: () => tuning.readyTimeoutMs,
     }),
-    runner: createNodeRunner(),
-    launcher,
-    configs,
-    notifyWorker: async (agentId, prompt) => {
-      if (!paseo) return false;
-      await paseo.agents.ref(agentId).send(prompt);
-      return true;
+    acquire: resources.acquire,
+    worktreeRoot:
+      process.env.VIBE_WORKTREE_ROOT?.trim() ||
+      (process.platform === "win32" ? "D:/devRepoCaches/worktrees" : join(home, "worktrees")),
+    async workspace(workspaceId) {
+      if (!paseo) throw new Error("等待原生连接后重新验证");
+      const native = await paseo.workspaces.ref(workspaceId).refresh();
+      if (!native || !native.projectId || native.archivingAt)
+        throw new Error("原生任务 workspace 不可用");
+      const project = board.projectConfigs.get(native.projectId);
+      if (!project) throw new Error("原生项目尚未关联任务扩展配置");
+      return {
+        projectId: project.id,
+        repoPath: project.repoPath,
+        worktreePath: native.workspaceDirectory,
+        projectTypes: project.projectTypes,
+      };
     },
-    tuning: getTuning,
-    prompts,
-    worktreeRoot: process.env.VIBE_WORKTREE_ROOT?.trim() || join(home, "worktrees"),
-    log,
+    async append(anchorAgentId, text, verificationId) {
+      if (!paseo) throw new Error("原生连接不可用");
+      const task = board.tasks.list().find((item) => item.anchorAgentId === anchorAgentId);
+      if (!task) return;
+      await paseo.agents.ref(anchorAgentId).timeline.append({
+        type: "plugin",
+        id: randomUUID(),
+        kind: "task-verification",
+        version: 1,
+        data: {
+          workspaceId: task.workspaceId,
+          text,
+          ...(verificationId ? { verificationId } : {}),
+        },
+      });
+    },
   });
-
-  const start = (cardId: string) => {
-    pipeline.run(cardId).catch((error) => log(`verification of ${cardId} crashed`, error));
-  };
-
-  // Verifications interrupted by a restart: close them as doubtful and run again.
-  for (const stale of verify.running()) {
-    verify.writeNotes(stale.id, ["Interrupted by a daemon restart"]);
-    verify.finish(stale.id, "doubt", null);
-    if (board.cards.get(stale.cardId)?.column === "verifying") start(stale.cardId);
+  const startTask = (workspaceId: string) =>
+    void taskPipeline.run(workspaceId).catch((error) => log("任务验证失败", error));
+  for (const stale of taskVerify.running()) {
+    taskVerify.writeNotes(stale.id, ["daemon 重启中断验证；先核对原生 agent 与资源，再重新验证"]);
+    taskVerify.finish(stale.id, "doubt");
+    const task = board.tasks.get(stale.workspaceId);
+    if (task && ["reviewing", "verifying"].includes(task.phase)) {
+      board.tasks.setPhase(task.workspaceId, "paused");
+      board.tasks.setSummary(
+        task.workspaceId,
+        "验证因 daemon 重启中断，资源状态待核对，请重新验证。",
+      );
+    }
   }
+  server.handle(taskVerifyGetRpc, ({ workspaceId, verificationId }, context) => {
+    remember(context.paseo);
+    if (!board.tasks.get(workspaceId)) throw new Error("任务不存在");
+    const id = verificationId ?? taskVerify.list(workspaceId).at(-1)?.id;
+    const detail = id ? taskVerify.detail(id) : null;
+    if (detail && detail.verification.workspaceId !== workspaceId)
+      throw new Error("验证记录不属于此任务");
+    return { detail };
+  });
+  server.handle(taskVerifyRerunRpc, ({ workspaceId }, context) => {
+    remember(context.paseo);
+    const task = board.tasks.get(workspaceId);
+    if (!task || !task.confirmedAt || !task.plan || !task.rolesSnapshot)
+      throw new Error("任务没有有效的执行确认");
+    if (taskPipeline.isRunning(workspaceId)) return { started: false };
+    if (!["paused", "reviewing", "verifying", "awaiting_acceptance"].includes(task.phase))
+      throw new Error("当前阶段不能重新验证");
+    if (task.phase === "awaiting_acceptance") board.tasks.setPhase(workspaceId, "paused");
+    if (board.tasks.get(workspaceId)!.phase === "paused")
+      board.tasks.setPhase(workspaceId, task.rolesSnapshot.reviewer ? "reviewing" : "verifying");
+    startTask(workspaceId);
+    return { started: true };
+  });
 
   const consumer = createEventConsumer({
     db,
     consumer: "vibe-verify",
-    types: ["card.moved", "verification.decision_requested"],
+    types: ["task.updated", "context.continuation_requested"],
     startAt: "now",
     handler: async (event) => {
-      if (isEvent(event, "card.moved") && event.payload.to === "verifying" && event.cardId) {
-        start(event.cardId);
+      if (
+        isEvent(event, "context.continuation_requested") &&
+        ["reviewer", "verifier"].includes(event.payload.role) &&
+        event.payload.workspaceId
+      ) {
+        const task = board.tasks.get(event.payload.workspaceId);
+        if (
+          task &&
+          task.confirmedAt === event.payload.confirmedAt &&
+          ["reviewing", "verifying"].includes(task.phase)
+        ) {
+          board.tasks.setPhase(task.workspaceId, "paused");
+          const text = "验证会话需要上下文交接，任务已暂停；先核对原生会话与资源停止，再重新验证。";
+          board.tasks.setSummary(task.workspaceId, text);
+          if (paseo)
+            await paseo.agents.ref(task.anchorAgentId).timeline.append({
+              type: "plugin",
+              id: randomUUID(),
+              kind: "task-verification",
+              version: 1,
+              data: { workspaceId: task.workspaceId, text },
+            });
+        }
+        publishEvent(db, {
+          type: "context.continuation_result",
+          payload: {
+            requestId: event.payload.requestId,
+            workspaceId: event.payload.workspaceId,
+            status: "paused",
+            reason: "验证证据轮次需要从稳定提交重新运行，未自动创建写入者",
+          },
+        });
       }
-      // Requests from the board UI (it cannot call this plugin's RPCs): only while still verifying.
-      if (isEvent(event, "verification.decision_requested") && event.cardId) {
-        if (board.cards.get(event.cardId)?.column !== "verifying") return;
-        const { action, comment } = event.payload;
-        if (action === "reject" && comment?.trim()) await pipeline.reject(event.cardId, comment.trim());
-        else if (action === "rerun" && !pipeline.isRunning(event.cardId)) start(event.cardId);
+      if (isEvent(event, "task.updated")) {
+        const task = board.tasks.get(event.payload.workspaceId);
+        if (
+          event.payload.fields.includes("phase") &&
+          task &&
+          ["reviewing", "verifying"].includes(task.phase)
+        )
+          startTask(task.workspaceId);
       }
     },
     onError: (error) => log("event handling failed", error),
   });
   consumer.start();
 
-  registerVerifyRpcs(server, { board, verify, pipeline, rerun: start });
+  registerVerifyRpcs(server, {
+    board,
+    verify,
+    evidenceRoot: join(home, "verify"),
+  });
 
   return async () => {
     stopSettings();
     await consumer.stop();
+    await resources.stop();
     db.close();
   };
 }

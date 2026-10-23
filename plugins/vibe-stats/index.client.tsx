@@ -1,20 +1,13 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
-import { StatsScreen, StatsSettingsScreen, StatsSidebarItem } from "./client/screen";
+import { StatsScreen } from "./client/screen";
 
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: "main", title: "Stats", Component: StatsScreen });
-  client.addSidebarHeaderItem({ id: "stats", title: "Stats", Component: StatsSidebarItem });
-  client.addSettingsScreen({
-    id: "preferences",
-    title: "Stats",
-    icon: "ChartBar",
-    Component: StatsSettingsScreen,
-  });
+  client.addScreen({ id: "main", title: "用量统计", Component: StatsScreen });
   client.addCommandCenterItem({
     id: "open-stats",
-    title: "Stats: Open usage overview",
+    title: "统计：打开用量概览",
     icon: "ChartBar",
-    keywords: ["stats", "usage", "tokens", "cost", "quota"],
+    keywords: ["统计", "用量", "tokens", "费用", "额度"],
     context: "global",
     onSelect({ openScreen }) {
       openScreen({ screenId: "main" });

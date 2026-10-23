@@ -9,50 +9,39 @@
 // * The index can always be rebuilt from the files (rebuildMemoryIndex), e.g. on daemon start
 //   or after a git pull changed the memory files. Rebuilding is idempotent.
 
-import { entryTokens, type MemoryEntry } from "./entries";
+import {
+  replaceContextMemoryFile,
+  replaceContextMemoryProject,
+  type ContextMemoryIndexDb,
+  type ContextMemoryIndexRow,
+} from "../vibe/db/context-state";
+import { entryTokens } from "./entries";
 import type { FileSnapshot, MemoryStore } from "./store";
 import { estimateTokens, type TokenEstimator } from "./tokens";
-
-/** Structurally satisfied by VibeDb from vibe-shared. */
-export interface MemoryIndexDb {
-  prepare(sql: string): { run(...params: (string | number)[]): unknown };
-  immediate<T>(fn: () => T): T;
+export type MemoryIndexDb = ContextMemoryIndexDb;
+function rowsOf(snapshot: FileSnapshot, estimate: TokenEstimator): ContextMemoryIndexRow[] {
+  return [
+    ...snapshot.live.map((entry) => ({ entry, archived: 0 as const })),
+    ...snapshot.archived.map((entry) => ({ entry, archived: 1 as const })),
+  ].map(({ entry, archived }) => ({
+    id: entry.id,
+    file: snapshot.file,
+    tag: entry.tag,
+    tokens: entryTokens(entry, estimate),
+    createdAt: entry.created,
+    touchedAt: entry.touched,
+    archived,
+  }));
 }
-
-function insertRows(
-  db: MemoryIndexDb,
-  projectId: string,
-  file: string,
-  entries: MemoryEntry[],
-  archived: 0 | 1,
-  estimate: TokenEstimator,
-): void {
-  const stmt = db.prepare(
-    `INSERT OR REPLACE INTO memory_entry (id, project_id, file, tag, tokens, created_at, touched_at, archived)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const e of entries) {
-    stmt.run(e.id, projectId, file, e.tag, entryTokens(e, estimate), e.created, e.touched, archived);
-  }
-}
-
 export function syncMemoryIndex(
   db: MemoryIndexDb,
   projectId: string,
   snapshot: FileSnapshot,
   estimate: TokenEstimator = estimateTokens,
 ): void {
-  db.immediate(() => {
-    db.prepare("DELETE FROM memory_entry WHERE project_id = ? AND file = ?").run(
-      projectId,
-      snapshot.file,
-    );
-    insertRows(db, projectId, snapshot.file, snapshot.live, 0, estimate);
-    insertRows(db, projectId, snapshot.file, snapshot.archived, 1, estimate);
-  });
+  replaceContextMemoryFile(db, projectId, snapshot.file, rowsOf(snapshot, estimate));
 }
-
-/** `onChange` callback for createMemoryStore that keeps memory_entry in step with the files. */
+/** Derive the index after an authoritative Markdown file changes. */
 export function createIndexSink(
   db: MemoryIndexDb,
   projectId: string,
@@ -60,19 +49,15 @@ export function createIndexSink(
 ): (snapshot: FileSnapshot) => void {
   return (snapshot) => syncMemoryIndex(db, projectId, snapshot, estimate);
 }
-
-/** Rebuild the whole index of a project from the files on disk (drops rows of vanished files). */
 export function rebuildMemoryIndex(
   db: MemoryIndexDb,
   projectId: string,
   store: MemoryStore,
   estimate: TokenEstimator = estimateTokens,
 ): void {
-  db.immediate(() => {
-    db.prepare("DELETE FROM memory_entry WHERE project_id = ?").run(projectId);
-    for (const snap of store.snapshots()) {
-      insertRows(db, projectId, snap.file, snap.live, 0, estimate);
-      insertRows(db, projectId, snap.file, snap.archived, 1, estimate);
-    }
-  });
+  replaceContextMemoryProject(
+    db,
+    projectId,
+    store.snapshots().flatMap((snapshot) => rowsOf(snapshot, estimate)),
+  );
 }

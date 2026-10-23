@@ -1,3 +1,4 @@
+import type { CollectorContext } from "../context";
 // Desktop application evidence collector (WP-46).
 //
 // Flow: launch the built app (or drive it via Playwright _electron) -> wait for its window ->
@@ -10,7 +11,6 @@ import path from "node:path";
 import type {
   CollectResult,
   CollectorAvailability,
-  CollectorContext,
   EvidenceArtifact,
   EvidenceCollector,
   Judgement,
@@ -64,7 +64,8 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
     if (typeof options.config === "function") return options.config(ctx);
     if (options.config) return options.config;
     const configured = loadVerifyConfig(ctx.worktreePath).desktop;
-    if (!configured) throw new Error("No desktop section in .vibe/verify.json and no config option");
+    if (!configured)
+      throw new Error("No desktop section in .vibe/verify.json and no config option");
     return configured;
   };
   // Relative executables with a path separator are worktree-relative; bare names go through PATH.
@@ -82,7 +83,9 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
     }
     const probe = await capturer.probe(ctx.runner);
     if (!probe.ok) return { available: false, reason: probe.reason };
-    return probe.degraded ? { available: true, degraded: true, reason: probe.degraded } : { available: true };
+    return probe.degraded
+      ? { available: true, degraded: true, reason: probe.degraded }
+      : { available: true };
   }
 
   async function collect(ctx: CollectorContext): Promise<CollectResult> {
@@ -116,7 +119,9 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
         notes.push("Driven through Playwright _electron.");
       } catch (e) {
         degraded = true;
-        notes.push(`Electron automation unavailable (${msg(e)}): plain launch, click/fill/press steps skipped.`);
+        notes.push(
+          `Electron automation unavailable (${msg(e)}): plain launch, click/fill/press steps skipped.`,
+        );
       }
     }
     if (!state.session) {
@@ -128,7 +133,9 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
     // 2. screenshots
     const frames: Buffer[] = [];
     let seq = 0;
-    const grabTo = async (file: string): Promise<{ ok: true } | { ok: false; reason: string; windowMissing?: boolean }> => {
+    const grabTo = async (
+      file: string,
+    ): Promise<{ ok: true } | { ok: false; reason: string; windowMissing?: boolean }> => {
       if (state.session) {
         try {
           writeFileSync(file, await state.session.screenshot());
@@ -143,7 +150,13 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
       const data = readFileSync(file);
       frames.push(data);
       artifacts.push(
-        writeArtifact(ctx, "screenshot", path.basename(file), data, ctx.check ? `${ctx.check.text} - ${label}` : label),
+        writeArtifact(
+          ctx,
+          "screenshot",
+          path.basename(file),
+          data,
+          ctx.check ? `${ctx.check.text} - ${label}` : label,
+        ),
       );
     };
     const shotFile = (label: string) =>
@@ -201,7 +214,8 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
       await sleep(app.settleMs ?? 1500);
       await shot(failures.length ? "failure" : "final");
       const exit = state.proc?.exitCode();
-      if (exit !== undefined && exit !== 0 && exit !== null) failures.push(`app exited with code ${exit} during the run`);
+      if (exit !== undefined && exit !== 0 && exit !== null)
+        failures.push(`app exited with code ${exit} during the run`);
     }
 
     // 5. GIF + logs
@@ -216,11 +230,18 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
     }
     const out = state.session?.output() ?? state.proc?.output() ?? { stdout: "", stderr: "" };
     artifacts.push(
-      writeArtifact(ctx, "log", `${prefix}-app.log`, `--- stdout ---\n${out.stdout}\n--- stderr ---\n${out.stderr}\n`, "app stdout/stderr"),
+      writeArtifact(
+        ctx,
+        "log",
+        `${prefix}-app.log`,
+        `--- stdout ---\n${out.stdout}\n--- stderr ---\n${out.stderr}\n`,
+        "app stdout/stderr",
+      ),
     );
 
     let judgement: Judgement | undefined;
-    if (failures.length === 0) notes.push("Window appeared and the app stayed up for the whole run.");
+    if (failures.length === 0)
+      notes.push("Window appeared and the app stayed up for the whole run.");
     else judgement = "fail";
     const report = {
       command: path.basename(command),
@@ -232,7 +253,13 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
       failures,
     };
     artifacts.push(
-      writeArtifact(ctx, "report", `${prefix}-report.json`, JSON.stringify(report, null, 2), "desktop run report"),
+      writeArtifact(
+        ctx,
+        "report",
+        `${prefix}-report.json`,
+        JSON.stringify(report, null, 2),
+        "desktop run report",
+      ),
     );
     notes.push(...failures);
     return { artifacts, judgement, notes, degraded };

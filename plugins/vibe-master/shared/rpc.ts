@@ -9,13 +9,15 @@ export const promptsListRpc = defineRpc({
   name: "vibe.prompts.list",
   input: z.object({ projectId: promptScope }),
   output: z.object({
-    prompts: z.array(PromptDefSchema.extend({
-      globalOverride: z.string().nullable(),
-      projectOverride: z.string().nullable(),
-      source: z.enum(["default", "global", "project"]),
-      effectiveText: z.string(),
-      overriddenProjects: z.array(z.string()),
-    })),
+    prompts: z.array(
+      PromptDefSchema.extend({
+        globalOverride: z.string().nullable(),
+        projectOverride: z.string().nullable(),
+        source: z.enum(["default", "global", "project"]),
+        effectiveText: z.string(),
+        overriddenProjects: z.array(z.string()),
+      }),
+    ),
     projects: z.array(z.object({ id: z.string(), name: z.string(), prefix: z.string() })),
   }),
 });
@@ -230,6 +232,12 @@ export const wakeRpc = defineRpc({
     /** Skip the "already consolidated" check. */
     force: z.boolean().default(true),
   }),
+  output: z.object({ queued: z.boolean(), message: z.string() }),
+});
+
+export const taskWakeRpc = defineRpc({
+  name: "master.task.wake",
+  input: z.object({ workspaceId: z.string().min(1), force: z.boolean().default(false) }),
   output: z.object({ queued: z.boolean(), message: z.string() }),
 });
 

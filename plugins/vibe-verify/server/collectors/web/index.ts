@@ -1,9 +1,9 @@
+import type { CollectorContext } from "../context";
 // Web evidence collector: desktop + mobile screenshots, interaction GIF, console errors and
 // before/after comparison, driven by `<worktree>/.vibe/verify.json` (see ../common.ts).
 import type {
   CollectResult,
   CollectorAvailability,
-  CollectorContext,
   EvidenceArtifact,
   EvidenceCollector,
 } from "../../vibe/contract/collector";
@@ -39,9 +39,10 @@ export function createWebCollector(options: WebCollectorOptions = {}): EvidenceC
     target: { url?: string; server?: ServerCommand },
     worktree: string,
   ): Promise<string> {
-    if (target.server) servers.add(ctx.verificationId, await launcher.start(target.server, worktree));
+    if (target.server)
+      servers.add(ctx.verificationId, await launcher.start(target.server, worktree));
     const url = target.url ?? target.server?.readyUrl;
-    if (!url) throw new Error("web target needs `url` or `server.readyUrl`");
+    if (!url) throw new Error("Web 目标需要配置 url 或 server.readyUrl");
     return url;
   }
 
@@ -73,14 +74,17 @@ export function createWebCollector(options: WebCollectorOptions = {}): EvidenceC
       if (!probe.ok) return { available: false, reason: probe.reason };
       const web = loadConfig(ctx).web;
       if (!web || (!web.url && !web.server)) {
-        return { available: false, reason: "No web target: set web.url or web.server in .vibe/verify.json" };
+        return {
+          available: false,
+          reason: "未配置 Web 目标：请在 .vibe/verify.json 设置 web.url 或 web.server",
+        };
       }
       return { available: true };
     },
 
     async collect(ctx): Promise<CollectResult> {
       const web = loadConfig(ctx).web;
-      if (!web) throw new Error("No web section in .vibe/verify.json");
+      if (!web) throw new Error(".vibe/verify.json 没有 web 配置段");
       const prefix = ctx.check ? `${ctx.check.id}-` : "";
       const artifacts: EvidenceArtifact[] = [];
       const notes: string[] = [];
@@ -91,7 +95,13 @@ export function createWebCollector(options: WebCollectorOptions = {}): EvidenceC
       const after = await shoot(base, web.entry, errors);
       for (const name of ["desktop", "mobile"] as const) {
         artifacts.push(
-          writeArtifact(ctx, "screenshot", `${prefix}after-${name}.png`, after[name], `${name} width`),
+          writeArtifact(
+            ctx,
+            "screenshot",
+            `${prefix}after-${name}.png`,
+            after[name],
+            `${name} width`,
+          ),
         );
       }
 
@@ -107,7 +117,7 @@ export function createWebCollector(options: WebCollectorOptions = {}): EvidenceC
             }
           } catch (e) {
             judgement = "fail";
-            notes.push(`Interaction step failed: ${String(e)}`);
+            notes.push(`交互步骤失败： ${String(e)}`);
             frames.push(await page.screenshot());
           }
           errors.push(...page.consoleErrors().map((e) => `[interaction] ${e}`));
@@ -126,7 +136,13 @@ export function createWebCollector(options: WebCollectorOptions = {}): EvidenceC
         const before = await shoot(baseBefore, web.entry, beforeErrors);
         for (const name of ["desktop", "mobile"] as const) {
           artifacts.push(
-            writeArtifact(ctx, "screenshot", `${prefix}before-${name}.png`, before[name], `before, ${name} width`),
+            writeArtifact(
+              ctx,
+              "screenshot",
+              `${prefix}before-${name}.png`,
+              before[name],
+              `before, ${name} width`,
+            ),
           );
           const cmp = compareScreenshots(before[name], after[name]);
           artifacts.push(
@@ -138,20 +154,28 @@ export function createWebCollector(options: WebCollectorOptions = {}): EvidenceC
               `before | after | diff, ${name} width`,
             ),
           );
-          notes.push(`${name}: ${(cmp.changedRatio * 100).toFixed(2)}% of pixels changed vs baseline${b.commitHash ? ` ${b.commitHash}` : ""}`);
+          notes.push(
+            `${name}: ${(cmp.changedRatio * 100).toFixed(2)}% 的像素相较基线发生变化${b.commitHash ? ` ${b.commitHash}` : ""}`,
+          );
         }
       } else {
-        notes.push("No baseline configured: before/after comparison skipped");
+        notes.push("未配置基线，已跳过前后对比");
       }
 
       if (errors.length > 0) {
         artifacts.push(
-          writeArtifact(ctx, "log", `${prefix}console-errors.txt`, errors.join("\n") + "\n", "console errors"),
+          writeArtifact(
+            ctx,
+            "log",
+            `${prefix}console-errors.txt`,
+            errors.join("\n") + "\n",
+            "console errors",
+          ),
         );
-        notes.push(`${errors.length} console/page error(s) collected`);
+        notes.push(`${errors.length} 条控制台或页面错误已采集`);
         if (judgement === "pass") judgement = "doubt";
       } else {
-        notes.push("No console errors");
+        notes.push("未发现控制台错误");
       }
       return { artifacts, judgement, notes, degraded: false };
     },

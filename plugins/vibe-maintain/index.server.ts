@@ -14,14 +14,28 @@ import { createMaintenanceEngine } from "./server/engine";
 import { perfSlowCheck } from "./server/checks/perf-slow";
 import { gitCheck } from "./server/git/check";
 import { execGit } from "./server/git/exec";
-import { createFixLauncher, createSubAgentRunner } from "./server/launch";
-import { createVibeStore, migrateOwner, openVibeDb } from "./server/vibe/db";
+import { createMaintenanceTaskLauncher } from "./server/launch";
+import { randomUUID } from "node:crypto";
+import { isEvent } from "./server/vibe/contract";
+import {
+  createVibeStore,
+  createMaintenanceCommands,
+  createTaskRuntimeCommands,
+  migrateOwner,
+  openVibeDb,
+  getMaxSeq,
+  publishEvent,
+  readEvents,
+} from "./server/vibe/db";
 
 export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
   migrateOwner(db, "core");
   migrateOwner(db, "maintain");
   const store = createVibeStore(db);
+  const runtime = createTaskRuntimeCommands(db);
+  const maintenance = createMaintenanceCommands(db);
+  const lifetime = new AbortController();
   const settings = server.registerSettings(maintainSettings);
 
   let current: MaintainSettings = maintainSettings.schema.parse({});
@@ -34,7 +48,11 @@ export default function contribute(server: PluginServerContext) {
     ...rulesSettings,
     migrate: (values, from) =>
       from === 1
-        ? migrateRulesV1(values, store.projects.list().map((p) => p.id), BUILTIN_RULES)
+        ? migrateRulesV1(
+            values,
+            store.projects.list().map((p) => p.id),
+            BUILTIN_RULES,
+          )
         : values,
   });
   let rulesConfig: RulesConfig = EMPTY_RULES_CONFIG;
@@ -52,11 +70,48 @@ export default function contribute(server: PluginServerContext) {
     getPaseo: () => paseo,
     defaultAgent: () => current.defaultAgent,
     presets: () => store.presets.list(),
-    unattendedModes: () => current.unattendedModes,
+    store,
+    runtime,
+    signal: lifetime.signal,
+    isTaskRejected: (workspaceId: string) => !!maintenance.links({ workspaceId })[0]?.rejectedAt,
+    resource: async (input: {
+      workspaceId: string;
+      action: "acquire" | "bind" | "release";
+      role?: "planner";
+      provider?: string;
+      model?: string;
+      reservationId?: string;
+      agentId?: string;
+      presetId?: string;
+    }) => {
+      const requestId = randomUUID();
+      let cursor = getMaxSeq(db);
+      publishEvent(db, {
+        type: "scheduler.task_resource_request",
+        payload: { ...input, requestId },
+      });
+      const deadline = Date.now() + 30_000;
+      while (!lifetime.signal.aborted && Date.now() < deadline) {
+        for (const event of readEvents(db, cursor, {
+          types: ["scheduler.task_resource_result"],
+          limit: 100,
+        })) {
+          cursor = event.seq;
+          if (
+            isEvent(event, "scheduler.task_resource_result") &&
+            event.payload.workspaceId === input.workspaceId &&
+            event.payload.requestId === requestId
+          )
+            return event.payload;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return { ok: false, reason: "等待调度器资源响应超时" };
+    },
     readOnlyModes: () => current.readOnlyModes,
-    timeoutMs: () => current.subAgentTimeoutMinutes * 60_000,
   };
 
+  const taskLauncher = createMaintenanceTaskLauncher(agentPorts);
   const engine = createMaintenanceEngine({
     db,
     store,
@@ -65,16 +120,47 @@ export default function contribute(server: PluginServerContext) {
     settings: () => current,
     commitPollSeconds: () => current.commitPollSeconds,
     uiRules: () => rulesConfig,
-    subAgent: createSubAgentRunner(agentPorts),
-    fixLauncher: createFixLauncher(agentPorts),
+    taskLauncher,
+    projectIdOfTask: async (workspaceId) =>
+      runtime.listSessions({ workspaceId }).find((session) => session.projectId)?.projectId ??
+      undefined,
+    stopTask: async (workspaceId) => {
+      const requestId = randomUUID();
+      let cursor = getMaxSeq(db);
+      publishEvent(db, {
+        type: "task.stop_requested",
+        payload: { workspaceId, requestId, reason: "维护发现有变化，需停止后重新规划确认" },
+      });
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        for (const event of readEvents(db, cursor, { types: ["task.stop_result"], limit: 100 })) {
+          cursor = event.seq;
+          if (
+            isEvent(event, "task.stop_result") &&
+            event.payload.workspaceId === workspaceId &&
+            event.payload.requestId === requestId
+          )
+            return event.payload.stopped;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return false;
+    },
     log: (message, error) => console.error(`vibe-maintain: ${message}`, error ?? ""),
   });
 
   const stopHooks = [
     server.on("agent.created", (_e, c) => remember(c.paseo)),
     server.on("agent.turn_started", (_e, c) => remember(c.paseo)),
-    server.on("agent.turn_ended", (_e, c) => remember(c.paseo)),
+    server.on("agent.turn_ended", async (event, c) => {
+      remember(c.paseo);
+      await taskLauncher.release(event.agent.id);
+    }),
     server.on("workspace.created", (_e, c) => remember(c.paseo)),
+    server.on("workspace.archived", (event, c) => {
+      remember(c.paseo);
+      engine.rejectWorkspace(event.workspace.id);
+    }),
   ];
 
   const specOf = (p: { provider: string; model: string }) =>
@@ -129,6 +215,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   return async () => {
+    lifetime.abort();
     if (timer) clearInterval(timer);
     stopSettings();
     stopRules();

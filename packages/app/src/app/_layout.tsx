@@ -64,6 +64,7 @@ import { HorizontalScrollProvider } from "@/contexts/horizontal-scroll-context";
 import { SessionProvider } from "@/contexts/session-context";
 import { SidebarCalloutProvider } from "@/contexts/sidebar-callout-context";
 import { ToastProvider } from "@/contexts/toast-context";
+import { useToast } from "@/contexts/toast-api-context";
 import { VoiceProvider } from "@/contexts/voice-context";
 import {
   resolveStartupBlocker,
@@ -113,6 +114,7 @@ import {
   useHosts,
 } from "@/runtime/host-runtime";
 import { getDaemonStartService } from "@/runtime/daemon-start-service";
+import { startFirstMessageOutbox } from "@/runtime/first-message-outbox";
 import { usePanelStore } from "@/stores/panel-store";
 import { flushDraftPersistStorage } from "@/stores/draft-store";
 import { getNextThemePreference, ICON_STROKE_WIDTH } from "@/styles/theme";
@@ -135,8 +137,7 @@ import { buildNotificationRoute, resolveNotificationTarget } from "@/utils/notif
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { PluginCatalogSync } from "@/plugins";
 import { pluginRegistry } from "@/plugins/registry";
-import { VIBE_BOARD_PLUGIN_ID } from "@/vibe/rpc/local-rpc";
-import { resolveVibePushRoute } from "@/vibe/sessions/push-route";
+import { isRetiredVibePush, resolveVibePushRoute } from "@/vibe/sessions/push-route";
 import { VibeSyncBootstrap } from "@/vibe/sync/vibe-sync-bootstrap";
 import {
   ensureOsNotificationPermission,
@@ -162,23 +163,15 @@ const HostRuntimeBootstrapContext = createContext<HostRuntimeBootstrapState>({
   startupBlocker: { kind: "none" },
 });
 
-/** Hosts a Vibe Board push may belong to: those with the board installed, else every known host. */
-function vibeBoardServerIds(): string[] {
-  const installed = pluginRegistry
-    .getSnapshot()
-    .filter((plugin) => plugin.id === VIBE_BOARD_PLUGIN_ID)
-    .map((plugin) => plugin.serverId);
-  return installed.length > 0
-    ? installed
-    : getHostRuntimeStore()
-        .getHosts()
-        .map((h) => h.serverId);
-}
-
 function PushNotificationRouter() {
   const router = useRouter();
+  const toast = useToast();
   const lastHandledIdRef = useRef<string | null>(null);
   const openNotification = useStableEvent((data: Record<string, unknown> | undefined) => {
+    if (isRetiredVibePush(data)) {
+      toast.show("旧看板入口已停用，请从项目的工作区打开任务");
+      return;
+    }
     const target = resolveNotificationTarget(data);
     const serverId = target.serverId;
     const workspaceId = target.workspaceId;
@@ -188,7 +181,7 @@ function PushNotificationRouter() {
       return;
     }
 
-    const vibeRoute = resolveVibePushRoute(data, vibeBoardServerIds());
+    const vibeRoute = resolveVibePushRoute(data);
     router.navigate(vibeRoute ?? buildNotificationRoute(data));
   });
 
@@ -326,6 +319,7 @@ function LegacyFavoriteProfileMigrationBootstrap({
 }
 
 function HostSessionManager() {
+  useEffect(() => startFirstMessageOutbox(), []);
   const hosts = useHosts();
 
   useEffect(() => {
