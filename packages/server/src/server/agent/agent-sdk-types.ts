@@ -712,7 +712,8 @@ export interface AgentSession {
    * (e.g. /goal pause) reach the provider without canceling the running turn.
    */
   tryHandleOutOfBand?(prompt: AgentPromptInput): {
-    run(ctx: { emit: (event: AgentStreamEvent) => void }): Promise<void>;
+    /** Control callers request errors instead of rendered status messages with throwOnError. */
+    run(ctx: { emit: (event: AgentStreamEvent) => void; throwOnError?: boolean }): Promise<void>;
   } | null;
 }
 

@@ -20,6 +20,7 @@ export interface PreparedFirstMessageAttachments {
 }
 
 export interface FirstMessageOutboxPort {
+  supportsTaskConversations?: boolean;
   getCreation(idempotencyKey: string): Promise<CreationSnapshot | null>;
   prepareAttachments(entry: FirstMessageOutboxEntry): Promise<PreparedFirstMessageAttachments>;
   createWorkspace(
@@ -121,11 +122,27 @@ export class FirstMessageOutbox {
     );
   }
 
-  async failUnsubmittedHost(hostId: string, message: string): Promise<void> {
+  async failUnsubmittedHost(hostId: string, message: string, taskOnly = false): Promise<void> {
     await this.hydrate();
+    if (
+      !this.entries.some(
+        (entry) =>
+          entry.hostId === hostId &&
+          !entry.submitted &&
+          entry.status === "queued" &&
+          (!taskOnly || !!entry.owner),
+      )
+    )
+      return;
     await this.write((entries) =>
       entries.map((entry) => {
-        if (entry.hostId !== hostId || entry.submitted || entry.status !== "queued") return entry;
+        if (
+          entry.hostId !== hostId ||
+          entry.submitted ||
+          entry.status !== "queued" ||
+          (taskOnly && !entry.owner)
+        )
+          return entry;
         return { ...entry, status: "failed", error: message };
       }),
     );
@@ -146,7 +163,11 @@ export class FirstMessageOutbox {
     const pending = this.entries.filter((entry) => {
       const shouldSend =
         entry.status === "queued" || entry.status === "unknown" || entry.status === "sending";
-      return entry.hostId === hostId && shouldSend;
+      return (
+        entry.hostId === hostId &&
+        shouldSend &&
+        (!entry.owner || port.supportsTaskConversations !== false)
+      );
     });
     for (const entry of pending) await this.deliver(entry, port);
   }
@@ -199,12 +220,31 @@ export class FirstMessageOutbox {
         idempotencyKey: entry.requestId,
         requestId: entry.requestId,
         firstAgentContext: { prompt: entry.text, attachments: prepared.attachments ?? [] },
-        agent: {
-          config: entry.config,
-          initialPrompt: entry.text,
-          clientMessageId: entry.clientMessageId,
-          ...prepared,
-        },
+        ...(entry.owner
+          ? {
+              taskConversation: {
+                idempotencyKey: entry.requestId,
+                ownerPluginId: entry.owner.pluginId,
+                initialRecipient: {
+                  role: entry.owner.initialRole,
+                  presetId: entry.plannerPresetId,
+                  config: entry.config,
+                },
+                initialMessage: {
+                  text: entry.text,
+                  clientMessageId: entry.clientMessageId,
+                  ...prepared,
+                },
+              },
+            }
+          : {
+              agent: {
+                config: entry.config,
+                initialPrompt: entry.text,
+                clientMessageId: entry.clientMessageId,
+                ...prepared,
+              },
+            }),
       });
     } catch {
       await this.patch(entry.id, {
@@ -215,14 +255,6 @@ export class FirstMessageOutbox {
     }
     if (result.creation) {
       await this.applyCreation(entry, result.creation);
-      return;
-    }
-    if (!result.error && result.workspace && result.agent) {
-      await this.patch(entry.id, {
-        status: "sent",
-        error: null,
-        result: { workspaceId: result.workspace.id, agentId: result.agent.id },
-      });
       return;
     }
     await this.patch(entry.id, {
@@ -245,11 +277,29 @@ export class FirstMessageOutbox {
       });
       return;
     }
-    if (snapshot.phase === "completed" && snapshot.workspaceId && snapshot.agentId) {
+    if (
+      snapshot.phase === "completed" &&
+      snapshot.workspaceId &&
+      snapshot.agentId &&
+      (!entry.owner || (snapshot.conversationId && snapshot.memberId))
+    ) {
       await this.patch(entry.id, {
         status: "sent",
         error: null,
-        result: { workspaceId: snapshot.workspaceId, agentId: snapshot.agentId },
+        result: {
+          workspaceId: snapshot.workspaceId,
+          agentId: snapshot.agentId,
+          conversationId: snapshot.conversationId,
+          memberId: snapshot.memberId,
+        },
+      });
+      return;
+    }
+    if (snapshot.phase === "completed") {
+      await this.patch(entry.id, {
+        status: "failed",
+        replayBlocked: true,
+        error: "创建回执缺少任务群聊或规划成员，请升级主机并核对原会话；正文和附件已保留",
       });
       return;
     }

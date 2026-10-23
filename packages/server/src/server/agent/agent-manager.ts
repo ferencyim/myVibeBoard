@@ -2484,6 +2484,30 @@ export class AgentManager {
    * broadcast like normal timeline events.
    */
   tryRunOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions): boolean {
+    const command = this.prepareOutOfBand(agentId, prompt, options);
+    if (!command) return false;
+    void command.run().catch(command.reportError);
+    return true;
+  }
+
+  /** Await native command acknowledgement and propagate failures to RPC callers. */
+  async runOutOfBand(
+    agentId: string,
+    prompt: AgentPromptInput,
+    options?: AgentRunOptions,
+  ): Promise<boolean> {
+    const command = this.prepareOutOfBand(agentId, prompt, options);
+    if (!command) return false;
+    try {
+      await command.run(true);
+    } catch (error) {
+      command.reportError(error);
+      throw error;
+    }
+    return true;
+  }
+
+  private prepareOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions) {
     this.taskConversations?.assertAgentRun(agentId, options);
     const agent = this.requireSessionAgent(agentId);
     // Providers parse slash commands from the raw text, so a command another agent sent
@@ -2493,7 +2517,7 @@ export class AgentManager {
       agentMessage?.source ? agentMessage.text : prompt,
     );
     if (!handler) {
-      return false;
+      return null;
     }
     if (options?.clientMessageId) {
       this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "accepted");
@@ -2514,19 +2538,17 @@ export class AgentManager {
       }
       this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
     };
-    void (async () => {
-      try {
-        await handler.run({ emit: dispatch });
-      } catch (error) {
+    return {
+      run: async (throwOnError?: boolean) => handler.run({ emit: dispatch, throwOnError }),
+      reportError(error: unknown) {
         const text = error instanceof Error ? error.message : "Out-of-band command failed";
         dispatch({
           type: "timeline",
           provider: agent.provider,
           item: { type: "assistant_message", text: `[Error] ${text}` },
         });
-      }
-    })();
-    return true;
+      },
+    };
   }
 
   async appendTimelineItem(
@@ -3124,6 +3146,7 @@ export class AgentManager {
     response: AgentPermissionResponse,
   ): Promise<AgentPermissionResult | void> {
     const agent = this.requireAgent(agentId);
+    this.taskConversations?.assertPermissionApproval(agentId, requestId, response);
     if (agent.inFlightPermissionResponses.has(requestId)) {
       throw new Error("A response to this permission request is already being submitted");
     }

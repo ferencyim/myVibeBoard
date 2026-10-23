@@ -49,14 +49,42 @@ function fixture(store = new TaskConversationStore({ filePath: ":memory:" })) {
     admitted: true,
     ready: true,
     receiptUnknown: false,
+    compactAutoComplete: true,
+    controlHooks: false,
     onPrepare: undefined as ((input: PluginTaskConversationPrepareRequest) => void) | undefined,
     onCreate: undefined as ((config: AgentSessionConfig) => AgentSessionConfig) | undefined,
   };
   let service!: TaskConversationService;
+  const listeners = new Set<(event: AgentManagerEvent) => void>();
+  const emit = (event: AgentManagerEvent) => {
+    for (const listener of listeners) listener(event);
+  };
   const manager = {
-    subscribe: vi.fn((_listener: (event: AgentManagerEvent) => void) => () => undefined),
+    subscribe: vi.fn((listener: (event: AgentManagerEvent) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    }),
     getAgent: vi.fn((agentId: string) => agents.get(agentId)),
     hasInFlightRun: vi.fn((_agentId: string) => false),
+    runOutOfBand: vi.fn(
+      async (agentId: string, _prompt: AgentPromptInput, options?: AgentRunOptions) => {
+        service.assertAgentRun(agentId, options);
+        if (controls.compactAutoComplete)
+          emit({
+            type: "agent_stream",
+            agentId,
+            epoch: "native-epoch",
+            seq: 1,
+            event: {
+              type: "timeline",
+              item: { type: "compaction", status: "completed", trigger: "manual" },
+            },
+          });
+        return true;
+      },
+    ),
     createAgent: vi.fn(
       async (config: AgentSessionConfig, agentId: string, options: CreateAgentOptions) => {
         const actual = controls.onCreate?.(config) ?? config;
@@ -117,14 +145,15 @@ function fixture(store = new TaskConversationStore({ filePath: ":memory:" })) {
     workspaceRegistry: {
       get: async (workspaceId: string) => ({ workspaceId, cwd: tmpdir(), archivedAt: null }),
     } as unknown as Pick<WorkspaceRegistry, "get">,
-    plugins: { before, hasBefore: () => false } as unknown as Pick<
-      PluginService,
-      "before" | "hasBefore"
-    >,
+    plugins: {
+      before,
+      hasBefore: (_id: string, name: string) =>
+        controls.controlHooks && name === "task.conversation.control",
+    } as unknown as Pick<PluginService, "before" | "hasBefore">,
     logger: pino({ enabled: false }),
   });
   services.add(service);
-  return { service, store, manager, prepareRequests, controls };
+  return { service, store, manager, prepareRequests, controls, before, emit };
 }
 
 async function createConversation(service: TaskConversationService) {
@@ -145,6 +174,9 @@ async function* terminalBeforeReceipt(
   });
   yield { type: "turn_started", provider: "claude", turnId: "already-finished" };
 }
+async function* reusedTurnZero(): AsyncGenerator<AgentStreamEvent> {
+  yield { type: "turn_started", provider: "codex", turnId: "codex-turn-0" };
+}
 
 afterEach(async () => {
   for (const service of services) {
@@ -154,6 +186,347 @@ afterEach(async () => {
 });
 
 describe("TaskConversationService", () => {
+  it.each(["planner", "scout", "plan_reviewer", "reviewer", "verifier"])(
+    "blocks plan-mode escalation for a managed read-only %s before provider response",
+    async (role) => {
+      const { service, store, manager } = fixture();
+      const conversation = await createConversation(service);
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient: { ...recipient, role, config: { ...recipient.config, modeId: "plan" } },
+        clientMessageId: "readonly-permission",
+        text: "只读工作",
+      });
+      store.update(conversation.conversationId, (record) => {
+        record.snapshot.members[0]!.pendingPermissions = [
+          { id: "exit-plan", provider: "claude", name: "ExitPlanMode", kind: "plan" },
+        ];
+      });
+      await expect(
+        service.preparePermissionResponse(delivery.backendAgentId, "exit-plan", {
+          behavior: "allow",
+          selectedActionId: "implement_resume",
+        }),
+      ).rejects.toThrow("只读角色");
+      expect(
+        service.resolve({ conversationId: conversation.conversationId })!.members[0]!
+          .pendingPermissions,
+      ).toHaveLength(1);
+      expect(() =>
+        service.assertPermissionApproval(delivery.backendAgentId, "exit-plan", {
+          behavior: "allow",
+        }),
+      ).toThrow("只读角色");
+      await expect(
+        service.preparePermissionResponse(delivery.backendAgentId, "exit-plan", {
+          behavior: "deny",
+        }),
+      ).resolves.toBeUndefined();
+      expect(manager.streamAgent).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["worker", "subagent", "verifier"])(
+    "preserves legal %s plan approval without a retained read-only launcher",
+    async (role) => {
+      const { service, store } = fixture();
+      const conversation = await createConversation(service);
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient: { ...recipient, role },
+        clientMessageId: "writable-permission",
+        text: "执行工作",
+      });
+      store.update(conversation.conversationId, (record) => {
+        record.snapshot.members[0]!.pendingPermissions = [
+          { id: "plan", provider: "claude", name: "ExitPlanMode", kind: "plan" },
+        ];
+      });
+      await expect(
+        service.preparePermissionResponse(delivery.backendAgentId, "plan", {
+          behavior: "allow",
+          selectedActionId: "implement",
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it("checks live requests after reload and preserves ordinary questions and unowned approval", async () => {
+    const { service, manager, store } = fixture();
+    const conversation = await createConversation(service);
+    const delivery = await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "live-permission",
+      text: "规划",
+    });
+    const pending = new Map([
+      [
+        "live-plan",
+        { id: "live-plan", provider: "claude", name: "ExitPlanMode", kind: "plan" as const },
+      ],
+      [
+        "question",
+        { id: "question", provider: "claude", name: "AskUserQuestion", kind: "question" as const },
+      ],
+      ["tool", { id: "tool", provider: "claude", name: "Read", kind: "tool" as const }],
+      ["mode", { id: "mode", provider: "claude", name: "ChangeMode", kind: "mode" as const }],
+    ]);
+    Object.assign(manager.getAgent(delivery.backendAgentId)!, { pendingPermissions: pending });
+    expect(() =>
+      service.assertPermissionApproval(delivery.backendAgentId, "live-plan", { behavior: "allow" }),
+    ).toThrow("只读角色");
+    expect(() =>
+      service.assertPermissionApproval(delivery.backendAgentId, "mode", { behavior: "allow" }),
+    ).toThrow("只读角色");
+    await expect(
+      service.preparePermissionResponse(delivery.backendAgentId, "question", { behavior: "allow" }),
+    ).resolves.toBeUndefined();
+    for (const id of ["tool", "missing"])
+      await expect(
+        service.preparePermissionResponse(delivery.backendAgentId, id, { behavior: "allow" }),
+      ).rejects.toThrow("只读角色");
+    expect(() =>
+      service.assertPermissionApproval("ordinary-agent", "live-plan", { behavior: "allow" }),
+    ).not.toThrow();
+    store.update(conversation.conversationId, (record) => {
+      const member = record.snapshot.members[0]!;
+      member.role = "verifier";
+      member.config = {
+        ...member.config,
+        modeId: "auto",
+        providerOptions: { sandbox_mode: "read-only" },
+      };
+    });
+    expect(() =>
+      service.assertPermissionApproval(delivery.backendAgentId, "live-plan", { behavior: "allow" }),
+    ).toThrow("只读角色");
+  });
+
+  it.each(["planner", "scout", "plan_reviewer", "reviewer", "verifier"])(
+    "rejects Claude tool approvals and persistent permission updates for read-only %s",
+    async (role) => {
+      const { service, store, manager } = fixture();
+      const conversation = await createConversation(service);
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient: { ...recipient, role, config: { ...recipient.config, modeId: "plan" } },
+        clientMessageId: "readonly-claude-tools",
+        text: "只读检查",
+      });
+      const tools = ["Bash", "Edit", "Write", "Read"].map((name) => ({
+        id: name,
+        provider: "claude" as const,
+        name,
+        kind: "tool" as const,
+      }));
+      store.update(conversation.conversationId, (record) => {
+        record.snapshot.members[0]!.pendingPermissions = [
+          ...tools,
+          { id: "question", provider: "claude", name: "AskUserQuestion", kind: "question" },
+        ];
+      });
+      for (const tool of ["Bash", "Edit", "Write", "Read"])
+        await expect(
+          service.preparePermissionResponse(delivery.backendAgentId, tool, { behavior: "allow" }),
+        ).rejects.toThrow("只读角色");
+      for (const destination of ["localSettings", "projectSettings"])
+        await expect(
+          service.preparePermissionResponse(delivery.backendAgentId, "question", {
+            behavior: "allow",
+            updatedPermissions: [
+              {
+                type: "addRules",
+                rules: [{ toolName: "Bash" }],
+                behavior: "allow",
+                destination,
+              },
+            ],
+          }),
+        ).rejects.toThrow("只读角色");
+      await expect(
+        service.preparePermissionResponse(delivery.backendAgentId, "question", {
+          behavior: "allow",
+          updatedInput: { answers: { decision: "继续检查" } },
+          updatedPermissions: [],
+        }),
+      ).resolves.toBeUndefined();
+      expect(manager.streamAgent).toHaveBeenCalledTimes(1);
+      expect(
+        service.resolve({ conversationId: conversation.conversationId })!.members[0]!
+          .pendingPermissions,
+      ).toHaveLength(5);
+    },
+  );
+
+  it("compacts through the authorized native command after owner admission, without a prompt turn", async () => {
+    const { service, manager, before, controls } = fixture();
+    controls.controlHooks = true;
+    const conversation = await createConversation(service);
+    await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "compact-member",
+      text: "首条",
+    });
+    const member = service.resolve({ conversationId: conversation.conversationId })!.members[0]!;
+    const previousTurns = manager.streamAgent.mock.calls.length;
+    await service.compact({
+      conversationId: conversation.conversationId,
+      memberId: member.memberId,
+    });
+    expect(manager.runOutOfBand).toHaveBeenCalledWith(
+      member.backendAgentId,
+      "/compact",
+      expect.objectContaining({ clientMessageId: expect.stringMatching(/^compact:/) }),
+    );
+    expect(manager.streamAgent.mock.calls.length).toBe(previousTurns);
+    expect(before).toHaveBeenCalledWith(
+      "task.conversation.admit",
+      expect.objectContaining({ operation: "compact", backendAgentId: member.backendAgentId }),
+      { pluginId: "test-plugin" },
+    );
+    expect(() =>
+      service.assertAgentRun(member.backendAgentId, manager.runOutOfBand.mock.calls[0]![2]),
+    ).toThrow("route_required");
+    expect(before).toHaveBeenCalledWith(
+      "task.conversation.control",
+      expect.objectContaining({
+        action: "compact",
+        phase: "settled",
+        backendAgentId: member.backendAgentId,
+      }),
+      { pluginId: "test-plugin" },
+    );
+  });
+
+  it("rejects unsupported or failed native compaction and retains admission and busy gates", async () => {
+    const { service, manager, controls, before } = fixture();
+    controls.controlHooks = true;
+    const conversation = await createConversation(service);
+    await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "compact-member",
+      text: "首条",
+    });
+    const member = service.resolve({ conversationId: conversation.conversationId })!.members[0]!;
+    const compact = () =>
+      service.compact({ conversationId: conversation.conversationId, memberId: member.memberId });
+    manager.runOutOfBand.mockResolvedValueOnce(false);
+    await expect(compact()).rejects.toThrow("不支持原生上下文压缩");
+    expect(before).toHaveBeenCalledWith(
+      "task.conversation.control",
+      expect.objectContaining({
+        action: "compact",
+        phase: "settled",
+        backendAgentId: member.backendAgentId,
+      }),
+      { pluginId: "test-plugin" },
+    );
+    controls.admitted = false;
+    await expect(compact()).rejects.toThrow("测试准入拒绝");
+    manager.hasInFlightRun.mockReturnValue(true);
+    await expect(compact()).rejects.toThrow("busy");
+    controls.admitted = true;
+    manager.hasInFlightRun.mockReturnValue(false);
+    manager.runOutOfBand.mockRejectedValueOnce(new Error("native compact failed"));
+    await expect(compact()).rejects.toThrow("native compact failed");
+    expect(manager.streamAgent).toHaveBeenCalledTimes(1);
+    expect(before).toHaveBeenCalledWith(
+      "task.conversation.control",
+      expect.objectContaining({
+        action: "compact",
+        phase: "unknown",
+        backendAgentId: member.backendAgentId,
+      }),
+      { pluginId: "test-plugin" },
+    );
+    expect(manager.runOutOfBand).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a fresh explicit native completion rather than acknowledgement, replay or auto compaction", async () => {
+    const { service, manager, controls, emit, before } = fixture();
+    controls.controlHooks = true;
+    controls.compactAutoComplete = false;
+    const conversation = await createConversation(service);
+    await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "compact-member",
+      text: "首条",
+    });
+    const member = service.resolve({ conversationId: conversation.conversationId })!.members[0]!;
+    let done = false;
+    const compact = service
+      .compact({ conversationId: conversation.conversationId, memberId: member.memberId })
+      .then(() => {
+        done = true;
+        return done;
+      });
+    await vi.waitFor(() => expect(manager.runOutOfBand).toHaveBeenCalledOnce());
+    const event = (epoch: string, seq: number, trigger: "auto" | "manual"): AgentManagerEvent => ({
+      type: "agent_stream",
+      agentId: member.backendAgentId,
+      epoch,
+      seq,
+      event: { type: "timeline", item: { type: "compaction", status: "completed", trigger } },
+    });
+    emit(event("stale-epoch", 2, "manual"));
+    emit(event("native-epoch", 0, "manual"));
+    emit(event("native-epoch", 2, "auto"));
+    await Promise.resolve();
+    expect(done).toBe(false);
+    expect(
+      before.mock.calls.some(
+        ([name, request]) =>
+          name === "task.conversation.control" &&
+          (request as { phase?: string }).phase === "settled",
+      ),
+    ).toBe(false);
+    emit(event("native-epoch", 3, "manual"));
+    await compact;
+    expect(done).toBe(true);
+    expect(before).toHaveBeenCalledWith(
+      "task.conversation.control",
+      expect.objectContaining({ phase: "settled", backendAgentId: member.backendAgentId }),
+      { pluginId: "test-plugin" },
+    );
+  });
+
+  it("keeps stop pending until the active native compaction is explicitly complete", async () => {
+    const { service, manager, controls, emit } = fixture();
+    controls.compactAutoComplete = false;
+    const conversation = await createConversation(service);
+    await service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "compact-member",
+      text: "首条",
+    });
+    const member = service.resolve({ conversationId: conversation.conversationId })!.members[0]!;
+    const compact = service.compact({
+      conversationId: conversation.conversationId,
+      memberId: member.memberId,
+    });
+    await vi.waitFor(() => expect(manager.runOutOfBand).toHaveBeenCalledOnce());
+    const stopped = service.stop({ conversationId: conversation.conversationId });
+    await Promise.resolve();
+    expect(manager.cancelAgentRun).not.toHaveBeenCalled();
+    emit({
+      type: "agent_stream",
+      agentId: member.backendAgentId,
+      epoch: "native-epoch",
+      seq: 2,
+      event: {
+        type: "timeline",
+        item: { type: "compaction", status: "completed", trigger: "manual" },
+      },
+    });
+    await compact;
+    await expect(stopped).resolves.toMatchObject({ status: "paused" });
+  });
+
   it("accepts trusted MCP injection while retaining the admitted member identity", async () => {
     const { service, controls } = fixture();
     controls.onCreate = (config) => ({
@@ -1206,6 +1579,129 @@ describe("TaskConversationService streaming durability", () => {
 });
 
 describe("Task conversation recovery boundaries", () => {
+  it("retains a completed legacy turn when a restarted provider reuses turn zero and deduplicates replay", async () => {
+    const initial = fixture();
+    initial.manager.streamAgent.mockImplementation((agentId, _prompt, options) => {
+      initial.service.assertAgentRun(agentId, options);
+      return reusedTurnZero();
+    });
+    const conversation = await createConversation(initial.service);
+    const first = await initial.service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "before-restart",
+      text: "旧请求",
+    });
+    const old = initial.store.update(conversation.conversationId, (record) => {
+      record.snapshot.members[0]!.status = "idle";
+      initial.store.acceptSourceSequence(record, first.backendAgentId, "native", 1);
+      return initial.store.append(record, {
+        sourceKey: `assistant:${first.memberId}:codex-turn-0`,
+        kind: "assistant",
+        text: "旧方案完整正文",
+        completed: true,
+        source: {
+          memberId: first.memberId,
+          backendAgentId: first.backendAgentId,
+          sourceTurnId: "codex-turn-0",
+          epoch: "native",
+          seq: 1,
+        },
+      });
+    });
+    const frozenOld = structuredClone(old);
+    const restarted = fixture(initial.store);
+    services.delete(initial.service);
+    restarted.manager.getAgent.mockImplementation(initial.manager.getAgent);
+    restarted.manager.streamAgent.mockImplementation((agentId, _prompt, options) => {
+      restarted.service.assertAgentRun(agentId, options);
+      return reusedTurnZero();
+    });
+    const second = await restarted.service.send({
+      conversationId: conversation.conversationId,
+      recipient,
+      clientMessageId: "after-restart",
+      text: "新请求",
+    });
+    restarted.emit({
+      type: "agent_stream",
+      agentId: second.backendAgentId,
+      epoch: "native",
+      seq: 4,
+      event: {
+        type: "timeline",
+        provider: "codex",
+        turnId: "codex-turn-0",
+        item: { type: "assistant_message", text: "新方案完整正文" },
+      },
+    });
+    restarted.emit({
+      type: "agent_stream",
+      agentId: second.backendAgentId,
+      event: { type: "turn_completed", provider: "codex", turnId: "codex-turn-0" },
+    });
+    const output = () =>
+      restarted.service
+        .fetch({ conversationId: conversation.conversationId })
+        .rows.filter((row) => row.kind === "assistant");
+    await vi.waitFor(() => expect(output()).toHaveLength(2));
+    expect(output()[0]).toEqual(frozenOld);
+    expect(output()[1]).toMatchObject({
+      sourceKey: `assistant:${second.memberId}:delivery:after-restart`,
+      text: "新方案完整正文",
+      completed: true,
+    });
+    initial.store.update(conversation.conversationId, (record) => {
+      record.recoveryMembers = [first.backendAgentId];
+    });
+    const hydrated = fixture(initial.store);
+    services.delete(restarted.service);
+    hydrated.manager.getAgent.mockImplementation(initial.manager.getAgent);
+    hydrated.manager.fetchTimeline.mockReturnValue({ epoch: "native" });
+    hydrated.manager.getTimelineRows.mockResolvedValue([
+      {
+        seq: 0,
+        turnId: "codex-turn-0",
+        item: { type: "user_message", clientMessageId: "before-restart" },
+      },
+      {
+        seq: 1,
+        turnId: "codex-turn-0",
+        item: { type: "assistant_message", text: "旧方案完整正文" },
+      },
+      {
+        seq: 3,
+        turnId: "codex-turn-0",
+        item: { type: "user_message", clientMessageId: "after-restart" },
+      },
+      {
+        seq: 4,
+        turnId: "codex-turn-0",
+        item: { type: "assistant_message", text: "新方案完整正文" },
+      },
+    ]);
+    const release = hydrated.service.subscribe(conversation.conversationId, () => undefined);
+    await vi.waitFor(() => expect(hydrated.manager.getTimelineRows).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(output()).toHaveLength(2);
+    expect(output()[0]).toEqual(frozenOld);
+    expect(output()[1]!.text).toBe("新方案完整正文");
+    hydrated.emit({
+      type: "agent_stream",
+      agentId: second.backendAgentId,
+      epoch: "native",
+      seq: 4,
+      event: {
+        type: "timeline",
+        turnId: "codex-turn-0",
+        item: { type: "assistant_message", text: "新方案完整正文" },
+      },
+    });
+    expect(output()).toHaveLength(2);
+    expect(output()[0]).toEqual(frozenOld);
+    release();
+  });
+
   it("does not duplicate overlapping buffered chunks during native reconciliation", async () => {
     vi.useFakeTimers();
     try {
@@ -1241,7 +1737,7 @@ describe("Task conversation recovery boundaries", () => {
       await vi.advanceTimersByTimeAsync(300);
       expect(
         store.querySource(conversation.conversationId, {
-          sourceKey: `assistant:${delivery.memberId}:native-turn`,
+          sourceKey: `assistant:${delivery.memberId}:delivery:${delivery.deliveryId}`,
         })?.text,
       ).toBe("ABC");
       emit(assistantEvent(delivery.backendAgentId, 2, "B"));
@@ -1249,7 +1745,7 @@ describe("Task conversation recovery boundaries", () => {
       await vi.advanceTimersByTimeAsync(300);
       expect(
         store.querySource(conversation.conversationId, {
-          sourceKey: `assistant:${delivery.memberId}:native-turn`,
+          sourceKey: `assistant:${delivery.memberId}:delivery:${delivery.deliveryId}`,
         })?.text,
       ).toBe("ABCD");
       release();

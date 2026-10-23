@@ -13,6 +13,8 @@ export const firstMessageOutbox = new FirstMessageOutbox({
 
 function createOutboxPort(hostId: string, client: DaemonClient): FirstMessageOutboxPort {
   return {
+    supportsTaskConversations:
+      client.getLastServerInfoMessage()?.features?.taskConversations === true,
     getCreation: (key) => client.getWorkspaceCreation(key),
     prepareAttachments: (entry) => prepareOutboxAttachments(entry),
     createWorkspace: async (input) => {
@@ -51,12 +53,20 @@ export async function flushFirstMessageOutbox(): Promise<void> {
           (entry.status === "queued" || entry.status === "unknown" || entry.status === "sending"),
       );
     if (!pending) continue;
-    if (client.getLastServerInfoMessage()?.features?.creationLifecycle !== true) {
+    const features = client.getLastServerInfoMessage()?.features;
+    if (features?.creationLifecycle !== true) {
       await firstMessageOutbox.failUnsubmittedHost(
         host.serverId,
-        "请升级目标主机后发送新任务；正文和附件已保留在本机",
+        "请升级目标主机以支持创建回执；正文和附件已保留在本机",
       );
       continue;
+    }
+    if (features.taskConversations !== true) {
+      await firstMessageOutbox.failUnsubmittedHost(
+        host.serverId,
+        "请升级目标主机以支持任务群聊后发送新任务；正文和附件已保留在本机",
+        true,
+      );
     }
     await firstMessageOutbox.flushHost(host.serverId, createOutboxPort(host.serverId, client));
   }

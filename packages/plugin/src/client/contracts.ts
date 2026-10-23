@@ -36,6 +36,14 @@ interface PluginNavigableHostProps extends PluginHostProps {
   /** Client-owned navigation. Undefined on older hosts; hide dependent affordances when absent. */
   readonly navigation?: {
     readonly setTaskConversationRecipients?: (input: PluginTaskConversationRecipientsInput) => void;
+    readonly openTaskConversationSource?: (input: {
+      readonly conversationId: string;
+      readonly sourceKey: string;
+    }) => Promise<void>;
+    readonly openTaskConversationMember?: (input: {
+      readonly conversationId: string;
+      readonly memberId: string;
+    }) => Promise<void>;
     /** Present only on Electron. The browser runs locally; serverId selects workspace ownership. */
     readonly openBrowser?: (input: {
       readonly url: string;
@@ -67,6 +75,8 @@ export interface PluginTaskConversationRecipientOption {
   id: string;
   label: string;
   recipient: TaskConversationRecipient;
+  /** Estimated provider prompt cache expiry, in Unix milliseconds. */
+  cacheExpiresAt?: number | null;
 }
 
 export interface PluginTaskConversationRecipientsInput {
@@ -156,6 +166,8 @@ export interface PluginConversationPanelProps extends PluginNavigableHostProps {
   workspaceId: string;
   conversationId: string;
   anchorAgentId: string | null;
+  /** Current composer recipient; updated when the user switches roles or models. */
+  recipient?: TaskConversationRecipient | null;
   /** Absent until the first recipient creates the anchor. Never identifies the current recipient. */
   agentId?: string;
 }
@@ -175,7 +187,16 @@ interface PluginClientContextAliases {
   addSidebarItem(contribution: PluginSidebarContribution): PluginCleanup;
 }
 
+export interface PluginFirstMessageOutboxOwnerContribution {
+  /** Role receiving the first message in this plugin's task conversation. */
+  initialRole: TaskConversationRecipient["role"];
+}
+
 export interface PluginClientContext extends PluginCommandCapabilities, PluginClientContextAliases {
+  /** Own new-workspace first messages until this registration is removed. */
+  addFirstMessageOutboxOwner(
+    contribution: PluginFirstMessageOutboxOwnerContribution,
+  ): PluginCleanup;
   setTaskConversationRecipients(input: PluginTaskConversationRecipientsInput): void;
   /** Play a base64-encoded audio file on this client; resolves when playback ends. */
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
@@ -258,6 +279,7 @@ export type PluginTimelineTransformerContribution<
       transform(input: {
         item: Extract<AgentTimelineItem, { type: ItemType }>;
         phase: "streaming" | "complete";
+        taskConversation?: { conversationId: string; ownerPluginId: string };
       }): PluginTimelineTransformResult | undefined;
     }
   : never;

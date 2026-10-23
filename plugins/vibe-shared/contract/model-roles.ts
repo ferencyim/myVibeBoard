@@ -181,6 +181,43 @@ export const TaskPresetSnapshotSchema = z
   })
   .strict();
 export type TaskPresetSnapshot = z.infer<typeof TaskPresetSnapshotSchema>;
+
+/** Actual overrides are frozen per confirmation round, member and optional planned subtask. */
+export function findTaskActualPreset(
+  task: { confirmedAt: string | null; control?: Record<string, unknown> | null },
+  input: {
+    agentId?: string;
+    memberId?: string;
+    role?: ModelRole;
+    subtaskId?: string;
+    admittedOnly?: boolean;
+  },
+): TaskPresetSnapshot | undefined {
+  const entries = task.control?.actualModels;
+  if (!Array.isArray(entries)) return undefined;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry: unknown = entries[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const actual = entry as Record<string, unknown>;
+    if (actual.confirmedAt !== task.confirmedAt) continue;
+    if (input.admittedOnly && actual.admitted === false) continue;
+    if (
+      ["agentId", "memberId", "role", "subtaskId"].some((key) => {
+        const selector = input[key as "agentId" | "memberId" | "role" | "subtaskId"];
+        return selector !== undefined && actual[key] !== selector;
+      })
+    )
+      continue;
+    // Entries written before actual snapshot freezing only identify a model; never resolve them
+    // through a now-mutable preset. Continue looking for a usable frozen entry instead.
+    if (actual.presetSnapshot === undefined) continue;
+    const parsed = TaskPresetSnapshotSchema.safeParse(actual.presetSnapshot);
+    if (!parsed.success) throw new Error("实际接手模型的预设快照无效，请核对任务后再继续");
+    return parsed.data;
+  }
+  return undefined;
+}
+
 export const TaskRoleSnapshotSchema = z
   .object({
     scout: TaskPresetSnapshotSchema.nullable(),

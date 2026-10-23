@@ -26,6 +26,20 @@ export function findTaskConversationRecipientOption(
   );
 }
 
+export function taskConversationHasLiveCache(
+  options: readonly TaskConversationRecipientOption[],
+  recipient: TaskConversationRecipient,
+  now = Date.now(),
+): boolean {
+  const option = findTaskConversationRecipientOption(options, recipient);
+  if (
+    option?.recipient.config.provider !== recipient.config.provider ||
+    option?.recipient.config.model !== recipient.config.model
+  )
+    return false;
+  return (option?.cacheExpiresAt ?? 0) > now;
+}
+
 export function withTaskConversationRecipientModel(input: {
   recipient: TaskConversationRecipient;
   provider: TaskConversationRecipient["config"]["provider"];

@@ -20,6 +20,7 @@ import {
   type ComplexitySettingsValues,
 } from "../complexity";
 import type { VibeDb, VibeStore } from "../vibe/db";
+import { setContextMeta } from "../vibe/db/context-state";
 import {
   baseProvider,
   COMPACT_PROVIDERS,
@@ -41,6 +42,8 @@ export interface AgentInfo {
 
 /** What the scheduler needs from the daemon; tests pass a fake. */
 export interface CompactionHost {
+  /** Managed members compact through their conversation owner, without a separate writer. */
+  taskMember?(session: AgentSession): Promise<TaskCacheMember | null>;
   /** Rehydrate only a native idle, unarchived agent after daemon restart. */
   describeIdleAgent?(agentId: string): Promise<AgentInfo | null>;
   /** Sends a prompt and resolves with how the turn ended; "permission" only after giving up on an approval. */
@@ -55,6 +58,15 @@ export interface CompactionHost {
   requestHandoff?(session: AgentSession, prompt: string): Promise<void>;
   /** CLI session ids behind an agent (the ids usage_event rows carry); enables complexity. */
   cliSessionIds?(agentId: string): Promise<string[]>;
+}
+
+export interface TaskCacheMember {
+  conversationId: string;
+  memberId: string;
+  lastRequestAt: string | null;
+  idle: boolean;
+  /** Returns the host's request timestamp after accepting compaction. */
+  compact(): Promise<string | null>;
 }
 
 export interface CompactionConfig {
@@ -178,6 +190,69 @@ export function createCompactionScheduler(options: SchedulerOptions) {
   const cliIds = new Map<string, string[]>(); // agent id -> CLI session ids
   const turnStart = new Map<string, number>(); // agent id -> start of the running turn (ms)
   const systemTurns = new Set<string>(); // agent ids whose running turn is not the user's
+  const memberRequests = new Map<string, string>();
+
+  async function compactTaskMember(s: AgentSession, agent: AgentInfo, member: TaskCacheMember) {
+    const config = options.config();
+    const key = `context:member_compact:${member.conversationId}:${member.memberId}`;
+    const raw =
+      options.usageDb
+        ?.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?")
+        .get(key)?.value ?? memberRequests.get(key);
+    const requestAt = member.lastRequestAt;
+    const remember = (at: string, pending: boolean) => {
+      const value = JSON.stringify({ requestAt: at, pending });
+      memberRequests.set(key, value);
+      if (options.usageDb) setContextMeta(options.usageDb, key, value);
+    };
+    let handled: { requestAt: string; pending: boolean } | null = null;
+    try {
+      handled = raw ? JSON.parse(raw) : null;
+    } catch {
+      /* No prior request marker. */
+    }
+    // Reconcile an interrupted RPC with the host's persisted request timestamp.
+    if (handled?.pending && requestAt && handled.requestAt !== requestAt) {
+      remember(requestAt, false);
+      handled = { requestAt, pending: false };
+    }
+    const requestMs = requestAt ? Date.parse(requestAt) : NaN;
+    const reason = skipReason({
+      state: member.idle ? "idle" : "working",
+      nowMs: now(),
+      cacheExpiresAtMs: Number.isFinite(requestMs)
+        ? requestMs + ttlFor(config, agent.provider) * 1000
+        : null,
+      marginMs: marginFor(config, ttlFor(config, agent.provider)) * 1000,
+      alreadyCompacted: requestAt !== null && handled?.requestAt === requestAt,
+    });
+    if (reason) return { sessionId: s.id, action: "skipped" as const, reason };
+    // Persist intent before the call: an interrupted/unknown request is never replayed.
+    remember(requestAt!, true);
+    busy.add(agent.id);
+    try {
+      const compactedAt = await member.compact();
+      // The compact request refreshes lastRequestAt too. Do not compact its own idle period.
+      remember(compactedAt ?? requestAt!, false);
+      store.sessions.recordCompaction(s.id, "compact");
+      return { sessionId: s.id, action: "compact" as const };
+    } catch (error) {
+      log(`vibe-context: task member compaction failed for ${s.id}: ${String(error)}`);
+      return { sessionId: s.id, action: "skipped" as const, reason: "failed" as const };
+    } finally {
+      busy.delete(agent.id);
+    }
+  }
+
+  async function nativeCompactionOutcome(s: AgentSession, agent: AgentInfo) {
+    if (!s.cardId && s.workspaceId) {
+      const member = await host.taskMember?.(s);
+      if (member) return compactTaskMember(s, agent, member);
+    }
+    if (nativeClaude && baseProvider(agent.provider) === "claude")
+      return { sessionId: s.id, action: "skipped" as const, reason: "native" as const };
+    return null;
+  }
 
   const track = (agent: AgentInfo) =>
     void agents.set(agent.id, { id: agent.id, provider: agent.provider, cwd: agent.cwd });
@@ -409,8 +484,9 @@ export function createCompactionScheduler(options: SchedulerOptions) {
           skipped("untracked");
           continue;
         }
-        if (nativeClaude && baseProvider(agent.provider) === "claude") {
-          skipped("native");
+        const nativeOutcome = await nativeCompactionOutcome(s, agent);
+        if (nativeOutcome) {
+          out.push(nativeOutcome);
           continue;
         }
         const cx = config.complexity;

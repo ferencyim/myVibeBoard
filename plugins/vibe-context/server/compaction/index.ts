@@ -18,6 +18,7 @@ import {
   type CompactionHost,
 } from "./scheduler";
 import { compactionSettings } from "./settings";
+import { persistCachePolicy } from "./cache-policy";
 
 export * from "../complexity";
 export * from "./native";
@@ -71,17 +72,18 @@ export function registerCompaction(server: PluginServerContext, options: Compact
   let complexityValues: ComplexitySettingsValues | undefined;
   let config: CompactionConfig = { enabled: true, ttlSeconds: {} };
   let intervalMs = 20_000;
+  let stopped = false;
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
+    if (stopped) return;
     if (state.status !== "ready") {
       log(`vibe-context: compaction settings invalid, keeping defaults: ${state.error}`);
       return;
     }
     config = state.values;
+    persistCachePolicy(db, config);
     log(`vibe-context: compaction settings: ${JSON.stringify(state.values)}`);
     intervalMs = state.values.checkIntervalSeconds * 1000;
   };
-  void settings.read().then(apply);
-  const unsubscribe = settings.subscribe(apply);
   const applyComplexity = (state: Awaited<ReturnType<typeof complexity.read>>) => {
     if (state.status !== "ready") {
       log(`vibe-context: complexity settings invalid, keeping previous: ${state.error}`);
@@ -96,6 +98,9 @@ export function registerCompaction(server: PluginServerContext, options: Compact
   const db = openVibeDb(options.dbPath ? { path: options.dbPath } : {});
   migrateOwner(db, "core");
   const store = createVibeStore(db);
+  persistCachePolicy(db, config);
+  void settings.read().then(apply);
+  const unsubscribe = settings.subscribe(apply);
   const userHome = resolveVibeHome();
   const markerHome = options.dbPath ? dirname(options.dbPath) : userHome;
 
@@ -105,6 +110,39 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     return paseo;
   };
   const host: CompactionHost = {
+    async taskMember(session) {
+      if (!session.workspaceId) return null;
+      const conversation = await handle().taskConversations.resolve({
+        workspaceId: session.workspaceId,
+      });
+      const snapshot = conversation?.current();
+      const member = snapshot?.members.find((entry) => entry.backendAgentId === session.agentId);
+      if (!conversation || !snapshot || !member) return null;
+      return {
+        conversationId: conversation.id,
+        memberId: member.memberId,
+        lastRequestAt: member.lastRequestAt,
+        idle: snapshot.status === "active" && member.status === "idle",
+        async compact() {
+          // Native compaction is out-of-band and emits no foreground turn to consume a marker.
+          const result = await conversation.compact({ memberId: member.memberId });
+          if (result.error) throw new Error(result.error);
+          const deadline = Date.now() + (config.approvalWaitMinutes ?? 10) * 60_000;
+          const agent = handle().agents.ref(session.agentId);
+          let turn = await agent.waitForFinish(30_000);
+          while (
+            (turn.status === "permission" || turn.status === "timeout") &&
+            Date.now() < deadline
+          )
+            turn = await agent.waitForFinish(30_000);
+          if (turn.status !== "idle") throw new Error(`任务成员压缩未完成：${turn.status}`);
+          return (
+            result.conversation?.members.find((entry) => entry.memberId === member.memberId)
+              ?.lastRequestAt ?? null
+          );
+        },
+      };
+    },
     async describeIdleAgent(agentId) {
       const snapshot = (await handle().agents.ref(agentId).refresh())?.agent;
       if (!snapshot || snapshot.status !== "idle" || snapshot.activeTurn || snapshot.archivedAt)
@@ -203,7 +241,6 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     server.on("agent.archived", ({ agent }) => scheduler.onAgentGone(agent.id)),
   ];
 
-  let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const loop = async () => {
     try {

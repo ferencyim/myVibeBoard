@@ -9,13 +9,16 @@ import {
   MODEL_ROLES,
   TaskSchema,
   validateTaskSubtaskPresets,
+  presetModels,
+  TaskPresetSnapshotSchema,
+  findTaskActualPreset,
   type ModelRole,
   type Project,
   type TaskPresetSnapshot,
   type Task,
   type ProviderQuota,
 } from "./vibe/contract";
-import { type DeviceLeases, type createVibeStore } from "./vibe/db";
+import { createTaskRuntimeCommands, type DeviceLeases, type createVibeStore } from "./vibe/db";
 import { type PortAllocator } from "./ports";
 import { findOverlap } from "./overlap";
 import { deviceKindFor, type SchedulerConfig } from "./scheduler";
@@ -54,6 +57,7 @@ export interface TaskResourceRequest {
   model?: string;
   files?: string[];
   hostLease?: boolean;
+  operation?: "send" | "compact" | "create";
 }
 const LeaseSchema = z.object({
   id: z.string(),
@@ -73,6 +77,7 @@ const LeaseSchema = z.object({
   slot: z.boolean(),
   frozen: z.boolean(),
   hostOperation: z.boolean().default(false),
+  pendingCreate: z.boolean().optional(),
   port: z.number(),
   deviceIds: z.array(z.string()),
 });
@@ -292,6 +297,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
           : null;
         if (
           (row.frozen && agent && nativeStopped(agent)) ||
+          (row.frozen && !agent && row.pendingCreate) ||
           (!row.agentId && workspace.agents.every(nativeStopped))
         )
           release(row);
@@ -319,6 +325,21 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   function taskFor(request: TaskResourceRequest, role: ResourceRole) {
     const task = deps.store.tasks.get(request.workspaceId);
     if (role === "master") return { task, planning: false };
+    if (request.operation === "compact") {
+      const session = request.agentId
+        ? createTaskRuntimeCommands(deps.store.db).findSessionByAgent(request.agentId)
+        : null;
+      if (
+        !task ||
+        !session ||
+        session.workspaceId !== request.workspaceId ||
+        session.role !== role ||
+        session.currentProvider !== request.provider ||
+        session.model !== request.model
+      )
+        block("压缩成员与已登记任务模型不一致");
+      return { task, planning: true };
+    }
     const planning =
       !!task && ["planning", "awaiting_confirmation"].includes(task.phase) && planningRole(role);
     if (planning) return { task, planning };
@@ -349,10 +370,28 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     planning: boolean,
   ) {
     let preset: TaskPresetSnapshot | null = null;
-    if (role !== "master" && !planning) {
+    const actual =
+      task && request.agentId && role !== "master" && request.operation !== "compact"
+        ? findTaskActualPreset(task, { agentId: request.agentId, role })
+        : undefined;
+    if (actual) preset = actual;
+    else if (role !== "master" && !planning) {
       preset =
         role === "subagent" ? subtaskPreset(task!, request.subtaskId) : task!.rolesSnapshot![role];
       if (!preset) block("此角色未启用");
+      // Explicit handover changes the next member's model, never the confirmed scope.
+      if (request.presetId && request.presetId !== preset!.presetId) {
+        const override = deps.store.presets.get(request.presetId);
+        if (!override) block("接手预设不存在或不可用");
+        preset = TaskPresetSnapshotSchema.parse({
+          presetId: override!.id,
+          source: "task",
+          models: presetModels(override!),
+          environmentKind: override!.environmentKind,
+          runtimeEnv: override!.runtimeEnv,
+          instructions: override!.instructions,
+        });
+      }
     }
     let model: { provider: string; model: string };
     if (preset) {
@@ -583,7 +622,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     const { workspace, paths, project } = await admissionWorkspace(request, master, hostOperation);
     const projectId = master ? null : workspace.projectId;
     checkCapacity(model.provider, projectId);
-    const access = accessFor(role, hostOperation);
+    const access = request.operation === "compact" ? "read" : accessFor(role, hostOperation);
     const files = filesFor(request, role, task, planning);
     const ranges = master && !hostOperation ? [] : await normalizeTaskFiles(files, paths.directory);
     checkFiles(paths.repo, ranges, access, existing?.id);
@@ -672,6 +711,10 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
       await freeze(workspaceId, "原生回合状态不可读，冻结新派发并保留资源");
       return false;
     }
+    if (row?.pendingCreate) {
+      row.pendingCreate = false;
+      save();
+    }
     if (row && (await boundMatches(row, agent, task))) return true;
     if (nativeStopped(agent)) return false;
     if (row) {
@@ -697,6 +740,24 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     if (restored) await reconcile();
     startup = false;
   }
+  function bindPlannedLease(request: TaskResourceRequest, row: TaskResourceLease) {
+    const planned = request.agentId
+      ? createTaskRuntimeCommands(deps.store.db).findSessionByAgent(request.agentId)
+      : null;
+    if (
+      !planned ||
+      planned.workspaceId !== row.workspaceId ||
+      planned.role !== row.role ||
+      planned.currentProvider !== row.provider ||
+      planned.model !== row.model
+    )
+      block("待创建成员与资源登记不一致");
+    if (row.agentId && row.agentId !== request.agentId) block("旧原生 agent 尚未释放");
+    row.agentId = request.agentId!;
+    row.pendingCreate = true;
+    save();
+    return result(request, true, "已登记待创建的原生成员", row);
+  }
   async function bindLease(
     request: TaskResourceRequest,
     row: TaskResourceLease,
@@ -704,6 +765,11 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   ) {
     if (row.frozen || !row.slot) block("资源未准入或已冻结");
     const agent = workspace.agents.find((entry) => entry.id === request.agentId);
+    if (!agent && request.agentId) {
+      // Admission runs before host member creation. Only the owner command's exact registration
+      // may bind that reserved identity; no provider request has started at this point.
+      return bindPlannedLease(request, row);
+    }
     if (agent?.archivedAt) block("原生 agent 已归档，请先通过原生恢复再绑定");
     if (!agent || agent.workspaceId !== row.workspaceId)
       block("原生 agent 的 workspace 与准入不一致");
@@ -713,6 +779,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
       block("原生 agent 的模型与准入不一致");
     if (row.agentId && row.agentId !== agent!.id) block("旧原生 agent 尚未释放");
     row.agentId = agent!.id;
+    row.pendingCreate = false;
     save();
     return result(request, true, "已登记原生 agent", row);
   }
@@ -725,7 +792,15 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
       release(row);
       return result(request, true, "插件文件操作已完成，写锁已释放");
     }
+    if (request.action === "release" && !row.agentId && workspace.agents.every(nativeStopped)) {
+      release(row);
+      return result(request, true, "未绑定资源且原生任务成员均已停止，资源已释放");
+    }
     const agent = workspace.agents.find((entry) => entry.id === row.agentId);
+    if (!agent && row.pendingCreate && request.action === "release") {
+      release(row);
+      return result(request, true, "预创建成员未产生原生agent，资源已释放");
+    }
     if (!agent || !nativeStopped(agent)) {
       row.frozen = true;
       await freeze(row.workspaceId, "停止未确认，继续保留文件锁、并发、设备与端口");

@@ -564,6 +564,8 @@ cleanup. Callbacks use the same `({ request }, { paseo, signal })` signature as 
 The host calls only the conversation's `ownerPluginId`; another plugin cannot authorize its work.
 Missing or disabled preparation/admission hooks reject new turns. Reading history, stopping,
 and answering an existing permission remain available.
+Plan or mode approval cannot lift a managed read-only task role's restrictions; execution still
+requires the task command. Denials and ordinary question/tool answers keep their existing behavior.
 
 | Hook            | Request and result                                                                                                                                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -579,6 +581,11 @@ never rendered as a human message or copied back into the public timeline. Contr
 the stop barrier and cannot prevent the host from cancelling members. These hooks also remain
 available through `server.before("task.conversation.prepare" | "task.conversation.admit" |
 "task.conversation.control", callback)`.
+
+Member compaction uses the provider's native out-of-band command and rejects unsupported
+providers. Its control `settled` arrives after a fresh native compaction completion, or after
+confirming that no native command was supported. A failed or unconfirmed command reports
+`unknown`; keep its resources reserved until reconciled. Compaction does not start a prompt turn.
 
 ### Change configuration and inject an MCP server
 
@@ -1399,6 +1406,8 @@ provider- or tool-specific recognition. Returning `undefined` keeps the original
 `items` replaces it; an empty array removes it. Item `data` must be JSON-compatible. The `phase`
 input is `"streaming"` for the live assistant message, running tool calls, and loading reasoning;
 it is `"complete"` for committed or fetched messages and finished tools or reasoning.
+`taskConversation` is optional input metadata containing `conversationId` and `ownerPluginId` for
+task group timelines. It is absent in ordinary agent timelines; use it to scope task-only transforms.
 Assistant and reasoning callbacks receive the full accumulated text on each update, including
 paragraph separators. Paseo invokes transformers before splitting native Markdown or grouping
 tools in Overview. A claimed assistant message remains one source item throughout streaming;
@@ -1741,7 +1750,8 @@ A workspace panel receives `PluginWorkspacePanelProps`: `context: "workspace"`, 
 
 For the exclusive `locations: ["conversation"]`, use `PluginConversationPanelProps`. The host mounts
 the panel beside the task conversation on wide layouts and in its native sheet on compact layouts.
-Props include stable `conversationId` and `anchorAgentId: string | null`; `agentId` is absent before
+Props include stable `conversationId`, `anchorAgentId: string | null`, and optional `recipient`
+(the current composer selection, or `null`); `agentId` is absent before
 the first recipient creates an anchor and then remains equal to that anchor when the recipient changes. The host
 validates the conversation's workspace ownership and does not require the anchor runtime to be
 loaded. Conversation-only panels do not create standalone workspace tabs.
@@ -1749,12 +1759,34 @@ Open one with `client.openPanel(id, { workspaceId, conversationId, anchorAgentId
 location: "conversation" })`, or `openPanel(id, { location: "conversation" })` from its task slash
 context. Gate the task entry on `server_info.features.taskConversations`.
 
+### First-message outbox owner
+
+Register `client.addFirstMessageOutboxOwner({ initialRole: "planner" })` to route new-workspace
+first messages into your task conversation. The runtime installation ID becomes `ownerPluginId`;
+`initialRole` selects the first recipient. Return the registration's cleanup with your other
+contributions. Each plugin may register one owner. Multiple enabled owners on the same host
+produce a visible error and preserve the draft.
+
+The outbox persists the chosen owner with the first message, so reconnects use the same destination.
+Without a declaration, including after plugin teardown, new messages create ordinary agents.
+Task-owned entries require `server_info.features.taskConversations`; ordinary entries require only
+the creation lifecycle capability. Existing submitted entries continue checking their original receipt.
+
 The owning plugin supplies selector options with
 `client.setTaskConversationRecipients({ workspaceId, conversationId,
 recipients: [{ id, label, recipient }], selectedRecipientId? })`. Each `recipient` uses the host SDK's
 `TaskConversationRecipient` contract. A mounted conversation panel may call the same method on
 `navigation`. The host validates workspace/owner identity and removes the options when the plugin
 unloads; supplying options does not create provider sessions. The plugin resolves roles and presets.
+An option may include `cacheExpiresAt` (estimated Unix milliseconds). The host uses it to show a
+token-cost hint before switching the current recipient's role or model while its cache is live.
+
+Conversation panels may use optional
+`navigation.openTaskConversationSource({ conversationId, sourceKey }): Promise<void>` to locate
+a published row in the same conversation, and
+`navigation.openTaskConversationMember({ conversationId, memberId }): Promise<void>` to expand
+the existing member details sheet. Both validate host, workspace, and plugin ownership; neither
+opens an agent tab. Hide dependent controls when the method is absent on an older host.
 
 Read cached state with `useWorkspace(workspaceId, selector)` and `useAgent(agentId, selector)`. A selector is required. Paseo compares its result shallowly, so selecting `{ name, status }` does not re-render when unrelated fields change. Select every field the component renders in one call; do not select the whole snapshot.
 
@@ -1883,6 +1915,9 @@ client.addSlashCommand({
 | `argumentHint` | Yes      | Short usage hint shown after the command name. |
 | `context`      | Yes      | `"workspace"` or `"agent"`.                    |
 | `onSubmit`     | Yes      | Client callback for the matching context.      |
+
+A command name starts with a lowercase ASCII letter or Chinese character; remaining characters
+may also include digits and hyphens.
 
 `onSubmit` receives the matching Command Center callback context plus `args`. For `/review src`,
 `args` is `"src"`; Paseo trims only the remainder's leading and trailing whitespace and leaves

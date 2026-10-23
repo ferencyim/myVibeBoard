@@ -1172,6 +1172,49 @@ describe("Codex app-server provider", () => {
     }
   });
 
+  test("namespaces the first local turn after resume while keeping every chunk in one turn", async () => {
+    const beforeRestart = createFakeCodexAppServer();
+    const firstSession =
+      await createProviderWithFakeAppServer(beforeRestart).createSession(createConfig());
+    const firstEvents: AgentStreamEvent[] = [];
+    firstSession.subscribe((event) => firstEvents.push(event));
+    const first = await firstSession.startTurn("旧轮次");
+    await beforeRestart.waitForTurnStart();
+    beforeRestart.says({ itemId: "first-message", text: "旧正文", chunks: ["旧", "正文"] });
+    beforeRestart.completeTurn();
+    await vi.waitFor(() =>
+      expect(firstEvents).toContainEqual(expect.objectContaining({ type: "turn_completed" })),
+    );
+    const handle = firstSession.describePersistence()!;
+    await firstSession.close();
+    const afterRestart = createFakeCodexAppServer();
+    const resumed = await createProviderWithFakeAppServer(afterRestart).resumeSession(handle);
+    const resumedEvents: AgentStreamEvent[] = [];
+    resumed.subscribe((event) => resumedEvents.push(event));
+    try {
+      const second = await resumed.startTurn("重启后的新轮次");
+      await afterRestart.waitForTurnStart();
+      afterRestart.says({ itemId: "second-message", text: "新正文", chunks: ["新", "正文"] });
+      afterRestart.completeTurn();
+      await vi.waitFor(() =>
+        expect(resumedEvents).toContainEqual(expect.objectContaining({ type: "turn_completed" })),
+      );
+      expect(first.turnId).toMatch(/^codex-turn-[0-9a-f-]+-0$/);
+      expect(second.turnId).toMatch(/^codex-turn-[0-9a-f-]+-0$/);
+      expect(second.turnId).not.toBe(first.turnId);
+      const messageTurns = (events: AgentStreamEvent[]) =>
+        events
+          .filter((event) => event.type === "timeline" && event.item.type === "assistant_message")
+          .map((event) => ("turnId" in event ? event.turnId : undefined));
+      expect(new Set(messageTurns(firstEvents))).toEqual(new Set([first.turnId]));
+      expect(new Set(messageTurns(resumedEvents))).toEqual(new Set([second.turnId]));
+      beforeRestart.assertNoErrors();
+      afterRestart.assertNoErrors();
+    } finally {
+      await resumed.close();
+    }
+  });
+
   test("provider persistence leaves options owned by the stored agent config", async () => {
     const appServer = createFakeCodexAppServer();
     const provider = createProviderWithFakeAppServer(appServer);
@@ -4156,7 +4199,7 @@ describe("Codex app-server provider", () => {
       await expect(child).resolves.toMatchObject({
         type: "provider_subagent",
         provider: "codex",
-        turnId: "codex-turn-0",
+        turnId: expect.stringMatching(/^codex-turn-[0-9a-f-]+-0$/),
         event: {
           type: "upsert",
           id: "legacy-only-child-thread",
@@ -4166,7 +4209,7 @@ describe("Codex app-server provider", () => {
       await expect(spawn).resolves.toMatchObject({
         type: "timeline",
         provider: "codex",
-        turnId: "codex-turn-0",
+        turnId: expect.stringMatching(/^codex-turn-[0-9a-f-]+-0$/),
         item: {
           type: "tool_call",
           callId: "spawn-legacy-only-child",
@@ -5575,6 +5618,35 @@ describe("Codex app-server provider", () => {
         },
       },
     ]);
+  });
+
+  test("formats ordinary compact failures and rejects failures for native control callers", async () => {
+    const session = createSession();
+    session.client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "thread/loaded/list") return { data: ["test-thread"] };
+        if (method === "skills/list") return { data: [] };
+        if (method === "thread/compact/start") throw new Error("native compact unavailable");
+        return {};
+      }),
+    };
+    const handler = session.tryHandleOutOfBand?.("/compact");
+    expect(handler).not.toBeNull();
+    const emit = vi.fn();
+    await expect(handler!.run({ emit })).resolves.toBeUndefined();
+    expect(emit).toHaveBeenCalledExactlyOnceWith({
+      type: "timeline",
+      provider: "codex",
+      item: {
+        type: "assistant_message",
+        text: "Failed to compact context: native compact unavailable\n\n",
+      },
+    });
+    emit.mockClear();
+    await expect(handler!.run({ emit, throwOnError: true })).rejects.toThrow(
+      "native compact unavailable",
+    );
+    expect(emit).not.toHaveBeenCalled();
   });
 
   test("maps question responses from headers back to question ids and completes the tool call", async () => {

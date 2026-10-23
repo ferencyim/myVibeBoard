@@ -4,6 +4,10 @@ Local plugins contribute daemon RPCs, native app surfaces, workspace panels, Com
 client slash commands, timeline items, header buttons, composer pills, app themes, composer attachment sources, and settings screens.
 Paseo executes `index.server.ts` in a subprocess and `index.client.tsx` in every connected app.
 
+Task plugins opt into new-workspace first messages with
+[`client.addFirstMessageOutboxOwner({ initialRole })`](../public-docs/plugins/reference.md#first-message-outbox-owner).
+The core never assumes a plugin ID; disabling the owner restores ordinary agent creation.
+
 > **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugins are unsandboxed: server code and preparation commands run with the daemon user's access on the daemon host, and client contributions run inside Paseo. The repository's dependencies and future updates are part of that trust decision. With `--host`, preparation runs on that remote daemon host.
 
 ## Install a directory source
@@ -576,6 +580,15 @@ lives in `plugins/workspace-panels/conversation.tsx`; it owns the side panel and
 sheet, while the plugin owns the content. Conversation identity, panel and slash/pill contracts,
 and owner-scoped preparation/admission hooks are defined in the
 [public reference](../public-docs/plugins/reference.md#task-conversation-hooks).
+
+Provider-local turn counters can restart when a runtime resumes. Public assistant source keys
+use the durable host delivery identity; `sourceTurnId` remains a native detail locator. Treat
+source keys as opaque and retain completed public rows when replaying provider history.
+
+Native compaction may emit a provider `turn_ended` before its out-of-band command settles.
+An owner tracking task completion must recognize its active compact control scope and leave
+resource release to `compact` settlement; treating that event as a normal task turn can freeze
+the task while the provider is still finishing the command.
 
 Header buttons and composer pills share the client-only descriptor and registration lifecycle in
 `packages/app/src/plugins/buttons/`. The [public button reference](../public-docs/plugins/reference.md#header-buttons)

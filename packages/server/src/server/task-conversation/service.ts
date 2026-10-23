@@ -31,7 +31,11 @@ import type {
   AgentManagerEvent,
   CreateAgentOptions,
 } from "../agent/agent-manager.js";
-import type { AgentSessionConfig, AgentPromptInput } from "../agent/agent-sdk-types.js";
+import type {
+  AgentSessionConfig,
+  AgentPromptInput,
+  AgentPermissionResponse,
+} from "../agent/agent-sdk-types.js";
 import type { AgentRunOptions } from "../agent/agent-sdk-types.js";
 import type { PluginTaskConversationPrepareRequest } from "@getpaseo/plugin/server";
 import type { AgentStorage } from "../agent/agent-storage.js";
@@ -40,13 +44,19 @@ import { buildAgentPrompt } from "../agent/prompt-attachments.js";
 import { formatSystemNotificationPrompt } from "../agent/agent-messages/index.js";
 import type { PluginService } from "../plugins/index.js";
 import type { WorkspaceRegistry } from "../workspace-registry.js";
-import { TaskConversationStore, type StoredTaskConversation } from "./store.js";
+import {
+  TaskConversationStore,
+  type StoredTaskConversation,
+  type StoredTaskConversationDelivery,
+} from "./store.js";
 import {
   TASK_CONVERSATION_ID_LABEL as CONVERSATION_LABEL,
   TASK_CONVERSATION_MEMBER_ID_LABEL as MEMBER_LABEL,
 } from "./identity.js";
 
 type Input<T> = Omit<T, "type" | "requestId">;
+type NativeTimelineRow = Awaited<ReturnType<AgentManager["getTimelineRows"]>>[number];
+const READ_ONLY_TASK_ROLES = new Set(["planner", "scout", "plan_reviewer", "reviewer"]);
 interface Update {
   conversation?: TaskConversationSnapshot;
   row?: TaskConversationRow;
@@ -81,6 +91,40 @@ function ownSet<T>(record: Record<string, T>, key: string, value: T): void {
     configurable: true,
     writable: true,
   });
+}
+function assistantSourceKey(
+  memberId: string,
+  turnId: string | undefined,
+  deliveryId?: string,
+): string {
+  return deliveryId
+    ? `assistant:${memberId}:delivery:${deliveryId}`
+    : `assistant:${memberId}:${turnId}`;
+}
+function confirmDeliveryReceipt(
+  record: StoredTaskConversation,
+  delivery: StoredTaskConversationDelivery,
+  receipt: NativeTimelineRow | undefined,
+): void {
+  if (delivery.status !== "unknown" || !receipt?.turnId) return;
+  delivery.status = "accepted";
+  delivery.sourceTurnId = receipt.turnId;
+  const member = record.snapshot.members.find((entry) => entry.memberId === delivery.memberId)!;
+  member.seenConversationSeq = Math.max(member.seenConversationSeq, delivery.throughSeq);
+}
+function legacyMatchesDelivery(
+  legacy: TaskConversationRow | null,
+  epoch: string,
+  receipt: NativeTimelineRow | undefined,
+  nextReceipt: NativeTimelineRow | undefined,
+  ambiguousTurn: boolean,
+): boolean {
+  return (
+    !ambiguousTurn ||
+    (legacy?.source?.epoch === epoch &&
+      (!receipt || (legacy.source.seq ?? -1) > receipt.seq) &&
+      (!nextReceipt || (legacy.source.seq ?? -1) < nextReceipt.seq))
+  );
 }
 function mergeAssistantFragments(
   previous: AgentManagerEvent | undefined,
@@ -1000,10 +1044,39 @@ export class TaskConversationService {
     };
   }
 
-  async preparePermissionResponse(agentId: string): Promise<void> {
+  assertPermissionApproval(
+    agentId: string,
+    requestId: string,
+    response: AgentPermissionResponse,
+  ): void {
+    if (response.behavior !== "allow") return;
+    const conversation = this.getByAgentId(agentId);
+    const member = conversation?.members.find((entry) => entry.backendAgentId === agentId);
+    if (!member) return;
+    const config = member.config;
+    const readOnlyVerifier =
+      member.role === "verifier" &&
+      (config.modeId === "plan" ||
+        config.modeId === "read-only" ||
+        config.providerOptions?.sandbox_mode === "read-only");
+    if (!READ_ONLY_TASK_ROLES.has(member.role) && !readOnlyVerifier) return;
+    const request =
+      this.dependencies.agentManager.getAgent(agentId)?.pendingPermissions?.get(requestId) ??
+      member.pendingPermissions?.find((entry) => entry.id === requestId);
+    if (response.updatedPermissions?.length || request?.kind !== "question")
+      throw new Error(
+        "该任务成员为只读角色，只能回答提问，不能批准工具或修改权限；请通过任务面板确认执行。",
+      );
+  }
+  async preparePermissionResponse(
+    agentId: string,
+    requestId?: string,
+    response?: AgentPermissionResponse,
+  ): Promise<void> {
     const conversation = this.getByAgentId(agentId);
     if (!conversation) throw new Error("Task member is missing");
     this.assertPermissionResponse(this.require(conversation.conversationId));
+    if (requestId && response) this.assertPermissionApproval(agentId, requestId, response);
     await this.authority.run({ agentId }, () =>
       ensureAgentLoaded(agentId, {
         agentManager: this.dependencies.agentManager,
@@ -1012,6 +1085,7 @@ export class TaskConversationService {
       }),
     );
     this.assertPermissionResponse(this.require(conversation.conversationId));
+    if (requestId && response) this.assertPermissionApproval(agentId, requestId, response);
   }
   async continuePermission(
     agentId: string,
@@ -1339,6 +1413,19 @@ export class TaskConversationService {
     });
   }
   async compact(input: Input<TaskConversationCompactRequest>): Promise<TaskConversationSnapshot> {
+    const previous = this.queues.get(input.conversationId) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(() => this.compactMember(input));
+    this.queues.set(input.conversationId, result);
+    try {
+      return await result;
+    } finally {
+      if (this.queues.get(input.conversationId) === result)
+        this.queues.delete(input.conversationId);
+    }
+  }
+  private async compactMember(
+    input: Input<TaskConversationCompactRequest>,
+  ): Promise<TaskConversationSnapshot> {
     const snapshot = this.require(input.conversationId).snapshot;
     const member = snapshot.members.find((entry) => entry.memberId === input.memberId);
     if (!member) throw new Error("Task member is missing");
@@ -1355,29 +1442,106 @@ export class TaskConversationService {
       },
       "compact",
     );
+    await this.controlNotice(snapshot, "compact", "before", member.backendAgentId);
     await this.authority.run({ agentId: member.backendAgentId }, async () => {
-      await ensureAgentLoaded(member.backendAgentId, {
-        agentManager: this.dependencies.agentManager,
-        agentStorage: this.dependencies.agentStorage,
-        logger: this.dependencies.logger,
-      });
-      this.dependencies.store.update(input.conversationId, (record) => {
-        record.snapshot.members.find((entry) => entry.memberId === member.memberId)!.lastRequestAt =
-          new Date().toISOString();
-      });
       const runOptions = { clientMessageId: `compact:${randomUUID()}` };
       this.authorizedRuns.set(runOptions, member.backendAgentId);
+      let completion: { promise: Promise<void>; dispose(): void } | null = null;
+      let handled: boolean | undefined;
       try {
-        await this.dependencies.agentManager.runAgent(
+        await ensureAgentLoaded(member.backendAgentId, {
+          agentManager: this.dependencies.agentManager,
+          agentStorage: this.dependencies.agentStorage,
+          logger: this.dependencies.logger,
+        });
+        completion = this.observeCompaction(member.backendAgentId);
+        this.dependencies.store.update(input.conversationId, (record) => {
+          record.control = { status: "unknown", memberId: member.memberId };
+        });
+        handled = await this.dependencies.agentManager.runOutOfBand(
           member.backendAgentId,
           "/compact",
           runOptions,
         );
+        if (!handled) throw new Error("此模型提供商不支持原生上下文压缩。");
+        await completion.promise;
+        this.dependencies.store.update(input.conversationId, (record) => {
+          record.snapshot.members.find(
+            (entry) => entry.memberId === member.memberId,
+          )!.lastRequestAt = new Date().toISOString();
+          if (record.snapshot.status === "active")
+            record.control = { status: "settled", memberId: member.memberId };
+        });
+        await this.controlNotice(snapshot, "compact", "settled", member.backendAgentId);
+      } catch (error) {
+        this.dependencies.store.update(input.conversationId, (record) => {
+          record.control = {
+            status: handled === false ? "settled" : "unknown",
+            memberId: member.memberId,
+          };
+          if (handled !== false) record.snapshot.status = "paused";
+        });
+        await this.controlNotice(
+          snapshot,
+          "compact",
+          handled === false ? "settled" : "unknown",
+          member.backendAgentId,
+        );
+        throw error;
       } finally {
+        completion?.dispose();
         this.authorizedRuns.delete(runOptions);
+        this.notifySnapshot(input.conversationId);
       }
     });
     return this.require(input.conversationId).snapshot;
+  }
+  private observeCompaction(agentId: string) {
+    const baseline = this.dependencies.agentManager.fetchTimeline(agentId, {
+      direction: "tail",
+      limit: 1,
+    });
+    let complete!: () => void;
+    let reject!: (error: Error) => void;
+    let loading = false;
+    const promise = new Promise<void>((done, fail) => {
+      complete = done;
+      reject = fail;
+    });
+    // A provider request can still be awaiting acknowledgement when its event fails.
+    void promise.catch(() => undefined);
+    const timer = setTimeout(
+      () => reject(new Error("原生压缩结果不明，资源仍保留，请核查成员详情。")),
+      120_000,
+    );
+    const unsubscribe = this.dependencies.agentManager.subscribe(
+      (event) => {
+        if (event.type !== "agent_stream" || event.agentId !== agentId) return;
+        if (event.event.type === "turn_failed" || event.event.type === "turn_canceled") {
+          reject(new Error("原生压缩中断，结果不明，资源仍保留。"));
+          return;
+        }
+        if (event.event.type !== "timeline" || event.event.item.type !== "compaction") return;
+        if (
+          event.epoch !== baseline.epoch ||
+          event.seq === undefined ||
+          event.seq <= (baseline.endSeq ?? 0)
+        )
+          return;
+        const item = event.event.item;
+        if (item.trigger === "auto") return;
+        if (item.status === "loading") loading = true;
+        if (item.status === "completed" && (loading || item.trigger === "manual")) complete();
+      },
+      { agentId, replayState: false },
+    );
+    return {
+      promise,
+      dispose() {
+        clearTimeout(timer);
+        unsubscribe();
+      },
+    };
   }
   private async controlNotice(
     snapshot: TaskConversationSnapshot,
@@ -1500,26 +1664,33 @@ export class TaskConversationService {
           const delivery = Object.values(record.deliveries).findLast(
             (candidate) =>
               candidate.backendAgentId === agentId &&
-              (candidate.status === "accepted" || candidate.status === "dispatching"),
+              (candidate.status === "accepted" ||
+                candidate.status === "dispatching" ||
+                candidate.status === "unknown") &&
+              (!sourceTurnId || !candidate.sourceTurnId || candidate.sourceTurnId === sourceTurnId),
           );
           const turnId =
             sourceTurnId ??
             this.dependencies.agentManager.getAgent(agentId)?.activeForegroundTurnId ??
             delivery?.sourceTurnId;
           let row: TaskConversationRow | undefined;
+          const sourceKey = assistantSourceKey(member.memberId, turnId, delivery?.deliveryId);
           if (event.event.type === "timeline" && event.event.item.type === "assistant_message") {
             if (turnId)
-              row = this.projectAssistant(record, member, turnId, event.event.item, event);
+              row = this.projectAssistant(
+                record,
+                member,
+                turnId,
+                sourceKey,
+                event.event.item,
+                event,
+              );
           } else {
             snapshot = record.snapshot;
-            if (
-              event.event.type === "turn_completed" ||
-              event.event.type === "turn_failed" ||
-              event.event.type === "turn_canceled"
-            ) {
+            if (isTerminalEvent(event)) {
               member.status = event.event.type === "turn_failed" ? "error" : "idle";
               const existing = this.dependencies.store.querySource(record, {
-                sourceKey: `assistant:${member.memberId}:${turnId}`,
+                sourceKey,
               });
               if (existing)
                 row = this.dependencies.store.replaceRow(record, existing, { completed: true });
@@ -1538,13 +1709,14 @@ export class TaskConversationService {
     record: StoredTaskConversation,
     member: TaskConversationMember,
     turnId: string,
+    sourceKey: string,
     item: { text: string; messageId?: string },
     event: { epoch?: string; seq?: number },
   ): TaskConversationRow | undefined {
-    const sourceKey = `assistant:${member.memberId}:${turnId}`;
     const existing = this.dependencies.store.querySource(record, {
       sourceKey,
     });
+    if (existing?.completed) return;
     const source = {
       memberId: member.memberId,
       backendAgentId: member.backendAgentId,
@@ -1653,28 +1825,46 @@ export class TaskConversationService {
                   row.item.type === "user_message" &&
                   row.item.clientMessageId === delivery.deliveryId,
               );
-              if (delivery.status === "unknown" && receipt?.turnId) {
-                delivery.status = "accepted";
-                delivery.sourceTurnId = receipt.turnId;
-                const member = record.snapshot.members.find(
-                  (entry) => entry.memberId === delivery.memberId,
-                )!;
-                member.seenConversationSeq = Math.max(
-                  member.seenConversationSeq,
-                  delivery.throughSeq,
-                );
-              }
+              confirmDeliveryReceipt(record, delivery, receipt);
               if (!delivery.sourceTurnId) continue;
+              const ambiguousTurn =
+                Object.values(record.deliveries).filter(
+                  (entry) =>
+                    entry.backendAgentId === agentId &&
+                    entry.sourceTurnId === delivery.sourceTurnId,
+                ).length > 1;
+              if (!receipt && ambiguousTurn) continue;
+              const nextReceipt =
+                receipt &&
+                native.find((row) => row.seq > receipt.seq && row.item.type === "user_message");
               const output = native.filter(
                 (row) =>
-                  row.turnId === delivery.sourceTurnId && row.item.type === "assistant_message",
+                  row.turnId === delivery.sourceTurnId &&
+                  row.item.type === "assistant_message" &&
+                  (!receipt || row.seq > receipt.seq) &&
+                  (!nextReceipt || row.seq < nextReceipt.seq),
               );
               if (!output.length) continue;
               const text = output
                 .map((row) => (row.item.type === "assistant_message" ? row.item.text : ""))
                 .join("\n\n");
-              const sourceKey = `assistant:${delivery.memberId}:${delivery.sourceTurnId}`;
-              const current = this.dependencies.store.querySource(record, { sourceKey });
+              const sourceKey = assistantSourceKey(
+                delivery.memberId,
+                delivery.sourceTurnId,
+                delivery.deliveryId,
+              );
+              const legacy = this.dependencies.store.querySource(record, {
+                sourceKey: assistantSourceKey(delivery.memberId, delivery.sourceTurnId),
+              });
+              const legacyMatchesReceipt = legacyMatchesDelivery(
+                legacy,
+                epoch,
+                receipt,
+                nextReceipt,
+                ambiguousTurn,
+              );
+              const indexed = this.dependencies.store.querySource(record, { sourceKey });
+              const current = indexed ?? (legacyMatchesReceipt ? legacy : undefined);
               const source = {
                 memberId: delivery.memberId,
                 backendAgentId: agentId,
@@ -1683,12 +1873,13 @@ export class TaskConversationService {
                 seq: output.at(-1)!.seq,
               };
               this.dependencies.store.acceptSourceSequence(record, agentId, epoch, source.seq);
+              if (current?.completed) continue;
               if (current && text.startsWith(current.text) && current.text !== text)
                 rows.push(
                   this.dependencies.store.replaceRow(record, current, {
                     text,
                     source,
-                    sourceKey: `recovery:${agentId}:${epoch}:${source.seq}`,
+                    ...(indexed ? {} : { sourceKey }),
                   }),
                 );
               else if (!current) {

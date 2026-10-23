@@ -3455,6 +3455,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private startupEvents: AgentStreamEvent[] | null = null;
   private nextTurnOrdinal = 0;
+  private readonly turnRuntimeId = randomUUID();
   private activeForegroundTurnId: string | null = null;
   private activeClientMessageId: string | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
@@ -5149,24 +5150,24 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
   }
 
-  tryHandleOutOfBand(
-    prompt: AgentPromptInput,
-  ): { run(ctx: { emit: (event: AgentStreamEvent) => void }): Promise<void> } | null {
+  tryHandleOutOfBand(prompt: AgentPromptInput): {
+    run(ctx: { emit: (event: AgentStreamEvent) => void; throwOnError?: boolean }): Promise<void>;
+  } | null {
     if (typeof prompt !== "string") return null;
     const parsed = this.parseSlashCommandInput(prompt);
     if (!parsed) return null;
 
     if (parsed.commandName === "compact") {
       return {
-        run: async ({ emit }) => {
+        run: async ({ emit, throwOnError }) => {
           const error = await this.executeCompactCommand();
-          if (error) {
-            emit({
-              type: "timeline",
-              provider: CODEX_PROVIDER,
-              item: { type: "assistant_message", text: formatOutOfBandStatusMessage(error) },
-            });
-          }
+          if (!error) return;
+          if (throwOnError) throw new Error(error);
+          emit({
+            type: "timeline",
+            provider: CODEX_PROVIDER,
+            item: { type: "assistant_message", text: formatOutOfBandStatusMessage(error) },
+          });
         },
       };
     }
@@ -5448,7 +5449,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private createTurnId(): string {
-    return `codex-turn-${this.nextTurnOrdinal++}`;
+    return `codex-turn-${this.turnRuntimeId}-${this.nextTurnOrdinal++}`;
   }
 
   private handleNotification(method: string, params: unknown): void {

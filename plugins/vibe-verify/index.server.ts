@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { taskVerifyGetRpc, taskVerifyRerunRpc } from "./shared/task-rpc";
 import { createTaskPipeline } from "./server/task-pipeline";
 import { createTaskVerifyStore } from "./server/task-store";
@@ -54,7 +53,7 @@ export default function contribute(server: PluginServerContext) {
   const stopSettings = settings.subscribe(applySettings);
   const getTuning = () => tuning;
 
-  let paseo: PaseoApi | null = null;
+  let paseo: PaseoApi | null = server.paseo;
   const remember = (api: PaseoApi) => void (paseo = api);
   for (const name of ["agent.created", "agent.turn_started", "agent.turn_ended"] as const) {
     server.on(name, (_event, { paseo: api }) => remember(api));
@@ -72,6 +71,7 @@ export default function contribute(server: PluginServerContext) {
     async launch(input) {
       const ids = new Set<string>();
       const register = (agentId: string) => {
+        if (!agentId) return;
         ids.add(agentId);
         verifierDirs.set(agentId, { outputDir: input.outputDir, denyShell: !!input.task });
       };
@@ -89,6 +89,12 @@ export default function contribute(server: PluginServerContext) {
       register(agent.agentId);
       return {
         ...agent,
+        get agentId() {
+          return agent.agentId;
+        },
+        get source() {
+          return agent.source;
+        },
         run: agent.run.bind(agent),
         close: async () => {
           await agent.close();
@@ -121,14 +127,6 @@ export default function contribute(server: PluginServerContext) {
       if (!task) return;
       const text = "验证排队：" + reason;
       board.tasks.setSummary(workspaceId, text);
-      if (paseo)
-        await paseo.agents.ref(task.anchorAgentId).timeline.append({
-          type: "plugin",
-          id: randomUUID(),
-          kind: "task-verification",
-          version: 1,
-          data: { workspaceId, text },
-        });
     },
   });
   const taskPipeline = createTaskPipeline({
@@ -163,22 +161,8 @@ export default function contribute(server: PluginServerContext) {
         projectTypes: project.projectTypes,
       };
     },
-    async append(anchorAgentId, text, verificationId) {
-      if (!paseo) throw new Error("原生连接不可用");
-      const task = board.tasks.list().find((item) => item.anchorAgentId === anchorAgentId);
-      if (!task) return;
-      await paseo.agents.ref(anchorAgentId).timeline.append({
-        type: "plugin",
-        id: randomUUID(),
-        kind: "task-verification",
-        version: 1,
-        data: {
-          workspaceId: task.workspaceId,
-          text,
-          ...(verificationId ? { verificationId } : {}),
-        },
-      });
-    },
+    // The conversation owner publishes durable taskArtifacts and replays pending indexes after restart.
+    async append() {},
   });
   const startTask = (workspaceId: string) =>
     void taskPipeline.run(workspaceId).catch((error) => log("任务验证失败", error));
@@ -238,14 +222,6 @@ export default function contribute(server: PluginServerContext) {
           board.tasks.setPhase(task.workspaceId, "paused");
           const text = "验证会话需要上下文交接，任务已暂停；先核对原生会话与资源停止，再重新验证。";
           board.tasks.setSummary(task.workspaceId, text);
-          if (paseo)
-            await paseo.agents.ref(task.anchorAgentId).timeline.append({
-              type: "plugin",
-              id: randomUUID(),
-              kind: "task-verification",
-              version: 1,
-              data: { workspaceId: task.workspaceId, text },
-            });
         }
         publishEvent(db, {
           type: "context.continuation_result",

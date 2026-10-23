@@ -61,6 +61,7 @@ export const EVENT_PAYLOADS = {
     requestId: z.string(),
     workspaceId: z.string(),
     action: z.enum(["acquire", "bind", "yield", "release", "freeze", "reconcile"]),
+    operation: z.enum(["send", "compact", "create"]).optional(),
     role: SessionRoleSchema.optional(),
     subtaskId: z.string().optional(),
     agentId: z.string().optional(),

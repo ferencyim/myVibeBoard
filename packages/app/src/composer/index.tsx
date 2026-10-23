@@ -5,6 +5,7 @@ import {
 } from "./editing-session";
 import type { ComposerTextSource } from "./text-source";
 import { createStore, type StoreApi } from "zustand/vanilla";
+import { DaemonRpcError } from "@getpaseo/client/internal/daemon-client";
 import { useStore } from "zustand";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -1466,7 +1467,11 @@ function ComposerContentImpl({
         args: resolved.args,
         onError(error) {
           console.error("[Composer] Failed to run plugin client slash command:", error);
-          toastErrorRef.current(error instanceof Error ? error.message : String(error));
+          let message = error instanceof Error ? error.message : String(error);
+          if (error instanceof DaemonRpcError)
+            message = error.serverMessage.replace(/^Request failed: /, "");
+          setSendError(message);
+          toastErrorRef.current(message);
         },
       });
       return true;
@@ -1747,6 +1752,7 @@ function ComposerContentImpl({
         text: payload.text,
         hasAttachments: outgoingAttachments.length > 0,
         commands: pluginClientSlashCommands,
+        taskConversation: Boolean(taskConversation),
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
 
@@ -1765,6 +1771,7 @@ function ComposerContentImpl({
       pluginClientSlashCommands,
       runPluginClientSlashCommand,
       sendMessageWithContent,
+      taskConversation,
     ],
   );
 

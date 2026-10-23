@@ -1,4 +1,5 @@
 import type { VerifyConfig } from "./collectors/common";
+import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import type {
   CollectorRegistry,
@@ -10,6 +11,7 @@ import type {
   TaskCollectorContext,
   TaskPresetSnapshot,
 } from "./vibe/contract";
+import { EVENT_PAYLOADS, findTaskActualPreset } from "./vibe/contract";
 import {
   publishEvent,
   createTaskRuntimeCommands,
@@ -33,6 +35,7 @@ import {
   type VerifierAgent,
 } from "./verifier/agent";
 import { defaultTuning, type TuningSource } from "./tuning";
+import { readEvidenceBytes } from "./rpc";
 
 export interface TaskWorkspace {
   projectId: string;
@@ -147,6 +150,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     }
   }
   async function execute(task: Task) {
+    if (!task.conversationId) throw new Error("任务尚未绑定原生群聊");
     const workspace = await deps.workspace(task.workspaceId);
     const initial = await taskTree(runner, workspace.worktreePath);
     if (initial.status) throw new Error("工作树有未提交改动，须先收口提交再验证");
@@ -162,6 +166,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     let voided = false;
     let stopped = true;
     let baseline: Baseline | undefined;
+    let verifierSource: VerifierAgent["source"];
     const ctx: TaskCollectorContext = {
       cardId: null,
       workspaceId: task.workspaceId,
@@ -181,6 +186,12 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       return (
         current?.confirmedAt === task.confirmedAt &&
         ["reviewing", "verifying"].includes(current.phase)
+      );
+    };
+    const sameConfirmation = () => {
+      const current = board.tasks.get(task.workspaceId);
+      return (
+        current?.confirmedAt === task.confirmedAt && current.conversationId === task.conversationId
       );
     };
     const ensureStable = async () => {
@@ -211,6 +222,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     };
     const vars = {
       workspaceId: task.workspaceId,
+      confirmedAt: task.confirmedAt!,
       worktree: workspace.worktreePath,
       commitHash: initial.head,
       outputDir: ctx.outputDir,
@@ -224,10 +236,58 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       snapshot: TaskPresetSnapshot,
       body: (agent: Awaited<ReturnType<VerifierLauncher["launch"]>>) => Promise<void>,
     ) {
-      const first = snapshot.models[0]!;
+      const current = board.tasks.get(task.workspaceId)!;
+      snapshot = findTaskActualPreset(current, { role, admittedOnly: true }) ?? snapshot;
+      const entries = Array.isArray(current.control?.actualModels)
+        ? current.control.actualModels
+        : [];
+      const actual = entries.findLast(
+        (entry) =>
+          entry?.role === role &&
+          entry?.confirmedAt === task.confirmedAt &&
+          entry?.admitted !== false &&
+          entry?.presetId === snapshot.presetId &&
+          entry?.presetSnapshot,
+      );
+      const candidateIndex = typeof actual?.candidateIndex === "number" ? actual.candidateIndex : 0;
+      const first = snapshot.models[candidateIndex];
+      if (!first) throw new Error("实际接手模型候选无效，请核对任务后重新验证");
       let previousSessionId: string | undefined;
+      let forceNewMember = false;
+      const leaf = runtime
+        .listSessions({ workspaceId: task.workspaceId })
+        .findLast(
+          (session) =>
+            session.role === role &&
+            session.currentProvider === first.provider &&
+            session.candidateIndex === candidateIndex &&
+            (session.confirmedAt === task.confirmedAt || session.model === first.model) &&
+            !runtime.getContinuation(session.id),
+        );
+      if (leaf?.state === "ended") {
+        const ended = board.db
+          .prepare<{ payload_json: string }>(
+            "SELECT payload_json FROM vibe_event WHERE type = 'session.ended' AND json_extract(payload_json, '$.sessionId') = ? ORDER BY seq DESC LIMIT 1",
+          )
+          .get(leaf.id);
+        const event = EVENT_PAYLOADS["session.ended"].safeParse(
+          ended ? JSON.parse(ended.payload_json) : undefined,
+        );
+        const outcome =
+          event.success && event.data.agentId === leaf.agentId ? event.data.outcome : undefined;
+        if (["failed", "canceled"].includes(outcome ?? "")) {
+          if (leaf.confirmedAt === task.confirmedAt) previousSessionId = leaf.id;
+          else forceNewMember = true;
+        } else if (outcome !== "completed") forceNewMember = true;
+      }
       const agent = await deps.launcher.launch({
-        task: { workspaceId: task.workspaceId, anchorAgentId: task.anchorAgentId },
+        task: {
+          workspaceId: task.workspaceId,
+          anchorAgentId: task.anchorAgentId,
+          conversationId: task.conversationId!,
+          confirmedAt: task.confirmedAt!,
+          commitHash: initial.head,
+        },
         project: { id: workspace.projectId },
         workspaceId: task.workspaceId,
         cwd: workspace.worktreePath,
@@ -236,8 +296,12 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         model: first.model,
         thinking: first.thinking,
         snapshot,
+        candidateIndex,
+        forceNewMember,
         role,
+        previousSessionId: () => previousSessionId,
         onCreated: (selection) => {
+          verify.setVerifier(vid, selection.agentId);
           const session = previousSessionId
             ? runtime.recordContinuation({
                 fromSessionId: previousSessionId,
@@ -256,10 +320,11 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         onStopped: (agentId, outcome) => {
           const session = runtime.findSessionByAgent(agentId);
           if (session && session.state !== "ended")
-            board.sessions.setState(session.id, "ended", { outcome });
+            if (outcome === "failed") board.sessions.setState(session.id, "ended", { outcome });
+            else board.sessions.setState(session.id, "idle");
         },
-        acquire: async (provider, candidateIndex) => {
-          const lease = await deps.acquire(task.workspaceId, role, provider, candidateIndex);
+        acquire: async (provider, selectedIndex) => {
+          const lease = await deps.acquire(task.workspaceId, role, provider, selectedIndex);
           return {
             bind: async (id) => {
               await lease.bind(id);
@@ -314,12 +379,15 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         );
         if (!baseline) notes.push("没有可用基线提交，前后对比只能存疑");
       }
-      const parsed = VerifyConfigSchema.safeParse(
+      const parsed = VerifyConfigSchema.strict().safeParse(
         await ask(agent, "verify.task.setup", {
           baseline: baseline ? JSON.stringify(baseline) : "没有可用基线",
         }),
       );
-      if (!parsed.success) throw new Error("验证模型没有提供有效的证据采集配置");
+      if (!parsed.success)
+        throw new Error(
+          "验证模型没有提供有效的证据采集配置；本轮仅接受配置 schema，不能把复核结论当作采集配置",
+        );
       let config = parsed.data;
       if (existing.backend?.perf && !config.backend?.perf)
         config = {
@@ -446,12 +514,143 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       if (verdict.summary) notes.push(verdict.summary);
     }
     try {
-      if (task.rolesSnapshot!.reviewer) {
-        if (task.phase !== "verifying") board.tasks.setPhase(task.workspaceId, "reviewing");
-        await withAgent("reviewer", task.rolesSnapshot!.reviewer, async (agent) => {
+      const reviewerPreset =
+        findTaskActualPreset(board.tasks.get(task.workspaceId)!, {
+          role: "reviewer",
+          admittedOnly: true,
+        }) ?? task.rolesSnapshot!.reviewer;
+      if (reviewerPreset) {
+        await ensureStable();
+        if (board.tasks.get(task.workspaceId)!.phase === "verifying")
+          board.db.immediate(() => {
+            // Revalidation includes configured review; keep the existing phase transition contract.
+            board.tasks.setPhase(task.workspaceId, "paused");
+            board.tasks.setPhase(task.workspaceId, "reviewing");
+          });
+        await withAgent("reviewer", reviewerPreset, async (agent) => {
           const diff = await changeDiff(runner, workspace.worktreePath, ["main", "master"]);
+          const latestSources = new Map<
+            string,
+            ReturnType<typeof board.taskArtifacts.list>[number]
+          >();
+          for (const artifact of board.taskArtifacts.list(task.workspaceId, {
+            confirmedAt: task.confirmedAt!,
+          })) {
+            if (artifact.kind !== "delivery") continue;
+            if (
+              typeof artifact.data?.commitHash === "string" &&
+              artifact.data.commitHash !== initial.head
+            )
+              continue;
+            latestSources.set(
+              artifact.kind +
+                ":" +
+                (artifact.source.memberId ?? artifact.source.backendAgentId ?? "task"),
+              artifact,
+            );
+          }
+          const previousReports = verify
+            .list(task.workspaceId, task.confirmedAt!)
+            .filter(
+              (candidate) =>
+                candidate.id !== vid &&
+                candidate.finishedAt &&
+                candidate.commitHash === initial.head,
+            );
+          const latestRaw = previousReports.findLast((candidate) => {
+            const collectorItems = new Set(
+              verify
+                .items(candidate.id)
+                .filter((item) => item.method === "collector" || item.method.startsWith("auto:"))
+                .map((item) => item.id),
+            );
+            return verify
+              .evidence(candidate.id)
+              .some(
+                (file) =>
+                  file.commitHash === initial.head &&
+                  file.itemId !== null &&
+                  collectorItems.has(file.itemId) &&
+                  ["log", "report"].includes(file.kind),
+              );
+          });
+          // Reuse independently collected bytes, never an earlier attempt's verdict or
+          // interrupted pipeline report. Public history still preserves those conclusions.
+          const priorEvidence = (latestRaw ? [latestRaw] : []).map((previous) => {
+            const collectorItems = verify
+              .items(previous.id)
+              .filter((item) => item.method === "collector" || item.method.startsWith("auto:"));
+            const itemIds = new Set(collectorItems.map((item) => item.id));
+            return {
+              verificationId: previous.id,
+              confirmedAt: previous.confirmedAt,
+              commitHash: previous.commitHash,
+              startedAt: previous.startedAt,
+              finishedAt: previous.finishedAt,
+              items: collectorItems,
+              evidence: verify
+                .evidence(previous.id)
+                .filter(
+                  (file) =>
+                    file.verificationId === previous.id &&
+                    file.commitHash === initial.head &&
+                    file.itemId !== null &&
+                    itemIds.has(file.itemId),
+                )
+                .map((file) => {
+                  const source = {
+                    id: file.id,
+                    verificationId: previous.id,
+                    path: file.path,
+                    kind: file.kind,
+                    capturedAt: file.capturedAt,
+                    commitHash: file.commitHash,
+                    sha256: file.sha256,
+                    simulated: file.simulated,
+                  };
+                  try {
+                    const bytes = readEvidenceBytes(file.path, verify.dirFor(previous.id));
+                    if (
+                      !file.sha256 ||
+                      createHash("sha256").update(bytes).digest("hex") !== file.sha256
+                    )
+                      throw new Error("证据文件校验值不匹配");
+                    return Object.assign(source, {
+                      excerpt: textExcerpt(file.path, file.kind, tuning().excerptChars),
+                    });
+                  } catch (error) {
+                    return Object.assign(source, {
+                      unavailableReason: error instanceof Error ? error.message : String(error),
+                    });
+                  }
+                }),
+            };
+          });
           const review = ReviewSchema.parse(
-            await ask(agent, "verify.task.review", { diff: diff.diff, stat: diff.stat }),
+            await ask(agent, "verify.task.review", {
+              diff: diff.diff,
+              stat: diff.stat,
+              subtaskRuns: JSON.stringify(board.tasks.get(task.workspaceId)!.subtaskRuns, null, 2),
+              priorEvidence: JSON.stringify(priorEvidence, null, 2),
+              reviewSources: JSON.stringify(
+                [...latestSources.values()].map((artifact) => ({
+                  kind: artifact.kind,
+                  sourceKey: artifact.sourceKey,
+                  source: artifact.source,
+                  summary: artifact.summary,
+                  createdAt: artifact.createdAt,
+                  commitHash: artifact.data?.commitHash,
+                  materialUse:
+                    artifact.data?.commitHash === initial.head
+                      ? "当前提交的交付声称，须对照代码与独立证据核实"
+                      : "未绑定提交的交付声称，不能作为当前提交的证据",
+                  evidence: artifact.data?.evidence,
+                  report: artifact.data?.report,
+                })),
+                null,
+                2,
+              ),
+            }),
           );
           let issues = review.issues;
           if (!issues.length && review.verdict && review.verdict !== "pass")
@@ -472,6 +671,16 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
               "review",
             );
           notes.push("复核结论：" + reviewVerdict({ ...review, issues }) + " " + review.summary);
+          const sourceKey = "verification:" + vid + ":review";
+          board.taskArtifacts.record({
+            workspaceId: task.workspaceId,
+            kind: "review",
+            sourceKey,
+            confirmedAt: task.confirmedAt,
+            source: { conversationId: task.conversationId!, sourceKey, ...agent.source },
+            summary: notes.at(-1)!,
+            data: { verificationId: vid, commitHash: initial.head, review: { ...review, issues } },
+          });
         });
       }
       // Severe review findings are returned before collecting evidence for code that must change.
@@ -482,6 +691,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
           deps.configs.set(vid, config);
           await collectEvidence(config);
           await judgeEvidence(agent);
+          verifierSource = agent.source;
         });
       }
     } catch (error) {
@@ -528,6 +738,27 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     verify.addEvidence(vid, null, report);
     verify.writeNotes(vid, notes);
     verify.finish(vid, conclusion);
+    if (sameConfirmation()) {
+      const sourceKey = "verification:" + vid;
+      board.taskArtifacts.record({
+        workspaceId: task.workspaceId,
+        kind: "verification",
+        sourceKey,
+        confirmedAt: task.confirmedAt,
+        source: { conversationId: task.conversationId!, sourceKey, ...verifierSource },
+        summary: verificationLine(conclusion, items, initial.head, false),
+        data: {
+          verificationId: vid,
+          commitHash: initial.head,
+          conclusion,
+          voided,
+          report: report.path,
+          evidence: verify
+            .evidence(vid)
+            .map((file) => ({ id: file.id, kind: file.kind, path: file.path })),
+        },
+      });
+    }
     return conclude();
     async function conclude() {
       let returned = false;

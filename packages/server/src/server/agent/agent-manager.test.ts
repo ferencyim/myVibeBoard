@@ -9435,6 +9435,59 @@ test("permission request notifies once without forcing unread attention state", 
   expect(attentionReasons).toContain("permission");
 });
 
+test("respondToPermission enforces the task approval guard before invoking the provider", async () => {
+  const approval = vi.fn(async () => undefined);
+  const request = {
+    id: "task-plan",
+    provider: "codex" as const,
+    name: "ExitPlanMode",
+    kind: "plan" as const,
+  };
+  class GuardedApprovalSession extends TestAgentSession {
+    override getPendingPermissions() {
+      return [request];
+    }
+    override async respondToPermission() {
+      await approval();
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new GuardedApprovalSession(config);
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+    workspaceId: undefined,
+  });
+  const guard = vi.fn(() => {
+    throw new Error("只读角色不能退出规划");
+  });
+  manager.taskConversations = {
+    assertPermissionApproval: guard,
+  } as unknown as TaskConversationService;
+  try {
+    await expect(
+      manager.respondToPermission(agent.id, request.id, {
+        behavior: "allow",
+        selectedActionId: "implement_resume",
+      }),
+    ).rejects.toThrow("只读角色");
+    expect(guard).toHaveBeenCalledWith(agent.id, request.id, {
+      behavior: "allow",
+      selectedActionId: "implement_resume",
+    });
+    expect(approval).not.toHaveBeenCalled();
+    expect(manager.getAgent(agent.id)!.pendingPermissions.has(request.id)).toBe(true);
+    manager.taskConversations = undefined;
+    await manager.respondToPermission(agent.id, request.id, { behavior: "allow" });
+    expect(approval).toHaveBeenCalledOnce();
+  } finally {
+    manager.taskConversations = undefined;
+    await manager.closeAgent(agent.id);
+  }
+});
+
 test("respondToPermission updates currentModeId after plan approval", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storagePath = join(workdir, "agents");
@@ -11045,6 +11098,61 @@ test("tryRunOutOfBand gives providers the command another agent sent, not its en
   } finally {
     await manager.closeAgent(agent.id);
     rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("runOutOfBand awaits native compact, propagates failure, and never starts a prompt turn", async () => {
+  const completed = deferred<void>();
+  const seen: AgentPromptInput[] = [];
+  const errorModes: Array<boolean | undefined> = [];
+  const startTurn = vi.fn();
+  let failure: Error | null = null;
+  class NativeCompactSession extends TestAgentSession {
+    override async startTurn(prompt: AgentPromptInput) {
+      startTurn(prompt);
+      return { turnId: "unexpected-turn" };
+    }
+    override tryHandleOutOfBand(prompt: AgentPromptInput) {
+      seen.push(prompt);
+      if (prompt !== "/compact") return null;
+      return {
+        run: async ({ throwOnError }: { throwOnError?: boolean }) => {
+          errorModes.push(throwOnError);
+          await completed.promise;
+          if (failure) throw failure;
+        },
+      };
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new NativeCompactSession(config);
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    let acknowledged = false;
+    const compact = manager.runOutOfBand(agent.id, "/compact").then((handled) => {
+      acknowledged = true;
+      return handled;
+    });
+    await Promise.resolve();
+    expect(acknowledged).toBe(false);
+    completed.resolve();
+    await expect(compact).resolves.toBe(true);
+    await expect(manager.runOutOfBand(agent.id, "/unsupported")).resolves.toBe(false);
+    failure = new Error("native failure");
+    await expect(manager.runOutOfBand(agent.id, "/compact")).rejects.toThrow("native failure");
+    failure = null;
+    expect(manager.tryRunOutOfBand(agent.id, "/compact")).toBe(true);
+    expect(errorModes).toEqual([true, true, undefined]);
+    expect(seen).toEqual(["/compact", "/unsupported", "/compact", "/compact"]);
+    expect(startTurn).not.toHaveBeenCalled();
+  } finally {
+    await manager.closeAgent(agent.id);
   }
 });
 

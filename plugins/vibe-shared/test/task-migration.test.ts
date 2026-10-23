@@ -12,8 +12,9 @@ import {
   openVibeDb,
   type VibeDb,
   createTaskRuntimeCommands,
+  readEvents,
 } from "../db";
-import { openTestDb } from "./helpers";
+import { openTestDb, setup } from "./helpers";
 
 const retained = [
   "project",
@@ -200,7 +201,7 @@ describe("WP-110 task migration", () => {
     const counts = maintenanceCounts(db);
     expect(before.project).toHaveLength(7);
     expect(db.prepare("SELECT COUNT(*) AS n FROM card").get()).toEqual({ n: 3 });
-    expect(migrateOwner(db, "core")).toMatchObject({ from: 10, to: 12, applied: [11, 12] });
+    expect(migrateOwner(db, "core")).toMatchObject({ from: 10, to: 13, applied: [11, 12, 13] });
     expect(snapshot(db)).toEqual(before);
     expect(maintenanceCounts(db)).toEqual(counts);
     expect(db.prepare("SELECT COUNT(*) AS n FROM task").get()).toEqual({ n: 0 });
@@ -405,5 +406,165 @@ describe("WP-112 retained runtime migration", () => {
       ).toBe(role);
     expect(runtime.listSessions({ workspaceId: "w" })).toHaveLength(4);
     db.close();
+  });
+});
+
+describe("completed native task member restoration", () => {
+  function fixture(outcome: string | undefined = "completed") {
+    const state = setup();
+    state.store.tasks.create({
+      workspaceId: "resume",
+      anchorAgentId: "backend",
+      conversationId: "conversation",
+    });
+    const runtime = createTaskRuntimeCommands(state.db, { now: () => new Date(state.clock.ms) });
+    const session = runtime.registerSession({
+      workspaceId: "resume",
+      agentId: "backend",
+      role: "verifier",
+      provider: "codex",
+      model: "test",
+      candidateIndex: 0,
+      confirmedAt: null,
+    });
+    state.store.sessions.setState(session.id, "ended", { outcome });
+    const input = {
+      workspaceId: "resume",
+      agentId: "backend",
+      role: "verifier" as const,
+      confirmedAt: null,
+    };
+    return { ...state, runtime, session, input };
+  }
+  it("restores a completed leaf to idle atomically and does not duplicate events or relax the global terminal state", () => {
+    const s = fixture();
+    expect(() => s.store.sessions.setState(s.session.id, "idle")).toThrow(/cannot go/);
+    const events = readEvents(s.db, 0);
+    s.tick();
+    const resumed = s.runtime.resumeCompletedSession(s.session.id, s.input);
+    expect(resumed).toMatchObject({
+      state: "idle",
+      endedAt: null,
+      confirmedAt: null,
+      lastActivityAt: new Date(s.clock.ms).toISOString(),
+    });
+    expect(readEvents(s.db, 0)).toHaveLength(events.length + 1);
+    expect(readEvents(s.db, 0).at(-1)).toMatchObject({
+      type: "task.updated",
+      payload: { workspaceId: "resume", fields: ["sessions"] },
+    });
+    expect(readEvents(s.db, 0).filter((event) => event.type === "session.started")).toHaveLength(1);
+    expect(s.runtime.resumeCompletedSession(s.session.id, s.input)).toEqual(resumed);
+    s.store.sessions.setState(s.session.id, "working");
+    expect(s.runtime.resumeCompletedSession(s.session.id, s.input).state).toBe("working");
+    expect(readEvents(s.db, 0)).toHaveLength(events.length + 1);
+    s.db.close();
+  });
+  it("atomically links a normally completed native member to the current confirmation round", () => {
+    const s = fixture();
+    const preset = s.store.presets.create({ name: "冻结预设", provider: "codex", model: "test" });
+    s.store.modelDefaults.setGlobal({ planner: preset.id, worker: preset.id, verifier: preset.id });
+    s.tick();
+    const task = s.store.tasks.confirm("resume", {
+      plan: {
+        goal: "再次执行",
+        approach: "复用已完成成员",
+        files: [],
+        subtasks: [],
+        checks: [{ text: "可恢复", method: "单测" }],
+      },
+      rolesSnapshot: s.store.modelDefaults.resolveTask({}),
+      planSource: {
+        conversationId: "conversation",
+        sourceKey: "planner:new",
+        memberId: "planner",
+        backendAgentId: "backend",
+      },
+      requestId: "new-round",
+    });
+    expect(s.runtime.getSession(s.session.id)?.confirmedAt).toBeNull();
+    expect(
+      s.runtime.resumeCompletedSession(s.session.id, { ...s.input, confirmedAt: task.confirmedAt }),
+    ).toMatchObject({ state: "idle", confirmedAt: task.confirmedAt, endedAt: null });
+    expect(s.store.sessions.list({ states: ["idle"] }).map((session) => session.id)).toContain(
+      s.session.id,
+    );
+    s.db.close();
+  });
+  it("rejects failed, canceled or missing completion evidence without changing the session", () => {
+    for (const outcome of ["failed", "canceled", ""]) {
+      const s = fixture(outcome);
+      const ended = s.runtime.getSession(s.session.id);
+      const events = readEvents(s.db, 0);
+      expect(() => s.runtime.resumeCompletedSession(s.session.id, s.input)).toThrow(
+        /正常完成.*证据/,
+      );
+      expect(s.runtime.getSession(s.session.id)).toEqual(ended);
+      expect(readEvents(s.db, 0)).toEqual(events);
+      s.db.close();
+    }
+    const s = fixture();
+    s.db.prepare("DELETE FROM vibe_event WHERE type = 'session.ended'").run();
+    expect(() => s.runtime.resumeCompletedSession(s.session.id, s.input)).toThrow(/正常完成.*证据/);
+    s.db.close();
+  });
+  it("rejects a legacy card, mismatched identities, changed task round and a continuation replacement", () => {
+    const s = fixture();
+    for (const patch of [
+      { workspaceId: "other" },
+      { agentId: "other" },
+      { role: "worker" as const },
+    ])
+      expect(() =>
+        s.runtime.resumeCompletedSession(s.session.id, { ...s.input, ...patch }),
+      ).toThrow(/同一任务/);
+    expect(() =>
+      s.runtime.resumeCompletedSession(s.session.id, {
+        ...s.input,
+        confirmedAt: "2026-10-23T12:00:00.000Z",
+      }),
+    ).toThrow(/确认已变化/);
+    const project = s.store.projects.create({
+      name: "旧项目",
+      prefix: "OLD",
+      repoPath: "synthetic",
+    });
+    const card = s.store.cards.create({ projectId: project.id, title: "旧卡" });
+    const legacy = s.store.sessions.start({
+      cardId: card.id,
+      workspaceId: "resume",
+      agentId: "legacy",
+      role: "verifier",
+      provider: "codex",
+    });
+    s.store.sessions.setState(legacy.id, "ended", { outcome: "completed" });
+    expect(() =>
+      s.runtime.resumeCompletedSession(legacy.id, { ...s.input, agentId: "legacy" }),
+    ).toThrow(/同一任务/);
+    s.runtime.recordContinuation({
+      fromSessionId: s.session.id,
+      agentId: "replacement",
+      provider: "codex",
+      model: "next",
+      candidateIndex: 1,
+      reason: "继续",
+    });
+    expect(() => s.runtime.resumeCompletedSession(s.session.id, s.input)).toThrow(/接续替代者/);
+    expect(s.runtime.getSession(s.session.id)?.state).toBe("ended");
+    s.db.close();
+  });
+  it("rolls back restoration when its task notification cannot commit", () => {
+    const s = fixture();
+    s.db.exec(
+      "CREATE TRIGGER fail_restore_event BEFORE INSERT ON vibe_event WHEN NEW.type = 'task.updated' BEGIN SELECT RAISE(ABORT, '模拟恢复通知失败'); END",
+    );
+    expect(() => s.runtime.resumeCompletedSession(s.session.id, s.input)).toThrow(
+      /模拟恢复通知失败/,
+    );
+    expect(s.runtime.getSession(s.session.id)).toMatchObject({
+      state: "ended",
+      endedAt: new Date(s.clock.ms).toISOString(),
+    });
+    s.db.close();
   });
 });

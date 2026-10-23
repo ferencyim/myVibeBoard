@@ -17,6 +17,7 @@ import type { PendingPermission } from "@/types/shared";
 import type { StreamItem } from "@/types/stream";
 import { derivePendingPermissionKey } from "@/utils/agent-snapshots";
 import { TaskConversationDetails, type TaskConversationDetailsTarget } from "./details";
+import { useTaskConversationNavigationStore } from "./navigation";
 import { projectTaskConversationRows, selectTaskConversationChildren } from "./projection";
 import {
   emptyTaskConversationTimeline,
@@ -45,6 +46,11 @@ export function TaskConversationTimeline({
   const conversation = useTaskConversationStore((state) => state.conversations.get(key));
   const timeline = useTaskConversationStore((state) => state.timelines.get(key) ?? EMPTY_TIMELINE);
   const [details, setDetails] = useState<TaskConversationDetailsTarget | null>(null);
+  const navigationTarget = useTaskConversationNavigationStore((state) => state.targets.get(key));
+  useEffect(() => {
+    if (navigationTarget?.kind === "member") setDetails(navigationTarget.details);
+    else if (navigationTarget?.kind === "source") setDetails(null);
+  }, [navigationTarget]);
   const closeDetails = useCallback(() => setDetails(null), []);
   useEffect(() => {
     if (!client) {
@@ -84,7 +90,7 @@ export function TaskConversationTimeline({
   );
   const renderItemHeader = useCallback(
     (item: StreamItem) => {
-      const row = rowsById.get(item.id);
+      const row = rowsById.get(item.kind === "plugin" ? (item.sourceId ?? item.id) : item.id);
       if (!row) return null;
       return (
         <SourceHeader
@@ -107,6 +113,11 @@ export function TaskConversationTimeline({
     [conversation, conversationId, serverId],
   );
   const active = conversation?.members.some((member) => member.status === "running") === true;
+  const ownerPluginId = conversation?.ownerPluginId;
+  const transformContext = useMemo(
+    () => (ownerPluginId ? { conversationId, ownerPluginId } : undefined),
+    [conversationId, ownerPluginId],
+  );
   const turn = useMemo(
     () => ({
       isActive: active,
@@ -157,9 +168,11 @@ export function TaskConversationTimeline({
       ))}
       <AgentStreamView
         agentId={conversationId}
+        taskConversation={transformContext}
         serverId={serverId}
         context={context}
         streamItems={items}
+        focusedMessage={navigationTarget?.kind === "source" ? navigationTarget : undefined}
         pendingPermissions={EMPTY_PERMISSIONS}
         pendingMessageSubmissions={submissions}
         turnPresentation={turn}

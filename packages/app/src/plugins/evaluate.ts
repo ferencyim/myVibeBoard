@@ -38,6 +38,7 @@ import { pluginReactNativeRuntime } from "./react-native/runtime";
 import { parsePluginThemeContribution } from "./themes";
 
 const CONTRIBUTION_ID = /^[a-z][a-z0-9-]*$/;
+const SLASH_COMMAND_NAME = /^[a-z\p{Script=Han}][a-z0-9\p{Script=Han}-]*$/u;
 const PANEL_LOCATIONS = ["workspace", "explorer", "conversation"] as const;
 const TIMELINE_ITEM_TYPES = new Set([
   "user_message",
@@ -82,6 +83,13 @@ function requireId(value: string, label: string): string {
   return id;
 }
 
+function requireSlashCommandName(value: string): string {
+  const name = value.trim();
+  if (!SLASH_COMMAND_NAME.test(name))
+    throw new Error(`Invalid client slash command name: ${value}`);
+  return name;
+}
+
 /** A non-empty string, or a function of the screen's params resolved when the header renders. */
 function requireScreenTitle(screenId: string, title: unknown): PluginScreenTitle {
   if (typeof title === "function") return title as PluginScreenTitle;
@@ -109,7 +117,9 @@ export function runPluginClientBundle(
   runtime: PluginClientRuntime,
   onChange: () => void = () => undefined,
 ): EvaluatedPlugin {
+  const firstMessageOutboxOwners: NonNullable<EvaluatedPlugin["firstMessageOutboxOwners"]> = [];
   const collector: Omit<EvaluatedPlugin, "id" | "cleanup"> = {
+    firstMessageOutboxOwners,
     surfaces: [],
     settingsScreens: [],
     sidebarItems: { header: [], footer: [] },
@@ -195,6 +205,14 @@ export function runPluginClientBundle(
   }
   const pluginContext: PluginClientContext = {
     ...runtime,
+    addFirstMessageOutboxOwner(contribution) {
+      if (firstMessageOutboxOwners.length > 0) {
+        throw new Error("Only one first-message outbox owner may be registered per plugin");
+      }
+      const initialRole = contribution.initialRole.trim();
+      if (!initialRole) throw new Error("First-message outbox owner needs an initial role");
+      return register(firstMessageOutboxOwners, { initialRole }, () => undefined);
+    },
     addSettingsScreen(contribution) {
       const screenId = requireId(contribution.id, "settings screen id");
       if (settingsScreenIds.has(screenId))
@@ -317,7 +335,7 @@ export function runPluginClientBundle(
       );
     },
     addSlashCommand(contribution: PluginClientSlashCommandContribution) {
-      const name = requireId(contribution.name, "client slash command name");
+      const name = requireSlashCommandName(contribution.name);
       if (clientSlashCommandNames.has(name)) {
         throw new Error(`Duplicate client slash command: ${name}`);
       }
@@ -509,6 +527,7 @@ export function runPluginClientBundle(
   return {
     id,
     cleanup,
+    firstMessageOutboxOwners: firstMessageOutboxOwners,
     surfaces: collector.surfaces,
     settingsScreens: collector.settingsScreens,
     sidebarItems: collector.sidebarItems,

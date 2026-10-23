@@ -1,5 +1,5 @@
-import type { PaseoWorkspaceAgentCreateOptions } from "@getpaseo/client";
 import { describe, expect, it } from "vitest";
+import type { PaseoApi } from "@getpaseo/client";
 import { createPaseoVerifierLauncher } from "../server/verifier/agent";
 
 function fakePaseo(models: Array<{ id: string; isDefault?: boolean }> | "throw") {
@@ -172,124 +172,150 @@ describe("verifier launcher model handling", () => {
   });
 });
 
-describe("原生任务只读辅助会话", () => {
-  it("冻结候选按序接续，先绑定/核对实际模型再运行，停止确认后才释放", async () => {
+describe("原生任务群聊辅助成员", () => {
+  function conversationPaseo(status = "accepted", firstUnavailable = false) {
     const f = fakePaseo([]);
-    const events: string[] = [];
-    const selections: unknown[] = [];
+    type Send = Parameters<ReturnType<PaseoApi["taskConversations"]["ref"]>["send"]>[0];
+    const sends: Send[] = [];
     let activeTurn: unknown = null;
-    f.paseo.workspaces.ref = () => ({
-      agents: {
-        create: async (options: PaseoWorkspaceAgentCreateOptions) => {
-          f.created.push(options);
-          const [provider, model] = options.config.provider.split("/");
-          return {
-            current: () => ({ provider, model: "actual-" + model }),
-            refresh: async () => {},
-            get status() {
-              return "idle";
-            },
-            get activeTurn() {
-              return activeTurn;
-            },
-            run: async () => {
-              events.push("run:" + model);
-              return model === "first"
-                ? { status: "error", error: "authentication required" }
-                : { status: "idle", lastMessage: "结论" };
-            },
-          };
-        },
+    let model = "first";
+    f.paseo.agents.ref = (id: string) => ({
+      id,
+      refresh: async () => {},
+      current: () => ({ provider: "codex", model }),
+      status: "idle",
+      get activeTurn() {
+        return activeTurn;
       },
+      waitForFinish: async () =>
+        firstUnavailable && model === "first"
+          ? { status: "error", error: "authentication required" }
+          : { status: "idle", lastMessage: "完整验证结论" },
     });
-    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
-      input({
-        card: undefined,
-        task: { workspaceId: "ws", anchorAgentId: "anchor" },
-        workspaceId: "ws",
-        model: "first",
-        snapshot: {
-          models: [
-            { provider: "codex", model: "first", thinking: "", permissionMode: "auto" },
-            { provider: "claude", model: "second", thinking: "", permissionMode: "auto" },
-          ],
-          runtimeEnv: "node",
-          instructions: "中文附加指令",
-        },
-        acquire: async (provider: string, index: number) => {
-          events.push("acquire:" + index);
+    f.paseo.taskConversations = {
+      ref: () => ({
+        refresh: async () => ({
+          workspaceId: "ws",
+          members: [{ memberId: "planner", backendAgentId: "anchor" }],
+        }),
+        send: async (request: Send) => {
+          sends.push(request);
+          if (status === "throw") throw new Error("network error authentication required");
+          model = request.recipient.config.model!;
           return {
-            bind: async () => {
-              events.push("bind:" + provider);
-            },
-            release: async () => {
-              events.push("release:" + provider);
-            },
+            error: status === "unknown" ? "authentication required" : null,
+            delivery: { status, memberId: "verifier", backendAgentId: "backend", error: null },
           };
         },
-        onCreated: (value: unknown) => {
-          selections.push(value);
-          events.push("registered");
+        querySource: async () => ({
+          error: null,
+          row: {
+            sourceKey: "model-output",
+            source: { memberId: "verifier", backendAgentId: "backend", sourceTurnId: "turn" },
+          },
+        }),
+      }),
+    };
+    return {
+      ...f,
+      sends,
+      busy: (value: unknown) => {
+        activeTurn = value;
+      },
+    };
+  }
+  const taskInput = (extra = {}) =>
+    input({
+      card: undefined,
+      task: { workspaceId: "ws", anchorAgentId: "anchor", conversationId: "conversation" },
+      workspaceId: "ws",
+      model: "first",
+      ...extra,
+    });
+
+  it("经宿主准入的群聊send启动，角色挂anchor并保留完整源定位，不创建独立tab或重复申请租约", async () => {
+    const f = conversationPaseo();
+    const selections: unknown[] = [];
+    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+      taskInput({
+        onCreated: (value: unknown) => selections.push(value),
+        acquire: async () => {
+          throw new Error("不得双重准入");
+        },
+        snapshot: {
+          presetId: "preset",
+          instructions: "中文附加指令",
+          models: [{ provider: "codex", model: "first" }],
         },
       }),
     );
-    expect(f.created[0]).toMatchObject({
-      parent: "anchor",
-      labels: { workspaceId: "ws", role: "verifier" },
-      env: { VIBE_WORKSPACE_ID: "ws" },
-      config: { options: { sandbox_mode: "read-only", approval_policy: "never" } },
-    });
-    expect(f.created[0].env.VIBE_CARD_ID).toBeUndefined();
-    expect(f.created[0].config.systemPrompt).toContain("中文附加指令");
-    expect(await agent.run("核对证据")).toMatchObject({ status: "idle" });
-    expect(events).toEqual([
-      "acquire:0",
-      "bind:codex",
-      "registered",
-      "run:first",
-      "release:codex",
-      "acquire:1",
-      "bind:claude",
-      "registered",
-      "run:second",
-    ]);
-    expect(selections).toMatchObject([
-      { provider: "codex", model: "actual-first", candidateIndex: 0 },
-      { provider: "claude", model: "actual-second", candidateIndex: 1 },
-    ]);
-    activeTurn = { id: "still-running" };
-    await expect(agent.close()).rejects.toThrow("尚未停止");
-    expect(events).not.toContain("release:claude");
-    activeTurn = null;
-    await agent.close();
-    expect(events.at(-1)).toBe("release:claude");
-  });
-  it("普通命令ENOENT或进程退出不能轮换任务验证模型", async () => {
-    const f = fakePaseo([]);
-    let created = 0;
-    f.paseo.workspaces.ref = () => ({
-      agents: {
-        create: async () => {
-          created++;
-          return {
-            current: () => ({ provider: "codex", model: "first" }),
-            refresh: async () => {},
-            status: "idle",
-            activeTurn: null,
-            run: async () => ({
-              status: "error",
-              error: "test process exited with code 1 (ENOENT fixture)",
-            }),
-          };
+    expect(f.created).toHaveLength(0);
+    expect(await agent.run("核对证据")).toMatchObject({ status: "idle", text: "完整验证结论" });
+    expect(f.sends[0].recipient.memberId).toBeUndefined();
+    expect(f.sends[0]).toMatchObject({
+      text: "核对证据",
+      recipient: {
+        role: "verifier",
+        presetId: "preset",
+        parentMemberId: "planner",
+        config: {
+          provider: "codex",
+          model: "first",
+          providerOptions: { sandbox_mode: "read-only", approval_policy: "never" },
         },
       },
     });
+    expect(f.sends[0].recipient.config.systemPrompt).toContain("中文附加指令");
+    expect(selections).toMatchObject([{ agentId: "backend", candidateIndex: 0, model: "first" }]);
+    expect(agent.source).toMatchObject({
+      sourceKey: "model-output",
+      memberId: "verifier",
+      sourceTurnId: "turn",
+    });
+    await agent.run("判断证据");
+    expect(f.sends[1].recipient.memberId).toBe("verifier");
+    f.busy({ id: "active" });
+    await expect(agent.close()).rejects.toThrow("尚未停止");
+    f.busy(null);
+    await agent.close();
+  });
+  it.each(["reviewer", "verifier"] as const)(
+    "%s receives confirmation and commit in its effective configuration to isolate stale private context",
+    async (role) => {
+      const f = conversationPaseo();
+      const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo });
+      for (const commitHash of ["commit-before", "commit-current"]) {
+        const agent = await launcher.launch(
+          taskInput({
+            role,
+            task: {
+              workspaceId: "ws",
+              anchorAgentId: "anchor",
+              conversationId: "conversation",
+              confirmedAt: "2030-01-01T00:00:00.000Z",
+              commitHash,
+            },
+          }),
+        );
+        await agent.run("当前证据请求");
+        await agent.close();
+      }
+      const prompts = f.sends.map((send) => send.recipient.config.systemPrompt);
+      expect(f.sends.map((send) => send.recipient.env?.VIBE_VERIFICATION_COMMIT)).toEqual([
+        "commit-before",
+        "commit-current",
+      ]);
+      expect(prompts[0]).toContain("confirmedAt=2030-01-01T00:00:00.000Z");
+      expect(prompts[0]).toContain("commit=commit-before");
+      expect(prompts[1]).toContain("commit=commit-current");
+      expect(prompts[1]).not.toContain("commit-before");
+    },
+  );
+
+  it.each(["unknown", "throw"])("回执不明或传输失败不能重发或轮换候选模型：%s", async (status) => {
+    const f = conversationPaseo(status);
     const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
-      input({
-        card: undefined,
-        task: { workspaceId: "ws", anchorAgentId: "anchor" },
-        workspaceId: "ws",
-        model: "first",
+      taskInput({
         snapshot: {
           models: [
             { provider: "codex", model: "first" },
@@ -298,8 +324,59 @@ describe("原生任务只读辅助会话", () => {
         },
       }),
     );
-    expect(await agent.run("测试")).toMatchObject({ status: "error" });
-    expect(created).toBe(1);
+    await expect(agent.run("核对证据")).rejects.toThrow("禁止自动重发");
+    expect(f.sends).toHaveLength(1);
+  });
+  it("确定完成的模型登录失败按冻结候选接续，继续使用同一任务群聊", async () => {
+    const f = conversationPaseo("accepted", true);
+    let previousSessionId: string | undefined;
+    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+      taskInput({
+        previousSessionId: () => previousSessionId,
+        onCreated: () => {
+          previousSessionId = "previous-session";
+        },
+        snapshot: {
+          models: [
+            { provider: "codex", model: "first" },
+            { provider: "codex", model: "second" },
+          ],
+        },
+      }),
+    );
+    expect(await agent.run("核对证据")).toMatchObject({ status: "idle" });
+    expect(f.sends.map((send) => send.recipient.config.model)).toEqual(["first", "second"]);
+    expect(f.sends[1].recipient.env?.VIBE_CANDIDATE_INDEX).toBe("1");
+    expect(f.sends[0].recipient.env?.VIBE_PREVIOUS_SESSION_ID).toBeUndefined();
+    expect(f.sends[1].recipient.env?.VIBE_PREVIOUS_SESSION_ID).toBe("previous-session");
+    expect(f.sends[1].recipient.memberId).toEqual(expect.any(String));
+    expect(f.sends[1].recipient.memberId).not.toBe("verifier");
+    expect(f.created).toHaveLength(0);
+    await agent.close();
+  });
+  it("跨确认失败重试显式新成员但不串旧轮，实际候选索引作为起点", async () => {
+    const f = conversationPaseo();
+    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+      taskInput({
+        forceNewMember: true,
+        candidateIndex: 1,
+        snapshot: {
+          models: [
+            { provider: "codex", model: "first" },
+            { provider: "codex", model: "second" },
+          ],
+        },
+      }),
+    );
+    await agent.run("重验");
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0].recipient).toMatchObject({
+      memberId: expect.any(String),
+      parentMemberId: "planner",
+      config: { model: "second" },
+    });
+    expect(f.sends[0].recipient.env?.VIBE_CANDIDATE_INDEX).toBe("1");
+    expect(f.sends[0].recipient.env?.VIBE_PREVIOUS_SESSION_ID).toBeUndefined();
     await agent.close();
   });
 });

@@ -88,7 +88,9 @@ describe("respondToAgentPermission", () => {
       logger,
     });
     expect(continuePermission).toHaveBeenCalledWith("task-member", "批准后继续", "approval");
-    expect(preparePermissionResponse).toHaveBeenCalledWith("task-member");
+    expect(preparePermissionResponse).toHaveBeenCalledWith("task-member", "approval", {
+      behavior: "allow",
+    });
     expect(agentManager.streamRuns).toEqual([]);
     expect(agentManager.replacementRuns).toEqual([]);
   });

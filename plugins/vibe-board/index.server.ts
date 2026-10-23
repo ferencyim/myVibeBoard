@@ -2,7 +2,7 @@ import { delimiter, join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { boardSettings } from "./shared/settings";
-import { publishEvent, resolveVibeHome } from "./server/vibe/db";
+import { resolveVibeHome } from "./server/vibe/db";
 import { startBoardBridge, type BoardBridgeHandle } from "./server/mcp/bridge";
 import { injectBoard } from "./server/mcp/inject";
 import { createChatService } from "./server/chat";
@@ -14,7 +14,11 @@ import { createReassigner } from "./server/dispatch/reassign";
 import { startAdmissionConsumer } from "./server/dispatch/admission";
 import { registerLifecycle } from "./server/lifecycle";
 import { startFinalizer } from "./server/lifecycle/finalize";
-import { createWatchdog, DEFAULT_STALL_CONFIG, parseProviderMinutes } from "./server/lifecycle/watchdog";
+import {
+  createWatchdog,
+  DEFAULT_STALL_CONFIG,
+  parseProviderMinutes,
+} from "./server/lifecycle/watchdog";
 import { createGitFinalizer } from "./server/lifecycle/git-finalize";
 import { registerBoardRpcs } from "./server/rpc";
 import { createBoardService, openBoardRuntime } from "./server/service";
@@ -25,6 +29,7 @@ import { buildBoardInstructions } from "./server/mcp/instructions";
 import { createBoardPrompts } from "./server/prompts";
 import type { BriefLimits } from "./server/dispatch/brief";
 import { createSubtaskService, type SubtaskService } from "./server/subtasks";
+import { registerTaskRuntime } from "./server/task-runtime";
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(boardSettings);
@@ -35,7 +40,10 @@ export default function contribute(server: PluginServerContext) {
   try {
     prompts.register({ pruneMissing: true });
   } catch (error) {
-    console.error("vibe-board: could not register the prompt defaults, using built-in texts:", error);
+    console.error(
+      "vibe-board: could not register the prompt defaults, using built-in texts:",
+      error,
+    );
   }
   const getLimits = async (): Promise<Partial<BriefLimits>> => {
     const current = await settings.read();
@@ -72,12 +80,16 @@ export default function contribute(server: PluginServerContext) {
   }
 
   server.before("agent.create", async ({ request }) => {
+    if (request.env?.VIBE_CONVERSATION_ID) return request;
     const inject = await autoInject();
     const active = bridge ?? (await bridgeReady);
-    return injectBoard(request, inject, active, process.execPath, () => buildBoardInstructions(prompts));
+    return injectBoard(request, inject, active, process.execPath, () =>
+      buildBoardInstructions(prompts),
+    );
   });
 
   server.before("agent.session_open", async ({ request }) => {
+    if (request.env?.VIBE_CONVERSATION_ID) return;
     if (request.env?.VIBE_ROLE === "scout" || !(await autoInject()).cliAndMcp) return;
     const active = bridge ?? (await bridgeReady);
     if (!active) return;
@@ -96,6 +108,12 @@ export default function contribute(server: PluginServerContext) {
   // Hosts that expose the handle at start-up (server.paseo) let dispatch run with no UI attached;
   // older hosts only hand it over through hook/RPC contexts, which keep refreshing it below.
   const onPaseo = (api: PaseoApi) => void (paseo = api);
+  const tasks = registerTaskRuntime(server, {
+    db: runtime.db,
+    store: runtime.store,
+    getPaseo: () => paseo,
+    onPaseo,
+  });
   const failoverEnabled = async () => {
     const current = await settings.read();
     return current.status !== "ready" || current.values.failoverEnabled;
@@ -162,11 +180,25 @@ export default function contribute(server: PluginServerContext) {
   // The poll interval is read once at start-up.
   void settings
     .read()
-    .then((current) => watchdog.start(current.status === "ready" ? current.values.watchdogPollSeconds * 1000 : undefined))
+    .then((current) =>
+      watchdog.start(
+        current.status === "ready" ? current.values.watchdogPollSeconds * 1000 : undefined,
+      ),
+    )
     .catch(() => watchdog.start());
-  const admission = startAdmissionConsumer({ db: runtime.db, board, dispatcher, prompts, onError: (e) => console.error("vibe-board admission:", e) });
+  const admission = startAdmissionConsumer({
+    db: runtime.db,
+    board,
+    dispatcher,
+    prompts,
+    onError: (e) => console.error("vibe-board admission:", e),
+  });
   const sync = createSyncService({ db: runtime.db, store: runtime.store });
-  const replies = createReplyService({ db: runtime.db, store: runtime.store, getPaseo: () => paseo });
+  const replies = createReplyService({
+    db: runtime.db,
+    store: runtime.store,
+    getPaseo: () => paseo,
+  });
   subtasks = createSubtaskService({
     board,
     getPaseo: () => paseo,
@@ -178,7 +210,13 @@ export default function contribute(server: PluginServerContext) {
   subtasks.startPolling();
   // Card conversations: execution-thread messages go to the executor (router); plan-thread ones
   // are answered by the planning session (vibe-master).
-  const chatRouter = createChatRouter({ db: runtime.db, board, getPaseo: () => paseo, replies, subtasks: () => subtasks });
+  const chatRouter = createChatRouter({
+    db: runtime.db,
+    board,
+    getPaseo: () => paseo,
+    replies,
+    subtasks: () => subtasks,
+  });
   chatRouter.start();
   const chat = createChatService(board, runtime.db, () => void chatRouter.poll());
   const finalizer = startFinalizer({
@@ -213,12 +251,18 @@ export default function contribute(server: PluginServerContext) {
     sync,
     replies,
     chat,
-    flow: createFlowService({ board, dispatcher, reassigner: reassigner!, onMessage: () => void chatRouter.poll() }),
+    flow: createFlowService({
+      board,
+      dispatcher,
+      reassigner: reassigner!,
+      onMessage: () => void chatRouter.poll(),
+    }),
     requirements: createRequirementsService({ board, db: runtime.db }),
     verify: createVerifyService({ db: runtime.db, board }),
   });
 
   return async () => {
+    await tasks.close();
     watchdog.stop();
     await subtasks?.stop();
     await admission.stop();
