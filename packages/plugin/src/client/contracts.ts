@@ -187,7 +187,16 @@ interface PluginClientContextAliases {
   addSidebarItem(contribution: PluginSidebarContribution): PluginCleanup;
 }
 
+export interface PluginFirstMessageOutboxOwnerContribution {
+  /** Role receiving the first message in this plugin's task conversation. */
+  initialRole: TaskConversationRecipient["role"];
+}
+
 export interface PluginClientContext extends PluginCommandCapabilities, PluginClientContextAliases {
+  /** Own new-workspace first messages until this registration is removed. */
+  addFirstMessageOutboxOwner(
+    contribution: PluginFirstMessageOutboxOwnerContribution,
+  ): PluginCleanup;
   setTaskConversationRecipients(input: PluginTaskConversationRecipientsInput): void;
   /** Play a base64-encoded audio file on this client; resolves when playback ends. */
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
@@ -270,6 +279,7 @@ export type PluginTimelineTransformerContribution<
       transform(input: {
         item: Extract<AgentTimelineItem, { type: ItemType }>;
         phase: "streaming" | "complete";
+        taskConversation?: { conversationId: string; ownerPluginId: string };
       }): PluginTimelineTransformResult | undefined;
     }
   : never;

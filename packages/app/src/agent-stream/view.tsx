@@ -265,6 +265,7 @@ export interface AgentStreamViewHandle {
 
 export interface AgentStreamViewProps {
   agentId: string;
+  taskConversation?: { conversationId: string; ownerPluginId: string };
   serverId?: string;
   context: AgentScreenAgent;
   streamItems: StreamItem[];
@@ -325,6 +326,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
   function AgentStreamView(
     {
       agentId,
+      taskConversation,
       serverId,
       context,
       streamItems,
@@ -375,7 +377,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     // Get serverId (fallback to agent's serverId if not provided)
     const resolvedServerId = serverId ?? context.serverId ?? "";
-    const transformTimelineItem = useInstalledTimelineTransform(resolvedServerId);
+    const transformTimelineItem = useInstalledTimelineTransform(resolvedServerId, taskConversation);
 
     const client = useSessionStore((state) => state.sessions[resolvedServerId]?.client ?? null);
     const sessionStreamHead = useSessionStore((state) =>
@@ -1270,6 +1272,7 @@ function agentStreamViewPropsEqual(
 ): boolean {
   const reasons: string[] = [];
   if (left.agentId !== right.agentId) reasons.push("agentId");
+  if (left.taskConversation !== right.taskConversation) reasons.push("taskConversation");
   if (left.serverId !== right.serverId) reasons.push("serverId");
   reasons.push(...collectAgentScreenAgentDiffs(left.context, right.context));
   if (left.streamItems !== right.streamItems) reasons.push("streamItems");

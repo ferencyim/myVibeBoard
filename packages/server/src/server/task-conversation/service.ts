@@ -1063,11 +1063,10 @@ export class TaskConversationService {
     const request =
       this.dependencies.agentManager.getAgent(agentId)?.pendingPermissions?.get(requestId) ??
       member.pendingPermissions?.find((entry) => entry.id === requestId);
-    if (
-      request &&
-      (request.kind === "plan" || request.kind === "mode" || request.name === "ExitPlanMode")
-    )
-      throw new Error("该任务成员为只读角色，不能批准退出规划或提升权限；请通过任务面板确认执行。");
+    if (response.updatedPermissions?.length || request?.kind !== "question")
+      throw new Error(
+        "该任务成员为只读角色，只能回答提问，不能批准工具或修改权限；请通过任务面板确认执行。",
+      );
   }
   async preparePermissionResponse(
     agentId: string,

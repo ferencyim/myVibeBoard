@@ -90,7 +90,7 @@ export function TaskConversationTimeline({
   );
   const renderItemHeader = useCallback(
     (item: StreamItem) => {
-      const row = rowsById.get(item.id);
+      const row = rowsById.get(item.kind === "plugin" ? (item.sourceId ?? item.id) : item.id);
       if (!row) return null;
       return (
         <SourceHeader
@@ -113,6 +113,11 @@ export function TaskConversationTimeline({
     [conversation, conversationId, serverId],
   );
   const active = conversation?.members.some((member) => member.status === "running") === true;
+  const ownerPluginId = conversation?.ownerPluginId;
+  const transformContext = useMemo(
+    () => (ownerPluginId ? { conversationId, ownerPluginId } : undefined),
+    [conversationId, ownerPluginId],
+  );
   const turn = useMemo(
     () => ({
       isActive: active,
@@ -163,6 +168,7 @@ export function TaskConversationTimeline({
       ))}
       <AgentStreamView
         agentId={conversationId}
+        taskConversation={transformContext}
         serverId={serverId}
         context={context}
         streamItems={items}

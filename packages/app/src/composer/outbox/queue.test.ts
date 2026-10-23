@@ -14,6 +14,7 @@ function input(id = "draft-one", hostId = "host-one"): FirstMessageOutboxInput {
     hostId,
     projectId: "project-one",
     source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+    owner: { pluginId: "vibe-board", initialRole: "planner" },
     config: { provider: "codex", cwd: "/repo", model: "planning-model" },
     text: "规划一个新任务，先等我确认方案。",
     attachments: [],
@@ -449,4 +450,51 @@ it("升级提示没有新待发送项时不反复落盘和唤醒发送循环", a
   const writes = vi.mocked(f.storage.setItem).mock.calls.length;
   await q.failUnsubmittedHost("host-one", "请升级主机");
   expect(f.storage.setItem).toHaveBeenCalledTimes(writes);
+});
+
+it("没有插件声明时使用普通 agent 创建并接受普通会话回执", async () => {
+  const q = fixture().queue();
+  const native = port();
+  const ordinary = { ...snapshot(), conversationId: undefined, memberId: undefined };
+  vi.mocked(native.createWorkspace).mockResolvedValue(response(ordinary));
+  const draft = {
+    ...input(),
+    owner: undefined,
+    source: { kind: "directory" as const, path: "/repo", projectId: "project-one" },
+  };
+  await q.enqueue(draft);
+  await q.flushHost("host-one", native);
+  expect(native.createWorkspace).toHaveBeenCalledWith(
+    expect.objectContaining({
+      source: draft.source,
+      agent: {
+        config: draft.config,
+        initialPrompt: draft.text,
+        clientMessageId: "intent-1:initial-message",
+      },
+    }),
+  );
+  expect(vi.mocked(native.createWorkspace).mock.calls[0][0].taskConversation).toBeUndefined();
+  expect(q.getSnapshot()[0]).toMatchObject({
+    status: "sent",
+    result: { agentId: "agent-one", workspaceId: "workspace-one" },
+  });
+});
+
+it("owner 来自插件声明，重启后继续使用同一安装身份与角色", async () => {
+  const f = fixture();
+  await f
+    .queue()
+    .enqueue({ ...input(), owner: { pluginId: "installed-custom-id", initialRole: "scout" } });
+  const q = f.queue();
+  const native = port();
+  await q.flushHost("host-one", native);
+  expect(native.createWorkspace).toHaveBeenCalledWith(
+    expect.objectContaining({
+      taskConversation: expect.objectContaining({
+        ownerPluginId: "installed-custom-id",
+        initialRecipient: expect.objectContaining({ role: "scout" }),
+      }),
+    }),
+  );
 });

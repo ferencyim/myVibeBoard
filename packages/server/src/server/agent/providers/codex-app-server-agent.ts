@@ -5150,18 +5150,24 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
   }
 
-  tryHandleOutOfBand(
-    prompt: AgentPromptInput,
-  ): { run(ctx: { emit: (event: AgentStreamEvent) => void }): Promise<void> } | null {
+  tryHandleOutOfBand(prompt: AgentPromptInput): {
+    run(ctx: { emit: (event: AgentStreamEvent) => void; throwOnError?: boolean }): Promise<void>;
+  } | null {
     if (typeof prompt !== "string") return null;
     const parsed = this.parseSlashCommandInput(prompt);
     if (!parsed) return null;
 
     if (parsed.commandName === "compact") {
       return {
-        run: async () => {
+        run: async ({ emit, throwOnError }) => {
           const error = await this.executeCompactCommand();
-          if (error) throw new Error(error);
+          if (!error) return;
+          if (throwOnError) throw new Error(error);
+          emit({
+            type: "timeline",
+            provider: CODEX_PROVIDER,
+            item: { type: "assistant_message", text: formatOutOfBandStatusMessage(error) },
+          });
         },
       };
     }

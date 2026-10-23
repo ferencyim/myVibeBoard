@@ -5620,7 +5620,7 @@ describe("Codex app-server provider", () => {
     ]);
   });
 
-  test("rejects a failed native compact request instead of reporting success", async () => {
+  test("formats ordinary compact failures and rejects failures for native control callers", async () => {
     const session = createSession();
     session.client = {
       request: vi.fn(async (method: string) => {
@@ -5632,7 +5632,21 @@ describe("Codex app-server provider", () => {
     };
     const handler = session.tryHandleOutOfBand?.("/compact");
     expect(handler).not.toBeNull();
-    await expect(handler!.run({ emit: vi.fn() })).rejects.toThrow("native compact unavailable");
+    const emit = vi.fn();
+    await expect(handler!.run({ emit })).resolves.toBeUndefined();
+    expect(emit).toHaveBeenCalledExactlyOnceWith({
+      type: "timeline",
+      provider: "codex",
+      item: {
+        type: "assistant_message",
+        text: "Failed to compact context: native compact unavailable\n\n",
+      },
+    });
+    emit.mockClear();
+    await expect(handler!.run({ emit, throwOnError: true })).rejects.toThrow(
+      "native compact unavailable",
+    );
+    expect(emit).not.toHaveBeenCalled();
   });
 
   test("maps question responses from headers back to question ids and completes the tool call", async () => {

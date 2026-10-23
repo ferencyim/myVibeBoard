@@ -11104,6 +11104,7 @@ test("tryRunOutOfBand gives providers the command another agent sent, not its en
 test("runOutOfBand awaits native compact, propagates failure, and never starts a prompt turn", async () => {
   const completed = deferred<void>();
   const seen: AgentPromptInput[] = [];
+  const errorModes: Array<boolean | undefined> = [];
   const startTurn = vi.fn();
   let failure: Error | null = null;
   class NativeCompactSession extends TestAgentSession {
@@ -11115,7 +11116,8 @@ test("runOutOfBand awaits native compact, propagates failure, and never starts a
       seen.push(prompt);
       if (prompt !== "/compact") return null;
       return {
-        run: async () => {
+        run: async ({ throwOnError }: { throwOnError?: boolean }) => {
+          errorModes.push(throwOnError);
           await completed.promise;
           if (failure) throw failure;
         },
@@ -11144,7 +11146,10 @@ test("runOutOfBand awaits native compact, propagates failure, and never starts a
     await expect(manager.runOutOfBand(agent.id, "/unsupported")).resolves.toBe(false);
     failure = new Error("native failure");
     await expect(manager.runOutOfBand(agent.id, "/compact")).rejects.toThrow("native failure");
-    expect(seen).toEqual(["/compact", "/unsupported", "/compact"]);
+    failure = null;
+    expect(manager.tryRunOutOfBand(agent.id, "/compact")).toBe(true);
+    expect(errorModes).toEqual([true, true, undefined]);
+    expect(seen).toEqual(["/compact", "/unsupported", "/compact", "/compact"]);
     expect(startTurn).not.toHaveBeenCalled();
   } finally {
     await manager.closeAgent(agent.id);

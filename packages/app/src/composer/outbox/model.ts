@@ -78,12 +78,16 @@ export const FirstMessageOutboxInputSchema = z
     projectId: z.string().min(1),
     source: WorkspaceCreateRequestSchema.shape.source,
     config: AgentCreateRequestSchema.shape.config,
+    owner: z.object({ pluginId: z.string().min(1), initialRole: z.string().min(1) }).optional(),
     plannerPresetId: z.string().min(1).optional(),
     text: z.string(),
     attachments: z.array(ComposerAttachmentSchema),
   })
   .superRefine((input, ctx) => {
-    if (input.source.kind !== "worktree" || input.source.projectId !== input.projectId) {
+    if (
+      input.owner &&
+      (input.source.kind !== "worktree" || input.source.projectId !== input.projectId)
+    ) {
       ctx.addIssue({ code: "custom", message: "离线新任务必须属于所选项目的独立 worktree" });
     }
     if (!input.text.trim() && input.attachments.length === 0) {

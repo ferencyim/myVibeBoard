@@ -279,10 +279,13 @@ describe("TaskConversationService", () => {
     expect(() =>
       service.assertPermissionApproval(delivery.backendAgentId, "mode", { behavior: "allow" }),
     ).toThrow("只读角色");
-    for (const id of ["question", "tool", "missing"])
+    await expect(
+      service.preparePermissionResponse(delivery.backendAgentId, "question", { behavior: "allow" }),
+    ).resolves.toBeUndefined();
+    for (const id of ["tool", "missing"])
       await expect(
         service.preparePermissionResponse(delivery.backendAgentId, id, { behavior: "allow" }),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow("只读角色");
     expect(() =>
       service.assertPermissionApproval("ordinary-agent", "live-plan", { behavior: "allow" }),
     ).not.toThrow();
@@ -299,6 +302,62 @@ describe("TaskConversationService", () => {
       service.assertPermissionApproval(delivery.backendAgentId, "live-plan", { behavior: "allow" }),
     ).toThrow("只读角色");
   });
+
+  it.each(["planner", "scout", "plan_reviewer", "reviewer", "verifier"])(
+    "rejects Claude tool approvals and persistent permission updates for read-only %s",
+    async (role) => {
+      const { service, store, manager } = fixture();
+      const conversation = await createConversation(service);
+      const delivery = await service.send({
+        conversationId: conversation.conversationId,
+        recipient: { ...recipient, role, config: { ...recipient.config, modeId: "plan" } },
+        clientMessageId: "readonly-claude-tools",
+        text: "只读检查",
+      });
+      const tools = ["Bash", "Edit", "Write", "Read"].map((name) => ({
+        id: name,
+        provider: "claude" as const,
+        name,
+        kind: "tool" as const,
+      }));
+      store.update(conversation.conversationId, (record) => {
+        record.snapshot.members[0]!.pendingPermissions = [
+          ...tools,
+          { id: "question", provider: "claude", name: "AskUserQuestion", kind: "question" },
+        ];
+      });
+      for (const tool of ["Bash", "Edit", "Write", "Read"])
+        await expect(
+          service.preparePermissionResponse(delivery.backendAgentId, tool, { behavior: "allow" }),
+        ).rejects.toThrow("只读角色");
+      for (const destination of ["localSettings", "projectSettings"])
+        await expect(
+          service.preparePermissionResponse(delivery.backendAgentId, "question", {
+            behavior: "allow",
+            updatedPermissions: [
+              {
+                type: "addRules",
+                rules: [{ toolName: "Bash" }],
+                behavior: "allow",
+                destination,
+              },
+            ],
+          }),
+        ).rejects.toThrow("只读角色");
+      await expect(
+        service.preparePermissionResponse(delivery.backendAgentId, "question", {
+          behavior: "allow",
+          updatedInput: { answers: { decision: "继续检查" } },
+          updatedPermissions: [],
+        }),
+      ).resolves.toBeUndefined();
+      expect(manager.streamAgent).toHaveBeenCalledTimes(1);
+      expect(
+        service.resolve({ conversationId: conversation.conversationId })!.members[0]!
+          .pendingPermissions,
+      ).toHaveLength(5);
+    },
+  );
 
   it("compacts through the authorized native command after owner admission, without a prompt turn", async () => {
     const { service, manager, before, controls } = fixture();

@@ -117,7 +117,9 @@ export function runPluginClientBundle(
   runtime: PluginClientRuntime,
   onChange: () => void = () => undefined,
 ): EvaluatedPlugin {
+  const firstMessageOutboxOwners: NonNullable<EvaluatedPlugin["firstMessageOutboxOwners"]> = [];
   const collector: Omit<EvaluatedPlugin, "id" | "cleanup"> = {
+    firstMessageOutboxOwners,
     surfaces: [],
     settingsScreens: [],
     sidebarItems: { header: [], footer: [] },
@@ -203,6 +205,14 @@ export function runPluginClientBundle(
   }
   const pluginContext: PluginClientContext = {
     ...runtime,
+    addFirstMessageOutboxOwner(contribution) {
+      if (firstMessageOutboxOwners.length > 0) {
+        throw new Error("Only one first-message outbox owner may be registered per plugin");
+      }
+      const initialRole = contribution.initialRole.trim();
+      if (!initialRole) throw new Error("First-message outbox owner needs an initial role");
+      return register(firstMessageOutboxOwners, { initialRole }, () => undefined);
+    },
     addSettingsScreen(contribution) {
       const screenId = requireId(contribution.id, "settings screen id");
       if (settingsScreenIds.has(screenId))
@@ -517,6 +527,7 @@ export function runPluginClientBundle(
   return {
     id,
     cleanup,
+    firstMessageOutboxOwners: firstMessageOutboxOwners,
     surfaces: collector.surfaces,
     settingsScreens: collector.settingsScreens,
     sidebarItems: collector.sidebarItems,

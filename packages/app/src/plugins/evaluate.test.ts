@@ -41,6 +41,32 @@ function bundle(body: string): string {
 }
 
 describe("evaluatePluginClientBundle", () => {
+  it("registers an outbox owner and releases the declaration on teardown", async () => {
+    const plugin = evaluatePluginClientBundle(
+      "tasks",
+      bundle('plugin.addFirstMessageOutboxOwner({ initialRole: "planner" });'),
+    );
+    expect(plugin.firstMessageOutboxOwners).toEqual([{ initialRole: "planner" }]);
+    await plugin.cleanup();
+    expect(plugin.firstMessageOutboxOwners).toEqual([]);
+  });
+
+  it("rejects empty roles and duplicate outbox declarations", () => {
+    expect(() =>
+      evaluatePluginClientBundle(
+        "tasks",
+        bundle('plugin.addFirstMessageOutboxOwner({ initialRole: " " });'),
+      ),
+    ).toThrow("initial role");
+    expect(() =>
+      evaluatePluginClientBundle(
+        "tasks",
+        bundle(
+          'plugin.addFirstMessageOutboxOwner({ initialRole: "planner" }); plugin.addFirstMessageOutboxOwner({ initialRole: "scout" });',
+        ),
+      ),
+    ).toThrow("Only one");
+  });
   it("registers all seven Chinese task slash commands without dropping the plugin's other surfaces", () => {
     const names = ["制定方案", "复核方案", "执行", "复核", "验证", "通过", "停止任务"];
     const plugin = evaluatePluginClientBundle(

@@ -2499,7 +2499,7 @@ export class AgentManager {
     const command = this.prepareOutOfBand(agentId, prompt, options);
     if (!command) return false;
     try {
-      await command.run();
+      await command.run(true);
     } catch (error) {
       command.reportError(error);
       throw error;
@@ -2539,7 +2539,7 @@ export class AgentManager {
       this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
     };
     return {
-      run: async () => handler.run({ emit: dispatch }),
+      run: async (throwOnError?: boolean) => handler.run({ emit: dispatch, throwOnError }),
       reportError(error: unknown) {
         const text = error instanceof Error ? error.message : "Out-of-band command failed";
         dispatch({

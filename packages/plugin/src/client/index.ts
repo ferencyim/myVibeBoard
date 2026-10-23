@@ -16,6 +16,7 @@ export type {
   PluginConversationPanelProps,
   PluginClientOpenPanelOptions,
   PluginClientContext,
+  PluginFirstMessageOutboxOwnerContribution,
   PluginTaskConversationRecipientsInput,
   PluginTaskConversationRecipientOption,
   PluginClientContribution,

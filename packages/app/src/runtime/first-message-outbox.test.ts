@@ -64,6 +64,7 @@ async function restart(status: "sending" | "unknown" = "sending") {
     hostId: "host-one",
     projectId: "project-one",
     source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+    owner: { pluginId: "vibe-board", initialRole: "planner" },
     config: { provider: "codex", cwd: "/repo", model: "planning-model" },
     text: "先规划，等待我确认方案。",
     attachments: [],
@@ -213,6 +214,7 @@ it("宿主缺少任务群聊能力时不创建普通 agent，保留首消息并�
   const { runtime } = await restart();
   await runtime.firstMessageOutbox.enqueue({
     id: "new-draft",
+    owner: { pluginId: "vibe-board", initialRole: "planner" },
     hostId: "host-one",
     projectId: "project-one",
     source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
@@ -234,4 +236,36 @@ it("宿主缺少任务群聊能力时不创建普通 agent，保留首消息并�
     submitted: false,
     error: expect.stringContaining("升级"),
   });
+});
+
+it("停用任务插件后，即使旧任务尚未发出，缺群聊能力的主机仍能创建普通 agent", async () => {
+  const { runtime } = await restart();
+  await runtime.firstMessageOutbox.enqueue({
+    id: "ordinary-draft",
+    hostId: "host-one",
+    projectId: "project-one",
+    source: { kind: "directory", projectId: "project-one", path: "/repo" },
+    config: { provider: "codex", cwd: "/repo" },
+    text: "普通新会话",
+    attachments: [],
+  });
+  host.client.getLastServerInfoMessage.mockReturnValue({
+    features: { creationLifecycle: true, taskConversations: false },
+  });
+  host.client.createWorkspace.mockResolvedValue({
+    creation: {
+      ...completed,
+      idempotencyKey: "unused-new-intent",
+      conversationId: undefined,
+      memberId: undefined,
+    },
+    workspace: null,
+    error: null,
+  });
+  await runtime.flushFirstMessageOutbox();
+  expect(host.client.createWorkspace).toHaveBeenCalledOnce();
+  expect(host.client.createWorkspace.mock.calls[0][0].taskConversation).toBeUndefined();
+  expect(
+    runtime.firstMessageOutbox.getSnapshot().find((entry) => entry.id === "ordinary-draft")?.status,
+  ).toBe("sent");
 });

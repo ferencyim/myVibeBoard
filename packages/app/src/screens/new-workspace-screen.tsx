@@ -11,6 +11,8 @@ import { createNameId } from "mnemonic-id";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
+import { pluginRegistry, useInstalledPlugins } from "@/plugins/registry";
+import { resolveFirstMessageOutboxOwner } from "@/plugins/first-message-outbox";
 import { FirstMessageOutboxView } from "@/composer/outbox/view";
 import { useFirstMessageOutbox } from "@/composer/outbox/hook";
 import { firstMessageOutbox, flushFirstMessageOutbox } from "@/runtime/first-message-outbox";
@@ -164,6 +166,8 @@ interface FirstWorkspaceMessageInput {
   worktreeSupport: "supported" | "unsupported" | "unknown";
   selectedItem: PickerItem | null;
   checkoutStatus: { currentBranch: string | null; upstreamRef?: string | null } | undefined;
+  owner?: Parameters<typeof firstMessageOutbox.enqueue>[0]["owner"];
+  isolation?: "local" | "worktree";
   identity: { draftId: string; worktreeSlug: string };
 }
 
@@ -209,7 +213,7 @@ function buildFirstWorkspaceMessage(
   if (!input.selectedProject || !input.selectedSourceDirectory) {
     throw new Error("请先选择项目和主机。");
   }
-  if (input.worktreeSupport === "unsupported") {
+  if (input.owner && input.worktreeSupport === "unsupported") {
     throw new Error("新任务需要独立 worktree，请选择 Git 项目；正文已保留。");
   }
   const hostProjectId = getHostProjectId(input.selectedProject, input.selectedServerId);
@@ -223,13 +227,17 @@ function buildFirstWorkspaceMessage(
     id: input.identity.draftId,
     hostId: input.selectedServerId,
     projectId: hostProjectId,
-    source: {
-      kind: "worktree",
-      cwd: input.selectedSourceDirectory,
-      projectId: hostProjectId,
-      worktreeSlug: input.identity.worktreeSlug,
-      ...checkoutRequest,
-    },
+    owner: input.owner,
+    source:
+      input.owner || input.isolation === "worktree"
+        ? {
+            kind: "worktree",
+            cwd: input.selectedSourceDirectory,
+            projectId: hostProjectId,
+            worktreeSlug: input.identity.worktreeSlug,
+            ...checkoutRequest,
+          }
+        : { kind: "directory", path: input.selectedSourceDirectory, projectId: hostProjectId },
     config,
     text: input.payload.text,
     attachments: input.payload.attachments,
@@ -238,15 +246,22 @@ function buildFirstWorkspaceMessage(
 
 function newTaskFormVisibility(input: {
   isTerminalLaunch: boolean;
+  hasTaskOwner?: boolean;
   canCreateWorktree: boolean;
   showRefPicker: boolean;
 }) {
-  if (input.isTerminalLaunch) return input;
+  if (input.isTerminalLaunch || !input.hasTaskOwner) return input;
   return { canCreateWorktree: false, showRefPicker: true };
 }
 
-function NewTaskOutboxHint({ isTerminalLaunch }: { isTerminalLaunch: boolean }) {
-  if (isTerminalLaunch) return null;
+function NewTaskOutboxHint({
+  isTerminalLaunch,
+  hasTaskOwner,
+}: {
+  isTerminalLaunch: boolean;
+  hasTaskOwner: boolean;
+}) {
+  if (isTerminalLaunch || !hasTaskOwner) return null;
   return (
     <Text style={styles.outboxHint}>
       新任务使用独立
@@ -676,6 +691,11 @@ export function NewWorkspaceScreen({
   }));
   const submissionLock = useRef(false);
   const [submittedOutboxId, setSubmittedOutboxId] = useState<string | null>(null);
+  const installedPlugins = useInstalledPlugins();
+  const hasTaskOwner = installedPlugins.some(
+    (plugin) =>
+      plugin.serverId === selectedServerId && (plugin.firstMessageOutboxOwners?.length ?? 0) > 0,
+  );
   const outbox = useFirstMessageOutbox();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [creationResult, setCreationResult] = useState<
@@ -1126,6 +1146,8 @@ export function NewWorkspaceScreen({
           worktreeSupport,
           selectedItem,
           checkoutStatus: checkoutStatus ?? undefined,
+          owner: resolveFirstMessageOutboxOwner(pluginRegistry.getSnapshot(), selectedServerId),
+          isolation: effectiveIsolation,
           identity: creationIdentity,
         });
         setPendingAction("chat");
@@ -1154,6 +1176,7 @@ export function NewWorkspaceScreen({
       draftContextScopeKey,
       checkoutStatus,
       ensureWorkspace,
+      effectiveIsolation,
       formPreferences,
       isConnected,
       isStillOnCreateScreen,
@@ -1183,7 +1206,7 @@ export function NewWorkspaceScreen({
     async (id: string) => {
       const entry = firstMessageOutbox.getSnapshot().find((item) => item.id === id);
       if (!entry?.result) return;
-      if (!entry.result.conversationId) {
+      if (entry.owner && !entry.result.conversationId) {
         setErrorMessage("原创建回执缺少任务群聊，请升级主机并核对原会话；本机输入已保留。");
         return;
       }
@@ -1191,7 +1214,9 @@ export function NewWorkspaceScreen({
       navigateToWorkspace({
         serverId: entry.hostId,
         workspaceId: entry.result.workspaceId,
-        target: { kind: "task_conversation", conversationId: entry.result.conversationId },
+        target: entry.result.conversationId
+          ? { kind: "task_conversation", conversationId: entry.result.conversationId }
+          : { kind: "agent", agentId: entry.result.agentId },
       });
       try {
         await firstMessageOutbox.removeSent(id);
@@ -1304,6 +1329,7 @@ export function NewWorkspaceScreen({
 
   const taskFormVisibility = newTaskFormVisibility({
     isTerminalLaunch,
+    hasTaskOwner,
     canCreateWorktree,
     showRefPicker,
   });
@@ -1442,7 +1468,7 @@ export function NewWorkspaceScreen({
         formStack={formStack}
         onImportSession={importSession.open}
       >
-        <NewTaskOutboxHint isTerminalLaunch={isTerminalLaunch} />
+        <NewTaskOutboxHint isTerminalLaunch={isTerminalLaunch} hasTaskOwner={hasTaskOwner} />
         {composer}
         <FirstMessageOutboxView
           entries={outbox.entries}

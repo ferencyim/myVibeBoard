@@ -7,6 +7,7 @@ import type {
   PluginThemeContribution,
 } from "@getpaseo/plugin";
 import type {
+  PluginFirstMessageOutboxOwnerContribution,
   PluginCommandCenterItemContribution,
   PluginClientSlashCommandContribution,
   PluginComposerPillContribution,
@@ -25,6 +26,7 @@ export type EvaluatedPluginWorkspacePanelContribution = PluginWorkspacePanelCont
 
 export interface EvaluatedPlugin {
   id: string;
+  firstMessageOutboxOwners?: PluginFirstMessageOutboxOwnerContribution[];
   cleanup: PluginCleanup;
   surfaces: PluginScreenContribution[];
   settingsScreens: PluginSettingsScreenContribution[];
