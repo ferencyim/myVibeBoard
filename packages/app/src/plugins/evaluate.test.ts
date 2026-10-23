@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runPluginClientBundle, type PluginClientRuntime } from "./evaluate";
+
+// Registration tests exercise the real evaluator without loading native rendering dependencies.
+vi.mock("./react-native/runtime", () => ({
+  pluginReactNativeRuntime: {
+    Icon: (props: Record<string, unknown>) => ({ props }),
+    Modal: Object.assign(() => null, { Content: () => null }),
+    useToast: () => undefined,
+  },
+}));
+vi.mock("./react-native/ui", () => ({ ExternalLink: () => null }));
+vi.mock("./settings/use-settings", () => ({ useSettings: () => undefined }));
+vi.mock("@/utils/open-external-url", () => ({ openExternalUrl: async () => undefined }));
 
 const runtime = {
   paseo: {},
@@ -29,6 +41,63 @@ function bundle(body: string): string {
 }
 
 describe("evaluatePluginClientBundle", () => {
+  it("registers all seven Chinese task slash commands without dropping the plugin's other surfaces", () => {
+    const names = ["制定方案", "复核方案", "执行", "复核", "验证", "通过", "停止任务"];
+    const plugin = evaluatePluginClientBundle(
+      "task-flow",
+      bundle(`
+      function Component() { return null; }
+      plugin.addWorkspacePanel({ id: "task-flow", title: "任务流程", icon: "Blocks", context: "agent", locations: ["conversation"], Component });
+      for (const name of ${JSON.stringify(names)}) {
+        plugin.addSlashCommand({ name, description: "任务流程", argumentHint: "", context: "agent", onSubmit() {} });
+      }
+      plugin.addSidebarHeaderItem({ id: "tasks", title: "任务", Component });
+    `),
+    );
+    expect(plugin.clientSlashCommands.map((command) => command.name)).toEqual(names);
+    expect(plugin.workspacePanels.map((panel) => panel.id)).toEqual(["task-flow"]);
+    expect(plugin.sidebarItems.header.map((item) => item.id)).toEqual(["tasks"]);
+  });
+
+  it.each([
+    "",
+    "制定 方案",
+    "制定\n方案",
+    "/执行",
+    "制定/方案",
+    "../执行",
+    "执行_任务",
+    "Review",
+    "🚀执行",
+  ])("rejects invalid slash command name %j", (name) => {
+    expect(() =>
+      evaluatePluginClientBundle(
+        "invalid-command",
+        bundle(`
+      plugin.addSlashCommand({ name: ${JSON.stringify(name)}, description: "任务流程", argumentHint: "", context: "agent", onSubmit() {} });
+    `),
+      ),
+    ).toThrow("Invalid client slash command name");
+  });
+
+  it("preserves ASCII command normalization and the existing contribution ID restrictions", () => {
+    const plugin = evaluatePluginClientBundle(
+      "ascii-command",
+      bundle(`
+      plugin.addSlashCommand({ name: " review-code ", description: "Review", argumentHint: "", context: "workspace", onSubmit() {} });
+    `),
+    );
+    expect(plugin.clientSlashCommands[0]?.name).toBe("review-code");
+    expect(() =>
+      evaluatePluginClientBundle(
+        "invalid-panel",
+        bundle(`
+      plugin.addWorkspacePanel({ id: "任务流程", title: "任务流程", icon: "Blocks", context: "workspace", Component() { return null; } });
+    `),
+      ),
+    ).toThrow("Invalid workspace panel id");
+  });
+
   it("releases button registrations when client setup throws", () => {
     let active = 0;
     function addButton() {

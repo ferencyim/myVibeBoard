@@ -1747,6 +1747,7 @@ function ComposerContentImpl({
         text: payload.text,
         hasAttachments: outgoingAttachments.length > 0,
         commands: pluginClientSlashCommands,
+        taskConversation: Boolean(taskConversation),
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
 
@@ -1765,6 +1766,7 @@ function ComposerContentImpl({
       pluginClientSlashCommands,
       runPluginClientSlashCommand,
       sendMessageWithContent,
+      taskConversation,
     ],
   );
 

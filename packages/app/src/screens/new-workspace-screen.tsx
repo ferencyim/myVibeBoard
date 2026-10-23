@@ -1183,11 +1183,15 @@ export function NewWorkspaceScreen({
     async (id: string) => {
       const entry = firstMessageOutbox.getSnapshot().find((item) => item.id === id);
       if (!entry?.result) return;
+      if (!entry.result.conversationId) {
+        setErrorMessage("原创建回执缺少任务群聊，请升级主机并核对原会话；本机输入已保留。");
+        return;
+      }
       leaveFullscreen();
       navigateToWorkspace({
         serverId: entry.hostId,
         workspaceId: entry.result.workspaceId,
-        target: { kind: "agent", agentId: entry.result.agentId },
+        target: { kind: "task_conversation", conversationId: entry.result.conversationId },
       });
       try {
         await firstMessageOutbox.removeSent(id);

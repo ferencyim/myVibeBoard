@@ -38,6 +38,7 @@ import { pluginReactNativeRuntime } from "./react-native/runtime";
 import { parsePluginThemeContribution } from "./themes";
 
 const CONTRIBUTION_ID = /^[a-z][a-z0-9-]*$/;
+const SLASH_COMMAND_NAME = /^[a-z\p{Script=Han}][a-z0-9\p{Script=Han}-]*$/u;
 const PANEL_LOCATIONS = ["workspace", "explorer", "conversation"] as const;
 const TIMELINE_ITEM_TYPES = new Set([
   "user_message",
@@ -80,6 +81,13 @@ function requireId(value: string, label: string): string {
   const id = value.trim();
   if (!CONTRIBUTION_ID.test(id)) throw new Error(`Invalid ${label}: ${value}`);
   return id;
+}
+
+function requireSlashCommandName(value: string): string {
+  const name = value.trim();
+  if (!SLASH_COMMAND_NAME.test(name))
+    throw new Error(`Invalid client slash command name: ${value}`);
+  return name;
 }
 
 /** A non-empty string, or a function of the screen's params resolved when the header renders. */
@@ -317,7 +325,7 @@ export function runPluginClientBundle(
       );
     },
     addSlashCommand(contribution: PluginClientSlashCommandContribution) {
-      const name = requireId(contribution.name, "client slash command name");
+      const name = requireSlashCommandName(contribution.name);
       if (clientSlashCommandNames.has(name)) {
         throw new Error(`Duplicate client slash command: ${name}`);
       }

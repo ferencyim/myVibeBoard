@@ -4,9 +4,12 @@ import type {
   TaskConversationPage,
   TaskConversationRow,
   SessionOutboundMessage,
+  TaskConversationSnapshot,
 } from "@getpaseo/protocol/messages";
 import { observeTaskConversationTimeline } from "./timeline-owner";
 import { taskConversationKey, useTaskConversationStore } from "./store";
+import { createTaskConversationNavigation, useTaskConversationNavigationStore } from "./navigation";
+import { taskConversationHasLiveCache } from "@/composer/task-conversation-selection";
 
 vi.mock("@/runtime/host-runtime", () => ({
   getHostRuntimeStore: () => ({
@@ -224,5 +227,161 @@ describe("task conversation timeline owner", () => {
     expect(state?.endSeq).toBe(2);
     expect(state?.rows.map((item) => item.id)).toEqual(["row-1", "row-2"]);
     release();
+  });
+});
+
+describe("plugin task conversation navigation", () => {
+  function fixture() {
+    const conversation: TaskConversationSnapshot = {
+      conversationId: "conversation",
+      workspaceId: "workspace",
+      anchorAgentId: "agent",
+      ownerPluginId: "owner",
+      status: "active",
+      epoch: "epoch",
+      lastSeq: 3,
+      createdAt: "2026-10-23T12:00:00Z",
+      updatedAt: "2026-10-23T12:00:00Z",
+      members: [
+        {
+          memberId: "worker",
+          backendAgentId: "agent",
+          role: "worker",
+          config: { provider: "codex", model: "cheap", cwd: "/repo" },
+          seenConversationSeq: 0,
+          status: "idle",
+          lastRequestAt: "2026-10-23T12:00:00Z",
+        },
+      ],
+    };
+    useTaskConversationStore.getState().setConversation("host", conversation);
+    useTaskConversationStore
+      .getState()
+      .applyPage("host", { ...page([row(3)], 3, 3), hasOlder: true }, "tail");
+    const client = {
+      queryTaskConversationSource: vi.fn<DaemonClient["queryTaskConversationSource"]>(async () => ({
+        requestId: "q",
+        error: null,
+        row: row(1),
+      })),
+      fetchTaskConversation: vi.fn<DaemonClient["fetchTaskConversation"]>(async () => ({
+        requestId: "f",
+        error: null,
+        page: page([row(1), row(2)], 1, 2),
+      })),
+    };
+    const controller = new AbortController();
+    const input = {
+      serverId: "host",
+      pluginId: "owner",
+      signal: controller.signal,
+      getClient: () => client,
+      hasWorkspace: (id: string) => id === "workspace",
+    };
+    return { client, controller, input, navigation: createTaskConversationNavigation(input) };
+  }
+
+  it("loads earlier public rows before locating the source inside its conversation", async () => {
+    const test = fixture();
+    await test.navigation.openTaskConversationSource({
+      conversationId: "conversation",
+      sourceKey: "source-1",
+    });
+    expect(test.client.fetchTaskConversation).toHaveBeenCalledWith({
+      conversationId: "conversation",
+      direction: "before",
+      cursor: { epoch: "epoch", seq: 3 },
+      limit: 100,
+    });
+    expect(
+      useTaskConversationNavigationStore
+        .getState()
+        .targets.get(taskConversationKey("host", "conversation")),
+    ).toEqual({ kind: "source", messageId: "row-1" });
+  });
+
+  it("expands an existing member without creating an agent tab", async () => {
+    const test = fixture();
+    await test.navigation.openTaskConversationMember({
+      conversationId: "conversation",
+      memberId: "worker",
+    });
+    expect(
+      useTaskConversationNavigationStore
+        .getState()
+        .targets.get(taskConversationKey("host", "conversation")),
+    ).toEqual({ kind: "member", details: { memberId: "worker", backendAgentId: "agent" } });
+    expect(test.client.fetchTaskConversation).not.toHaveBeenCalled();
+    await expect(
+      test.navigation.openTaskConversationMember({
+        conversationId: "conversation",
+        memberId: "foreign",
+      }),
+    ).rejects.toThrow("成员不属于");
+  });
+
+  it("rejects mismatched source identity and revokes a pending request on plugin unload", async () => {
+    const test = fixture();
+    await expect(
+      test.navigation.openTaskConversationSource({
+        conversationId: "conversation",
+        sourceKey: "foreign-source",
+      }),
+    ).rejects.toThrow("来源与请求不一致");
+    test.client.queryTaskConversationSource.mockImplementationOnce(async () => {
+      test.controller.abort();
+      return { requestId: "q", error: null, row: row(1) };
+    });
+    await expect(
+      test.navigation.openTaskConversationSource({
+        conversationId: "conversation",
+        sourceKey: "source-1",
+      }),
+    ).rejects.toThrow();
+    expect(test.client.fetchTaskConversation).not.toHaveBeenCalled();
+  });
+
+  it("rejects another host, workspace, owner and unloaded plugin before reading sources", async () => {
+    const test = fixture();
+    const target = { conversationId: "conversation", sourceKey: "source-1" };
+    await expect(
+      createTaskConversationNavigation({
+        ...test.input,
+        serverId: "other",
+      }).openTaskConversationSource(target),
+    ).rejects.toThrow("当前宿主");
+    await expect(
+      createTaskConversationNavigation({
+        ...test.input,
+        hasWorkspace: () => false,
+      }).openTaskConversationSource(target),
+    ).rejects.toThrow("工作区");
+    await expect(
+      createTaskConversationNavigation({
+        ...test.input,
+        pluginId: "other",
+      }).openTaskConversationSource(target),
+    ).rejects.toThrow("另一个插件");
+    test.controller.abort();
+    await expect(test.navigation.openTaskConversationSource(target)).rejects.toThrow();
+    expect(test.client.queryTaskConversationSource).not.toHaveBeenCalled();
+  });
+
+  it("does not misattribute a manual model change's prompt cache", () => {
+    const recipient = {
+      role: "worker",
+      presetId: "cheap",
+      config: { provider: "codex" as const, model: "cheap", cwd: "/repo" },
+    };
+    const options = [{ id: "worker", label: "执行", recipient, cacheExpiresAt: 2000 }];
+    expect(taskConversationHasLiveCache(options, recipient, 1000)).toBe(true);
+    expect(taskConversationHasLiveCache(options, recipient, 2000)).toBe(false);
+    expect(
+      taskConversationHasLiveCache(
+        options,
+        { ...recipient, config: { ...recipient.config, model: "other" } },
+        1000,
+      ),
+    ).toBe(false);
   });
 });

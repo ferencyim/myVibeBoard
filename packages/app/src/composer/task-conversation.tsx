@@ -15,6 +15,7 @@ import {
 } from "@/composer/task-conversation-send";
 import {
   findTaskConversationRecipientOption,
+  taskConversationHasLiveCache,
   withTaskConversationRecipientModel,
   type TaskConversationRecipientOption,
 } from "@/composer/task-conversation-selection";
@@ -52,6 +53,12 @@ export interface TaskConversationComposerProps extends Pick<
 
 const EMPTY_RECIPIENT_OPTIONS: readonly TaskConversationRecipientOption[] = [];
 
+function CacheWarning({ visible }: { visible: boolean }) {
+  return visible ? (
+    <Text style={styles.noticeText}>现在换会多耗 token（缓存到期时间为估算）。</Text>
+  ) : null;
+}
+
 export function TaskConversationComposer({
   conversationId,
   anchorAgentId,
@@ -75,11 +82,15 @@ export function TaskConversationComposer({
   );
   const roleAnchor = useRef<View>(null);
   const [roleOpen, setRoleOpen] = useState(false);
-  const openRoles = useCallback(() => setRoleOpen(true), []);
-  const openModels = useCallback(
-    () => refetchIfStale(recipient.config.provider),
-    [refetchIfStale, recipient.config.provider],
-  );
+  const [cacheWarning, setCacheWarning] = useState(false);
+  const openRoles = useCallback(() => {
+    setCacheWarning(taskConversationHasLiveCache(recipientOptions, recipient));
+    setRoleOpen(true);
+  }, [recipientOptions, recipient]);
+  const openModels = useCallback(() => {
+    setCacheWarning(taskConversationHasLiveCache(recipientOptions, recipient));
+    return refetchIfStale(recipient.config.provider);
+  }, [refetchIfStale, recipientOptions, recipient]);
   const options = useMemo(() => {
     if (recipientOptions.length > 0) return recipientOptions;
     const members = conversation?.members ?? [];
@@ -101,9 +112,9 @@ export function TaskConversationComposer({
       options.map((option) => ({
         id: option.id,
         label: option.label,
-        description: `${option.recipient.config.provider} · ${option.recipient.config.model ?? "默认模型"}`,
+        description: `${option.recipient.config.provider} · ${option.recipient.config.model ?? "默认模型"}${cacheWarning ? " · 现在换会多耗 token（估算）" : ""}`,
       })),
-    [options],
+    [cacheWarning, options],
   );
   const selectedOption = findTaskConversationRecipientOption(options, recipient);
   const selectRecipient = useCallback(
@@ -111,12 +122,14 @@ export function TaskConversationComposer({
       const option = options.find((entry) => entry.id === id);
       if (option) onRecipientChange(option.recipient);
       setRoleOpen(false);
+      setCacheWarning(false);
     },
     [onRecipientChange, options],
   );
   const selectModel = useCallback(
     (provider: AgentProvider, model: string) => {
       onRecipientChange(withTaskConversationRecipientModel({ recipient, provider, model }));
+      setCacheWarning(false);
     },
     [onRecipientChange, recipient],
   );
@@ -257,6 +270,7 @@ export function TaskConversationComposer({
   );
   return (
     <View>
+      <CacheWarning visible={cacheWarning} />
       {hasUncertain && (
         <View style={styles.notice}>
           <Text style={styles.noticeText}>{[...(uncertain?.values() ?? [])].join("\n")}</Text>

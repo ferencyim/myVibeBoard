@@ -3455,6 +3455,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private startupEvents: AgentStreamEvent[] | null = null;
   private nextTurnOrdinal = 0;
+  private readonly turnRuntimeId = randomUUID();
   private activeForegroundTurnId: string | null = null;
   private activeClientMessageId: string | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
@@ -5158,15 +5159,9 @@ export class CodexAppServerAgentSession implements AgentSession {
 
     if (parsed.commandName === "compact") {
       return {
-        run: async ({ emit }) => {
+        run: async () => {
           const error = await this.executeCompactCommand();
-          if (error) {
-            emit({
-              type: "timeline",
-              provider: CODEX_PROVIDER,
-              item: { type: "assistant_message", text: formatOutOfBandStatusMessage(error) },
-            });
-          }
+          if (error) throw new Error(error);
         },
       };
     }
@@ -5448,7 +5443,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private createTurnId(): string {
-    return `codex-turn-${this.nextTurnOrdinal++}`;
+    return `codex-turn-${this.turnRuntimeId}-${this.nextTurnOrdinal++}`;
   }
 
   private handleNotification(method: string, params: unknown): void {

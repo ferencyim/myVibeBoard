@@ -14,6 +14,7 @@ import {
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useHosts } from "@/runtime/host-runtime";
 import { taskConversationKey, useTaskConversationStore } from "@/task-conversations/store";
+import { useTaskConversationSelectionStore } from "@/composer/task-conversation-selection";
 import type { Theme } from "@/styles/theme";
 import { createPluginClientStateSource } from "../client-state/source";
 import { usePluginHostNavigation } from "../host-navigation";
@@ -80,6 +81,9 @@ function ConversationPanelBody({
   const active = useRetainedPanelActive();
   const key = taskConversationKey(input.serverId, input.conversationId);
   const conversation = useTaskConversationStore((state) => state.conversations.get(key) ?? null);
+  const recipient = useTaskConversationSelectionStore(
+    (state) => state.selections.get(key)?.recipient ?? null,
+  );
   const selection = useConversationPanelStore((state) => state.selections.get(key) ?? null);
   const installed = useInstalledPlugins();
   const panels = installed
@@ -128,6 +132,7 @@ function ConversationPanelBody({
       workspaceId: input.workspaceId,
       conversationId: input.conversationId,
       anchorAgentId: input.anchorAgentId,
+      recipient,
       agentId: input.anchorAgentId ?? undefined,
     };
     content = (

@@ -8,7 +8,9 @@ const host = vi.hoisted(() => {
   const hostListeners = new Set<() => void>();
   const client = {
     isConnected: true,
-    getLastServerInfoMessage: vi.fn(() => ({ features: { creationLifecycle: true } })),
+    getLastServerInfoMessage: vi.fn(() => ({
+      features: { creationLifecycle: true, taskConversations: true },
+    })),
     getWorkspaceCreation: vi.fn<(key: string) => Promise<CreationSnapshot | null>>(),
     createWorkspace: vi.fn(),
   };
@@ -48,6 +50,8 @@ const completed: CreationSnapshot = {
   revision: 2,
   workspaceId: "workspace-one",
   agentId: "agent-one",
+  conversationId: "conversation-one",
+  memberId: "planner-one",
   error: null,
 };
 
@@ -80,7 +84,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   host.connection.online = true;
   host.client.isConnected = true;
-  host.client.getLastServerInfoMessage.mockReturnValue({ features: { creationLifecycle: true } });
+  host.client.getLastServerInfoMessage.mockReturnValue({
+    features: { creationLifecycle: true, taskConversations: true },
+  });
   host.client.getWorkspaceCreation.mockReset().mockResolvedValue(completed);
   host.client.createWorkspace.mockReset();
 });
@@ -102,7 +108,12 @@ describe("首消息 outbox 冷重启自动恢复", () => {
       expect(host.client.createWorkspace).not.toHaveBeenCalled();
       expect(runtime.firstMessageOutbox.getSnapshot()[0]).toMatchObject({
         status: "sent",
-        result: { workspaceId: "workspace-one", agentId: "agent-one" },
+        result: {
+          workspaceId: "workspace-one",
+          agentId: "agent-one",
+          conversationId: "conversation-one",
+          memberId: "planner-one",
+        },
       });
       expect(
         JSON.parse((await storage.getItem(FIRST_MESSAGE_OUTBOX_STORAGE_KEY))!).entries[0].status,
@@ -146,9 +157,13 @@ describe("首消息 outbox 冷重启自动恢复", () => {
       expect.objectContaining({
         idempotencyKey: "intent-one",
         requestId: "intent-one",
-        agent: expect.objectContaining({
-          clientMessageId: "intent-one:initial-message",
-          initialPrompt: "先规划，等待我确认方案。",
+        taskConversation: expect.objectContaining({
+          ownerPluginId: "vibe-board",
+          initialRecipient: expect.objectContaining({ role: "planner" }),
+          initialMessage: expect.objectContaining({
+            clientMessageId: "intent-one:initial-message",
+            text: "先规划，等待我确认方案。",
+          }),
         }),
       }),
     );
@@ -191,5 +206,32 @@ describe("首消息 outbox 冷重启自动恢复", () => {
     expect(host.runtimeListeners.size).toBe(0);
     expect(host.hostListeners.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+it("宿主缺少任务群聊能力时不创建普通 agent，保留首消息并提示升级", async () => {
+  const { runtime } = await restart();
+  await runtime.firstMessageOutbox.enqueue({
+    id: "new-draft",
+    hostId: "host-one",
+    projectId: "project-one",
+    source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+    config: { provider: "codex", cwd: "/repo" },
+    text: "离线正文",
+    attachments: [],
+  });
+  host.client.getLastServerInfoMessage.mockReturnValue({
+    features: { creationLifecycle: true, taskConversations: false },
+  });
+  await runtime.flushFirstMessageOutbox();
+  expect(host.client.createWorkspace).not.toHaveBeenCalled();
+  expect(host.client.getWorkspaceCreation).not.toHaveBeenCalled();
+  expect(
+    runtime.firstMessageOutbox.getSnapshot().find((entry) => entry.id === "new-draft"),
+  ).toMatchObject({
+    status: "failed",
+    text: "离线正文",
+    submitted: false,
+    error: expect.stringContaining("升级"),
   });
 });

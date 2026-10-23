@@ -268,6 +268,8 @@ export interface AgentStreamViewProps {
   serverId?: string;
   context: AgentScreenAgent;
   streamItems: StreamItem[];
+  /** A new request object also allows jumping to the same source again. */
+  focusedMessage?: { messageId: string };
   streamHead?: StreamItem[];
   pendingPermissions: Map<string, PendingPermission>;
   pendingMessageSubmissions?: readonly PendingMessageSubmission[];
@@ -326,6 +328,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       serverId,
       context,
       streamItems,
+      focusedMessage,
       streamHead: providedStreamHead,
       pendingPermissions,
       pendingMessageSubmissions = EMPTY_PENDING_MESSAGE_SUBMISSIONS,
@@ -603,6 +606,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => new Set(baseRenderModel.history.map(getStreamItemMessageId)),
       [baseRenderModel.history],
     );
+    const focusedRequest = useRef<AgentStreamViewProps["focusedMessage"]>(undefined);
+    useEffect(() => {
+      if (!focusedMessage || focusedRequest.current === focusedMessage) return;
+      if (revealLoadedHistory(focusedMessage.messageId)) return;
+      viewportRef.current?.scrollToMessage?.(focusedMessage.messageId);
+      focusedRequest.current = focusedMessage;
+    }, [focusedMessage, mountedHistoryMessageIds, revealLoadedHistory]);
     const mountedMessageIds = useMemo(() => {
       const liveHeadMessageIds = new Set(
         baseRenderModel.segments.liveHead.map(getStreamItemMessageId),

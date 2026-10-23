@@ -78,6 +78,7 @@ export const FirstMessageOutboxInputSchema = z
     projectId: z.string().min(1),
     source: WorkspaceCreateRequestSchema.shape.source,
     config: AgentCreateRequestSchema.shape.config,
+    plannerPresetId: z.string().min(1).optional(),
     text: z.string(),
     attachments: z.array(ComposerAttachmentSchema),
   })
@@ -88,7 +89,7 @@ export const FirstMessageOutboxInputSchema = z
     if (!input.text.trim() && input.attachments.length === 0) {
       ctx.addIssue({ code: "custom", message: "请填写首消息或添加附件" });
     }
-    if (/^\/(执行|停止任务|复核方案)(?:\s|$)/u.test(input.text.trim())) {
+    if (/^\/(制定方案|复核方案|执行|复核|验证|通过|停止任务)(?:\s|$)/u.test(input.text.trim())) {
       ctx.addIssue({ code: "custom", message: "任务命令需要联网后在原生对话中操作" });
     }
   });
@@ -101,7 +102,14 @@ export const FirstMessageOutboxEntrySchema = FirstMessageOutboxInputSchema.safeE
   submitted: z.boolean(),
   replayBlocked: z.boolean(),
   error: z.string().nullable(),
-  result: z.object({ workspaceId: z.string().min(1), agentId: z.string().min(1) }).nullable(),
+  result: z
+    .object({
+      workspaceId: z.string().min(1),
+      agentId: z.string().min(1),
+      conversationId: z.string().min(1).optional(),
+      memberId: z.string().min(1).optional(),
+    })
+    .nullable(),
 });
 
 export const FirstMessageOutboxStorageSchema = z

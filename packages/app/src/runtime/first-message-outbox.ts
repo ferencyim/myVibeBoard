@@ -51,10 +51,11 @@ export async function flushFirstMessageOutbox(): Promise<void> {
           (entry.status === "queued" || entry.status === "unknown" || entry.status === "sending"),
       );
     if (!pending) continue;
-    if (client.getLastServerInfoMessage()?.features?.creationLifecycle !== true) {
+    const features = client.getLastServerInfoMessage()?.features;
+    if (features?.creationLifecycle !== true || features.taskConversations !== true) {
       await firstMessageOutbox.failUnsubmittedHost(
         host.serverId,
-        "请升级目标主机后发送新任务；正文和附件已保留在本机",
+        "请升级目标主机以支持任务群聊后发送新任务；正文和附件已保留在本机",
       );
       continue;
     }

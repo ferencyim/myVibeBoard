@@ -30,7 +30,7 @@ export async function respondToAgentPermission(
   );
 
   if (agentManager.taskConversations?.getByAgentId(agentId)) {
-    await agentManager.taskConversations.preparePermissionResponse(agentId);
+    await agentManager.taskConversations.preparePermissionResponse(agentId, requestId, response);
   }
   const result = await agentManager.respondToPermission(agentId, requestId, response);
   logger.debug({ agentId }, `Permission response forwarded to agent ${agentId}`);
