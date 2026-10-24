@@ -21,7 +21,7 @@ test("a plugin transforms workspace creation once across receipt replays and obs
       `
 export default function contribute(server) {
   server.before("workspace.create", ({ request }) => {
-    console.log(JSON.stringify({ hook: "workspace.before" }));
+    console.log(JSON.stringify({ hook: "workspace.before", workspaceId: request.workspaceId }));
     return { ...request, title: "Created through a hook" };
   });
   server.on("workspace.created", (event) => {
@@ -63,7 +63,7 @@ export default function contribute(server) {
           });
       })
       .toMatchObject([
-        { hook: "workspace.before" },
+        { hook: "workspace.before", workspaceId },
         { hook: "workspace.created", event: { workspace: { id: workspaceId, cwd: directory } } },
         { hook: "workspace.archived", event: { workspace: { id: workspaceId } } },
       ]);

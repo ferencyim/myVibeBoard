@@ -6738,7 +6738,10 @@ export class Session {
     // and must not rerun hooks or compare their potentially changing output.
     if (this.pluginRuntime) {
       const { type, requestId, ...input } = request;
-      const transformed = await this.pluginRuntime.before("workspace.create", input);
+      const transformed = await this.pluginRuntime.before("workspace.create", {
+        ...input,
+        ...(workspaceId ? { workspaceId } : {}),
+      });
       creationRequest = { ...transformed, type, requestId };
     }
     return creationRequest.source.kind === "directory"

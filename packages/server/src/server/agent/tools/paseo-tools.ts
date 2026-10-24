@@ -1593,7 +1593,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           workspaceId: resolvedArgs.workspaceId,
           thinking: parsedArgs.settings?.thinkingOptionId,
           features: parsedArgs.settings?.features,
-          labels: stripReservedLabels(parsedArgs.labels),
+          labels: parsedArgs.labels,
           mode: parsedArgs.settings?.modeId,
           promptFailure: "throw",
           notifyOnFinish,
@@ -1644,19 +1644,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         workspaceId: string | undefined;
         worktree: CreateAgentFromMcpInput["worktree"];
       };
-
-  // Agent-supplied `vibe.*` labels would otherwise impersonate plugin-created task tabs.
-  function stripReservedLabels(
-    labels: Record<string, string> | undefined,
-  ): Record<string, string> | undefined {
-    if (!labels) {
-      return undefined;
-    }
-    const kept = Object.fromEntries(
-      Object.entries(labels).filter(([key]) => !key.startsWith("vibe.")),
-    );
-    return Object.keys(kept).length > 0 ? kept : undefined;
-  }
 
   async function resolveCreateAgentToolArgs(args: unknown): Promise<ResolvedCreateAgentToolArgs> {
     if (callerAgentId) {
