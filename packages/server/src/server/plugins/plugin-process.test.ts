@@ -1,6 +1,33 @@
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { expect, it } from "vitest";
+import { z } from "zod";
+import { describeAgentToolInput } from "./plugin-process.js";
+
+it("advertises a strict empty object schema for input-less agent tools", () => {
+  const { input, inputSchema } = describeAgentToolInput({
+    name: "vibe_probe",
+    description: "Probe",
+    handler: async () => undefined,
+  });
+  expect(inputSchema).toEqual({ type: "object", properties: {}, additionalProperties: false });
+  expect(input.safeParse({}).success).toBe(true);
+});
+
+it("serializes an agent tool input schema for the manifest", () => {
+  const { inputSchema } = describeAgentToolInput({
+    name: "vibe_open_tab",
+    description: "Open a tab",
+    input: z.object({ role: z.enum(["scout", "worker"]) }).strict(),
+    handler: async () => undefined,
+  });
+  expect(inputSchema).toMatchObject({
+    type: "object",
+    properties: { role: { enum: ["scout", "worker"] } },
+    required: ["role"],
+    additionalProperties: false,
+  });
+});
 
 it("keeps React out of the plugin host's runtime dependency graph", async () => {
   await expect(

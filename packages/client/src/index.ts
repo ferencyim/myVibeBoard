@@ -377,6 +377,10 @@ export interface PaseoAgentHandle {
    */
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
   archive(): Promise<{ archivedAt: string }>;
+  /** Stops the active turn without closing or archiving the agent. */
+  cancelRun(): Promise<void>;
+  /** Switches the provider session mode, e.g. to a read-only planning mode. */
+  setMode(modeId: string): Promise<void>;
   /** Renames the agent through the existing `update_agent_request` RPC (shown as its title). */
   setTitle(title: string): Promise<void>;
   /**
@@ -988,6 +992,12 @@ function createAgentHandleFactory(
       },
       setTitle: async (title) => {
         await daemonClient.updateAgent(id, { name: title });
+      },
+      cancelRun: async () => {
+        await daemonClient.cancelAgent(id);
+      },
+      setMode: async (modeId) => {
+        await daemonClient.setAgentMode(id, modeId);
       },
       resume: async () => {
         await daemonClient.refreshAgent(id);

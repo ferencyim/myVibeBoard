@@ -1160,12 +1160,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .describe(
         "Get notified when the created agent finishes, errors, or needs permission. Set false only for truly fire-and-forget agents.",
       ),
-    asTab: z
-      .boolean()
-      .optional()
-      .describe(
-        "Create a top-level workspace tab instead of a subagent under you. Use this when the work needs its own tab other agents can address.",
-      ),
   };
   const canonicalTopLevelInputSchema = {
     ...canonicalCreateAgentFields,
@@ -1599,7 +1593,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           workspaceId: resolvedArgs.workspaceId,
           thinking: parsedArgs.settings?.thinkingOptionId,
           features: parsedArgs.settings?.features,
-          labels: parsedArgs.labels,
+          labels: stripReservedLabels(parsedArgs.labels),
           mode: parsedArgs.settings?.modeId,
           promptFailure: "throw",
           notifyOnFinish,
@@ -1651,6 +1645,19 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree: CreateAgentFromMcpInput["worktree"];
       };
 
+  // Agent-supplied `vibe.*` labels would otherwise impersonate plugin-created task tabs.
+  function stripReservedLabels(
+    labels: Record<string, string> | undefined,
+  ): Record<string, string> | undefined {
+    if (!labels) {
+      return undefined;
+    }
+    const kept = Object.fromEntries(
+      Object.entries(labels).filter(([key]) => !key.startsWith("vibe.")),
+    );
+    return Object.keys(kept).length > 0 ? kept : undefined;
+  }
+
   async function resolveCreateAgentToolArgs(args: unknown): Promise<ResolvedCreateAgentToolArgs> {
     if (callerAgentId) {
       if (hasLegacyCreateAgentPlacement(args)) {
@@ -1676,7 +1683,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return {
         kind: "agent-scoped",
         parsedArgs: parsed,
-        detached: parsed.asTab === true,
+        detached: false,
         cwd,
         workspaceId,
         worktree: undefined,

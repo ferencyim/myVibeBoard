@@ -243,6 +243,12 @@ const CODEX_APP_SERVER_CAPABILITIES: AgentCapabilityFlags = {
 
 const CODEX_MODES: AgentMode[] = [
   {
+    id: "read-only",
+    label: "Read Only",
+    description:
+      "Inspect files and run read commands without editing files or accessing the network.",
+  },
+  {
     id: "auto",
     label: "Default Permissions",
     description: "Edit files and run commands with Codex's default approval flow.",

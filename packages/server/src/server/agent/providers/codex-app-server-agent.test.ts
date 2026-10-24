@@ -841,6 +841,21 @@ describe("Codex app-server provider", () => {
     );
   });
 
+  test("getAvailableModes includes read-only in both Codex versions", async () => {
+    for (const autoReviewEnabled of [true, false]) {
+      const session = createSession({}, { autoReviewEnabled });
+
+      await expect(session.getAvailableModes()).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "read-only",
+            label: "Read Only",
+          }),
+        ]),
+      );
+    }
+  });
+
   test("getAvailableModes excludes auto-review when the Codex version is too old", async () => {
     const session = createSession({}, { autoReviewEnabled: false });
 

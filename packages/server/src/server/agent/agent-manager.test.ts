@@ -7749,6 +7749,73 @@ test("workspace ownership does not turn an ordinary agent into a disposable help
   expect(beforeHookCalls).toContain("agent.create");
 });
 
+test("agent.create hooks receive placement and labels while only config and env are applied", async () => {
+  const agentId = "00000000-0000-4000-8000-000000000117";
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const requests: unknown[] = [];
+  const sessionOpenEnvs: Array<Record<string, string>> = [];
+  const created: Array<{ labels: Record<string, string>; workspaceId: string | null }> = [];
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+    idFactory: () => agentId,
+    pluginLifecycle: {
+      emit: (name, event) => {
+        if (name === "agent.created") {
+          created.push(event.agent);
+        }
+      },
+      before: async (name, request) => {
+        if (name === "agent.session_open") {
+          sessionOpenEnvs.push(request.env);
+          return request;
+        }
+        if (name !== "agent.create") {
+          return request;
+        }
+        requests.push(request);
+        return {
+          ...request,
+          config: { ...request.config, systemPrompt: "from plugin hook" },
+          env: { ...request.env, HOOK_ENV: "1" },
+          // Read-only placement fields must not be taken from the return value.
+          labels: { "vibe.tab.role": "spoofed" },
+          workspaceId: "wks_spoofed",
+        };
+      },
+    },
+  });
+
+  const labels = {
+    [PARENT_AGENT_ID_LABEL]: "parent-1",
+    "vibe.tab.role": "scout",
+  };
+  await manager.createAgent({ provider: "codex", cwd: workdir, title: "Task tab" }, undefined, {
+    workspaceId: "wks_task",
+    labels,
+    env: { BASE: "1" },
+  });
+
+  expect(requests).toEqual([
+    expect.objectContaining({
+      workspaceId: "wks_task",
+      parentAgentId: "parent-1",
+      labels,
+      env: { BASE: "1" },
+    }),
+  ]);
+  expect(manager.getAgent(agentId)?.config.systemPrompt).toBe("from plugin hook");
+  expect(sessionOpenEnvs).toContainEqual(expect.objectContaining({ BASE: "1", HOOK_ENV: "1" }));
+  expect(manager.getAgent(agentId)?.workspaceId).toBe("wks_task");
+  expect(manager.getAgent(agentId)?.labels).toEqual(labels);
+  // agent.created fires synchronously with the caller's placement and labels.
+  expect(created).toEqual([
+    expect.objectContaining({ workspaceId: "wks_task", parentAgentId: "parent-1", labels }),
+  ]);
+});
+
 test("global subscribers receive internal agent events only when they opt in", async () => {
   const internalAgentId = "00000000-0000-4000-8000-000000000116";
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));

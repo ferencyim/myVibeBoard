@@ -37,6 +37,23 @@ export interface PluginWorkerChannel {
   disconnect(): void;
 }
 
+/** Input-less agent tools still advertise a strict empty object schema. */
+export function describeAgentToolInput(tool: PluginAgentTool): {
+  input: ZodType;
+  inputSchema: Record<string, unknown>;
+} {
+  if (!tool.input) {
+    return {
+      input: z.unknown(),
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    };
+  }
+  return {
+    input: tool.input,
+    inputSchema: z.toJSONSchema(tool.input, { io: "input" }) as Record<string, unknown>,
+  };
+}
+
 export function createPluginWorker(options: {
   channel: PluginWorkerChannel;
   contribute: PluginServerContribution;
@@ -166,10 +183,7 @@ export function createPluginWorker(options: {
       throw new Error(`Plugin agent tool ${name} requires a description`);
     if (typeof tool.handler !== "function")
       throw new Error(`Plugin agent tool ${name} must provide a handler`);
-    const input = tool.input ?? z.unknown();
-    const inputSchema = tool.input
-      ? (z.toJSONSchema(tool.input, { io: "input" }) as Record<string, unknown>)
-      : { type: "object", properties: {}, additionalProperties: false };
+    const { input, inputSchema } = describeAgentToolInput(tool);
     register({ name, input, output: z.unknown() }, (parsed, context) =>
       tool.handler(parsed, { callerAgentId: context.callerAgentId ?? null }),
     );
