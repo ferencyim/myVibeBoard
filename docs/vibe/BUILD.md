@@ -93,6 +93,12 @@ cd android && ./gradlew.bat assembleDebug --no-daemon              # 首次约 1
 
 未安装到任何设备。`adb devices` 当前列出 2 台模拟器（`emulator-5558`、`emulator-5590`，构建期间曾有第三台 `emulator-5620`），**没有真机**。装机命令（需要时自行执行）：`adb -s <serial> install -r packages/app/android/app/build/outputs/apk/debug/app-debug.apk`。
 
+### 升级 Expo 大版本后（v0.13.0 合并，Expo 54→57）
+
+- `packages/app/android` 是 prebuild 生成物（已 gitignore）。旧版本生成的工程与新 Gradle（9.x）不兼容时，不要删除，先整体改名挪到 `D:/devRepoCaches/` 下备份，再重新 `expo prebuild`。
+- 旧的 `~/.gradle` 缓存会让 Gradle 9 编译 RN 插件的 `settings.gradle.kts` 报 `Unresolved reference 'plugins'`。用全新缓存目录：`GRADLE_USER_HOME='D:\devRepoCaches\gradle-home-057'`。
+- `react-native-enriched-markdown` 的 postinstall 要下载代码高亮语法文件；在 Git Bash 里 GNU tar 会把 `C:\...` 当成远程主机而解压失败。到 `packages/app/node_modules/react-native-enriched-markdown` 用 PowerShell（Windows 自带 tar）运行 `node postinstall.mjs`。RaTeX（iOS 数学渲染）解压失败不影响 Android。
+
 ## 4. Android release APK（可安装包，WP-70）
 
 debug APK 要连 Metro、含全部 ABI、体积 485 MB，不适合分发。release 变体把 JS 打成 Hermes 字节码内置，只打 `arm64-v8a`（真机）+ `x86_64`（模拟器），用 Expo 模板自带的 debug keystore 签名（`android/app/debug.keystore`，随 prebuild 生成，**不新增任何签名材料、不入库**）。
