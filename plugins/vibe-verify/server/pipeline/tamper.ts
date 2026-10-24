@@ -1,6 +1,8 @@
 // Verification tabs must only read the workspace. Any file-editing tool call or Git-state
 // command in their timeline invalidates the round, even when the end snapshot looks unchanged.
 
+import path from "node:path";
+
 const EDIT_TOOL_NAMES = new Set([
   "edit",
   "write",
@@ -106,6 +108,13 @@ export function gitMutation(command: string): string | undefined {
       }
       const subcommand = tokens[cursor]?.toLowerCase();
       if (!subcommand) return undefined;
+      if (subcommand === "stash") {
+        // Listing or showing stashes only reads them; anything else (push/save/pop/apply/drop/
+        // clear/branch/create, or the implicit save of a bare `git stash`) mutates the repo.
+        const rest = tokens.slice(cursor + 1);
+        const action = rest.find((token) => !token.startsWith("-"))?.toLowerCase();
+        return action === "list" || action === "show" ? undefined : "stash";
+      }
       if (GIT_MUTATIONS.has(subcommand)) return subcommand;
       if (
         subcommand === "branch" &&
@@ -123,17 +132,49 @@ function excerpt(text: string): string {
 }
 
 /**
- * Scans timeline entries for tool calls that edit files or mutate Git. Edited paths that are
- * ignored by `.gitignore` are dropped (test artifacts change constantly); a call with no path
- * we can check stays a violation.
+ * Scans timeline entries for tool calls that edit files or mutate Git. Edited paths outside the
+ * worktree (evidence output, temp directories) are not repository edits; inside paths that are
+ * ignored by `.gitignore` are dropped (test artifacts change constantly); a call with no path we
+ * can check stays a violation. An entry is left out only when its timestamp proves it predates the
+ * round start; undated entries stay in scope.
  */
+export interface TimelineScanOptions {
+  /** Worktree root; edit paths outside it do not belong to this repository. */
+  root?: string;
+  /** Verification start instant; earlier entries are not part of this round. */
+  since?: string;
+  ignored?: (paths: readonly string[]) => Promise<ReadonlySet<string>>;
+}
+
+function entryTime(entry: unknown): number | undefined {
+  const value = record(entry)?.timestamp;
+  if (typeof value !== "string") return undefined;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : undefined;
+}
+
+function within(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(".." + path.sep) &&
+      !path.isAbsolute(relative))
+  );
+}
+
 export async function timelineViolations(
   entries: readonly unknown[],
-  options: { ignored?: (paths: readonly string[]) => Promise<ReadonlySet<string>> } = {},
+  options: TimelineScanOptions = {},
 ): Promise<TimelineViolation[]> {
   const violations: TimelineViolation[] = [];
-  const edits: Array<{ summary: string; paths: string[] }> = [];
+  const edits: Array<{ summary: string; paths: string[]; inside: Map<string, string> }> = [];
+  const root = options.root ? path.resolve(options.root) : undefined;
+  const since = options.since ? Date.parse(options.since) : undefined;
   for (const entry of entries) {
+    const time = entryTime(entry);
+    if (since !== undefined && Number.isFinite(since) && time !== undefined && time <= since)
+      continue;
     const envelope = record(entry);
     const item = record(envelope?.item) ?? envelope;
     if (!item || item.type !== "tool_call") continue;
@@ -151,17 +192,32 @@ export async function timelineViolations(
     }
     if (EDIT_DETAIL_TYPES.has(String(detail.type)) || EDIT_TOOL_NAMES.has(tool.toLowerCase())) {
       const paths = pathsOf(detail);
+      const inside = new Map<string, string>();
+      for (const raw of paths) {
+        if (!root) {
+          inside.set(raw, raw);
+          continue;
+        }
+        const absolute = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(root, raw);
+        if (!within(root, absolute)) continue;
+        const relative = path.relative(root, absolute);
+        inside.set(raw, relative ? relative.split(path.sep).join("/") : ".");
+      }
       edits.push({
         summary: `${tool || String(detail.type)} 修改文件${paths.length ? "：" + paths.join("、") : ""}`,
         paths,
+        inside,
       });
     }
   }
   if (!edits.length) return violations;
-  const allPaths = [...new Set(edits.flatMap((edit) => edit.paths))];
+  const allPaths = [...new Set(edits.flatMap((edit) => [...edit.inside.values()]))];
   const ignored = options.ignored && allPaths.length ? await options.ignored(allPaths) : new Set();
   for (const edit of edits) {
-    const remaining = edit.paths.filter((path) => !ignored.has(path));
+    const remaining = edit.paths.filter((raw) => {
+      const relative = edit.inside.get(raw);
+      return relative !== undefined && !ignored.has(relative);
+    });
     if (edit.paths.length && !remaining.length) continue;
     violations.push({ kind: "edit", summary: edit.summary, paths: remaining });
   }

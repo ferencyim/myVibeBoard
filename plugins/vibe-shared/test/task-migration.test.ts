@@ -37,7 +37,11 @@ describe("WP-114 legacy cutover", () => {
     const counts = maintenanceCounts(db);
     expect(before.project).toHaveLength(7);
     expect(db.prepare("SELECT COUNT(*) AS n FROM card").get()).toEqual({ n: 3 });
-    expect(migrateOwner(db, "core")).toMatchObject({ from: 10, to: 15, applied: [11, 12, 13, 14, 15] });
+    expect(migrateOwner(db, "core")).toMatchObject({
+      from: 10,
+      to: 16,
+      applied: [11, 12, 13, 14, 15, 16],
+    });
     expect(snapshot(db)).toEqual(before);
     expect(maintenanceCounts(db)).toEqual(counts);
     expect(db.prepare("SELECT COUNT(*) AS n FROM task").get()).toEqual({ n: 0 });

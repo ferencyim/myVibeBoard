@@ -51,7 +51,13 @@ interface TimelineEntry {
   seqEnd: number;
 }
 
-function fakePaseo(options: { directory?: string; projectId?: string } = {}) {
+function fakePaseo(
+  options: {
+    directory?: string;
+    projectId?: string;
+    models?: Record<string, Array<{ id: string; label: string }>>;
+  } = {},
+) {
   const directory = options.directory ?? mkdtempSync(join(tmpdir(), "vibe-tabs-"));
   const projectId = options.projectId ?? "project-1";
   const agents = new Map<string, FakeAgent>();
@@ -150,6 +156,15 @@ function fakePaseo(options: { directory?: string; projectId?: string } = {}) {
   };
   const paseo = {
     agents: { ref: (agentId: string) => handle(agentId) },
+    ...(options.models
+      ? {
+          providers: {
+            listModels: async (provider: string) => ({
+              models: options.models![provider] ?? [],
+            }),
+          },
+        }
+      : {}),
     workspaces: {
       ref: () => ({
         ...workspace,
@@ -200,6 +215,7 @@ function setup(
   options: {
     git?: Parameters<typeof createTaskFlow>[0]["git"];
     now?: () => number;
+    models?: Record<string, Array<{ id: string; label: string }>>;
   } = {},
 ) {
   const db = openVibeDb({ path: ":memory:" });
@@ -207,7 +223,7 @@ function setup(
   migrateOwner(db, "core");
   const store = createVibeStore(db);
   store.tasks.markTaskWorkspace("ws");
-  const fake = fakePaseo();
+  const fake = fakePaseo(options.models ? { models: options.models } : {});
   const runtime = createTaskRuntimeCommands(db);
   const tabs = createTaskTabs({
     store,
@@ -340,6 +356,43 @@ describe("任务 tab 编号与标题", () => {
     expect(formatTabs(await tabs.tabsFor(store.tasks.get("ws")!, false))).toContain(
       "#3 会话 · first",
     );
+  });
+
+  it("标题显示 provider 模型目录的可读名称，取不到时回退模型 id", async () => {
+    const { fake, tabs } = setup({
+      models: { qoder: [{ id: "dfmodel", label: "DeepSeek-Flash" }] },
+    });
+    fake.addAgent({ id: "agent-1", provider: "qoder", model: "dfmodel" });
+    const first = await tabs.ensureTab("agent-1");
+    expect(first).toMatchObject({ model: "dfmodel", modelLabel: "DeepSeek-Flash" });
+    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 主会话 · DeepSeek-Flash" });
+
+    fake.addAgent({ id: "agent-2", provider: "qoder", model: "unknown-id" });
+    const second = await tabs.ensureTab("agent-2");
+    expect(second).toMatchObject({ number: 2, model: "unknown-id" });
+    expect(second!.modelLabel).toBeUndefined();
+    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-2", title: "#2 会话 · unknown-id" });
+  });
+
+  it("快速结束的首回合在 tab 尚未登记时补登记并保存方案", async () => {
+    const { store, fake, flow } = setup();
+    store.tasks.create({ workspaceId: "ws", anchorAgentId: "agent-1" });
+    fake.addAgent({ id: "agent-1" });
+    fake.setTimeline("agent-1", [
+      {
+        item: { type: "assistant_message", text: planMessage("快速方案"), messageId: "m-fast" },
+        turnId: "turn-fast",
+        seqEnd: 2,
+      },
+    ]);
+    await flow.turnEnded({
+      agent: { id: "agent-1", workspaceId: "ws" },
+      turnId: "turn-fast",
+      outcome: { kind: "completed" },
+    });
+    const task = store.tasks.get("ws")!;
+    expect(task.plan?.goal).toBe("快速方案");
+    expect(task.tabs).toMatchObject([{ number: 1, agentId: "agent-1", role: "main" }]);
   });
 
   it("agent 自带角色标签不能授予角色，只有插件声明生效且不改写编号", async () => {
@@ -1412,6 +1465,128 @@ describe("上下文接续", () => {
       requestId: "cont-exhausted",
       status: "exhausted",
     });
+  });
+
+  it("缺少可恢复阶段时保持暂停且不打开 tab", async () => {
+    const { db, store, fake, tabs, flow } = await projectTask();
+    const scout = await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
+    store.tasks.setPhase("ws", "paused");
+    const created = fake.created.length;
+    const sends = fake.sends.length;
+    const result = await flow.continuation({
+      requestId: "cont-norestore",
+      workspaceId: "ws",
+      agentId: scout.agentId,
+      role: "scout",
+      reason: "context",
+      message: "上下文接续",
+      summary: "#2 上下文已满",
+      candidateIndex: 0,
+      confirmedAt: null,
+      prompt: "",
+    });
+    expect(result.message).toContain("不能自动恢复");
+    expect(fake.created).toHaveLength(created);
+    expect(fake.sends).toHaveLength(sends);
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("paused");
+    expect(task.tabs.find((tab) => tab.agentId === scout.agentId)!.role).toBe("scout");
+    expect(task.control).toMatchObject({
+      continuationRequestId: "cont-norestore",
+      continuationResult: { status: "paused" },
+    });
+    const results = readEvents(db, 0, { types: ["context.continuation_result"] });
+    expect(results.at(-1)!.payload).toMatchObject({
+      requestId: "cont-norestore",
+      status: "paused",
+    });
+  });
+
+  it("接续请求之后用户停止了任务时保持暂停", async () => {
+    const { db, store, fake, tabs, flow } = await projectTask();
+    const scout = await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
+    store.tasks.setPhase("ws", "paused");
+    store.tasks.updateControl("ws", { stoppedAt: "2026-10-24T12:00:10.000Z" });
+    const created = fake.created.length;
+    const sends = fake.sends.length;
+    const result = await flow.continuation({
+      requestId: "cont-stopped",
+      workspaceId: "ws",
+      agentId: scout.agentId,
+      role: "scout",
+      reason: "context",
+      message: "上下文接续",
+      summary: "#2 上下文已满",
+      candidateIndex: 0,
+      confirmedAt: null,
+      prompt: "",
+      previousPhase: "planning",
+      requestedAt: "2026-10-24T12:00:00.000Z",
+    });
+    expect(result.message).toContain("用户停止");
+    expect(fake.created).toHaveLength(created);
+    expect(fake.sends).toHaveLength(sends);
+    expect(store.tasks.get("ws")!.phase).toBe("paused");
+    const results = readEvents(db, 0, { types: ["context.continuation_result"] });
+    expect(results.at(-1)!.payload).toMatchObject({
+      requestId: "cont-stopped",
+      status: "paused",
+    });
+  });
+
+  it("排队阶段不能从暂停恢复，保持暂停且不打开 tab", async () => {
+    const { store, fake, flow } = await projectTask();
+    store.tasks.setPhase("ws", "paused");
+    const created = fake.created.length;
+    const result = await flow.continuation({
+      requestId: "cont-queued",
+      workspaceId: "ws",
+      agentId: "agent-1",
+      role: "planner",
+      reason: "context",
+      message: "主会话上下文接续",
+      summary: "#1 上下文已满",
+      candidateIndex: 0,
+      confirmedAt: null,
+      prompt: "",
+      previousPhase: "queued",
+    });
+    expect(result.message).toContain("不能自动恢复");
+    expect(fake.created).toHaveLength(created);
+    expect(store.tasks.get("ws")!.phase).toBe("paused");
+  });
+
+  it("等待确认的任务接续后恢复等待确认阶段并打开接续 tab", async () => {
+    const { store, fake, flow } = await projectTask();
+    store.tasks.savePlan("ws", planSnapshot());
+    expect(store.tasks.get("ws")!.phase).toBe("awaiting_confirmation");
+    fake.setTimeline("agent-1", [
+      {
+        item: { type: "assistant_message", text: "方案已就绪", messageId: "m-await" },
+        turnId: "turn-await",
+        seqEnd: 4,
+      },
+    ]);
+    store.tasks.setPhase("ws", "paused");
+    const result = await flow.continuation({
+      requestId: "cont-await",
+      workspaceId: "ws",
+      agentId: "agent-1",
+      role: "planner",
+      reason: "context",
+      message: "主会话上下文接续",
+      summary: "#1 上下文已满",
+      candidateIndex: 0,
+      confirmedAt: null,
+      prompt: "",
+      previousPhase: "awaiting_confirmation",
+    });
+    expect(result.message).toContain("已打开接续 tab");
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("awaiting_confirmation");
+    expect(task.plan).toEqual(planSnapshot());
+    expect(task.tabs.find((tab) => tab.agentId === "agent-1")!.role).toBe("session");
+    expect(task.tabs.at(-1)!.role).toBe("main");
   });
 });
 

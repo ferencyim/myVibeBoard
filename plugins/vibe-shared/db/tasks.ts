@@ -48,6 +48,7 @@ export interface AllocateTaskTabInput {
   role: TaskTabRole;
   provider: string;
   model: string;
+  modelLabel?: string;
   thinking?: string;
   presetId?: string;
 }
@@ -55,6 +56,7 @@ export interface UpdateTaskTabInput {
   role?: TaskTabRole;
   provider?: string;
   model?: string;
+  modelLabel?: string | null;
   thinking?: string | null;
   presetId?: string | null;
 }
@@ -76,7 +78,15 @@ const TRANSITIONS: Record<TaskPhase, readonly TaskPhase[]> = {
   verifying: ["executing", "awaiting_acceptance", "paused", "failed"],
   awaiting_acceptance: ["executing", "completed", "paused", "failed"],
   completed: ["planning"],
-  paused: ["planning", "executing", "reviewing", "verifying", "awaiting_acceptance", "failed"],
+  paused: [
+    "planning",
+    "awaiting_confirmation",
+    "executing",
+    "reviewing",
+    "verifying",
+    "awaiting_acceptance",
+    "failed",
+  ],
   failed: ["planning", "paused"],
 };
 const CONFIRMED_PHASES = new Set<TaskPhase>([
@@ -262,6 +272,7 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           role: TaskTabRoleSchema,
           provider: z.string().trim().min(1),
           model: z.string().trim().min(1),
+          modelLabel: z.string().trim().min(1).optional(),
           thinking: z.string().trim().min(1).optional(),
           presetId: z.string().trim().min(1).optional(),
         })
@@ -277,6 +288,7 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           role: parsed.role,
           provider: parsed.provider,
           model: parsed.model,
+          ...(parsed.modelLabel ? { modelLabel: parsed.modelLabel } : {}),
           thinking: parsed.thinking,
           presetId: parsed.presetId,
           createdAt: now().toISOString(),
@@ -294,6 +306,7 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           role: TaskTabRoleSchema.optional(),
           provider: z.string().trim().min(1).optional(),
           model: z.string().trim().min(1).optional(),
+          modelLabel: z.string().trim().min(1).nullable().optional(),
           thinking: z.string().trim().min(1).nullable().optional(),
           presetId: z.string().trim().min(1).nullable().optional(),
         })
@@ -308,6 +321,13 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           ...(patch.role !== undefined ? { role: patch.role } : {}),
           ...(patch.provider !== undefined ? { provider: patch.provider } : {}),
           ...(patch.model !== undefined ? { model: patch.model } : {}),
+          ...(patch.modelLabel !== undefined
+            ? patch.modelLabel
+              ? { modelLabel: patch.modelLabel }
+              : {}
+            : existing.modelLabel !== undefined
+              ? { modelLabel: existing.modelLabel }
+              : {}),
           ...(patch.thinking !== undefined
             ? patch.thinking
               ? { thinking: patch.thinking }

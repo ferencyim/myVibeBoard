@@ -9,6 +9,7 @@ import {
   TASK_TAB_ROLE_LABELS,
   TASK_TAB_PRESET_LABEL,
   UNRESOLVED_TAB_MODEL,
+  providerModelLabel,
   tabTitle,
   type Task,
   type TaskTab,
@@ -88,6 +89,15 @@ export function createTaskTabs(options: {
     assertTaskWorkspace(placement.current());
     return placement;
   }
+  /** Opaque provider ids (`dfmodel`) get their catalog label (`DeepSeek-Flash`) in titles. */
+  async function labelFor(provider: string, model: string): Promise<string | undefined> {
+    try {
+      const label = await providerModelLabel(paseo(), provider, model);
+      return label && label !== model ? label : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   /** Planner/scout sessions let vibe-context freeze and continue these tabs like a worker. */
   async function registerTabSession(
     workspaceId: string,
@@ -158,10 +168,13 @@ export function createTaskTabs(options: {
     handle: PaseoAgentHandle,
   ) {
     const model = agent.model?.trim();
-    if (!model || model === tab.model) return tab;
+    if (!model || (model === tab.model && tab.modelLabel)) return tab;
+    const modelLabel = await labelFor(agent.provider, model);
+    if (model === tab.model && !modelLabel) return tab;
     const updated = store.tasks.updateTab(workspaceId, tab.agentId, {
       model,
       provider: agent.provider,
+      modelLabel: modelLabel ?? null,
     });
     await handle.setTitle(tabTitle(updated)).catch((error) => {
       log("任务 tab 标题更新失败", error);
@@ -206,14 +219,19 @@ export function createTaskTabs(options: {
         role?: TaskTabRole;
         presetId?: string;
         model?: string;
+        modelLabel?: string | null;
         provider?: string;
       } = {};
       if (claim.role && claim.role !== existing.role) updates.role = claim.role;
       if (claim.presetId && claim.presetId !== existing.presetId) updates.presetId = claim.presetId;
       const resolved = agent.model?.trim();
-      if (resolved && resolved !== existing.model) {
-        updates.model = resolved;
-        updates.provider = agent.provider;
+      if (resolved) {
+        const modelLabel = await labelFor(agent.provider, resolved);
+        if (resolved !== existing.model || modelLabel !== existing.modelLabel) {
+          updates.model = resolved;
+          updates.provider = agent.provider;
+          updates.modelLabel = modelLabel ?? null;
+        }
       }
       if (Object.keys(updates).length === 0) {
         await registerTabSession(workspaceId, existing, agent, placement.current()?.projectId ?? null);
@@ -227,19 +245,30 @@ export function createTaskTabs(options: {
       return updated;
     }
     const role = claim.role ?? (agentId === task.anchorAgentId ? "main" : "session");
+    const model = agent.model?.trim() || UNRESOLVED_TAB_MODEL;
     const { tab } = store.tasks.allocateTab(workspaceId, {
       agentId,
       role,
       provider: agent.provider,
-      model: agent.model?.trim() || UNRESOLVED_TAB_MODEL,
+      model,
       thinking: agent.thinkingOptionId ?? undefined,
       ...(claim.presetId ? { presetId: claim.presetId } : {}),
     });
     await handle.setTitle(tabTitle(tab)).catch((error) => {
       log("任务 tab 标题设置失败（编号已保留）", error);
     });
-    await registerTabSession(workspaceId, tab, agent, placement.current()?.projectId ?? null);
-    return tab;
+    // The catalog lookup may be a cold provider discovery. Allocate first so a fast first turn
+    // still finds its tab; the readable label lands in a second title update.
+    let resolved = tab;
+    const modelLabel = await labelFor(agent.provider, model);
+    if (modelLabel) {
+      resolved = store.tasks.updateTab(workspaceId, agentId, { modelLabel });
+      await handle.setTitle(tabTitle(resolved)).catch((error) => {
+        log("任务 tab 标题更新失败", error);
+      });
+    }
+    await registerTabSession(workspaceId, resolved, agent, placement.current()?.projectId ?? null);
+    return resolved;
   }
   async function tabsFor(task: Task, refresh: boolean): Promise<TaskTabView[]> {
     return Promise.all(

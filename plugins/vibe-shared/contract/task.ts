@@ -149,6 +149,8 @@ export const TaskTabSchema = z
     role: TaskTabRoleSchema,
     provider: Text,
     model: Text,
+    /** Provider catalog label for the model; omitted when it is the same as the id. */
+    modelLabel: Text.optional(),
     thinking: z.string().optional(),
     presetId: Text.optional(),
     createdAt: z.iso.datetime(),
@@ -157,9 +159,11 @@ export const TaskTabSchema = z
 export type TaskTab = z.infer<typeof TaskTabSchema>;
 /** A provider can report its model only after the session starts; the title must not invent one. */
 export const UNRESOLVED_TAB_MODEL = "未解析";
-export function tabTitle(tab: Pick<TaskTab, "number" | "role" | "model">): string {
-  const model = tab.model && tab.model !== UNRESOLVED_TAB_MODEL ? ` · ${tab.model}` : "";
-  return `#${tab.number} ${TASK_TAB_ROLE_LABELS[tab.role]}${model}`;
+export function tabTitle(
+  tab: Pick<TaskTab, "number" | "role" | "model"> & { modelLabel?: string },
+): string {
+  const name = tab.modelLabel || (tab.model !== UNRESOLVED_TAB_MODEL ? tab.model : "");
+  return `#${tab.number} ${TASK_TAB_ROLE_LABELS[tab.role]}${name ? ` · ${name}` : ""}`;
 }
 
 /** Public timeline locator. Message contents remain in the host's durable history. */

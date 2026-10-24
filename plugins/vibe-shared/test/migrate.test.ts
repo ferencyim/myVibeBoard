@@ -15,6 +15,7 @@ import { openTestDb, runWorker } from "./helpers";
 
 const EXPECTED_TABLES = [
   "task",
+  "task_workspace",
   "task_artifact",
   "project",
   "prompt_override",

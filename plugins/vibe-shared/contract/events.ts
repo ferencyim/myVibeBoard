@@ -93,6 +93,8 @@ export const EVENT_PAYLOADS = {
     prompt: z.string(),
     /** Phase before the owner froze the task, so the replacement can continue it. */
     previousPhase: TaskPhaseSchema.optional(),
+    /** When the request was published; a user stop after this wins over resuming. */
+    requestedAt: z.iso.datetime().optional(),
   }),
   "context.continuation_result": z.object({
     requestId: z.string(),

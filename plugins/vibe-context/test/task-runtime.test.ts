@@ -338,6 +338,22 @@ describe("workspace runtime wiring", () => {
       readEvents(s.db, 0, { types: ["scheduler.task_resource_request"] }).at(-1)!.payload,
     ).toMatchObject({ action: "freeze" });
   });
+  it("scout 的上下文冻结不暂停任务，并上报原阶段与请求时间", async () => {
+    const s = setup("scout");
+    const service = createTaskContextService({ ...s, report: vi.fn() });
+    await service.requestContinuation(s.session, "context", "scout 上下文已满", "交接提示");
+    expect(s.store.tasks.get("workspace")!.phase).toBe("executing");
+    expect(readEvents(s.db, 0, { types: ["context.continuation_requested"] })[0]!.payload).toMatchObject(
+      {
+        role: "scout",
+        previousPhase: "executing",
+        requestedAt: expect.any(String),
+      },
+    );
+    expect(
+      readEvents(s.db, 0, { types: ["scheduler.task_resource_request"] }).at(-1)!.payload,
+    ).toMatchObject({ action: "freeze", agentId: "agent" });
+  });
   it("inherits context once after an owner result without resetting subsequent turns", async () => {
     const s = setup();
     const service = createTaskContextService(s);

@@ -92,7 +92,7 @@ export const VERIFY_PROMPT_DEFS: readonly PromptDef[] = [
     audience: "验证 agent",
     defaultText:
       TASK_CONTEXT +
-      "证据文件：\n{{evidence}}\n采集备注：\n{{notes}}\n请打开证据核对每个检查项；没有对应证据必须存疑，禁止修改文件。",
+      "证据文件：\n{{evidence}}\n采集备注：\n{{notes}}\n请打开证据核对每个检查项；没有对应证据必须存疑，不要修改工作树。检查项要求留下核对说明时，可以写入证据输出目录，该目录不属于工作树。",
     placeholders: TASK_VARS,
     fixedSuffix: JUDGE_SUFFIX,
   },

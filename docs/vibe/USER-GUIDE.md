@@ -32,6 +32,8 @@ qoder CLI 支持 ACP，可以按 `docs/custom-providers.md` 的 ACP 方式接入
 
 Windows 下可执行文件为 `qoderclicn.exe`，需要写绝对路径或在 PATH 中。先在 Paseo 之外用 `qoderclicn` 完成登录；凭据由 qoder 自己保存，不写进本仓库和 `config.json`。可用 `--config-dir <独立目录>` 指向隔离的登录与配置，便于测试时不碰默认 `~/.qoder-cn`。保存后重启 daemon，模型列表由 ACP 在连接时发现，默认模型为 DeepSeek-Flash，可在预设里按 provider 显示的模型名选择。ACP provider 默认通过 MCP 注入 Paseo 工具，`vibe_open_tab`、`get_agent_activity` 等才能使用；若某个 ACP 适配器无法在 `mcpServers` 非空时建会话，再按 `docs/custom-providers.md` 设置 `options.supportsMcpServers: false`，但那样会失去这些工具。
 
+qoder 的权限模式由它自己的 ACP 模式提供。实测时建议在 provider 的 `command` 里加 `--permission-mode auto`，或在新建 tab 时选择自动放行模式；qoder 的 `auto` 仍可能拦截 `git commit` 等命令并等待确认，无人值守的端到端测试可用 `--permission-mode yolo`，日常使用则按需在 tab 里放行。否则验证 tab 运行测试、采集证据时可能停在权限审批上，任务会一直等待。模型 id 与显示名不同时（例如 `dfmodel` 显示为 `DeepSeek-Flash`），tab 标题使用 provider 模型目录里的可读名称，取不到才显示模型 id。
+
 任何 provider 都可以担任任意角色，插件不再按角色强制只读或拒绝不支持的 provider；只读角色仅靠提示词约束。
 
 ## 新建任务并讨论方案
@@ -48,6 +50,8 @@ Windows 下可执行文件为 `qoderclicn.exe`，需要写绝对路径或在 PAT
 只有用户在原生输入框发送 `/执行`，才会保存当前 tab（找不到时回退 #1）最新完整方案、确认时间和角色快照，并交给调度器。执行只能使用任务自己的附加 worktree。资源不足、文件范围冲突或前置子任务未完成时保留排队原因。
 
 调度器准入后，插件在同一个 workspace 打开 `执行` tab（例如 `#3 执行 · Sol`）。执行 tab 按方案使用原生 subagent 分工，子代理不占顶部 tab，计入并发限制。执行结束输出 `vibe-delivery` 完成标记后，插件按配置自动打开代码复核 tab（启用时）和验证 tab。复核/验证同样是普通 tab，提示词要求不修改仓库文件，但不强制只读权限；验证 tab 需要能运行测试和采集证据。
+
+验证 tab 会运行测试、启动采集器并写证据文件。如果 provider 把工具调用交给用户审批，验证会停在权限审批上，看起来像卡住；请到该 tab 放行，或给复核/验证角色的预设选择自动放行模式（如 accept edits / auto / bypass），避免整轮验证一直等待。验证期间人工批准的审批不会让结论作废，但验证 tab 自己修改仓库文件或 Git 状态会使本轮证据作废。
 
 复核或验证发现问题时，任务会退回修复或暂停并记录原因。验证证据只对当前确认轮次和当前代码提交有效，不能沿用旧轮通过结论。结果摘要会追加到相关 tab 的时间线，不触发模型回合；任意任务 tab 发送 `/状态` 可显示阶段、各 tab 状态和最近结论。
 

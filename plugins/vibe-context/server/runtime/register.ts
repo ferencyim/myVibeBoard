@@ -33,7 +33,12 @@ export function createTaskContextService(options: {
   const freeze = (session: AgentSession) => {
     const task = session.workspaceId ? store.tasks.get(session.workspaceId) : undefined;
     const previousPhase = task?.phase;
-    if (task && !["paused", "completed", "failed"].includes(task.phase))
+    // Scouting runs alongside planning; freezing it must not stall the task's own phase.
+    if (
+      task &&
+      session.role !== "scout" &&
+      !["paused", "completed", "failed"].includes(task.phase)
+    )
       store.tasks.setPhase(task.workspaceId, "paused");
     if (task)
       publishEvent(db, {
@@ -125,6 +130,7 @@ export function createTaskContextService(options: {
         candidateIndex: candidateIndex,
         confirmedAt: current.confirmedAt ?? task?.confirmedAt ?? null,
         prompt: handoff,
+        requestedAt: new Date().toISOString(),
         ...(previousPhase ? { previousPhase } : {}),
       },
     });

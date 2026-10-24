@@ -11,7 +11,7 @@ import { createNodeRunner } from "./server/collectors/common";
 import { verifySettings } from "./shared/settings";
 import { createVerifyPrompts } from "./server/prompts";
 import { tuningOf, type VerifyTuning } from "./server/tuning";
-import { isEvent, tabTitle } from "./server/vibe/contract";
+import { isEvent, providerModelLabel, tabTitle } from "./server/vibe/contract";
 import { createVerifyRegistry, type RunConfigs } from "./server/registry";
 import { registerVerifyRpcs } from "./server/rpc";
 import { createPaseoVerifierLauncher, type VerifierLauncher } from "./server/verifier/agent";
@@ -66,18 +66,26 @@ export default function contribute(server: PluginServerContext) {
           ...(input.thinking ? { thinking: input.thinking } : {}),
           ...(input.presetId ? { presetId: input.presetId } : {}),
         };
+        const label = paseo
+          ? await providerModelLabel(paseo, input.provider, input.model).catch(
+              () => input.model,
+            )
+          : input.model;
+        const modelLabel = label && label !== input.model ? label : undefined;
         board.tasks.allocateTab(input.workspaceId, {
           agentId: input.agentId,
           role: input.role,
           provider: input.provider,
           model: input.model,
           ...extra,
+          ...(modelLabel ? { modelLabel } : {}),
         });
         const tab = board.tasks.updateTab(input.workspaceId, input.agentId, {
           role: input.role,
           provider: input.provider,
           model: input.model,
           ...extra,
+          modelLabel: modelLabel ?? null,
         });
         await paseo?.agents
           .ref(input.agentId)

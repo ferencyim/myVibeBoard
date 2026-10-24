@@ -836,6 +836,8 @@ export function createTaskFlow(options: {
     confirmedAt: string | null;
     prompt: string;
     previousPhase?: TaskPhase;
+    /** When the owner published the request; a later user stop wins over it. */
+    requestedAt?: string;
   };
   type ContinuationResult = {
     status: "continued" | "paused" | "exhausted" | "deferred";
@@ -847,7 +849,6 @@ export function createTaskFlow(options: {
   const RESTORABLE_PHASES = new Set<TaskPhase>([
     "planning",
     "awaiting_confirmation",
-    "queued",
     "executing",
     "reviewing",
     "verifying",
@@ -905,6 +906,19 @@ export function createTaskFlow(options: {
           sessionId: replacement.id,
           candidateIndex: replacement.candidateIndex ?? input.candidateIndex,
         });
+      // The owner froze the task only so this request could replace one tab. A phase the state
+      // machine cannot restore from paused, or a user stop after the request, means the task must
+      // stay paused untouched.
+      if (!input.previousPhase || !RESTORABLE_PHASES.has(input.previousPhase))
+        return fail(
+          "任务阶段为" +
+            (initial.phase ? TASK_PHASE_LABELS[initial.phase] : "未知") +
+            "，不能自动恢复；保持暂停",
+        );
+      const stoppedAt = Date.parse(String(initial.control?.stoppedAt ?? ""));
+      const requestedAt = Date.parse(input.requestedAt ?? "");
+      if (Number.isFinite(stoppedAt) && (!Number.isFinite(requestedAt) || stoppedAt > requestedAt))
+        return fail("任务在接续请求之后被用户停止，保持暂停");
       try {
         const views = await tabs.tabsFor(initial, true);
         const fromView = views.find((view) => view.agentId === input.agentId);
@@ -965,16 +979,8 @@ export function createTaskFlow(options: {
         const created = await tabs.ensureTab(handle.id);
         if (!created) return fail("接续 tab 未登记到任务");
         // The owner froze the task; admission and turn handling need the previous phase back.
-        const restore =
-          input.previousPhase && RESTORABLE_PHASES.has(input.previousPhase)
-            ? input.previousPhase
-            : from.role === "worker"
-              ? "executing"
-              : initial.plan
-                ? "awaiting_confirmation"
-                : "planning";
         if (requireTask(input.workspaceId).phase === "paused")
-          store.tasks.setPhase(input.workspaceId, restore);
+          store.tasks.setPhase(input.workspaceId, input.previousPhase);
         await handoffNow({
           workspaceId: input.workspaceId,
           agentId: handle.id,
@@ -1097,10 +1103,19 @@ export function createTaskFlow(options: {
   }) {
     const workspaceId = event.agent.workspaceId;
     if (!workspaceId) return;
-    const task = store.tasks.get(workspaceId);
+    let task = store.tasks.get(workspaceId);
     if (!task) return;
-    const tab = tabFor(task, event.agent.id);
-    if (!tab) return;
+    let tab = tabFor(task, event.agent.id);
+    if (!tab) {
+      // A fast first turn can end before the agent.created hook has finished registering its tab.
+      tab =
+        (await tabs.ensureTab(event.agent.id).catch((error) => {
+          log("任务 tab 补登记失败", error);
+          return null;
+        })) ?? undefined;
+      if (!tab) return;
+      task = store.tasks.get(workspaceId) ?? task;
+    }
     const page = await timeline(tab.agentId);
     if (event.outcome.kind === "completed") {
       if (await naturalHandoff(task, tab, page, event.turnId)) return;

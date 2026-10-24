@@ -304,6 +304,18 @@ describe("workspace task commands", () => {
     expect(() => s.tasks.setPhase("workspace-1", "executing")).toThrow();
     s.db.close();
   });
+  it("restores awaiting confirmation after a context handoff pause", () => {
+    const s = tasks();
+    s.tasks.savePlan("workspace-1", plan());
+    s.tasks.setPhase("workspace-1", "paused");
+    expect(s.tasks.setPhase("workspace-1", "awaiting_confirmation")).toMatchObject({
+      phase: "awaiting_confirmation",
+      plan: plan(),
+    });
+    s.tasks.setPhase("workspace-1", "paused");
+    expect(() => s.tasks.setPhase("workspace-1", "queued")).toThrow(/不能从 paused/);
+    s.db.close();
+  });
   it("keeps a saved plan unchanged if the newest output is incomplete", () => {
     const s = tasks();
     s.tasks.savePlan("workspace-1", plan());

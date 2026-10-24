@@ -191,6 +191,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     const workspace = await deps.workspace(task.workspaceId);
     const initial = await taskTree(runner, workspace.worktreePath);
     if (initial.status) throw new Error("工作树有未提交改动，须先收口提交再验证");
+    const startedAt = now().toISOString();
     const startState = await gitStateSnapshot(runner, workspace.worktreePath);
     const created = verify.create({
       workspaceId: task.workspaceId,
@@ -832,6 +833,8 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         [...verifiedAgents].map((agentId) => (deps.timeline ? deps.timeline(agentId) : [])),
       );
       violations = await timelineViolations(pages.flat(), {
+        root: workspace.worktreePath,
+        since: startedAt,
         ignored: async (paths) => {
           const result = await runner.run("git", ["check-ignore", "--stdin"], {
             cwd: workspace.worktreePath,

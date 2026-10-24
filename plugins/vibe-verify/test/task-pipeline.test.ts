@@ -36,8 +36,7 @@ function setup(
     dirtyChanges?: boolean;
     headChanges?: boolean;
     reflogChanges?: boolean;
-    stashChanges?: boolean;
-    refChanges?: boolean;
+    branchChanges?: boolean;
     ignoredFiles?: string[];
     timelineEntries?: Record<string, unknown[]>;
     closeFails?: boolean;
@@ -113,8 +112,7 @@ function setup(
   let head = "abc123";
   let dirty = options.dirty ?? false;
   const reflog = ["aaa111"];
-  let stash = "";
-  let refs = "refs/heads/wp\tabc123\nrefs/remotes/origin/main\tbase123";
+  let branchHead = "abc123";
   const calls: string[] = [];
   const sentPrompts: Array<{ role: string; text: string }> = [];
   const launched: LaunchInput[] = [];
@@ -126,11 +124,11 @@ function setup(
   let busy = options.busy ?? false;
   const runner = createScriptedRunner((call) => {
     if (call.command === "git") {
-      if (call.args[0] === "rev-parse") return { stdout: head };
+      if (call.args[0] === "rev-parse")
+        return { stdout: String(call.args[1] ?? "").startsWith("refs/heads/") ? branchHead : head };
       if (call.args[0] === "status") return { stdout: dirty ? "?? .vibe/verify.json" : "" };
       if (call.args[0] === "reflog") return { stdout: reflog.join("\n") };
-      if (call.args[0] === "stash") return { stdout: stash };
-      if (call.args[0] === "for-each-ref") return { stdout: refs };
+      if (call.args[0] === "symbolic-ref") return { stdout: "refs/heads/wp\n" };
       if (call.args[0] === "check-ignore") {
         const requested = String(call.options?.input ?? "").split("\n");
         return {
@@ -171,8 +169,7 @@ function setup(
       if (options.headChanges) head = "def456";
       if (options.dirtyChanges) dirty = true;
       if (options.reflogChanges) reflog.unshift("bbb222");
-      if (options.stashChanges) stash = "ccc333 stash@{0}: 验证中途 stash";
-      if (options.refChanges) refs += "\nrefs/heads/extra\tddd444";
+      if (options.branchChanges) branchHead = "ddd444";
       if (options.stop) board.tasks.setPhase("ws-task", "paused");
       if (options.reconfirm) {
         const task = board.tasks.get("ws-task")!;
@@ -898,8 +895,8 @@ describe("原生 workspace 验证", () => {
       expect(h.board.tasks.get("ws-task")!.phase).toBe("paused");
     },
   );
-  it.each(["reflogChanges", "stashChanges", "refChanges"] as const)(
-    "开始与结束的 Git 状态快照不一致时作废：%s",
+  it.each(["reflogChanges", "branchChanges"] as const)(
+    "本 worktree 的 HEAD/reflog/分支 ref 变化时作废：%s",
     async (option) => {
       const h = setup({ [option]: true });
       const result = await h.pipeline.run("ws-task");
@@ -912,8 +909,14 @@ describe("原生 workspace 验证", () => {
       expect(saved.voided).toBe(true);
       expect(saved.notes.join("\n")).toContain("验证开始与结束的 Git 状态不一致");
       expect(saved.gitState).toMatchObject({
-        start: { head: "abc123", reflogCount: 1, reflogLatest: "aaa111" },
-        end: { head: "abc123" },
+        start: {
+          head: "abc123",
+          reflogCount: 1,
+          reflogLatest: "aaa111",
+          branch: "refs/heads/wp",
+          branchHead: "abc123",
+        },
+        end: { head: "abc123", branch: "refs/heads/wp" },
       });
     },
   );
@@ -980,6 +983,152 @@ describe("原生 workspace 验证", () => {
       voided: false,
     });
     expect(h.board.tasks.get("ws-task")!.phase).toBe("awaiting_acceptance");
+  });
+  it("git stash list/show 是只读操作；只有修改 stash 才作废", async () => {
+    const readOnly = setup({
+      timelineEntries: {
+        "native-verifier": [
+          {
+            timestamp: "2999-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "shell",
+              detail: { type: "shell", command: "git stash list && git stash show -p stash@{0}" },
+            },
+          },
+        ],
+      },
+    });
+    expect(await readOnly.pipeline.run("ws-task")).toMatchObject({
+      conclusion: "pass",
+      voided: false,
+    });
+
+    const mutated = setup({
+      timelineEntries: {
+        "native-verifier": [
+          {
+            timestamp: "2999-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "shell",
+              detail: { type: "shell", command: "git stash push -m 验证中" },
+            },
+          },
+        ],
+      },
+    });
+    const result = await mutated.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "doubt", voided: true });
+    expect(mutated.verify.detail(result!.verificationId)!.notes.join("\n")).toContain(
+      "改变了 Git 状态（stash）",
+    );
+  });
+  it("验证 tab 写 worktree 外的证据目录不作废，也不送 check-ignore", async () => {
+    const outside = join(tmpdir(), "vibe-outside-evidence", "result.log");
+    const h = setup({
+      timelineEntries: {
+        "native-verifier": [
+          {
+            timestamp: "2999-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "Write",
+              detail: { type: "write", filePath: outside },
+            },
+          },
+        ],
+      },
+    });
+    expect(await h.pipeline.run("ws-task")).toMatchObject({
+      conclusion: "pass",
+      voided: false,
+    });
+    expect(
+      h.runner.calls.some((call) => call.command === "git" && call.args[0] === "check-ignore"),
+    ).toBe(false);
+  });
+  it("只把 worktree 内的编辑路径送 check-ignore", async () => {
+    const outside = join(tmpdir(), "vibe-outside-evidence", "result.log");
+    const h = setup({
+      ignoredFiles: [".vibe/run.log"],
+      timelineEntries: {
+        "native-verifier": [
+          {
+            timestamp: "2999-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "Write",
+              detail: { type: "write", filePath: ".vibe/run.log" },
+            },
+          },
+          {
+            timestamp: "2999-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "Write",
+              detail: { type: "write", filePath: outside },
+            },
+          },
+        ],
+      },
+    });
+    expect(await h.pipeline.run("ws-task")).toMatchObject({
+      conclusion: "pass",
+      voided: false,
+    });
+    const check = h.runner.calls.find(
+      (call) => call.command === "git" && call.args[0] === "check-ignore",
+    )!;
+    expect(String(check.options?.input)).toBe(".vibe/run.log");
+  });
+  it("验证开始之前的编辑记录不作废，之后的编辑才计入", async () => {
+    const onlyOld = setup({
+      timelineEntries: {
+        "native-verifier": [
+          {
+            timestamp: "2000-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "Edit",
+              detail: { type: "edit", filePath: "src/old.ts" },
+            },
+          },
+        ],
+      },
+    });
+    expect(await onlyOld.pipeline.run("ws-task")).toMatchObject({
+      conclusion: "pass",
+      voided: false,
+    });
+
+    const mixed = setup({
+      timelineEntries: {
+        "native-verifier": [
+          {
+            timestamp: "2000-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "Edit",
+              detail: { type: "edit", filePath: "src/old.ts" },
+            },
+          },
+          {
+            timestamp: "2999-01-01T00:00:00.000Z",
+            item: {
+              type: "tool_call",
+              name: "Edit",
+              detail: { type: "edit", filePath: "src/new.ts" },
+            },
+          },
+        ],
+      },
+    });
+    const result = await mixed.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "doubt", voided: true });
+    const notes = mixed.verify.detail(result!.verificationId)!.notes.join("\n");
+    expect(notes).toContain("src/new.ts");
+    expect(notes).not.toContain("src/old.ts");
   });
   it.each([{ noEvidence: true }, { duplicate: true }])(
     "没有证据或重复检查编号不能pass %j",
