@@ -32,7 +32,6 @@ import {
   type VibeStore,
 } from "../vibe/db";
 import { busyMember, latestTaskPlan, taskSource } from "./source";
-import { TASK_FLOW_PROMPTS } from "./prompts";
 import { createTaskGitFinalizer, type GitState } from "./git";
 import type { TaskTurnToken } from "../task-host/resources";
 
@@ -99,7 +98,6 @@ export function createTaskConversationService(options: TaskFlowOptions) {
     worker: "delivery",
     subagent: "delivery",
   };
-  store.prompts.register(TASK_FLOW_PROMPTS);
   const serial = <T>(workspaceId: string, action: () => Promise<T>): Promise<T> => {
     const previous = queues.get(workspaceId) ?? Promise.resolve();
     const pending = previous.catch(() => {}).then(action);

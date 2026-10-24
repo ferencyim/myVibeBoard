@@ -30,6 +30,7 @@ function fixture() {
   databases.push(db);
   migrateAll(db);
   const store = createVibeStore(db, { deviceId: "wp115-test" });
+  store.prompts.register([...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS], { pruneMissing: true });
   store.projects.create({
     name: "任务测试",
     prefix: "TEST",
@@ -337,7 +338,6 @@ describe("统一任务动作与编排", () => {
     expect(f.store.prompts.resolve("board.task.work")).toBe(
       "请在已确认范围内完成任务。\n\n" + fixed,
     );
-    f.store.prompts.register(TASK_HOST_PROMPTS);
     const rolePrompt = f.store.prompts.resolve("task.role.worker");
     expect(rolePrompt).toContain(fixed);
     expect(rolePrompt).not.toContain("委派工具");

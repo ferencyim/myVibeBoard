@@ -36,11 +36,32 @@ $vibeHome = Join-Path $dataDir "vibe"
 $electronData = Join-Path $dataDir "electron"
 $tokenTarget = Join-Path $dataDir "push-gateway.token"
 
+function Get-TargetOnlyFiles($from, $to) {
+  $pending = [Collections.Generic.Stack[string]]::new()
+  $pending.Push(".")
+  while ($pending.Count -gt 0) {
+    $relative = $pending.Pop()
+    foreach ($item in Get-ChildItem -LiteralPath (Join-Path $to $relative) -Force) {
+      # Inspect neither side through a junction/symlink (e.g. a source SDK checkout).
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+      $child = Join-Path $relative $item.Name
+      $source = Get-Item -LiteralPath (Join-Path $from $child) -Force -ErrorAction SilentlyContinue
+      if ($source -and ($source.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+      if ($item.PSIsContainer) { $pending.Push($child) }
+      elseif (-not $source -or $source.PSIsContainer) { $item.FullName }
+    }
+  }
+}
+
 function Copy-Tree($from, $to, $exclude = @()) {
   # robocopy /E copies and overwrites; it never deletes anything in the target.
   robocopy $from $to /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2 /XD .git test __tests__ @exclude | Out-Null
   if ($LASTEXITCODE -ge 8) { throw "robocopy $from -> $to failed ($LASTEXITCODE)" }
   $global:LASTEXITCODE = 0
+  Write-Host "目标目录中源码已不存在的文件（仅列出，不删除）：$to"
+  $extra = @(Get-TargetOnlyFiles $from $to | Sort-Object)
+  if ($extra.Count -eq 0) { Write-Host "  （无）" }
+  else { foreach ($file in $extra) { Write-Host "  $file" } }
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir, $pluginsDir, $paseoHome, $vibeHome, $electronData, $WorktreesRoot | Out-Null
@@ -58,7 +79,8 @@ if (-not $SkipCopy) {
     $src = Join-Path $repo "plugins\$p"
     if (-not (Test-Path (Join-Path $src "node_modules"))) { throw "Run npm ci in plugins\$p first" }
     $pluginTarget = Join-Path $pluginsDir $p
-    # Source npm ci links the fork SDK. Do not deploy a link to a source checkout.
+    # npm ci links the SDK for source types/tools. The host supplies @getpaseo/plugin*
+    # at runtime (external during compilation), so deploy neither the link nor SDK copies.
     $sdkTarget = Join-Path $pluginTarget "node_modules\@getpaseo\plugin"
     if (Test-Path -LiteralPath $sdkTarget) {
       $sdkItem = Get-Item -LiteralPath $sdkTarget -Force
@@ -68,10 +90,6 @@ if (-not $SkipCopy) {
       }
     }
     Copy-Tree $src $pluginTarget @((Join-Path $src "node_modules\@getpaseo\plugin"))
-    New-Item -ItemType Directory -Force -Path $sdkTarget | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repo "packages\plugin\package.json") -Destination $sdkTarget -Force
-    Copy-Tree (Join-Path $repo "packages\plugin\dist") (Join-Path $sdkTarget "dist")
-    Copy-Tree (Join-Path $repo "packages\plugin\src") (Join-Path $sdkTarget "src")
   }
 }
 
