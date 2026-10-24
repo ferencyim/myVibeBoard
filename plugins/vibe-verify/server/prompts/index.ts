@@ -46,7 +46,14 @@ export function createVerifyPrompts(store: Pick<VibeStore, "prompts">) {
   return {
     /** Upsert the defaults; called once at start-up. */
     register(options: { pruneMissing?: boolean } = { pruneMissing: true }): void {
-      store.prompts.register(VERIFY_PROMPT_DEFS, options);
+      store.prompts.register(VERIFY_PROMPT_DEFS, {
+        ...options,
+        // WP-122: the board's old role templates map onto the verify system prompts.
+        aliases: {
+          "task.role.reviewer": "verify.reviewer_system",
+          "task.role.verifier": "verify.verifier_system",
+        },
+      });
     },
     resolve(key: string, options: ResolveOptions = {}): string {
       try {

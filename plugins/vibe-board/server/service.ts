@@ -66,6 +66,7 @@ export function createBoardService({ store }: BoardRuntime) {
         projects: store.projects
           .list(false)
           .map((p) => ({ id: p.paseoProjectId ?? p.id, name: p.name, prefix: p.prefix })),
+        orphans: store.prompts.orphans(),
       }),
       set(key: string, text: string, projectId?: string | null) {
         store.prompts.setOverride(key, text, { projectId: projectId ?? null });

@@ -157,6 +157,23 @@ export function TextField(props: TextInputProps & { multiline?: boolean }) {
   const [focused, setFocused] = useState(false);
   const [local, setLocal] = useState(props.value ?? "");
   const controlled = props.value !== undefined;
+  // The plugin and the host resolve different react-native copies for types; the style shape is
+  // compatible at runtime, so cast to the host input's style type instead of duplicating types.
+  const style = [
+    {
+      color: theme.colors.foreground,
+      backgroundColor: theme.colors.surface1,
+      borderColor: theme.colors.border,
+      borderWidth: 1,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      fontSize: 14,
+      minHeight: props.multiline ? 80 : undefined,
+      textAlignVertical: props.multiline ? "top" : "center",
+    },
+    props.style,
+  ] as unknown as React.ComponentProps<typeof TextInput>["style"];
   return (
     <TextInput
       placeholderTextColor={theme.colors.foregroundMuted}
@@ -179,21 +196,7 @@ export function TextField(props: TextInputProps & { multiline?: boolean }) {
             },
           }
         : {})}
-      style={[
-        {
-          color: theme.colors.foreground,
-          backgroundColor: theme.colors.surface1,
-          borderColor: theme.colors.border,
-          borderWidth: 1,
-          borderRadius: 8,
-          paddingHorizontal: 10,
-          paddingVertical: 8,
-          fontSize: 14,
-          minHeight: props.multiline ? 80 : undefined,
-          textAlignVertical: props.multiline ? "top" : "center",
-        },
-        props.style,
-      ]}
+      style={style}
     />
   );
 }

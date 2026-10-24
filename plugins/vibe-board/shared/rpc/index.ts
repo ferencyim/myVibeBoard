@@ -256,6 +256,10 @@ export const promptsListRpc = defineRpc({
     prompts: z.array(promptInfoSchema),
     /** Unarchived projects, for the scope switcher. */
     projects: z.array(z.object({ id: z.string(), name: z.string(), prefix: z.string() })),
+    /** Overrides whose prompt was merged or removed; shown as stale on the Agent behaviour page. */
+    orphans: z
+      .array(z.object({ key: z.string(), projectId: z.string().nullable() }))
+      .default([]),
   }),
 });
 

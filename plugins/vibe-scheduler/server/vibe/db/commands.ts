@@ -50,6 +50,7 @@ import {
   renderPromptTemplate,
   type PromptDef,
   type PromptInfo,
+  type PromptOrphan,
   type PromptSource,
 } from "../contract/prompts";
 import { assertSessionTransition } from "../contract/state-machine";
@@ -937,15 +938,68 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
     return row && row.text.trim() ? row.text : null;
   };
 
+  const saveOverride = (
+    key: string,
+    text: string,
+    projectId: string | null,
+    hlc: Hlc,
+    requireTemplate: boolean,
+  ): void => {
+    if (requireTemplate) mustTemplate(key);
+    if (projectId !== null && !db.prepare("SELECT 1 AS x FROM project WHERE id = ?").get(projectId))
+      throw new CommandError("not_found", `Project not found: ${projectId}`);
+    if (text.length > PROMPT_OVERRIDE_MAX_CHARS)
+      throw new CommandError(
+        "invalid",
+        `Prompt override too long (max ${PROMPT_OVERRIDE_MAX_CHARS} characters)`,
+      );
+    const value = text.trim() ? text : "";
+    const id = promptOverrideId(key, projectId);
+    const row = db.prepare<{ text: string }>("SELECT text FROM prompt_override WHERE id = ?").get(id);
+    if (row ? row.text === value : !value) return;
+    db.prepare(
+      `INSERT INTO prompt_override (id, key, project_id, text, created_at, updated_at, updated_hlc)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at,
+         updated_hlc = excluded.updated_hlc`,
+    ).run(id, key, projectId, value, iso(), iso(), hlc);
+  };
+
   const prompts = {
     /**
-     * Upsert defaults and metadata of the calling plugin's prompts. Overrides are never touched.
+     * Upsert defaults and metadata of the calling plugin's prompts. Overrides are never touched,
+     * except by `aliases`: a merged-away key moves its override to the replacement key when that
+     * scope has none; otherwise the old override stays and is reported by `orphans()`.
      * `pruneMissing` drops templates of the same plugin that are no longer in `defs` (renamed or
-     * removed keys); their overrides stay in the table, harmless.
+     * removed keys); their overrides stay in the table for the owner to review.
      */
-    register(defs: readonly PromptDef[], options: { pruneMissing?: boolean } = {}): void {
+    register(
+      defs: readonly PromptDef[],
+      options: { pruneMissing?: boolean; aliases?: Record<string, string> } = {},
+    ): void {
       const parsed = defs.map((d) => PromptDefSchema.parse(d));
-      write(() => {
+      write((hlc) => {
+        if (options.aliases) {
+          const keys = new Set(parsed.map((d) => d.key));
+          for (const [from, to] of Object.entries(options.aliases)) {
+            if (from === to || !keys.has(to)) continue;
+            for (const row of db
+              .prepare<{ id: string; project_id: string | null; text: string; created_at: string }>(
+                "SELECT id, project_id, text, created_at FROM prompt_override WHERE key = ? AND text <> ''",
+              )
+              .all(from)) {
+              if (overrideText(to, row.project_id) !== null) continue;
+              const id = promptOverrideId(to, row.project_id);
+              db.prepare(
+                `INSERT INTO prompt_override (id, key, project_id, text, created_at, updated_at, updated_hlc)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at,
+                   updated_hlc = excluded.updated_hlc`,
+              ).run(id, to, row.project_id, row.text, row.created_at, iso(), hlc);
+              db.prepare("DELETE FROM prompt_override WHERE id = ?").run(row.id);
+            }
+          }
+        }
         for (const d of parsed) {
           const have = db
             .prepare<TemplateRow>("SELECT * FROM prompt_template WHERE key = ?")
@@ -1031,37 +1085,28 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
 
     /** Set (or with blank text, clear) an override. `projectId` null/omitted = global. */
     setOverride(key: string, text: string, options: { projectId?: string | null } = {}): void {
-      write((hlc) => {
-        mustTemplate(key);
-        const projectId = options.projectId ?? null;
-        if (
-          projectId !== null &&
-          !db.prepare("SELECT 1 AS x FROM project WHERE id = ?").get(projectId)
-        )
-          throw new CommandError("not_found", `Project not found: ${projectId}`);
-        if (text.length > PROMPT_OVERRIDE_MAX_CHARS)
-          throw new CommandError(
-            "invalid",
-            `Prompt override too long (max ${PROMPT_OVERRIDE_MAX_CHARS} characters)`,
-          );
-        const value = text.trim() ? text : "";
-        const id = promptOverrideId(key, projectId);
-        const row = db
-          .prepare<{ text: string }>("SELECT text FROM prompt_override WHERE id = ?")
-          .get(id);
-        if (row ? row.text === value : !value) return;
-        db.prepare(
-          `INSERT INTO prompt_override (id, key, project_id, text, created_at, updated_at, updated_hlc)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at,
-             updated_hlc = excluded.updated_hlc`,
-        ).run(id, key, projectId, value, iso(), iso(), hlc);
-      });
+      write((hlc) => saveOverride(key, text, options.projectId ?? null, hlc, true));
     },
 
-    /** Back to the default (for a project override: to the global one). */
+    /**
+     * Back to the default (for a project override: to the global one). Also clears an orphaned
+     * override whose prompt was merged or deleted, so the owner can dismiss it.
+     */
     clearOverride(key: string, options: { projectId?: string | null } = {}): void {
-      prompts.setOverride(key, "", options);
+      write((hlc) => saveOverride(key, "", options.projectId ?? null, hlc, false));
+    },
+
+    /** Overrides whose prompt key is no longer registered (merged or deleted). */
+    orphans(): PromptOrphan[] {
+      return db
+        .prepare<{ key: string; project_id: string | null }>(
+          `SELECT o.key, o.project_id FROM prompt_override o
+           LEFT JOIN prompt_template t ON t.key = o.key
+           WHERE o.text <> '' AND t.key IS NULL
+           ORDER BY o.key, COALESCE(o.project_id, '')`,
+        )
+        .all()
+        .map((row) => ({ key: row.key, projectId: row.project_id }));
     },
 
     /** Every registered prompt, with overrides and the source of the text in effect. */

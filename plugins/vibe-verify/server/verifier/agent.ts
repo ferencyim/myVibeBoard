@@ -179,16 +179,6 @@ function verifierStatus(status: string): VerifierRun["status"] {
   return "timeout";
 }
 
-function taskEvidenceScope(input: LaunchInput, prompts: PromptResolver): string {
-  if (!input.task.confirmedAt || !input.task.commitHash) return "";
-  return (
-    "\n\n" +
-    prompts.resolve("verify.task.evidence_scope", {
-      projectId: input.project.id,
-      vars: { confirmedAt: input.task.confirmedAt, commitHash: input.task.commitHash },
-    })
-  );
-}
 function taskEvidenceEnv(task: LaunchInput["task"]): Record<string, string> {
   return task.commitHash ? { VIBE_VERIFICATION_COMMIT: task.commitHash } : {};
 }
@@ -222,9 +212,7 @@ async function tabVerifier(
   const prompt =
     prompts.resolve(role === "reviewer" ? "verify.reviewer_system" : "verify.verifier_system", {
       projectId: input.project.id,
-    }) +
-    taskEvidenceScope(input, prompts) +
-    (input.snapshot?.instructions ? "\n\n" + input.snapshot.instructions : "");
+    }) + (input.snapshot?.instructions ? "\n\n" + input.snapshot.instructions : "");
   const spec = model.startsWith(`${input.provider}/`) ? model : `${input.provider}/${model}`;
   const handle = await paseo.workspaces.ref(input.task.workspaceId).agents.create({
     config: { provider: spec as never, ...nativeConfig(input, prompt) } as never,

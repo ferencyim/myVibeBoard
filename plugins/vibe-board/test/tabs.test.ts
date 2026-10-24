@@ -319,6 +319,49 @@ async function acceptanceTask(
   return { ...context, confirmed };
 }
 
+describe("提示词注册表", () => {
+  it("只注册精简后的提示词，旧 key 的覆盖迁移且模板被清理", () => {
+    const { store, flow } = setup();
+    expect(
+      store.prompts
+        .list()
+        .map((p) => p.key)
+        .sort(),
+    ).toEqual(
+      [
+        "task.plan_format",
+        "task.role.planner",
+        "task.role.scout",
+        "task.role.plan_reviewer",
+        "board.task.work",
+        "task.role.subagent",
+        "board.tabs.guide",
+        "board.task.continuation",
+      ].sort(),
+    );
+
+    // Simulate an override saved before WP-122 on a key that was merged away.
+    store.prompts.register([
+      {
+        key: "board.task.plan",
+        plugin: "vibe-board",
+        role: "planner",
+        title: "旧规划",
+        defaultText: "old",
+      },
+    ]);
+    store.prompts.setOverride("board.task.plan", "旧的规划覆盖");
+    flow.registerPrompts();
+
+    expect(store.prompts.body("task.role.planner").source).toBe("global");
+    expect(store.prompts.resolve("task.role.planner", { vars: { tabs: "" } })).toContain(
+      "旧的规划覆盖",
+    );
+    expect(store.prompts.list().some((p) => p.key === "board.task.plan")).toBe(false);
+    expect(store.prompts.orphans()).toEqual([]);
+  });
+});
+
 describe("任务 tab 编号与标题", () => {
   it("按创建顺序分配固定编号、设置原生标题，并跳过子代理与归档 agent", async () => {
     const { store, fake, tabs } = setup();
@@ -690,7 +733,7 @@ describe("任务 tab 交流说明注入", () => {
     expect(repeated.config.systemPrompt).toBe(prompt);
   });
 
-  it("agent 标签不决定角色规则；子代理和不合格 workspace 保持原样", async () => {
+  it("agent 标签不决定角色规则；子代理只注入子任务规则，不合格 workspace 保持原样", async () => {
     const { fake, tabs } = setup();
     fake.addAgent({ id: "agent-1" });
     await tabs.ensureTab("agent-1");
@@ -707,7 +750,11 @@ describe("任务 tab 交流说明注入", () => {
       workspaceId: "ws",
       labels: { [PARENT_AGENT_ID_LABEL]: "agent-1" },
     };
-    expect(await tabs.injectGuide(request as never)).toBe(request);
+    const subagent = (await tabs.injectGuide(request as never)) as {
+      config: { systemPrompt?: string };
+    };
+    expect(subagent.config.systemPrompt).toContain("你是执行子代理");
+    expect(subagent.config.systemPrompt).toContain("vibe-delivery");
 
     fake.setWorkspaceKinds("directory", "git");
     const other = { config: {}, workspaceId: "ws" };
