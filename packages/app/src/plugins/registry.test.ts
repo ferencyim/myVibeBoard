@@ -3,6 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { pluginRegistry as registry } from "./registry";
 
+// Registry tests use the real evaluator and isolate native rendering/bootstrap dependencies.
+vi.mock("./react-native/runtime", () => ({ pluginReactNativeRuntime: {} }));
+vi.mock("./react-native/ui", () => ({}));
+vi.mock("./settings/use-settings", () => ({ useSettings: () => undefined }));
+vi.mock("@/utils/open-external-url", () => ({ openExternalUrl: async () => undefined }));
+vi.mock("@/runtime/host-runtime", () => ({
+  getHostRuntimeStore: () => ({ getSnapshot: () => null }),
+  isHostRuntimeConnected: () => false,
+}));
+
 const audio = { play: async () => 0 };
 
 vi.mock("./navigation", () => ({
@@ -76,6 +86,17 @@ afterEach(() => {
 });
 
 describe("PluginRegistry", () => {
+  it("distinguishes an unloaded catalog from an empty successful catalog", () => {
+    expect(registry.hasLoadedCatalog("host-a")).toBe(false);
+    pluginRegistry.installCatalog("host-a", []);
+    expect(registry.hasLoadedCatalog("host-a")).toBe(true);
+    registry.markCatalogLoading("host-a");
+    expect(registry.hasLoadedCatalog("host-a")).toBe(false);
+    pluginRegistry.installCatalog("host-a", []);
+    pluginRegistry.removeHost("host-a");
+    expect(registry.hasLoadedCatalog("host-a")).toBe(false);
+  });
+
   it("publishes synchronous setup once after storing the installation", () => {
     const snapshots: string[][] = [];
     const unsubscribe = pluginRegistry.subscribe(() => {

@@ -14,18 +14,14 @@ function connectedHost() {
 }
 
 describe("plugin RPC online boundary", () => {
-  it.each([
-    "vibe.presets.update",
-    "vibe.prompts.set",
-    "vibe.task.confirm",
-    "vibe.reply.send",
-    "vibe.task.stop",
-    "vibe.cards.create",
-  ])("rejects offline %s without local success or queueing", async (method) => {
-    await expect(invokeConnectedPluginRpc(null, "vibe-board", method, {})).rejects.toThrow(
-      "[offline] 主机未连接；设置、确认、审批和停止操作须联网后重试",
-    );
-  });
+  it.each(["vibe.presets.update", "vibe.prompts.set", "vibe.task.confirm", "vibe.task.stop"])(
+    "rejects offline %s without local success or queueing",
+    async (method) => {
+      await expect(invokeConnectedPluginRpc(null, "vibe-board", method, {})).rejects.toThrow(
+        "[offline] 主机未连接；设置、确认、审批和停止操作须联网后重试",
+      );
+    },
+  );
 
   it("forwards only to the exact connected host and plugin", async () => {
     const hostA = connectedHost();

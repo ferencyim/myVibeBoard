@@ -294,7 +294,7 @@ export class TaskConversationStore {
           this.metadata(record),
         );
       this.indexMembers(record);
-      return this.attachTimeline(record);
+      return record;
     });
   }
 
@@ -648,7 +648,7 @@ export class TaskConversationStore {
         "Task conversation legacy migration is incomplete; original history has been retained",
       );
     value = this.validate({ rows: [], sources: {}, rowSourceSeqRanges: {}, ...(value as object) });
-    return this.attachTimeline(value as StoredTaskConversation);
+    return value as StoredTaskConversation;
   }
 
   private validate(value: unknown): StoredTaskConversation {
@@ -667,48 +667,6 @@ export class TaskConversationStore {
       )
         throw new Error("Task conversation store row is inconsistent; history cannot be loaded");
     }
-    return record;
-  }
-
-  private attachTimeline(record: StoredTaskConversation): StoredTaskConversation {
-    const id = record.snapshot.conversationId;
-    Object.defineProperties(record, {
-      rows: {
-        configurable: true,
-        enumerable: false,
-        get: () =>
-          this.db
-            .prepare(
-              "SELECT record FROM task_conversation_rows WHERE conversation_id = ? ORDER BY seq",
-            )
-            .all(id)
-            .map((row) => this.readRow(row)),
-      },
-      sources: {
-        configurable: true,
-        enumerable: false,
-        get: () =>
-          Object.fromEntries(
-            this.db
-              .prepare(
-                "SELECT source_key, row_id FROM task_conversation_sources WHERE conversation_id = ?",
-              )
-              .all(id)
-              .map((row) => [String(row.source_key), String(row.row_id)]),
-          ),
-      },
-      rowSourceSeqRanges: {
-        configurable: true,
-        enumerable: false,
-        get: () =>
-          Object.fromEntries(
-            this.db
-              .prepare("SELECT id, ranges FROM task_conversation_rows WHERE conversation_id = ?")
-              .all(id)
-              .map((row) => [String(row.id), JSON.parse(String(row.ranges))]),
-          ),
-      },
-    });
     return record;
   }
 

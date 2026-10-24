@@ -43,4 +43,14 @@ describe("resolveVibePushRoute", () => {
     expect(resolveVibePushRoute(data)).toBeNull();
     expect(isRetiredVibePush({ event: "session.waiting" })).toBe(false);
   });
+
+  it("retires old session notifications carrying a card identity", () => {
+    for (const data of [
+      { event: "session.waiting", cardKey: "VB-7", agentId: "old-agent" },
+      { event: "session.error", cardId: "old-card", agentId: "old-agent" },
+    ]) {
+      expect(isRetiredVibePush(data)).toBe(true);
+      expect(resolveVibePushRoute(data)).toBeNull();
+    }
+  });
 });

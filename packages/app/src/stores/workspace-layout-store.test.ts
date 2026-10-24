@@ -283,6 +283,68 @@ describe("workspace-layout-store helpers", () => {
     expect(persistedIds.has(restoredNewTab?.tabId ?? "")).toBe(false);
   });
 
+  it("reads older layouts and ignores future fields without losing task or ordinary tabs", async () => {
+    const source = createWorkspaceLayoutStore(workspaceLayoutIds);
+    source.getState().openTab({
+      workspaceKey: "compat",
+      target: { kind: "agent", agentId: "ordinary" },
+      intent: "reveal",
+    });
+    source.getState().openTab({
+      workspaceKey: "compat",
+      target: { kind: "task_conversation", conversationId: "task" },
+      intent: "reveal",
+    });
+    const layout = source.getState().layoutByWorkspace.compat;
+    const addFutureFields = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(addFutureFields);
+      if (value && typeof value === "object")
+        return {
+          ...Object.fromEntries(
+            Object.entries(value).map(([key, item]) => [key, addFutureFields(item)]),
+          ),
+          futureField: true,
+        };
+      return value;
+    };
+    await AsyncStorage.setItem(
+      "workspace-layout-state",
+      JSON.stringify({
+        version: 2,
+        state: {
+          futureField: true,
+          layoutByWorkspace: { compat: addFutureFields(layout) },
+          closedTaskConversationIdsByWorkspace: { compat: ["closed-task"] },
+        },
+      }),
+    );
+    const restored = createWorkspaceLayoutStore(createDeterministicWorkspaceLayoutIds());
+    await restored.persist.rehydrate();
+    const targets = collectAllTabs(restored.getState().layoutByWorkspace.compat.root).map(
+      (tab) => tab.target,
+    );
+    expect(targets).toContainEqual({ kind: "agent", agentId: "ordinary" });
+    expect(targets).toContainEqual({ kind: "task_conversation", conversationId: "task" });
+    expect(restored.getState().closedTaskConversationIdsByWorkspace).toEqual({
+      compat: ["closed-task"],
+    });
+    expect(restored.getState().layoutByWorkspace.compat).not.toHaveProperty("futureField");
+
+    // Pre-task builds have neither the optional closed-task field nor task tabs.
+    await AsyncStorage.setItem(
+      "workspace-layout-state",
+      JSON.stringify({
+        version: 2,
+        state: {
+          layoutByWorkspace: { compat: layout },
+        },
+      }),
+    );
+    await restored.persist.rehydrate();
+    expect(restored.getState().closedTaskConversationIdsByWorkspace).toEqual({});
+    expect(collectAllTabs(restored.getState().layoutByWorkspace.compat.root)).not.toHaveLength(0);
+  });
+
   it("finds panes and tabs across nested groups", () => {
     const root: SplitNode = {
       kind: "group",

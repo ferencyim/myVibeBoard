@@ -1,7 +1,7 @@
 import type { AudioEngine } from "@/audio";
 import { useMemo, useSyncExternalStore } from "react";
 import { QueryClient } from "@tanstack/react-query";
-import { createPaseoApi, type PaseoApi } from "@getpaseo/client";
+import { createPaseoApi } from "@getpaseo/client";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
 import { getHostRuntimeStore, isHostRuntimeConnected } from "@/runtime/host-runtime";
@@ -13,30 +13,36 @@ import type { InstalledPlugin } from "./types";
 
 export type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
 
-/** Stands in for the daemon-bound Paseo API while a host is offline: every call fails loudly. */
-function createOfflinePaseoApi(): PaseoApi {
-  const offline = (): never => {
-    throw new Error("[offline] 主机未连接，请联网后重试");
-  };
-  const node = (): unknown =>
-    new Proxy(offline, {
-      get: (_target, property) => {
-        if (property === "then") return undefined;
-        if (property === "dispose") return async () => undefined;
-        return node();
-      },
-    });
-  return node() as PaseoApi;
-}
-
 export class PluginRegistry {
   private readonly byHost = new Map<string, InstalledPlugin[]>();
   private readonly listeners = new Set<() => void>();
   private snapshot: InstalledPlugin[] = [];
   private readonly disposed = new WeakSet<InstalledPlugin>();
   private readonly evaluationErrors = new Map<string, string>();
-  /** The client each installation was created with (null = restored from the offline cache). */
-  private readonly installedWith = new WeakMap<InstalledPlugin, DaemonClient | null>();
+  private readonly installedWith = new WeakMap<InstalledPlugin, DaemonClient>();
+  private readonly loadedCatalogs = new Set<string>();
+  private readonly catalogErrors = new Map<string, string>();
+
+  markCatalogLoading(serverId: string): void {
+    this.loadedCatalogs.delete(serverId);
+    this.catalogErrors.delete(serverId);
+  }
+
+  markCatalogFailed(serverId: string, error: string): void {
+    this.loadedCatalogs.delete(serverId);
+    this.catalogErrors.set(serverId, error);
+  }
+
+  getCatalogError(serverId: string): string | undefined {
+    return this.catalogErrors.get(serverId);
+  }
+
+  hasLoadedCatalog(serverId: string): boolean {
+    return (
+      this.loadedCatalogs.has(serverId) &&
+      ![...this.evaluationErrors.keys()].some((key) => key.startsWith(`${serverId}/`))
+    );
+  }
 
   constructor(
     private readonly dependencies: {
@@ -63,8 +69,7 @@ export class PluginRegistry {
     catalog: CatalogPlugin[],
     options: {
       replacePluginId?: string;
-      /** null: install from the offline cache (no daemon behind the plugin's Paseo API). */
-      client: DaemonClient | null;
+      client: DaemonClient;
       audio: Pick<AudioEngine, "play">;
     },
   ): boolean {
@@ -103,7 +108,7 @@ export class PluginRegistry {
         const client = options.client;
         installation = {
           lifetime: new AbortController(),
-          paseo: client ? createPaseoApi(client) : createOfflinePaseoApi(),
+          paseo: createPaseoApi(client),
           invoke: (method, input) => this.invokeRpc(serverId, entry.id, client, method, input),
           id: entry.id,
           serverId,
@@ -157,6 +162,8 @@ export class PluginRegistry {
         this.evaluationErrors.delete(key);
       }
     }
+    this.catalogErrors.delete(serverId);
+    this.loadedCatalogs.add(serverId);
     this.byHost.set(serverId, installed);
     this.publish();
     const installedTimelineBundles = installed
@@ -166,19 +173,6 @@ export class PluginRegistry {
       previousTimelineBundles.length !== installedTimelineBundles.length ||
       previousTimelineBundles.some((bundle, index) => bundle !== installedTimelineBundles[index])
     );
-  }
-
-  /**
-   * Cold start without a connection: evaluate the catalog cached from the last online session so
-   * offline-capable plugins (vibe-board) open. A no-op once the host has any installation.
-   */
-  restoreFromCache(
-    serverId: string,
-    catalog: CatalogPlugin[],
-    options: { audio: Pick<AudioEngine, "play"> },
-  ): void {
-    if ((this.byHost.get(serverId)?.length ?? 0) > 0) return;
-    this.installCatalog(serverId, catalog, { client: null, audio: options.audio });
   }
 
   /** Drop installations of hosts that were removed from the app. */
@@ -201,6 +195,7 @@ export class PluginRegistry {
   }
 
   removeHost(serverId: string): void {
+    this.markCatalogLoading(serverId);
     const installed = this.byHost.get(serverId);
     if (!installed) return;
     for (const plugin of installed) this.dispose(plugin);

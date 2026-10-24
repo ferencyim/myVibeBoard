@@ -692,6 +692,7 @@ describe("TaskConversationService", () => {
       });
       store.update(conversation.conversationId, (record) => {
         record.snapshot.status = status;
+        record.recoveryMembers = [];
       });
       manager.hasInFlightRun.mockReturnValue(true);
       await service.continuePermission(delivery.backendAgentId, "批准后接续", "approval");
@@ -705,6 +706,9 @@ describe("TaskConversationService", () => {
       expect(service.resolve({ conversationId: conversation.conversationId })!.status).toBe(
         "active",
       );
+      expect(store.get(conversation.conversationId)!.recoveryMembers).toEqual([
+        delivery.backendAgentId,
+      ]);
       expect(() =>
         service.assertAgentRun(delivery.backendAgentId, manager.streamAgent.mock.calls[1]![2]),
       ).toThrow("route_required");
@@ -735,7 +739,7 @@ describe("TaskConversationService", () => {
   );
 
   it("does not reconcile idle unused members or reload settled members when tabs reopen", async () => {
-    const { service, manager, store } = fixture();
+    const { service, manager, store, emit } = fixture();
     const conversation = await createConversation(service);
     const one = await service.send({
       conversationId: conversation.conversationId,
@@ -748,6 +752,11 @@ describe("TaskConversationService", () => {
       recipient: { ...recipient, role: "reviewer" },
       clientMessageId: "unused",
       text: "已完成",
+    });
+    emit({
+      type: "agent_stream",
+      agentId: two.backendAgentId,
+      event: { type: "turn_completed", provider: "claude", turnId: "turn-2" },
     });
     store.update(conversation.conversationId, (record) => {
       record.snapshot.members[0]!.status = "running";
@@ -975,6 +984,18 @@ describe("TaskConversationService", () => {
     expect(
       original.service.fetch({ conversationId: conversation.conversationId }).rows,
     ).toHaveLength(1);
+    expect(original.store.get(conversation.conversationId)!.recoveryMembers).toEqual([
+      delivery.backendAgentId,
+    ]);
+    // NORMAL state batches can reach idle before their public output is durable.
+    // Recovery must rely on the accepted FULL marker rather than the latest state.
+    original.store.update(
+      conversation.conversationId,
+      (record) => {
+        record.snapshot.members[0]!.status = "idle";
+      },
+      { durability: "normal" },
+    );
     const recovered = fixture(original.store);
     services.delete(original.service);
     recovered.manager.getAgent.mockReturnValue({ config: recipient.config, runtimeInfo: {} });
@@ -1434,6 +1455,40 @@ describe("TaskConversationService", () => {
 });
 
 describe("TaskConversationService streaming durability", () => {
+  it("keeps the latest accepted recovery marker when an older round ends late", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, store, emit } = fixture();
+      const conversation = await createConversation(service);
+      const input = {
+        conversationId: conversation.conversationId,
+        recipient,
+        clientMessageId: "older-round",
+        text: "第一轮",
+      };
+      const first = await service.send(input);
+      await service.send({ ...input, clientMessageId: "latest-round", text: "第二轮" });
+      emit({
+        type: "agent_stream",
+        agentId: first.backendAgentId,
+        event: { type: "turn_completed", provider: "claude", turnId: "turn-1" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.get(conversation.conversationId)!.recoveryMembers).toEqual([
+        first.backendAgentId,
+      ]);
+      emit({
+        type: "agent_stream",
+        agentId: first.backendAgentId,
+        event: { type: "turn_completed", provider: "claude", turnId: "turn-2" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.get(conversation.conversationId)!.recoveryMembers).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("coalesces fragments, separates messages and pushes only durable changed rows", async () => {
     vi.useFakeTimers();
     try {
@@ -1463,6 +1518,9 @@ describe("TaskConversationService streaming durability", () => {
       expect(service.fetch({ conversationId: conversation.conversationId }).rows.at(-1)?.text).toBe(
         "字".repeat(100),
       );
+      expect(store.get(conversation.conversationId)!.recoveryMembers).toEqual([
+        delivery.backendAgentId,
+      ]);
       emit(assistantEvent(delivery.backendAgentId, 1, "旧回放"));
       emit(assistantEvent(delivery.backendAgentId, 101, "下一段", "two"));
       emit({
@@ -1474,11 +1532,8 @@ describe("TaskConversationService streaming durability", () => {
       expect(
         service.fetch({ conversationId: conversation.conversationId }).rows.at(-1),
       ).toMatchObject({ text: "字".repeat(100) + "\n\n下一段", completed: true });
-      expect(
-        Object.keys(store.get(conversation.conversationId)!.sources).filter((key) =>
-          key.startsWith("fragment:"),
-        ),
-      ).toEqual([]);
+      expect(store.get(conversation.conversationId)!.recoveryMembers).toEqual([]);
+      expect(write.mock.calls.at(-1)?.[2]).toEqual({ durability: "full" });
       release();
     } finally {
       vi.useRealTimers();

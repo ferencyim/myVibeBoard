@@ -138,7 +138,6 @@ import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { PluginCatalogSync } from "@/plugins";
 import { pluginRegistry } from "@/plugins/registry";
 import { isRetiredVibePush, resolveVibePushRoute } from "@/vibe/sessions/push-route";
-import { VibeSyncBootstrap } from "@/vibe/sync/vibe-sync-bootstrap";
 import {
   ensureOsNotificationPermission,
   WEB_NOTIFICATION_CLICK_EVENT,
@@ -283,7 +282,6 @@ function ManagedDaemonSession({ daemon }: { daemon: HostProfile }) {
   const client = useHostRuntimeClient(daemon.serverId);
 
   if (!client) {
-    // No connection yet (cold start offline): still bring back the cached offline plugins.
     return <PluginCatalogSync serverId={daemon.serverId} client={null} />;
   }
 
@@ -291,7 +289,6 @@ function ManagedDaemonSession({ daemon }: { daemon: HostProfile }) {
     <SessionProvider key={daemon.serverId} serverId={daemon.serverId} client={client}>
       <LegacyFavoriteProfileMigrationBootstrap serverId={daemon.serverId} client={client} />
       <PluginCatalogSync serverId={daemon.serverId} client={client} />
-      <VibeSyncBootstrap serverId={daemon.serverId} client={client} />
     </SessionProvider>
   );
 }
@@ -323,7 +320,7 @@ function HostSessionManager() {
   const hosts = useHosts();
 
   useEffect(() => {
-    // Plugin installations outlive disconnects (offline board); only a removed host drops them.
+    // Retained installations are removed when their host is removed.
     pluginRegistry.pruneHosts(hosts.map((host) => host.serverId));
   }, [hosts]);
 

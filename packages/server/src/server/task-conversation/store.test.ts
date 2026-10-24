@@ -681,11 +681,12 @@ describe("TaskConversationStore", () => {
       });
     });
     const record = store.get("conversation")!;
+    const rows = store.fetch("conversation").rows;
     const legacy = {
       ...record,
-      rows: record.rows,
-      sources: { ...record.sources, "fragment:legacy": record.rows[0]!.id },
-      rowSourceSeqRanges: record.rowSourceSeqRanges,
+      rows,
+      sources: { "legacy-start": rows[0]!.id, "fragment:legacy": rows[0]!.id },
+      rowSourceSeqRanges: { [rows[0]!.id]: [{ start: rows[0]!.seq, end: rows[0]!.seq }] },
     };
     close(store);
     const db = new DatabaseSync(databasePath);
@@ -749,11 +750,12 @@ describe("TaskConversationStore", () => {
       });
     });
     const record = store.get("conversation")!;
+    const rows = store.fetch("conversation").rows;
     const legacyJson = JSON.stringify({
       ...record,
-      rows: record.rows,
-      sources: record.sources,
-      rowSourceSeqRanges: record.rowSourceSeqRanges,
+      rows,
+      sources: { "legacy-preserved": rows[0]!.id },
+      rowSourceSeqRanges: { [rows[0]!.id]: [{ start: rows[0]!.seq, end: rows[0]!.seq }] },
     });
     close(store);
     const db = new DatabaseSync(databasePath);

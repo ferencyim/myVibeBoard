@@ -12,7 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
 import { pluginRegistry, useInstalledPlugins } from "@/plugins/registry";
-import { resolveFirstMessageOutboxOwner } from "@/plugins/first-message-outbox";
+import { resolveFirstMessageSubmissionOwner } from "@/plugins/first-message-outbox";
 import { FirstMessageOutboxView } from "@/composer/outbox/view";
 import { useFirstMessageOutbox } from "@/composer/outbox/hook";
 import { firstMessageOutbox, flushFirstMessageOutbox } from "@/runtime/first-message-outbox";
@@ -685,6 +685,8 @@ export function NewWorkspaceScreen({
   // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
   const supportsWorkspaceMultiplicity = useHostFeature(selectedServerId, "workspaceMultiplicity");
   const supportsForgeSearch = useHostFeature(selectedServerId, "forgeSearch");
+  const supportsPlugins = useHostFeature(selectedServerId, "plugins");
+  const isConnected = useHostRuntimeIsConnected(selectedServerId);
   const [creationIdentity, setCreationIdentity] = useState(() => ({
     draftId: draftId ?? generateDraftId(),
     worktreeSlug: createNameId(),
@@ -692,9 +694,37 @@ export function NewWorkspaceScreen({
   const submissionLock = useRef(false);
   const [submittedOutboxId, setSubmittedOutboxId] = useState<string | null>(null);
   const installedPlugins = useInstalledPlugins();
-  const hasTaskOwner = installedPlugins.some(
-    (plugin) =>
-      plugin.serverId === selectedServerId && (plugin.firstMessageOutboxOwners?.length ?? 0) > 0,
+  const [offlineTaskOwner, setOfflineTaskOwner] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setOfflineTaskOwner(false);
+    if (!isConnected) {
+      void resolveFirstMessageSubmissionOwner({
+        serverId: selectedServerId,
+        plugins: [],
+        connected: false,
+        catalogLoaded: false,
+        pluginsSupported: supportsPlugins,
+      })
+        .then((owner) => {
+          if (!cancelled) setOfflineTaskOwner(Boolean(owner));
+          return undefined;
+        })
+        .catch(() => undefined);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isConnected, selectedServerId, supportsPlugins]);
+  const hasTaskOwner = useMemo(
+    () =>
+      offlineTaskOwner ||
+      installedPlugins.some(
+        (plugin) =>
+          plugin.serverId === selectedServerId &&
+          (plugin.firstMessageOutboxOwners?.length ?? 0) > 0,
+      ),
+    [offlineTaskOwner, installedPlugins, selectedServerId],
   );
   const outbox = useFirstMessageOutbox();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -766,7 +796,6 @@ export function NewWorkspaceScreen({
 
   const { workspace } = creationResult;
   const client = useHostRuntimeClient(selectedServerId);
-  const isConnected = useHostRuntimeIsConnected(selectedServerId);
   const {
     selectedProject,
     selectedSourceDirectory,
@@ -1146,7 +1175,14 @@ export function NewWorkspaceScreen({
           worktreeSupport,
           selectedItem,
           checkoutStatus: checkoutStatus ?? undefined,
-          owner: resolveFirstMessageOutboxOwner(pluginRegistry.getSnapshot(), selectedServerId),
+          owner: await resolveFirstMessageSubmissionOwner({
+            plugins: pluginRegistry.getSnapshot(),
+            serverId: selectedServerId,
+            connected: isConnected,
+            catalogLoaded: pluginRegistry.hasLoadedCatalog(selectedServerId),
+            catalogError: pluginRegistry.getCatalogError(selectedServerId),
+            pluginsSupported: supportsPlugins,
+          }),
           isolation: effectiveIsolation,
           identity: creationIdentity,
         });
@@ -1186,6 +1222,7 @@ export function NewWorkspaceScreen({
       selectedProject,
       selectedServerId,
       selectedSourceDirectory,
+      supportsPlugins,
       toast,
       updateFormPreferences,
       worktreeSupport,

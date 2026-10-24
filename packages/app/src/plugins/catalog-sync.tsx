@@ -4,8 +4,11 @@ import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeature } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
-import { loadOfflineCatalog, saveOfflineCatalog } from "@/vibe/plugin-cache";
-import { pluginRegistry, type CatalogPlugin } from "./registry";
+import {
+  assertFirstMessagePluginsReady,
+  saveFirstMessageOutboxOwner,
+} from "./first-message-outbox";
+import { pluginRegistry } from "./registry";
 
 export function PluginCatalogSync({
   serverId,
@@ -22,35 +25,36 @@ export function PluginCatalogSync({
   useEffect(() => {
     let cancelled = false;
     let refreshQueue = Promise.resolve();
+    pluginRegistry.markCatalogLoading(serverId);
     if (!audio || (client && connected && !supported)) {
       pluginRegistry.removeHost(serverId);
       return;
     }
-    if (!client || !connected) {
-      // Offline: keep what is installed (their RPCs fall back to the local replica); after a cold
-      // start bring back the plugins cached from the last online session.
-      pluginRegistry.restoreFromCache(serverId, loadOfflineCatalog<CatalogPlugin>(serverId), {
-        audio,
-      });
-      return;
-    }
+    if (!client || !connected) return;
     const refresh = (replacePluginId?: string) => {
+      pluginRegistry.markCatalogLoading(serverId);
       refreshQueue = refreshQueue.then(() =>
-        client
-          .getPluginCatalog()
-          .then((catalog) => {
+        Promise.all([client.getPluginCatalog(), client.listPlugins()])
+          .then(async ([catalog, configured]) => {
             if (!cancelled) {
-              saveOfflineCatalog(serverId, catalog);
+              assertFirstMessagePluginsReady(configured);
               pluginRegistry.installCatalog(serverId, catalog, {
                 replacePluginId,
                 client,
                 audio,
               });
+              if (pluginRegistry.hasLoadedCatalog(serverId)) {
+                await saveFirstMessageOutboxOwner(serverId, pluginRegistry.getSnapshot());
+              }
             }
             return undefined;
           })
           .catch((error) => {
             if (!cancelled) {
+              pluginRegistry.markCatalogFailed(
+                serverId,
+                error instanceof Error ? error.message : String(error),
+              );
               console.warn(`[Plugins] Failed to load catalog for ${serverId}`, error);
             }
             return undefined;
@@ -85,6 +89,7 @@ export function PluginCatalogSync({
     });
     return () => {
       cancelled = true;
+      pluginRegistry.markCatalogLoading(serverId);
       void observation
         .release()
         .catch((error) => console.warn("[Plugins] Failed to release catalog", error));
