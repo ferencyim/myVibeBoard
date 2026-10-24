@@ -1,6 +1,6 @@
-// The verifier/reviewer is an ordinary read-only task tab.
-// `VerifierLauncher` is the injection seam;
-// unit tests use a scripted fake, the plugin wires `createPaseoVerifierLauncher`.
+// The verifier/reviewer is an ordinary task tab; its read-only requirement lives in the role
+// prompt. `VerifierLauncher` is the injection seam; unit tests use a scripted fake, the plugin
+// wires `createPaseoVerifierLauncher`.
 
 import type { PaseoApi } from "@getpaseo/client";
 import { z } from "zod";
@@ -73,7 +73,9 @@ export interface LaunchInput {
   cwd: string;
   workspaceId: string | null;
   outputDir: string;
-  /** reviewer = model code review (same read-only guards, different prompt); default verifier. */
+  /** Provenance for plugin prompts: the task anchor (#1), never the verifier itself. */
+  sourceAgentId?: string;
+  /** reviewer = model code review (same read-only prompt requirement, different prompt); default verifier. */
   role?: "verifier" | "reviewer";
 }
 
@@ -191,36 +193,14 @@ function taskEvidenceEnv(task: LaunchInput["task"]): Record<string, string> {
   return task.commitHash ? { VIBE_VERIFICATION_COMMIT: task.commitHash } : {};
 }
 
-export function nativeConfig(
-  input: LaunchInput,
-  prompt: string,
-  platform: NodeJS.Platform = process.platform,
-) {
+export function nativeConfig(input: LaunchInput, prompt: string) {
+  // Read-only roles rely on their role prompt; the agent runs under its own preset permissions.
+  // Only Claude and Codex have a known writable mode we can name; other providers receive no
+  // modeId (an unknown mode would break agent creation).
   const provider = input.provider.toLowerCase();
-  const role = input.role ?? "verifier";
-  let policy: { modeId: string; providerOptions?: Record<string, unknown> };
-  if (role === "reviewer") {
-    if (provider === "claude") policy = { modeId: "plan" };
-    else if (provider === "codex")
-      policy =
-        platform === "win32"
-          ? // The Codex read-only sandbox cannot start a shell on Windows; the prompt is the guard.
-            { modeId: "auto" }
-          : {
-              modeId: "auto",
-              providerOptions: { sandbox_mode: "read-only", approval_policy: "never" },
-            };
-    else
-      throw new Error(
-        `该 provider 尚无受支持的强制只读策略，不能打开复核 tab：${input.provider}`,
-      );
-  } else {
-    // Verification runs tests and builds, which need a writable workspace; the code tree is
-    // compared before and after each step so any change voids this round's evidence.
-    policy = { modeId: "auto" };
-  }
+  const modeId = provider === "claude" || provider === "codex" ? "auto" : undefined;
   return {
-    ...policy,
+    ...(modeId ? { modeId } : {}),
     ...(input.thinking && input.thinking !== "default"
       ? { thinkingOptionId: input.thinking }
       : {}),
@@ -330,7 +310,7 @@ async function tabVerifier(
     async run(text) {
       if (closed) throw new Error("验证 tab 已收口");
       const deadline = Date.now() + roundTimeout;
-      await handle.send(text, { sourceAgentId: handle.id });
+      await handle.send(text, { sourceAgentId: input.sourceAgentId ?? handle.id });
       let finished = await handle.waitForFinish(Math.max(1_000, deadline - Date.now()));
       while (finished.status === "permission" && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 500));

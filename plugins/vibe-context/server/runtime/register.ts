@@ -32,6 +32,7 @@ export function createTaskContextService(options: {
   };
   const freeze = (session: AgentSession) => {
     const task = session.workspaceId ? store.tasks.get(session.workspaceId) : undefined;
+    const previousPhase = task?.phase;
     if (task && !["paused", "completed", "failed"].includes(task.phase))
       store.tasks.setPhase(task.workspaceId, "paused");
     if (task)
@@ -44,6 +45,7 @@ export function createTaskContextService(options: {
           agentId: session.agentId,
         },
       });
+    return previousPhase;
   };
   const pause = async (session: AgentSession, text: string) => {
     freeze(session);
@@ -76,6 +78,7 @@ export function createTaskContextService(options: {
     candidateIndex: number,
     prompt?: string,
     turnId?: string | null,
+    previousPhase?: Task["phase"],
   ) => {
     const summary = JSON.stringify({
       plan: task?.plan ?? null,
@@ -122,6 +125,7 @@ export function createTaskContextService(options: {
         candidateIndex: candidateIndex,
         confirmedAt: current.confirmedAt ?? task?.confirmedAt ?? null,
         prompt: handoff,
+        ...(previousPhase ? { previousPhase } : {}),
       },
     });
     return true;
@@ -200,7 +204,7 @@ export function createTaskContextService(options: {
           ? "模型不可用，已暂停任务，等待按预设顺序接续。"
           : "上下文需要交接，已暂停任务，等待原生会话接续。";
       // Freeze admission before the owner stops or replaces the native agent.
-      freeze(current);
+      const previousPhase = freeze(current);
       if (!selection) {
         await report(
           current,
@@ -221,6 +225,7 @@ export function createTaskContextService(options: {
           selection.candidateIndex,
           prompt,
           turnId,
+          previousPhase,
         )
       )
         return;

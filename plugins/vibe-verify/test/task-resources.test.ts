@@ -4,11 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createTaskResources } from "../server/task-resources";
 import { readEvidenceBytes } from "../server/rpc";
-import { decideVerifierPermission, restoredVerifierPolicy } from "../server/verifier/policy";
 import {
   createEventConsumer,
-  createTaskRuntimeCommands,
-  createVibeStore,
   migrateOwner,
   openVibeDb,
   publishEvent,
@@ -109,27 +106,6 @@ describe("验证资源与证据权限", () => {
       db.close();
     }
   });
-  it("只读辅助会话拒绝shell与目录外写入，原生重启后同一策略仍可使用", () => {
-    const context = { outputDir: "D:/evidence/readonly/session-1", denyShell: true };
-    expect(
-      decideVerifierPermission(
-        { detail: { type: "shell", command: 'python -c "open("src.py","w")"' } } as never,
-        context,
-      ).behavior,
-    ).toBe("deny");
-    expect(
-      decideVerifierPermission(
-        { detail: { type: "write", filePath: "D:/repo/src.py" } } as never,
-        context,
-      ).behavior,
-    ).toBe("deny");
-    expect(
-      decideVerifierPermission(
-        { detail: { type: "read", filePath: "D:/repo/src.py" } } as never,
-        context,
-      ).behavior,
-    ).toBe("allow");
-  });
   it("证据读取只能访问真实证据根目录中的文件", () => {
     const root = mkdtempSync(join(tmpdir(), "vibe-evidence-access-"));
     const inside = join(root, "report.json");
@@ -138,36 +114,5 @@ describe("验证资源与证据权限", () => {
     writeFileSync(outside, "private");
     expect(readEvidenceBytes(inside, root).toString()).toBe("{}");
     expect(() => readEvidenceBytes(outside, root)).toThrow("证据文件不在允许目录内");
-  });
-  it("关闭数据库重开后，已结束验证会话的只读权限仍可恢复", () => {
-    const root = mkdtempSync(join(tmpdir(), "vibe-verifier-restart-"));
-    const file = join(root, "vibe.db");
-    const db = openVibeDb({ path: file });
-    migrateOwner(db, "verify");
-    const runtime = createTaskRuntimeCommands(db);
-    const session = runtime.registerSession({
-      workspaceId: "ws",
-      agentId: "native-verifier",
-      role: "verifier",
-      provider: "codex",
-      model: "actual-model",
-      candidateIndex: 0,
-    });
-    createVibeStore(db).sessions.setState(session.id, "ended", { outcome: "completed" });
-    db.close();
-    const reopened = openVibeDb({ path: file });
-    try {
-      const restored = createTaskRuntimeCommands(reopened).findSessionByAgent("native-verifier");
-      const policy = restoredVerifierPolicy(restored, root);
-      expect(policy).toMatchObject({ denyShell: true });
-      expect(
-        decideVerifierPermission(
-          { detail: { type: "write", filePath: join(root, "repo", "src.ts") } } as never,
-          policy!,
-        ).behavior,
-      ).toBe("deny");
-    } finally {
-      reopened.close();
-    }
   });
 });

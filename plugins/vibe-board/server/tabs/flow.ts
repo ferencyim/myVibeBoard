@@ -19,17 +19,18 @@ import {
   type TaskPlan,
   type TaskPlanSource,
   type TaskPresetSnapshot,
+  type TaskPhase,
   type TaskRoleSnapshot,
   type TaskTab,
 } from "../vibe/contract";
-import { createTaskRuntimeCommands, type VibeDb, type VibeStore } from "../vibe/db";
+import { createTaskRuntimeCommands, publishEvent, type VibeDb, type VibeStore } from "../vibe/db";
 import { createTaskResources } from "../task-host/resources";
-import { modeIdFor, readOnlyConfigFor, writableConfigFor } from "../task-host/permission";
+import { modeIdFor } from "../task-host/permission";
 import { createTaskGitFinalizer, type GitState } from "../task-conversation/git";
 import { TASK_FLOW_PROMPTS } from "../task-conversation/prompts";
 import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
 import { TASK_HOST_PROMPTS } from "../task-host/prompts";
-import { HANDOFF_PATTERN, READ_ONLY_ROLES, tabTitle, type TaskTabs } from "./service";
+import { HANDOFF_PATTERN, tabTitle, type TaskTabs } from "./service";
 
 type Admission = {
   workspaceId: string;
@@ -53,38 +54,6 @@ interface TimelinePage {
 const DELIVERY = /^```vibe-delivery[ \t]*\r?\n([\s\S]*?)^```[ \t]*$/m;
 const BUSY_ROLES = new Set(["worker", "subagent", "reviewer", "verifier"]);
 const HANDOFF_NUMBER = /#\s*(\d+)/;
-const READ_ONLY_ROLE_LABELS: Partial<Record<keyof TaskRoleSnapshot, string>> = {
-  scout: "探路",
-  plan_reviewer: "方案复核",
-  reviewer: "代码复核",
-};
-
-/** Reject an execution confirmation whose role presets cannot run under the required policy. */
-function assertRolePolicies(roles: TaskRoleSnapshot): void {
-  for (const role of ["scout", "plan_reviewer", "reviewer"] as const) {
-    const snapshot = roles[role];
-    if (!snapshot) continue;
-    const label = READ_ONLY_ROLE_LABELS[role];
-    for (const model of snapshot.models) {
-      try {
-        readOnlyConfigFor(model.provider);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`${label}角色的预设不可用：${detail}`);
-      }
-    }
-  }
-  if (roles.verifier) {
-    for (const model of roles.verifier.models) {
-      try {
-        writableConfigFor(model.provider);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`验证角色的预设不可用：${detail}`);
-      }
-    }
-  }
-}
 
 function handoffTarget(reason: string | undefined): number | undefined {
   if (!reason) return undefined;
@@ -325,7 +294,6 @@ export function createTaskFlow(options: {
     tab: TaskTab,
   ) {
     const roles = await rolesFor(task, tab);
-    assertRolePolicies(roles);
     const frozen = freezeTaskSubtaskPresets(plan, roles, (id) => store.presets.get(id));
     validateTaskSubtaskPresets(plan, frozen);
     const confirmed = store.tasks.confirm(task.workspaceId, {
@@ -697,14 +665,17 @@ export function createTaskFlow(options: {
       return { task: requireTask(task.workspaceId), message: text };
     });
   }
-  /** A user-native `/接手 #n` or "继续 #n 的工作" moves #n's role, progress and worker lease. */
-  async function handoff(input: {
+  type HandoffInput = {
     workspaceId: string;
     agentId: string;
     requestId: string;
     reason?: string;
-  }) {
-    return queue(input.workspaceId, async () => {
+  };
+  /** A user-native `/接手 #n` or "继续 #n 的工作" moves #n's role, progress and worker lease. */
+  function handoff(input: HandoffInput) {
+    return queue(input.workspaceId, () => handoffNow(input));
+  }
+  async function handoffNow(input: HandoffInput) {
       const task = requireTask(input.workspaceId);
       const targetNumber = handoffTarget(input.reason);
       if (!targetNumber) throw new Error("请提供要接手的 tab 编号，例如 /接手 #2");
@@ -718,13 +689,6 @@ export function createTaskFlow(options: {
       const views = await tabs.tabsFor(task, true);
       const toView = views.find((view) => view.agentId === input.agentId);
       if (!toView) throw new Error("当前 tab 尚未登记为任务 tab");
-      // A read-only role must keep its provider-enforced restriction when it changes owner;
-      // the verifier keeps a writable mode because it runs tests and builds.
-      const roleConfig = READ_ONLY_ROLES.has(from.role)
-        ? readOnlyConfigFor(toView.provider)
-        : from.role === "verifier"
-          ? writableConfigFor(toView.provider)
-          : undefined;
       let worker: { presetId: string; index: number } | undefined;
       if (from.role === "worker") {
         const preset =
@@ -816,7 +780,6 @@ export function createTaskFlow(options: {
         const updatedFrom = store.tasks.updateTab(task.workspaceId, from.agentId, {
           role: "session",
         });
-        if (roleConfig?.modeId) await toHandle.setMode(roleConfig.modeId);
         await Promise.all([
           toHandle
             .setTitle(tabTitle(updatedTo))
@@ -859,6 +822,200 @@ export function createTaskFlow(options: {
         store.tasks.updateControl(task.workspaceId, { blockingReason: text });
         store.tasks.setSummary(task.workspaceId, text);
         throw error;
+      }
+  }
+  type ContinuationInput = {
+    requestId: string;
+    workspaceId: string;
+    agentId: string;
+    role: string;
+    reason: "failure" | "context";
+    message: string;
+    summary: string;
+    candidateIndex: number;
+    confirmedAt: string | null;
+    prompt: string;
+    previousPhase?: TaskPhase;
+  };
+  type ContinuationResult = {
+    status: "continued" | "paused" | "exhausted" | "deferred";
+    reason: string;
+    agentId?: string;
+    sessionId?: string;
+    candidateIndex?: number;
+  };
+  const RESTORABLE_PHASES = new Set<TaskPhase>([
+    "planning",
+    "awaiting_confirmation",
+    "queued",
+    "executing",
+    "reviewing",
+    "verifying",
+    "awaiting_acceptance",
+  ]);
+  function publishContinuationResult(
+    workspaceId: string,
+    requestId: string,
+    result: ContinuationResult,
+  ) {
+    try {
+      publishEvent(db, {
+        type: "context.continuation_result",
+        payload: { requestId, workspaceId, ...result },
+      });
+    } catch (error) {
+      log("上下文接续结果回写失败", error);
+    }
+  }
+  function finishContinuation(task: Task, input: ContinuationInput, result: ContinuationResult) {
+    store.tasks.updateControl(task.workspaceId, {
+      continuationRequestId: input.requestId,
+      continuationResult: result,
+    });
+    publishContinuationResult(task.workspaceId, input.requestId, result);
+    return { task: requireTask(task.workspaceId), message: result.reason };
+  }
+  /** vibe-context freezes a worker/main/scout session whose context must be replaced. */
+  async function continuation(input: ContinuationInput) {
+    return queue(input.workspaceId, async () => {
+      const initial = store.tasks.get(input.workspaceId);
+      if (!initial) return;
+      if (initial.control?.continuationRequestId === input.requestId) {
+        const saved = initial.control?.continuationResult as ContinuationResult | undefined;
+        if (saved) publishContinuationResult(input.workspaceId, input.requestId, saved);
+        return { task: initial, message: saved?.reason ?? "接续请求已处理" };
+      }
+      const fail = (reason: string, status: "paused" | "exhausted" = "paused") =>
+        finishContinuation(initial, input, { status, reason });
+      if (initial.confirmedAt !== input.confirmedAt)
+        return fail("任务的执行确认已变化，未自动接续");
+      const from = tabFor(initial, input.agentId);
+      // Reviewer/verifier (vibe-verify) and master have their own owners.
+      if (!from || !["main", "scout", "worker"].includes(from.role)) return;
+      const sessionRole = from.role === "main" ? "planner" : from.role;
+      if (sessionRole !== input.role) return fail("接续请求的角色与来源 tab 不一致");
+      const oldSession = runtime.findSessionByAgent(input.agentId);
+      if (!oldSession) return fail("来源会话没有实际模型记录，无法自动接续");
+      const replacement = runtime.getContinuation(oldSession.id);
+      if (replacement)
+        return finishContinuation(initial, input, {
+          status: "continued",
+          reason: "会话已经接续，不再重复打开 tab",
+          agentId: replacement.agentId,
+          sessionId: replacement.id,
+          candidateIndex: replacement.candidateIndex ?? input.candidateIndex,
+        });
+      try {
+        const views = await tabs.tabsFor(initial, true);
+        const fromView = views.find((view) => view.agentId === input.agentId);
+        let provider: string;
+        let model: string;
+        let thinking = from.thinking;
+        let modeId: string | undefined;
+        let candidateIndex = input.candidateIndex;
+        let presetId: string | undefined;
+        let runtimeEnv: string | null | undefined;
+        if (from.role === "worker") {
+          const preset =
+            findTaskActualPreset(initial, { role: "worker", admittedOnly: true }) ??
+            initial.rolesSnapshot?.worker;
+          if (!preset) return fail("任务缺少执行角色快照");
+          // A context handoff keeps the model; a failure moves to the next confirmed candidate.
+          const index =
+            input.reason === "failure" ? input.candidateIndex + 1 : input.candidateIndex;
+          const candidate = preset.models[index];
+          if (!candidate)
+            return fail(
+              input.reason === "failure" ? "预设候选模型已耗尽" : "接续模型不在本轮确认快照内",
+              input.reason === "failure" ? "exhausted" : "paused",
+            );
+          provider = candidate.provider;
+          model = candidate.model;
+          thinking = candidate.thinking || undefined;
+          modeId = modeIdFor(provider, candidate.permissionMode);
+          candidateIndex = index;
+          presetId = preset.presetId;
+          runtimeEnv = preset.runtimeEnv;
+        } else {
+          if (!fromView || fromView.model === UNRESOLVED_TAB_MODEL)
+            return fail("来源 tab 的模型尚未解析，请稍后重试");
+          provider = fromView.provider;
+          model = fromView.model;
+          modeId = modeIdFor(provider, "auto");
+        }
+        const handle = await paseo().workspaces.ref(input.workspaceId).agents.create({
+          config: {
+            provider: `${provider}/${model}`,
+            ...(modeId ? { modeId } : {}),
+            ...(thinking && thinking !== "default" ? { thinkingOptionId: thinking } : {}),
+          },
+          env: {
+            VIBE_ROLE: sessionRole,
+            VIBE_WORKSPACE_ID: input.workspaceId,
+            ...(runtimeEnv ? { VIBE_RUNTIME_ENV: runtimeEnv } : {}),
+          },
+          labels: {
+            [TASK_TAB_ROLE_LABEL]: from.role,
+            ...(presetId ? { [TASK_TAB_PRESET_LABEL]: presetId } : {}),
+          },
+        });
+        await handle.refresh();
+        const agent = handle.current();
+        if (!agent?.model) return fail("无法核对接续 tab 的实际模型");
+        const created = await tabs.ensureTab(handle.id);
+        if (!created) return fail("接续 tab 未登记到任务");
+        // The owner froze the task; admission and turn handling need the previous phase back.
+        const restore =
+          input.previousPhase && RESTORABLE_PHASES.has(input.previousPhase)
+            ? input.previousPhase
+            : from.role === "worker"
+              ? "executing"
+              : initial.plan
+                ? "awaiting_confirmation"
+                : "planning";
+        if (requireTask(input.workspaceId).phase === "paused")
+          store.tasks.setPhase(input.workspaceId, restore);
+        await handoffNow({
+          workspaceId: input.workspaceId,
+          agentId: handle.id,
+          requestId: input.requestId,
+          reason: `#${from.number} ${input.message || "上下文接续"}`,
+        });
+        // Handoff registers the worker's session; planner/scout need their chain too.
+        if (from.role !== "worker" && !runtime.findSessionByAgent(handle.id))
+          runtime.recordContinuation({
+            fromSessionId: oldSession.id,
+            agentId: handle.id,
+            provider: agent.provider,
+            model: agent.model,
+            thinking: agent.thinkingOptionId ?? undefined,
+            candidateIndex,
+            reason: input.message || "上下文接续",
+          });
+        const next = runtime.findSessionByAgent(handle.id);
+        const nextTab = tabFor(requireTask(input.workspaceId), handle.id);
+        const text = `#${from.number} 已由 #${nextTab?.number ?? created.number} 接续（${TASK_TAB_ROLE_LABELS[from.role]}）。`;
+        store.tasks.setSummary(input.workspaceId, "上下文接续：" + text);
+        await tabs
+          .appendStatus(handle.id, "已接续 " + text)
+          .catch((error) => log("接续状态追加失败", error));
+        return finishContinuation(initial, input, {
+          status: "continued",
+          reason: "已打开接续 tab：" + text,
+          agentId: handle.id,
+          ...(next ? { sessionId: next.id } : {}),
+          candidateIndex,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        log("上下文接续失败", error);
+        const current = requireTask(input.workspaceId);
+        if (!["paused", "completed", "failed"].includes(current.phase))
+          store.tasks.setPhase(input.workspaceId, "paused");
+        return finishContinuation(current, input, {
+          status: "paused",
+          reason: "接续失败：" + reason,
+        });
       }
     });
   }
@@ -975,6 +1132,7 @@ export function createTaskFlow(options: {
     accept,
     stop,
     handoff,
+    continuation,
     status,
     workerAdmitted,
     turnEnded,

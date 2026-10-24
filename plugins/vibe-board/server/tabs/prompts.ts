@@ -14,7 +14,7 @@ export const TASK_TAB_GUIDE_PROMPT: PromptDef = {
 {{tabs}}
 
 你可以使用 Paseo MCP 工具与其它 tab 交流：
-- vibe_open_tab：由插件打开新的编号 tab（role：scout、plan_reviewer、session），只读角色按 provider 能力限制权限；省略 provider/model 时沿用当前 tab 的模型；
+- vibe_open_tab：由插件打开新的编号 tab（role：scout、plan_reviewer、session）；scout/plan_reviewer 只按角色提示词要求不修改项目文件；省略 provider/model 时沿用当前 tab 的模型；
 - vibe_tabs：读取本任务每个 tab 的编号、角色、模型和状态；
 - list_agents、get_agent_activity：查看 workspace 成员和指定 agent 最近的活动；
 - send_agent_prompt：向指定 agent 发送消息；由 agent 发起时默认在对方完成后通知你（notifyOnFinish）；

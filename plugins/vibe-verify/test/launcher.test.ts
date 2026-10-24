@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createPaseoVerifierLauncher,
+  nativeConfig,
   type LaunchInput,
 } from "../server/verifier/agent";
 
@@ -8,7 +9,6 @@ interface CreateOptions {
   config: {
     provider: string;
     modeId?: string;
-    providerOptions?: Record<string, unknown>;
     options?: Record<string, unknown>;
     systemPrompt?: string;
   };
@@ -268,25 +268,44 @@ describe("验证/复核 tab", () => {
     expect(released).toBe(1);
   });
 
-  it("只读配置：复核使用 Claude plan / codex 只读沙箱；验证使用可写模式", async () => {
+  it("复核与验证按角色提示词只读，claude/codex 设 auto，其它 provider 不传模式", async () => {
     const f = fakePaseo();
     const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo as never });
     await launcher.launch(input({ provider: "claude", role: "reviewer" }));
     await launcher.launch(input({ provider: "codex", role: "reviewer" }));
-    await launcher.launch(input({ provider: "codex", role: "verifier" }));
-    expect(f.created[0].config.modeId).toBe("plan");
-    if (process.platform === "win32") {
-      // Windows cannot run the Codex read-only sandbox; the reviewer prompt is the guard.
-      expect(f.created[1].config.modeId).toBe("auto");
-      expect(f.created[1].config.providerOptions).toBeUndefined();
-    } else {
-      expect(f.created[1].config.modeId).toBe("auto");
-      expect(f.created[1].config.providerOptions).toEqual({
-        sandbox_mode: "read-only",
-        approval_policy: "never",
-      });
+    await launcher.launch(input({ provider: "gemini", role: "reviewer" }));
+    await launcher.launch(input({ provider: "gemini", role: "verifier" }));
+    expect(f.created[0].config).toMatchObject({ modeId: "auto" });
+    expect(f.created[1].config).toMatchObject({ modeId: "auto" });
+    for (const index of [2, 3]) {
+      expect(f.created[index].config).not.toHaveProperty("modeId");
+      expect(f.created[index].config).not.toHaveProperty("options");
     }
-    expect(f.created[2].config).toMatchObject({ modeId: "auto" });
+  });
+
+  it("验证角色只对 claude/codex 设置 modeId，其它 provider 保持默认权限", () => {
+    const claude = nativeConfig(input({ provider: "claude", role: "verifier" }), "p");
+    expect(claude).toMatchObject({ modeId: "auto" });
+    const gemini = nativeConfig(input({ provider: "gemini", role: "reviewer" }), "p");
+    expect(gemini).not.toHaveProperty("modeId");
+    expect(gemini).not.toHaveProperty("options");
+  });
+
+  it("提示词来源默认是自身，任务流程指定 anchor 时使用 anchor", async () => {
+    const f = fakePaseo();
+    const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo as never });
+    const anchored = await launcher.launch(input({ sourceAgentId: "anchor-1" }));
+    await anchored.run("任务验证");
+    expect(f.sends.at(-1)).toEqual({
+      agentId: "tab-1",
+      text: "任务验证",
+      options: { sourceAgentId: "anchor-1" },
+    });
+    await anchored.close();
+    const own = await launcher.launch(input());
+    await own.run("独立验证");
+    expect(f.sends.at(-1)?.options).toEqual({ sourceAgentId: own.agentId });
+    await own.close();
   });
 
   it.each(["reviewer", "verifier"] as const)(

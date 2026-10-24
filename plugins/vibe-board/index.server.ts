@@ -45,7 +45,7 @@ export default function contribute(server: PluginServerContext) {
   server.registerAgentTool({
     name: "vibe_open_tab",
     description:
-      "由插件在当前 Vibe 任务中打开一个新的编号 tab，并强制只读角色权限。需要探路或方案复核时使用它，不要用 create_agent 冒充任务 tab。",
+      "由插件在当前 Vibe 任务中打开一个新的编号 tab（scout/plan_reviewer 按角色提示词保持只读）。需要探路或方案复核时使用它，不要用 create_agent 冒充任务 tab。",
     input: openTabInput,
     handler: async (input, { callerAgentId }) => {
       if (!callerAgentId) throw new Error("vibe_open_tab 只能由任务 tab 调用");

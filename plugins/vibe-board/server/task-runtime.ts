@@ -1,7 +1,7 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { EVENT_PAYLOADS } from "./vibe/contract";
-import { createEventConsumer, type VibeDb, type VibeStore } from "./vibe/db";
+import { createEventConsumer, createTaskRuntimeCommands, type VibeDb, type VibeStore } from "./vibe/db";
 import { createTaskTabs } from "./tabs/service";
 import { createTaskFlow } from "./tabs/flow";
 import { taskTabCommandRpc } from "../shared/task-tabs";
@@ -19,7 +19,13 @@ export function registerTaskRuntime(
   const log = (message: string, error?: unknown) =>
     console.error("[vibe-board] " + message, error ?? "");
   let closed = false;
-  const tabs = createTaskTabs({ store: options.store, getPaseo: options.getPaseo, log });
+  const runtime = createTaskRuntimeCommands(options.db);
+  const tabs = createTaskTabs({
+    store: options.store,
+    getPaseo: options.getPaseo,
+    sessions: runtime,
+    log,
+  });
   const flow = createTaskFlow({
     db: options.db,
     store: options.store,
@@ -81,16 +87,22 @@ export function registerTaskRuntime(
   const consumer = createEventConsumer({
     db: options.db,
     consumer: "vibe-board:task-tabs",
-    types: ["scheduler.task_admitted"],
+    types: ["scheduler.task_admitted", "context.continuation_requested"],
     handler: async (event) => {
       if (!options.getPaseo()) throw new Error("任务宿主连接尚未就绪，保留事件待重试");
+      if (event.type === "context.continuation_requested") {
+        const payload = EVENT_PAYLOADS["context.continuation_requested"].parse(event.payload);
+        if (!payload.workspaceId) return;
+        await flow.continuation({ ...payload, workspaceId: payload.workspaceId });
+        return;
+      }
       flow.resources.handleAdmission(event);
       if (event.type !== "scheduler.task_admitted") return;
       await flow.workerAdmitted(
         EVENT_PAYLOADS["scheduler.task_admitted"].parse(event.payload),
       );
     },
-    onError: (error) => log("任务准入事件处理失败", error),
+    onError: (error) => log("任务准入或接续事件处理失败", error),
   });
   consumer.start();
   return {

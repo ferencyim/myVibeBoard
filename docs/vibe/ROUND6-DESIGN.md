@@ -28,7 +28,7 @@
 - task（WP-110）仍以 workspace_id 为键；新增 `tabs_json`（编号 → agentId、角色、预设/模型、创建时间）与下一个编号。不再需要 conversation_id、群聊行、成员表、artifact 发布到群聊。
 - 方案仍用 vibe-plan 固定格式，由 `/执行` 读取 #1（或用户所在 tab）最近一次完成输出中的方案段确认。
 - 复核/验证结论、Git 结果写 vibe.db（verification/evidence 等现有表），并在 #1 时间线 append 一条摘要（不触发模型回合）；`/状态` 在任意任务 tab 显示阶段、各 tab 状态与最近结论。
-- 调度（WP-112）、七角色默认、只读角色（用 provider 的只读/plan 权限模式启动）、Git 收尾安全规则（WP-115 复核后的版本）保留。
+- 调度（WP-112）、七角色默认、只读角色（**只靠提示词要求不修改文件**，不强制 provider 的只读/plan 权限模式，也不拒绝不支持只读模式的 provider）、Git 收尾安全规则（WP-115 复核后的版本）保留。
 
 ## 4. [core]
 
@@ -55,7 +55,7 @@
 - **编号与标题**：`vibe-shared` core 迁移 v15 给 task 增加 `tabs_json`、`next_tab_number`；`tasks.allocateTab` 同一 agent 幂等、编号只增不复用。`agent.created` 生命周期调用同一登记函数，标签 `vibe.tab.role` 决定角色，否则首个 agent 为 `main`、后续手动 tab 为 `session`；标题用现有 `agent.setTitle` 写成 `#n 角色 · 模型`。子代理（带 `parentAgentId` 标签）和归档 agent 不登记。
 - **交流说明**：`agent.create` before 变换按 workspace 注入 `board.tabs.guide`（当前清单 `{{tabs}}`）、对应角色规则和主会话方案格式；子代理与非任务 workspace 原样放行。清单实时渲染，agent 随时可用 `vibe_tabs` 刷新。
 - **`vibe_tabs`**：通过 `registerAgentTool` 注册，要求 `callerAgentId`；返回当前任务阶段、方案目标、自身编号和每个 tab 的编号、agentId、角色、模型、状态。
-- **流程改为开 tab**：`/执行` 从当前 tab（找不到则 #1）读取最新 `vibe-plan` 并确认；`scheduler.task_admitted` 到达后由插件在任务 workspace 用 `workspaces.ref().agents.create` 打开带 `vibe.tab.role=worker` 的执行 tab，绑定资源并发送执行提示词；执行 tab 输出 `vibe-delivery` 后进入 reviewing/verifying，vibe-verify 继续以只读普通 tab 打开复核/验证。`/通过` 复用原 Git 收尾安全规则；`/状态` 只向时间线 append 摘要。
+- **流程改为开 tab**：`/执行` 从当前 tab（找不到则 #1）读取最新 `vibe-plan` 并确认；`scheduler.task_admitted` 到达后由插件在任务 workspace 用 `workspaces.ref().agents.create` 打开带 `vibe.tab.role=worker` 的执行 tab，绑定资源并发送执行提示词；执行 tab 输出 `vibe-delivery` 后进入 reviewing/verifying，vibe-verify 继续以普通 tab 打开复核/验证（提示词要求不修改文件，不强制只读权限，验证 tab 可运行测试）。`/通过` 复用原 Git 收尾安全规则；`/状态` 只向时间线 append 摘要。
 - **授权**：`vibe.task.tabs.command` RPC 在 `context.callerAgentId` 非空时拒绝；agent 消息在时间线中是 `tool_call`，`standaloneAccept` 只匹配 `user_message` 的「通过」。
 - **删除**：会话内任务面板、客户端群聊 outbox/recipients、`taskConversations` 调用、vibe-context 的群聊成员压缩路径均已移除；首消息 outbox 交回宿主普通路径。
 - **偏差**：本 fork 的 Paseo 工具集没有 `wait_for_agent`，等待完成改用 `send_agent_prompt` 的 `notifyOnFinish` 通知及 `get_agent_activity`/`get_agent_status` 查询；设计表已同步修正。

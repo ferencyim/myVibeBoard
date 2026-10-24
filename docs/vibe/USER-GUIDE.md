@@ -12,20 +12,42 @@ daemon 启用插件后，安装 `vibe-board`、`vibe-context`、`vibe-master`、
 
 在同一管理页配置预设及七个角色的默认模型：探路、规划、方案复核、执行主代理、子代理、代码复核、验证。「Agent 行为」负责提示词与自动化设置。项目默认覆盖全局默认；确认方案时冻结当时的角色与模型快照，之后修改默认不会改写已确认任务。探路、方案复核、代码复核可以不启用，规划、主代理、验证必须可用，子代理未选时沿用主代理。预设内模型按顺序失败接续，候选耗尽时显示原因，不会悄悄把任务当成成功。
 
+## 把 qoder 接为 Paseo provider
+
+qoder CLI 支持 ACP，可以按 `docs/custom-providers.md` 的 ACP 方式接入，不需要改宿主代码。在 `$PASEO_HOME/config.json`（默认 `~/.paseo/config.json`）的 `agents.providers` 下加入：
+
+```json
+{
+  "agents": {
+    "providers": {
+      "qoder": {
+        "extends": "acp",
+        "label": "Qoder CLI",
+        "command": ["qoderclicn", "--acp"]
+      }
+    }
+  }
+}
+```
+
+Windows 下可执行文件为 `qoderclicn.exe`，需要写绝对路径或在 PATH 中。先在 Paseo 之外用 `qoderclicn` 完成登录；凭据由 qoder 自己保存，不写进本仓库和 `config.json`。可用 `--config-dir <独立目录>` 指向隔离的登录与配置，便于测试时不碰默认 `~/.qoder-cn`。保存后重启 daemon，模型列表由 ACP 在连接时发现，默认模型为 DeepSeek-Flash，可在预设里按 provider 显示的模型名选择。ACP provider 默认通过 MCP 注入 Paseo 工具，`vibe_open_tab`、`get_agent_activity` 等才能使用；若某个 ACP 适配器无法在 `mcpServers` 非空时建会话，再按 `docs/custom-providers.md` 设置 `options.supportsMcpServers: false`，但那样会失去这些工具。
+
+任何 provider 都可以担任任意角色，插件不再按角色强制只读或拒绝不支持的 provider；只读角色仅靠提示词约束。
+
 ## 新建任务并讨论方案
 
 1. 在原生项目下新建 workspace，选择独立 worktree，在输入框写需求并附上参考文件或图片。首消息就是任务输入，不用另外填标题、描述、验收表单。插件把首个 agent 登记为 `#1 主会话` 并设置原生标题。
 2. 规划模型在 #1 回复，可以先问清需求。你继续在输入框补充限制、回答问题或要求修改。
-3. 需要探路时，由 #1 用 `create_agent`（`asTab: true`，标注 scout）打开探路 tab；插件分配 `#2 探路 · 模型`。方案复核同理使用 plan_reviewer 角色。
+3. 需要探路时，由 #1 用 `vibe_open_tab` 打开探路 tab；插件分配 `#2 探路 · 模型`。方案复核同理使用 plan_reviewer 角色。
 4. 方案仍使用固定的 `vibe-plan` JSON 段。不完整、仍在输出或没有验收条件的方案不能执行；普通的「认可」「确认」「可以」不构成执行授权。
 
-规划与探路均只读。确认方案时冻结角色、模型、文件范围、子任务和验收条件。
+规划、探路、方案复核只靠提示词要求「不修改文件」，插件不再强制只读权限模式；这些角色以预设正常的权限运行，任何 provider 都可以担任。确认方案时冻结角色、模型、文件范围、子任务和验收条件。
 
 ## 执行、复核、验证与通过
 
 只有用户在原生输入框发送 `/执行`，才会保存当前 tab（找不到时回退 #1）最新完整方案、确认时间和角色快照，并交给调度器。执行只能使用任务自己的附加 worktree。资源不足、文件范围冲突或前置子任务未完成时保留排队原因。
 
-调度器准入后，插件在同一个 workspace 打开 `执行` tab（例如 `#3 执行 · Sol`）。执行 tab 按方案使用原生 subagent 分工，子代理不占顶部 tab，计入并发限制。执行结束输出 `vibe-delivery` 完成标记后，插件按配置自动打开代码复核 tab（启用时）和验证 tab；复核/验证由 vibe-verify 以只读权限启动普通 tab。
+调度器准入后，插件在同一个 workspace 打开 `执行` tab（例如 `#3 执行 · Sol`）。执行 tab 按方案使用原生 subagent 分工，子代理不占顶部 tab，计入并发限制。执行结束输出 `vibe-delivery` 完成标记后，插件按配置自动打开代码复核 tab（启用时）和验证 tab。复核/验证同样是普通 tab，提示词要求不修改仓库文件，但不强制只读权限；验证 tab 需要能运行测试和采集证据。
 
 复核或验证发现问题时，任务会退回修复或暂停并记录原因。验证证据只对当前确认轮次和当前代码提交有效，不能沿用旧轮通过结论。结果摘要会追加到相关 tab 的时间线，不触发模型回合；任意任务 tab 发送 `/状态` 可显示阶段、各 tab 状态和最近结论。
 
@@ -46,6 +68,7 @@ tab 之间直接使用现有 Paseo 工具：
 - `vibe_tabs`：读取本任务每个 tab 的编号、agentId、角色、模型和状态；
 - `list_agents` / `get_agent_activity`：查看同 workspace 的 agent 及其记录；
 - `send_agent_prompt`：给另一个 tab 发消息；由 agent 发起时默认在对方完成后通知；
+- `vibe_open_tab`：插件提供的开 tab 入口，可指定角色与任务说明；
 - `create_agent`（`asTab: true`）：打开新的顶层 tab，可带 `vibe.tab.role` 标签。
 
 本 fork 没有 `wait_for_agent`，等待完成使用 `send_agent_prompt` 的完成通知或 `get_agent_activity` / `get_agent_status` 轮询。

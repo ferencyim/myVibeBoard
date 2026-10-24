@@ -5,10 +5,12 @@ import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createEventConsumer,
+  createTaskRuntimeCommands,
   createVibeStore,
   migrateOwner,
   openVibeDb,
   publishEvent,
+  readEvents,
   type VibeDb,
 } from "../server/vibe/db";
 import {
@@ -18,7 +20,6 @@ import {
   tabTitle,
 } from "../server/tabs/service";
 import { createTaskFlow } from "../server/tabs/flow";
-import { readOnlyConfigFor, writableConfigFor } from "../server/task-host/permission";
 import { registerTaskRuntime } from "../server/task-runtime";
 import {
   TASK_TAB_ROLE_LABEL,
@@ -207,9 +208,11 @@ function setup(
   const store = createVibeStore(db);
   store.tasks.markTaskWorkspace("ws");
   const fake = fakePaseo();
+  const runtime = createTaskRuntimeCommands(db);
   const tabs = createTaskTabs({
     store,
     getPaseo: () => fake.paseo as never,
+    sessions: runtime,
     ...(options.now ? { now: options.now } : {}),
   });
   const flow = createTaskFlow({
@@ -457,20 +460,14 @@ describe("任务 workspace 标记", () => {
   });
 });
 
-describe("插件打开只读 tab", () => {
-  it("codex scout 使用只读沙箱，先建 agent 再以来源身份发送任务", async () => {
+describe("插件打开 tab", () => {
+  it("按当前 tab 的模型打开 scout，先建 agent 再以来源身份发送任务", async () => {
     const { store, fake, tabs } = setup();
     fake.addAgent({ id: "agent-1" });
     await tabs.ensureTab("agent-1");
     const opened = await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
     expect(opened).toMatchObject({ number: 2, role: "scout", title: "#2 探路 · first" });
-    expect(fake.created[0]!.config).toMatchObject({
-      provider: "codex/first",
-      modeId: "auto",
-      ...(process.platform === "win32"
-        ? {}
-        : { providerOptions: { sandbox_mode: "read-only", approval_policy: "never" } }),
-    });
+    expect(fake.created[0]!.config).toEqual({ provider: "codex/first" });
     expect(fake.created[0]).not.toHaveProperty("prompt");
     expect(fake.created[0]!.labels).toEqual({ [TASK_TAB_ROLE_LABEL]: "scout" });
     expect(fake.sends).toEqual([
@@ -483,18 +480,14 @@ describe("插件打开只读 tab", () => {
     expect(store.tasks.get("ws")!.tabs[1]).toMatchObject({ role: "scout", model: "first" });
   });
 
-  it("claude 使用 plan 模式；不支持的 provider 拒绝打开", async () => {
+  it("任意 provider 都可打开探路/复核 tab，且不传未知 modeId", async () => {
     const { fake, tabs } = setup();
-    fake.addAgent({ id: "agent-1", provider: "claude", model: "sonnet" });
+    fake.addAgent({ id: "agent-1", provider: "gemini", model: "pro" });
     await tabs.ensureTab("agent-1");
     await tabs.openTab("agent-1", { role: "plan_reviewer", task: "复核方案" });
-    expect(fake.created[0]!.config).toMatchObject({ provider: "claude/sonnet", modeId: "plan" });
-
-    fake.addAgent({ id: "agent-2", provider: "gemini", model: "pro" });
-    await tabs.ensureTab("agent-2");
-    await expect(tabs.openTab("agent-2", { role: "scout", task: "调查" })).rejects.toThrow(
-      "强制只读策略",
-    );
+    expect(fake.created[0]!.config).toEqual({ provider: "gemini/pro" });
+    expect(fake.created[0]!.config).not.toHaveProperty("modeId");
+    expect(fake.created[0]!.config).not.toHaveProperty("options");
   });
 
   it("会话 tab 不强制模式，但仍以来源身份发送任务", async () => {
@@ -507,27 +500,6 @@ describe("插件打开只读 tab", () => {
       agentId: opened.agentId,
       options: { sourceAgentId: "agent-1" },
     });
-  });
-});
-
-describe("只读与可写权限配置", () => {
-  it("codex 在 Windows 上放宽沙箱，在其他平台写入 providerOptions", () => {
-    expect(readOnlyConfigFor("codex", "win32")).toEqual({ modeId: "auto" });
-    expect(readOnlyConfigFor("codex", "darwin")).toEqual({
-      modeId: "auto",
-      providerOptions: { sandbox_mode: "read-only", approval_policy: "never" },
-    });
-  });
-
-  it("claude 使用 plan，未支持只读的 provider 拒绝", () => {
-    expect(readOnlyConfigFor("claude")).toEqual({ modeId: "plan" });
-    expect(() => readOnlyConfigFor("gemini")).toThrow("强制只读策略");
-  });
-
-  it("验证角色始终使用可写 auto 模式", () => {
-    expect(writableConfigFor("codex")).toEqual({ modeId: "auto" });
-    expect(writableConfigFor("claude")).toEqual({ modeId: "auto" });
-    expect(writableConfigFor("gemini")).toEqual({ modeId: "auto" });
   });
 });
 
@@ -755,7 +727,7 @@ describe("打开 tab 的任务流程", () => {
     expect(fake.appended.at(-1)?.item).toMatchObject({ kind: "task-status" });
   });
 
-  it("/执行 确认前拒绝无法强制只读的复核 preset", async () => {
+  it("/执行 允许任意 provider 担任复核角色（复核仅靠提示词只读）", async () => {
     const { store, fake, flow } = await confirmedTask();
     store.presets.create({
       id: "p-core",
@@ -786,13 +758,10 @@ describe("打开 tab 的任务流程", () => {
         seqEnd: 3,
       },
     ]);
-    await expect(
-      flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-1" }),
-    ).rejects.toThrow("代码复核角色的预设不可用");
-    const task = store.tasks.get("ws")!;
-    expect(task.phase).toBe("awaiting_confirmation");
-    expect(task.confirmedAt ?? null).toBeNull();
-    expect(store.taskArtifacts.list("ws", { kind: "plan" })).toHaveLength(0);
+    const result = await flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-1" });
+    expect(result.task.phase).toBe("queued");
+    expect(store.tasks.get("ws")!.rolesSnapshot?.reviewer?.models[0]!.provider).toBe("gemini");
+    expect(store.taskArtifacts.list("ws", { kind: "plan" })).toHaveLength(1);
   });
 
   it("/执行 允许验证角色使用可写 provider", async () => {
@@ -1029,7 +998,7 @@ describe("接手 tab", () => {
     expect(fake.modes).toHaveLength(0);
   });
 
-  it("接手前先停止目标 tab 的运行中回合，再切换模式", async () => {
+  it("接手前先停止目标 tab 的运行中回合", async () => {
     const { fake, tabs, flow } = await projectTask();
     await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
     fake.addAgent({
@@ -1048,15 +1017,16 @@ describe("接手 tab", () => {
       reason: "#2 接手调查",
     });
     const cancelled = fake.operations.indexOf("cancel:agent-2");
-    const switched = fake.operations.indexOf("mode:agent-2:plan");
+    const sent = fake.operations.indexOf("send:agent-2");
     expect(cancelled).toBeGreaterThanOrEqual(0);
-    expect(switched).toBeGreaterThan(cancelled);
+    expect(sent).toBeGreaterThan(cancelled);
+    expect(fake.modes).toHaveLength(0);
   });
 
-  it("只读角色接手时在新 tab 上强制 provider 只读模式", async () => {
+  it("任意 provider 的会话 tab 都能接手只读角色（不再切换模式）", async () => {
     const { store, fake, tabs, flow } = await projectTask();
     await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
-    fake.addAgent({ id: "agent-2", provider: "claude", model: "sonnet" });
+    fake.addAgent({ id: "agent-2", provider: "gemini", model: "pro" });
     await tabs.ensureTab("agent-2");
     await flow.handoff({
       workspaceId: "ws",
@@ -1067,26 +1037,7 @@ describe("接手 tab", () => {
     const task = store.tasks.get("ws")!;
     expect(task.tabs.find((tab) => tab.agentId === "worker-1")!.role).toBe("session");
     expect(task.tabs.find((tab) => tab.agentId === "agent-2")!.role).toBe("scout");
-    expect(fake.modes).toContainEqual({ agentId: "agent-2", modeId: "plan" });
-  });
-
-  it("未确认只读模式的 provider 不能接手只读角色", async () => {
-    const { store, fake, tabs, flow } = await projectTask();
-    await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
-    fake.addAgent({ id: "agent-2", provider: "gemini", model: "pro" });
-    await tabs.ensureTab("agent-2");
-    await expect(
-      flow.handoff({
-        workspaceId: "ws",
-        agentId: "agent-2",
-        requestId: "h-ro-deny",
-        reason: "#2 接手调查",
-      }),
-    ).rejects.toThrow("强制只读策略");
-    const task = store.tasks.get("ws")!;
-    expect(task.tabs.find((tab) => tab.agentId === "worker-1")!.role).toBe("scout");
-    expect(task.tabs.find((tab) => tab.agentId === "agent-2")!.role).toBe("session");
-    expect(fake.sends.some((send) => send.agentId === "agent-2")).toBe(false);
+    expect(fake.modes).toHaveLength(0);
   });
 
   it("执行 tab 接手时转移 vibe-delivery 角色与资源租约", async () => {
@@ -1165,6 +1116,302 @@ describe("接手 tab", () => {
     } finally {
       await responder.stop();
     }
+  });
+});
+
+describe("上下文接续", () => {
+  it("scout 接续会打开新 tab、继承角色与进度、写入会话链并回写结果", async () => {
+    const { db, store, fake, tabs, flow } = await projectTask();
+    const scout = await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
+    const oldSession = flow.runtime.findSessionByAgent(scout.agentId)!;
+    expect(oldSession.role).toBe("scout");
+    fake.setTimeline(scout.agentId, [
+      {
+        item: { type: "assistant_message", text: "已完成一半调查", messageId: "m-s" },
+        turnId: "turn-s",
+        seqEnd: 5,
+      },
+    ]);
+    store.tasks.setPhase("ws", "paused");
+    const result = await flow.continuation({
+      requestId: "cont-1",
+      workspaceId: "ws",
+      agentId: scout.agentId,
+      role: "scout",
+      reason: "context",
+      message: "上下文接续",
+      summary: "#2 上下文已满",
+      candidateIndex: 0,
+      confirmedAt: null,
+      prompt: "",
+      previousPhase: "planning",
+    });
+    expect(result.message).toContain("已打开接续 tab");
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("planning");
+    expect(task.tabs.find((tab) => tab.agentId === scout.agentId)!.role).toBe("session");
+    const next = task.tabs.at(-1)!;
+    expect(next.role).toBe("scout");
+    expect(fake.created.at(-1)).toMatchObject({
+      config: { provider: "codex/first", modeId: "auto", thinkingOptionId: "high" },
+      env: { VIBE_ROLE: "scout", VIBE_WORKSPACE_ID: "ws" },
+      labels: { [TASK_TAB_ROLE_LABEL]: "scout" },
+    });
+    const sent = fake.sends.at(-1)!;
+    expect(sent.agentId).toBe(next.agentId);
+    expect(sent.options).toEqual({ sourceAgentId: scout.agentId });
+    expect(sent.text).toContain("已完成一半调查");
+    // Plugin-to-plugin prompts stay in the tool-call lane, so a completed turn cannot authorise
+    // acceptance or handoff even if its text contains a handoff phrase.
+    const page = await fake.paseo.agents.ref(next.agentId).timeline.refetch();
+    const entry = page.entries.at(-1)!;
+    expect(entry.item.type).toBe("tool_call");
+    const sendsBeforeTurn = fake.sends.length;
+    await flow.turnEnded({
+      agent: { id: next.agentId, workspaceId: "ws" },
+      turnId: entry.turnId ?? null,
+      outcome: { kind: "completed" },
+    });
+    expect(fake.sends).toHaveLength(sendsBeforeTurn);
+    expect(store.tasks.get("ws")!.tabs.at(-1)!.role).toBe("scout");
+    expect(flow.runtime.findSessionByAgent(next.agentId)).toMatchObject({
+      role: "scout",
+      previousSessionId: oldSession.id,
+      candidateIndex: 0,
+    });
+    const results = readEvents(db, 0, { types: ["context.continuation_result"] });
+    expect(results.at(-1)!.payload).toMatchObject({
+      requestId: "cont-1",
+      workspaceId: "ws",
+      status: "continued",
+      agentId: next.agentId,
+      sessionId: flow.runtime.findSessionByAgent(next.agentId)!.id,
+      candidateIndex: 0,
+    });
+    expect(store.tasks.get("ws")!.control).toMatchObject({
+      continuationRequestId: "cont-1",
+      continuationResult: { status: "continued", agentId: next.agentId },
+    });
+
+    const sends = fake.sends.length;
+    const created = fake.created.length;
+    const replay = await flow.continuation({
+      requestId: "cont-1",
+      workspaceId: "ws",
+      agentId: scout.agentId,
+      role: "scout",
+      reason: "context",
+      message: "上下文接续",
+      summary: "#2 上下文已满",
+      candidateIndex: 0,
+      confirmedAt: null,
+      prompt: "",
+      previousPhase: "planning",
+    });
+    expect(replay.message).toContain("已打开接续 tab");
+    expect(fake.sends).toHaveLength(sends);
+    expect(fake.created).toHaveLength(created);
+  });
+
+  it("main 的接续按 planner 会话写入链路并恢复原阶段", async () => {
+    const { store, fake, flow } = await projectTask();
+    const oldSession = flow.runtime.findSessionByAgent("agent-1")!;
+    expect(oldSession.role).toBe("planner");
+    fake.setTimeline("agent-1", [
+      {
+        item: { type: "assistant_message", text: "主会话已整理目标", messageId: "m-p" },
+        turnId: "turn-p",
+        seqEnd: 3,
+      },
+    ]);
+    store.tasks.setPhase("ws", "paused");
+    const result = await flow.continuation({
+      requestId: "cont-main",
+      workspaceId: "ws",
+      agentId: "agent-1",
+      role: "planner",
+      reason: "context",
+      message: "主会话上下文接续",
+      summary: "#1 上下文已满",
+      candidateIndex: 0,
+      confirmedAt: null,
+      prompt: "",
+      previousPhase: "planning",
+    });
+    expect(result.message).toContain("已打开接续 tab");
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("planning");
+    expect(task.tabs.find((tab) => tab.agentId === "agent-1")!.role).toBe("session");
+    const next = task.tabs.at(-1)!;
+    expect(next.role).toBe("main");
+    expect(fake.sends.at(-1)!.agentId).toBe(next.agentId);
+    expect(fake.sends.at(-1)!.options).toEqual({ sourceAgentId: "agent-1" });
+    expect(fake.sends.at(-1)!.text).toContain("主会话已整理目标");
+    expect(flow.runtime.findSessionByAgent(next.agentId)).toMatchObject({
+      role: "planner",
+      previousSessionId: oldSession.id,
+    });
+  });
+
+  it("worker 失败接续按确认快照切换到下一个候选模型", async () => {
+    const { db, store, fake, tabs, flow } = await projectTask();
+    fake.addAgent({ id: "agent-w", provider: "codex", model: "first" });
+    await tabs.ensureTab("agent-w", { role: "worker" });
+    const plan = planSnapshot();
+    store.tasks.savePlan("ws", plan);
+    const base = roleSnapshot();
+    const confirmed = store.tasks.confirm("ws", {
+      plan,
+      rolesSnapshot: {
+        ...base,
+        worker: {
+          ...base.worker!,
+          models: [
+            { provider: "codex", model: "first", thinking: "high", permissionMode: "full" },
+            { provider: "codex", model: "second", thinking: "high", permissionMode: "auto" },
+          ],
+        },
+      },
+      planSource: { sourceKey: "test" },
+      requestId: "confirm-worker",
+    });
+    const oldSession = flow.runtime.registerSession({
+      workspaceId: "ws",
+      projectId: fake.projectId,
+      agentId: "agent-w",
+      role: "worker",
+      provider: "codex",
+      model: "first",
+      thinking: "high",
+      candidateIndex: 0,
+      confirmedAt: confirmed.confirmedAt,
+    });
+    store.tasks.setPhase("ws", "paused");
+    const responder = createEventConsumer({
+      db,
+      consumer: "test-continuation-resources",
+      types: ["scheduler.task_resource_request"],
+      pollIntervalMs: 2,
+      startAt: "now",
+      handler: (event) => {
+        const payload = event.payload as { requestId: string; workspaceId: string };
+        publishEvent(db, {
+          type: "scheduler.task_resource_result",
+          payload: {
+            requestId: payload.requestId,
+            workspaceId: payload.workspaceId,
+            ok: true,
+            reason: "",
+            reservationId: "res-cont",
+            provider: "codex",
+            model: "second",
+          },
+        });
+      },
+    });
+    responder.start();
+    try {
+      const result = await flow.continuation({
+        requestId: "cont-worker",
+        workspaceId: "ws",
+        agentId: "agent-w",
+        role: "worker",
+        reason: "failure",
+        message: "执行失败，切换候选",
+        summary: "#2 执行失败",
+        candidateIndex: 0,
+        confirmedAt: confirmed.confirmedAt,
+        prompt: "",
+        previousPhase: "executing",
+      });
+      expect(result.message).toContain("已打开接续 tab");
+      const task = store.tasks.get("ws")!;
+      expect(task.phase).toBe("executing");
+      expect(task.tabs.find((tab) => tab.agentId === "agent-w")!.role).toBe("session");
+      const next = task.tabs.find((tab) => tab.role === "worker")!;
+      expect(next.agentId).not.toBe("agent-w");
+      expect(fake.created.at(-1)).toMatchObject({
+        config: { provider: "codex/second", modeId: "auto", thinkingOptionId: "high" },
+        env: { VIBE_ROLE: "worker", VIBE_WORKSPACE_ID: "ws" },
+        labels: {
+          [TASK_TAB_ROLE_LABEL]: "worker",
+          [TASK_TAB_PRESET_LABEL]: "task-tab-native",
+        },
+      });
+      expect(fake.sends.at(-1)!.options).toEqual({ sourceAgentId: "agent-w" });
+      expect(flow.runtime.findSessionByAgent(next.agentId)).toMatchObject({
+        role: "worker",
+        currentProvider: "codex",
+        model: "second",
+        candidateIndex: 1,
+        previousSessionId: oldSession.id,
+        confirmedAt: confirmed.confirmedAt,
+      });
+      expect(flow.runtime.getSession(oldSession.id)!.state).toBe("ended");
+      const results = readEvents(db, 0, { types: ["context.continuation_result"] });
+      expect(results.at(-1)!.payload).toMatchObject({
+        requestId: "cont-worker",
+        status: "continued",
+        agentId: next.agentId,
+        candidateIndex: 1,
+      });
+    } finally {
+      await responder.stop();
+    }
+  });
+
+  it("失败接续没有候选时标记 exhausted 且不创建 tab", async () => {
+    const { db, store, fake, tabs, flow } = await projectTask();
+    fake.addAgent({ id: "worker-1", provider: "codex", model: "first" });
+    await tabs.ensureTab("worker-1", { role: "worker" });
+    const plan = planSnapshot();
+    store.tasks.savePlan("ws", plan);
+    const confirmed = store.tasks.confirm("ws", {
+      plan,
+      rolesSnapshot: roleSnapshot(),
+      planSource: { sourceKey: "test" },
+      requestId: "confirm-exhausted",
+    });
+    flow.runtime.registerSession({
+      workspaceId: "ws",
+      projectId: fake.projectId,
+      agentId: "worker-1",
+      role: "worker",
+      provider: "codex",
+      model: "first",
+      candidateIndex: 0,
+      confirmedAt: confirmed.confirmedAt,
+    });
+    store.tasks.setPhase("ws", "paused");
+    const before = fake.created.length;
+    const result = await flow.continuation({
+      requestId: "cont-exhausted",
+      workspaceId: "ws",
+      agentId: "worker-1",
+      role: "worker",
+      reason: "failure",
+      message: "执行失败",
+      summary: "#2 执行失败",
+      candidateIndex: 0,
+      confirmedAt: confirmed.confirmedAt,
+      prompt: "",
+      previousPhase: "executing",
+    });
+    expect(result.message).toContain("耗尽");
+    expect(fake.created).toHaveLength(before);
+    expect(fake.sends).toHaveLength(0);
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("paused");
+    expect(task.tabs.filter((tab) => tab.role === "worker")).toHaveLength(1);
+    expect(task.control).toMatchObject({
+      continuationRequestId: "cont-exhausted",
+      continuationResult: { status: "exhausted" },
+    });
+    const results = readEvents(db, 0, { types: ["context.continuation_result"] });
+    expect(results.at(-1)!.payload).toMatchObject({
+      requestId: "cont-exhausted",
+      status: "exhausted",
+    });
   });
 });
 

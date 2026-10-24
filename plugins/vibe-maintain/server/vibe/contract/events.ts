@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import { JudgementSchema, SessionComplexitySchema, SessionRoleSchema } from "./enums";
+import { TaskPhaseSchema } from "./task";
 
 const SessionRef = z.object({ sessionId: z.string(), agentId: z.string().optional() });
 
@@ -91,6 +92,8 @@ export const EVENT_PAYLOADS = {
     candidateIndex: z.number().int().nonnegative(),
     confirmedAt: z.string().nullable(),
     prompt: z.string(),
+    /** Phase before the owner froze the task, so the replacement can continue it. */
+    previousPhase: TaskPhaseSchema.optional(),
   }),
   "context.continuation_result": z.object({
     requestId: z.string(),

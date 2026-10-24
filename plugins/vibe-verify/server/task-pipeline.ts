@@ -20,7 +20,15 @@ import {
 } from "./vibe/db";
 import { loadVerifyConfig, VerifyConfigSchema, writeArtifact } from "./collectors/common";
 import { runAutoChecks } from "./pipeline/checks";
-import { changeDiff, prepareBaseline, type Baseline } from "./pipeline/git";
+import {
+  changeDiff,
+  gitStateChange,
+  gitStateSnapshot,
+  prepareBaseline,
+  type Baseline,
+  type GitStateSnapshot,
+} from "./pipeline/git";
+import { timelineViolations, type TimelineViolation } from "./pipeline/tamper";
 import { textExcerpt, verificationLine } from "./pipeline";
 import { aggregate } from "./store";
 import type { TaskVerifyStore } from "./task-store";
@@ -62,6 +70,8 @@ export interface TaskPipelineDeps {
     candidateIndex: number,
   ): Promise<TaskResourceLease>;
   append(anchorAgentId: string, text: string, verificationId?: string): Promise<void>;
+  /** Reviewer/verifier timeline entries; any file edit or Git mutation voids the round. */
+  timeline?(agentId: string): Promise<readonly unknown[]>;
   prompts?: PromptResolver;
   tuning?: TuningSource;
   now?: () => Date;
@@ -181,6 +191,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     const workspace = await deps.workspace(task.workspaceId);
     const initial = await taskTree(runner, workspace.worktreePath);
     if (initial.status) throw new Error("工作树有未提交改动，须先收口提交再验证");
+    const startState = await gitStateSnapshot(runner, workspace.worktreePath);
     const created = verify.create({
       workspaceId: task.workspaceId,
       confirmedAt: task.confirmedAt!,
@@ -194,6 +205,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     let stopped = true;
     let baseline: Baseline | undefined;
     let verifierSource: VerifierAgent["source"];
+    const verifiedAgents = new Set<string>();
     const ctx: TaskCollectorContext = {
       cardId: null,
       workspaceId: task.workspaceId,
@@ -313,6 +325,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         },
         project: { id: workspace.projectId },
         workspaceId: task.workspaceId,
+        sourceAgentId: task.anchorAgentId,
         cwd: workspace.worktreePath,
         outputDir: ctx.outputDir,
         provider: first.provider,
@@ -324,6 +337,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         role,
         previousSessionId: () => previousSessionId,
         onCreated: (selection) => {
+          verifiedAgents.add(selection.agentId);
           verify.setVerifier(vid, selection.agentId);
           const session = previousSessionId
             ? runtime.recordContinuation({
@@ -402,11 +416,17 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         );
         if (!baseline) notes.push("没有可用基线提交，前后对比只能存疑");
       }
-      const parsed = VerifyConfigSchema.strict().safeParse(
-        await ask(agent, "verify.task.setup", {
-          baseline: baseline ? JSON.stringify(baseline) : "没有可用基线",
-        }),
-      );
+      const setupReply = await ask(agent, "verify.task.setup", {
+        baseline: baseline ? JSON.stringify(baseline) : "没有可用基线",
+      });
+      if (
+        setupReply &&
+        typeof setupReply === "object" &&
+        !Array.isArray(setupReply) &&
+        "$schema" in setupReply
+      )
+        delete (setupReply as Record<string, unknown>).$schema;
+      const parsed = VerifyConfigSchema.strict().safeParse(setupReply);
       if (!parsed.success)
         throw new Error(
           "验证模型没有提供有效的证据采集配置；本轮仅接受配置 schema，不能把复核结论当作采集配置",
@@ -792,6 +812,57 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       voided = true;
       notes.push(String(error));
     }
+    let endState: GitStateSnapshot | undefined;
+    try {
+      endState = await gitStateSnapshot(runner, workspace.worktreePath);
+      const changed = gitStateChange(startState, endState);
+      if (changed) {
+        voided = true;
+        notes.push("验证开始与结束的 Git 状态不一致：" + changed);
+      }
+    } catch (error) {
+      voided = true;
+      notes.push(
+        "验证结束 Git 状态快照失败：" + (error instanceof Error ? error.message : String(error)),
+      );
+    }
+    let violations: TimelineViolation[] = [];
+    try {
+      const pages = await Promise.all(
+        [...verifiedAgents].map((agentId) => (deps.timeline ? deps.timeline(agentId) : [])),
+      );
+      violations = await timelineViolations(pages.flat(), {
+        ignored: async (paths) => {
+          const result = await runner.run("git", ["check-ignore", "--stdin"], {
+            cwd: workspace.worktreePath,
+            timeoutMs: 60_000,
+            input: paths.join("\n"),
+          });
+          if (result.timedOut || (result.exitCode !== 0 && result.exitCode !== 1)) {
+            notes.push("无法判断被忽略的文件，编辑记录按未忽略处理");
+            return new Set<string>();
+          }
+          return new Set(
+            result.stdout
+              .split(/\r?\n/)
+              .map((path) => path.trim())
+              .filter(Boolean),
+          );
+        },
+      });
+    } catch (error) {
+      voided = true;
+      notes.push(
+        "无法核对验证 tab 时间线，结论作废：" +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+    if (violations.length) {
+      voided = true;
+      const text = violations.map((violation) => violation.summary).join("；");
+      notes.push("验证 tab 修改了工作区或 Git 状态，结论作废：" + text);
+      add("验证 tab 完整性", "runtime", "doubt", text);
+    }
     if (voided || !stopped)
       for (const item of verify.items(vid))
         verify.judgeItem(item.id, "doubt", "结论已失效：" + (item.note ?? ""), item.evidenceIds);
@@ -812,6 +883,8 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
           voided,
           items,
           notes,
+          gitState: { start: startState, end: endState ?? null },
+          timelineViolations: violations,
         },
         null,
         2,

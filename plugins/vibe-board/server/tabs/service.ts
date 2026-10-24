@@ -15,7 +15,8 @@ import {
   type TaskTabRole,
 } from "../vibe/contract";
 import { assertTaskWorkspace } from "../task-host/workspace";
-import { readOnlyConfigFor } from "../task-host/permission";
+import type { TaskRuntimeCommands } from "../vibe/db";
+import type { SessionRole } from "../vibe/contract";
 import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
 
 export { tabTitle };
@@ -32,11 +33,6 @@ export interface TaskTabView {
   busy: boolean;
 }
 
-export const READ_ONLY_ROLES = new Set<TaskTabRole>([
-  "scout",
-  "plan_reviewer",
-  "reviewer",
-]);
 /** The whole message must be one of the two user-native handoff forms. */
 export const HANDOFF_PATTERN =
   /^\s*(?:[/／]?\s*接手\s*#?(\d+)|继续\s*#(\d+)\s*的工作)\s*$/;
@@ -57,10 +53,17 @@ export function formatTabs(tabs: readonly Pick<TaskTabView, "number" | "roleLabe
   return tabs.map((tab) => `#${tab.number} ${tab.roleLabel} · ${tab.model}（${tab.status}）`).join("\n");
 }
 
+/** Task tabs that vibe-context should track (worker registers at admission instead). */
+const SESSION_ROLE_BY_TAB: Partial<Record<TaskTabRole, SessionRole>> = {
+  main: "planner",
+  scout: "scout",
+};
+
 /** Task tabs are ordinary agents; this registry only adds immutable numbers and titles. */
 export function createTaskTabs(options: {
   store: VibeStore;
   getPaseo(): PaseoApi | null;
+  sessions?: Pick<TaskRuntimeCommands, "registerSession" | "findSessionByAgent">;
   now?: () => number;
   log?: (message: string, error?: unknown) => void;
 }) {
@@ -84,6 +87,36 @@ export function createTaskTabs(options: {
     await placement.refresh();
     assertTaskWorkspace(placement.current());
     return placement;
+  }
+  /** Planner/scout sessions let vibe-context freeze and continue these tabs like a worker. */
+  async function registerTabSession(
+    workspaceId: string,
+    tab: TaskTab,
+    agent: PaseoAgent,
+    projectId: string | null,
+  ) {
+    const sessions = options.sessions;
+    const role = SESSION_ROLE_BY_TAB[tab.role];
+    const model = agent.model?.trim() || (tab.model === UNRESOLVED_TAB_MODEL ? "" : tab.model);
+    if (!sessions || !role || !model) return;
+    try {
+      if (sessions.findSessionByAgent(agent.id)) return;
+      const task = store.tasks.get(workspaceId);
+      if (!task) return;
+      sessions.registerSession({
+        workspaceId,
+        projectId,
+        agentId: agent.id,
+        role,
+        provider: agent.provider,
+        model,
+        thinking: agent.thinkingOptionId ?? tab.thinking,
+        candidateIndex: 0,
+        confirmedAt: task.confirmedAt ?? null,
+      });
+    } catch (error) {
+      log("任务 tab 会话登记失败", error);
+    }
   }
   /** Records a UI-created worktree so its first agent becomes tab #1; agent-created worktrees stay out. */
   const PENDING_WORKSPACE_TTL_MS = 5 * 60_000;
@@ -133,6 +166,12 @@ export function createTaskTabs(options: {
     await handle.setTitle(tabTitle(updated)).catch((error) => {
       log("任务 tab 标题更新失败", error);
     });
+    try {
+      const placement = await taskWorkspace(workspaceId);
+      await registerTabSession(workspaceId, updated, agent, placement.current()?.projectId ?? null);
+    } catch {
+      // A workspace that vanished keeps the tab row; session tracking is best effort.
+    }
     return updated;
   }
   /** Allocates a number once per agent; subagents and archived agents stay out of the tab list.
@@ -176,11 +215,15 @@ export function createTaskTabs(options: {
         updates.model = resolved;
         updates.provider = agent.provider;
       }
-      if (Object.keys(updates).length === 0) return existing;
+      if (Object.keys(updates).length === 0) {
+        await registerTabSession(workspaceId, existing, agent, placement.current()?.projectId ?? null);
+        return existing;
+      }
       const updated = store.tasks.updateTab(workspaceId, agentId, updates);
       await handle.setTitle(tabTitle(updated)).catch((error) => {
         log("任务 tab 标题更新失败", error);
       });
+      await registerTabSession(workspaceId, updated, agent, placement.current()?.projectId ?? null);
       return updated;
     }
     const role = claim.role ?? (agentId === task.anchorAgentId ? "main" : "session");
@@ -195,6 +238,7 @@ export function createTaskTabs(options: {
     await handle.setTitle(tabTitle(tab)).catch((error) => {
       log("任务 tab 标题设置失败（编号已保留）", error);
     });
+    await registerTabSession(workspaceId, tab, agent, placement.current()?.projectId ?? null);
     return tab;
   }
   async function tabsFor(task: Task, refresh: boolean): Promise<TaskTabView[]> {
@@ -342,7 +386,6 @@ export function createTaskTabs(options: {
       (caller.model ? `${caller.provider}/${caller.model}` : "");
     if (!/^[^/]+\/[^/]+$/.test(spec))
       throw new Error("无法解析当前 tab 的 provider/model，请在调用时指定 provider（provider/model）");
-    const provider = spec.split("/")[0]!;
     const placement = await taskWorkspace(workspaceId);
     const projectId = placement.projectId;
     const roleKey = rolePromptKey(input.role);
@@ -353,8 +396,6 @@ export function createTaskTabs(options: {
     const config: Record<string, unknown> = { provider: spec };
     if (preset?.thinking && preset.thinking !== "default")
       config.thinkingOptionId = preset.thinking;
-    // Read-only roles never inherit a writable preset mode.
-    if (READ_ONLY_ROLES.has(input.role)) Object.assign(config, readOnlyConfigFor(provider));
     const handle = await paseo().workspaces.ref(workspaceId).agents.create({
       config: config as never,
       env: {

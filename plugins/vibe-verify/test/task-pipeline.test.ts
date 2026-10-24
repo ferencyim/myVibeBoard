@@ -35,6 +35,11 @@ function setup(
     dirty?: boolean;
     dirtyChanges?: boolean;
     headChanges?: boolean;
+    reflogChanges?: boolean;
+    stashChanges?: boolean;
+    refChanges?: boolean;
+    ignoredFiles?: string[];
+    timelineEntries?: Record<string, unknown[]>;
     closeFails?: boolean;
     noEvidence?: boolean;
     gitEvidenceFails?: boolean;
@@ -107,6 +112,9 @@ function setup(
   );
   let head = "abc123";
   let dirty = options.dirty ?? false;
+  const reflog = ["aaa111"];
+  let stash = "";
+  let refs = "refs/heads/wp\tabc123\nrefs/remotes/origin/main\tbase123";
   const calls: string[] = [];
   const sentPrompts: Array<{ role: string; text: string }> = [];
   const launched: LaunchInput[] = [];
@@ -120,6 +128,15 @@ function setup(
     if (call.command === "git") {
       if (call.args[0] === "rev-parse") return { stdout: head };
       if (call.args[0] === "status") return { stdout: dirty ? "?? .vibe/verify.json" : "" };
+      if (call.args[0] === "reflog") return { stdout: reflog.join("\n") };
+      if (call.args[0] === "stash") return { stdout: stash };
+      if (call.args[0] === "for-each-ref") return { stdout: refs };
+      if (call.args[0] === "check-ignore") {
+        const requested = String(call.options?.input ?? "").split("\n");
+        return {
+          stdout: (options.ignoredFiles ?? []).filter((path) => requested.includes(path)).join("\n"),
+        };
+      }
       if (call.args[0] === "merge-base") return { stdout: "base123" };
       if (call.args[0] === "log")
         return options.gitEvidenceFails
@@ -153,6 +170,9 @@ function setup(
       calls.push("collect");
       if (options.headChanges) head = "def456";
       if (options.dirtyChanges) dirty = true;
+      if (options.reflogChanges) reflog.unshift("bbb222");
+      if (options.stashChanges) stash = "ccc333 stash@{0}: 验证中途 stash";
+      if (options.refChanges) refs += "\nrefs/heads/extra\tddd444";
       if (options.stop) board.tasks.setPhase("ws-task", "paused");
       if (options.reconfirm) {
         const task = board.tasks.get("ws-task")!;
@@ -186,6 +206,7 @@ function setup(
         confirmedAt: board.tasks.get("ws-task")!.confirmedAt,
         commitHash: "abc123",
       });
+      expect(input.sourceAgentId).toBe("anchor");
       if (!board.tasks.get("ws-task")!.control?.actualModels)
         expect(input.snapshot).toEqual(input.role === "reviewer" ? roles.reviewer : roles.verifier);
       const lease = await input.acquire!(input.provider, input.candidateIndex ?? 0);
@@ -287,6 +308,7 @@ function setup(
       reportIds.push(verificationId);
       calls.push("summary:" + text);
     },
+    timeline: async (agentId) => options.timelineEntries?.[agentId] ?? [],
     tuning: () => ({ ...DEFAULT_TUNING, maxReviewReturns: options.maxReturns ?? 3 }),
     log: () => {},
   });
@@ -431,6 +453,18 @@ describe("原生 workspace 验证", () => {
       { data: { conclusion: "doubt" } },
     ]);
     expect(h.board.tasks.get("ws-task")!.phase).toBe("paused");
+  });
+  it("setup 配置带 $schema 注解时忽略注解而不是判为无效", async () => {
+    const h = setup({
+      setupReply: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        backend: { requests: [] },
+      },
+    });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "pass" });
+    expect(h.collected).toBe(1);
+    expect(h.launched).toHaveLength(1);
   });
   it("同提交旧中断报告与复核判词不进入当前材料，仅取最近独立采集原文且保留历史结论", async () => {
     const h = setup({ review: "pass" });
@@ -864,6 +898,89 @@ describe("原生 workspace 验证", () => {
       expect(h.board.tasks.get("ws-task")!.phase).toBe("paused");
     },
   );
+  it.each(["reflogChanges", "stashChanges", "refChanges"] as const)(
+    "开始与结束的 Git 状态快照不一致时作废：%s",
+    async (option) => {
+      const h = setup({ [option]: true });
+      const result = await h.pipeline.run("ws-task");
+      expect(result).toMatchObject({ conclusion: "doubt", voided: true, returned: false });
+      expect(h.board.tasks.get("ws-task")!.phase).toBe("paused");
+      const report = h.verify
+        .detail(result!.verificationId)!
+        .evidence.find((file) => file.path.endsWith("verification-report.json"))!;
+      const saved = JSON.parse(readFileSync(report.path, "utf8"));
+      expect(saved.voided).toBe(true);
+      expect(saved.notes.join("\n")).toContain("验证开始与结束的 Git 状态不一致");
+      expect(saved.gitState).toMatchObject({
+        start: { head: "abc123", reflogCount: 1, reflogLatest: "aaa111" },
+        end: { head: "abc123" },
+      });
+    },
+  );
+  it.each([
+    [
+      "编辑工具",
+      {
+        item: {
+          type: "tool_call",
+          name: "Edit",
+          detail: { type: "edit", filePath: "src/task.ts" },
+        },
+      },
+    ],
+    [
+      "apply_patch 补丁",
+      {
+        item: {
+          type: "tool_call",
+          name: "apply_patch",
+          detail: {
+            type: "unknown",
+            input: "*** Begin Patch\n*** Update File: src/task.ts\n@@\n-a\n+b\n*** End Patch",
+          },
+        },
+      },
+    ],
+    [
+      "改变 Git 状态的 shell",
+      {
+        item: {
+          type: "tool_call",
+          name: "shell",
+          detail: { type: "shell", command: "cd repo && git commit -m '验证中提交'" },
+        },
+      },
+    ],
+  ] as const)("验证 tab 时间线出现%s时整轮作废", async (_label, entry) => {
+    const h = setup({ timelineEntries: { "native-verifier": [entry] } });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "doubt", voided: true });
+    expect(h.board.tasks.get("ws-task")!.phase).toBe("paused");
+    expect(h.verify.detail(result!.verificationId)!.notes.join("\n")).toContain(
+      "验证 tab 修改了工作区或 Git 状态",
+    );
+  });
+  it("验证 tab 仅修改 .gitignore 忽略的文件时不作废", async () => {
+    const h = setup({
+      ignoredFiles: [".vibe/run.log"],
+      timelineEntries: {
+        "native-verifier": [
+          {
+            item: {
+              type: "tool_call",
+              name: "Write",
+              detail: { type: "write", filePath: ".vibe/run.log" },
+            },
+          },
+        ],
+      },
+    });
+    expect(await h.pipeline.run("ws-task")).toMatchObject({
+      conclusion: "pass",
+      voided: false,
+    });
+    expect(h.board.tasks.get("ws-task")!.phase).toBe("awaiting_acceptance");
+  });
   it.each([{ noEvidence: true }, { duplicate: true }])(
     "没有证据或重复检查编号不能pass %j",
     async (option) => {
