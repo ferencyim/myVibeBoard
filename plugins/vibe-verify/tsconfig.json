@@ -3,27 +3,25 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": [
-      "ES2023"
-    ],
-    "types": [
-      "react",
-      "node"
-    ],
+    "lib": ["ES2023", "DOM"],
+    "types": ["react", "node"],
     "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "paths": {
+      "@getpaseo/plugin": ["../../packages/plugin/dist/index.d.ts"],
+      "@getpaseo/plugin/*": ["../../packages/plugin/dist/*"],
+      "@getpaseo/client": ["../../packages/client/dist/index.d.ts"],
+      "@getpaseo/client/*": ["../../packages/client/dist/*"],
+      "@getpaseo/protocol": ["../../packages/protocol/dist/index.d.ts"],
+      "@getpaseo/protocol/*": ["../../packages/protocol/dist/*"],
+      "zod": ["../../node_modules/zod/index.d.ts", "./node_modules/zod/index.d.ts"],
+      "zod/*": ["../../node_modules/zod/*", "./node_modules/zod/*"]
+    }
   },
-  "include": [
-    "**/*.ts",
-    "**/*.tsx"
-  ],
-  "exclude": [
-    "node_modules",
-    "**/*.test.ts",
-    "**/*.test.tsx"
-  ]
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.test.tsx"]
 }

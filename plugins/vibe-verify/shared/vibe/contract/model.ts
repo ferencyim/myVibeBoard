@@ -7,13 +7,6 @@
 
 import { z } from "zod";
 import {
-  AuthorKindSchema,
-  CardColumnSchema,
-  CardEventTypeSchema,
-  CardOriginSchema,
-  CardPrioritySchema,
-  ChatKindSchema,
-  ChatThreadSchema,
   DeviceKindSchema,
   EvidenceKindSchema,
   JudgementSchema,
@@ -23,12 +16,10 @@ import {
   PresetEnvironmentKindSchema,
   PresetPermissionModeSchema,
   ProjectTypeSchema,
-  ProposalStatusSchema,
   RoleHintSchema,
   SessionComplexitySchema,
   SessionRoleSchema,
   SessionStateSchema,
-  SubtaskStatusSchema,
   VerificationKindSchema,
   VerificationModeSchema,
 } from "./enums";
@@ -74,196 +65,6 @@ export const ProjectSchema = z.object({
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
-export const CardSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  number: z.number().int(),
-  key: z.string(),
-  title: z.string().min(1),
-  description: z.string(),
-  column: CardColumnSchema,
-  sortKey: z.string(),
-  priority: CardPrioritySchema,
-  acceptance: z.string(),
-  refImages: z.array(z.string()),
-  needsEvidence: z.boolean(),
-  presetId: z.string().nullable(),
-  suggestedPresetId: z.string().nullable(),
-  /** Preset used to review this card's result; null = no review. Phone-writable. */
-  reviewerPresetId: z.string().nullable(),
-  /** WP-105: preset of the scout run before planning (null = no scouting) and of the planning session. */
-  scoutPresetId: z.string().nullable(),
-  plannerPresetId: z.string().nullable(),
-  /** WP-106: default model of the sub-agents (a subtask may pick its own); `presetId` is the main agent. */
-  subagentPresetId: z.string().nullable(),
-  /** WP-108: model that reviews the plan (复核方案) and model that runs the evidence verification. */
-  planReviewerPresetId: z.string().nullable(),
-  verifierPresetId: z.string().nullable(),
-  /** WP-106: runtime state per subtask id of the plan. Daemon-written. */
-  subtaskRuns: z.record(
-    z.string(),
-    z.lazy(() => SubtaskRunSchema),
-  ),
-  /** WP-105: the card's single plan (overwritten on re-planning); null = no plan yet. Daemon-written. */
-  plan: z.lazy(() => PlanSnapshotSchema).nullable(),
-  /** Acceptance criteria as last written by the planning model; differs from `acceptance` after a user edit. */
-  modelAcceptance: z.string(),
-  /** WP-105 unread markers: newest content per tab (daemon-written) and what the owner has seen. */
-  planActivityAt: Iso.nullable(),
-  execActivityAt: Iso.nullable(),
-  /** WP-108: the review tab. */
-  reviewActivityAt: Iso.nullable(),
-  verifyActivityAt: Iso.nullable(),
-  planSeenAt: Iso.nullable(),
-  execSeenAt: Iso.nullable(),
-  reviewSeenAt: Iso.nullable(),
-  verifySeenAt: Iso.nullable(),
-  worktree: z.string().nullable(),
-  origin: CardOriginSchema,
-  /** For origin=maintenance: the maintenance_rule id that produced the card. */
-  originRef: z.string().nullable(),
-  /** Open maintenance cards with the same dedupe key get notes appended instead of a new card. */
-  dedupeKey: z.string().nullable(),
-  planSessionId: z.string().nullable(),
-  parentCardId: z.string().nullable(),
-  archivedAt: Iso.nullable(),
-  createdAt: Iso,
-  updatedAt: Iso,
-  updatedHlc: Hlc,
-});
-export type Card = z.infer<typeof CardSchema>;
-
-/** Card plus its tag ids (card_tag join), as returned by getCard/listCards. */
-export const CardViewSchema = CardSchema.extend({ tags: z.array(z.string()) });
-export type CardView = z.infer<typeof CardViewSchema>;
-
-export const CardEventSchema = z.object({
-  id: z.string(),
-  cardId: z.string(),
-  type: CardEventTypeSchema,
-  authorKind: AuthorKindSchema,
-  author: z.string(),
-  body: Json,
-  createdAt: Iso,
-  updatedHlc: Hlc,
-});
-export type CardEvent = z.infer<typeof CardEventSchema>;
-
-/** Body of a `chat` card event (author kind: user/master/executor/reviewer/scout/system). */
-export const ChatEventBodySchema = z.object({
-  text: z.string(),
-  /** agent_session / Paseo agent the message came from, if any. */
-  sessionId: z.string().optional(),
-  agentId: z.string().optional(),
-  kind: ChatKindSchema.optional(),
-  /** Idempotency key, unique per card: a second write-back with the same key is a no-op. */
-  key: z.string().optional(),
-  /** Ids of the user chat messages this message answers or hands over (routing bookkeeping). */
-  answers: z.array(z.string()).optional(),
-  /** User chat messages that could not be forwarded to the executor and fall back to the master. */
-  fallback: z.array(z.string()).optional(),
-  /** Long text shown on demand (for example the full dispatch prompt). */
-  detail: z.string().optional(),
-  /** Planner reply: the plan version it wrote, and the hint "the plan can be executed". */
-  planVersion: z.number().int().optional(),
-  ready: z.boolean().optional(),
-  /** The message reports a failure (for example a planning turn that failed). */
-  error: z.boolean().optional(),
-  /** WP-105: the conversation it belongs to; absent on old rows (see chatThreadOf). */
-  thread: ChatThreadSchema.optional(),
-  /** A user message that asks for something beyond text: "make_plan" = 制定方案 (WP-105), "review_plan" = 复核方案 (WP-108). */
-  action: z.enum(["make_plan", "review_plan"]).optional(),
-  /** WP-106: the subtask whose sub-agent wrote the message, or that an owner message is addressed to. */
-  subtask: z.string().optional(),
-});
-export type ChatEventBody = z.infer<typeof ChatEventBodySchema>;
-
-/** WP-106: one unit of work of a card's plan, run by its own sub-agent. */
-export const SubtaskSchema = z.object({
-  /** Stable within the card ("s1", "s2", ...); dependencies and runs refer to it. */
-  id: z.string().trim().min(1),
-  title: z.string().trim().min(1),
-  goal: z.string(),
-  method: z.string(),
-  /** 注意事项: constraints, pitfalls, what not to touch. */
-  notes: z.string(),
-  acceptance: z.string(),
-  /** Files/directories (globs) it changes; sub-agents with overlapping files never run together. */
-  files: z.array(z.string()),
-  /** Subtask ids that must be done before this one starts. */
-  dependsOn: z.array(z.string()),
-  /** Preset that runs it; null = the card's sub-agent default model. */
-  presetId: z.string().nullable(),
-});
-export type Subtask = z.infer<typeof SubtaskSchema>;
-
-/** WP-106: what happened to a subtask in the current execution (card.subtask_runs_json). */
-export const SubtaskRunSchema = z.object({
-  status: SubtaskStatusSchema,
-  /** agent_session / Paseo agent of the current (or last) sub-agent. */
-  sessionId: z.string().nullable(),
-  agentId: z.string().nullable(),
-  presetId: z.string().nullable(),
-  /** Last reply of the sub-agent (done), its question (waiting) or the main agent's note. */
-  summary: z.string(),
-  error: z.string(),
-  /** Sub-agents started for it so far (failover replacements included). */
-  attempts: z.number().int(),
-  /** The main agent has been told about the latest status change. */
-  notified: z.boolean(),
-  startedAt: Iso.nullable(),
-  finishedAt: Iso.nullable(),
-});
-export type SubtaskRun = z.infer<typeof SubtaskRunSchema>;
-
-/** Card fields a proposal may change. */
-export const ProposalChangesSchema = z.object({
-  title: z.string().min(1).optional(),
-  description: z.string().optional(),
-  acceptance: z.string().optional(),
-  /** WP-106: the planning model's subtasks when the owner had edited them (applied to the plan). */
-  subtasks: z.array(SubtaskSchema).optional(),
-});
-export type ProposalChanges = z.infer<typeof ProposalChangesSchema>;
-
-/** Body of a `proposal` card event; `status` is the only part that changes after creation. */
-export const ProposalEventBodySchema = z.object({
-  changes: ProposalChangesSchema,
-  rationale: z.string(),
-  status: ProposalStatusSchema,
-  /** The card's values of the changed fields when the proposal was made (for the before/after view). */
-  before: ProposalChangesSchema.optional(),
-  /** Who accepted/rejected it and when (set with the status change). */
-  resolvedBy: z.string().optional(),
-  resolvedAt: Iso.optional(),
-});
-export type ProposalEventBody = z.infer<typeof ProposalEventBodySchema>;
-
-export const PlanSnapshotSchema = z.object({
-  description: z.string(),
-  checks: z.array(z.object({ text: z.string(), method: z.string().optional() })),
-  subCards: z.array(z.object({ title: z.string(), description: z.string().optional() })),
-  tags: z.array(z.string()),
-  recommendedPresetId: z.string().nullable(),
-  notes: z.string().optional(),
-  /** Files/directories (globs) the plan touches; the scheduler uses them to avoid parallel conflicts. */
-  files: z.array(z.string()).optional(),
-  /** WP-106: the work split into sub-agent tasks; absent/empty = the main agent works alone. */
-  subtasks: z.array(SubtaskSchema).optional(),
-  /** WP-106: the owner edited the subtasks since the planning model last wrote them. */
-  subtasksEdited: z.boolean().optional(),
-});
-export type PlanSnapshot = z.infer<typeof PlanSnapshotSchema>;
-
-export const PlanVersionSchema = z.object({
-  id: z.string(),
-  cardId: z.string(),
-  version: z.number().int().min(1),
-  snapshot: PlanSnapshotSchema,
-  createdAt: Iso,
-});
-export type PlanVersion = z.infer<typeof PlanVersionSchema>;
-
 export const PresetModelSchema = z.object({
   provider: z.string().trim().min(1),
   // COMPAT: old presets used an empty model to request the provider's catalog default.
@@ -303,30 +104,6 @@ export const PresetSchema = z.object({
   updatedHlc: Hlc,
 });
 export type Preset = z.infer<typeof PresetSchema>;
-
-export const TagSchema = z.object({
-  id: z.string(),
-  name: z.string().min(1),
-  /** Default for card.needs_evidence when this tag is applied. */
-  evidence: z.boolean(),
-  /** Hex color chosen by the user; empty means the client derives one from the tag id. */
-  color: z.string(),
-  builtin: z.boolean(),
-  updatedHlc: Hlc,
-});
-export type Tag = z.infer<typeof TagSchema>;
-
-export const AttachmentSchema = z.object({
-  id: z.string(),
-  cardId: z.string(),
-  cardEventId: z.string().nullable(),
-  filename: z.string(),
-  mimeType: z.string(),
-  sizeBytes: z.number().int(),
-  sha256: z.string(),
-  createdAt: Iso,
-});
-export type Attachment = z.infer<typeof AttachmentSchema>;
 
 export const SwitchHistoryEntrySchema = z.object({
   from: z.string(),
@@ -372,22 +149,14 @@ export const AgentSessionSchema = z.object({
 });
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
 
-export const GitSnapshotSchema = z.object({
-  projectId: z.string(),
-  branch: z.string(),
-  ahead: z.number().int(),
-  behind: z.number().int(),
-  dirtyFiles: z.number().int(),
-  diffStat: z.string(),
-  takenAt: Iso,
-});
-export type GitSnapshot = z.infer<typeof GitSnapshotSchema>;
-
 // --- verify (owner: vibe-verify) ------------------------------------------------------------
 
-export const VerificationSchema = z.object({
+export const TaskVerificationSchema = z.object({
   id: z.string(),
-  cardId: z.string(),
+  cardId: z.null(),
+  workspaceId: z.string().min(1),
+  confirmedAt: Iso,
+  projectId: z.string().nullable(),
   commitHash: z.string(),
   /** null while running. */
   conclusion: JudgementSchema.nullable(),
@@ -396,15 +165,6 @@ export const VerificationSchema = z.object({
   kind: VerificationKindSchema,
   startedAt: Iso,
   finishedAt: Iso.nullable(),
-});
-export type Verification = z.infer<typeof VerificationSchema>;
-
-/** Workspace verification never depends on a legacy card. */
-export const TaskVerificationSchema = VerificationSchema.extend({
-  cardId: z.null(),
-  workspaceId: z.string().min(1),
-  confirmedAt: Iso,
-  projectId: z.string().nullable(),
 });
 export type TaskVerification = z.infer<typeof TaskVerificationSchema>;
 
@@ -545,21 +305,3 @@ export const MaintenanceRunSchema = z.object({
 export type MaintenanceRun = z.infer<typeof MaintenanceRunSchema>;
 
 // --- event bus row --------------------------------------------------------------------------
-
-export const SyncFieldMetaSchema = z.object({
-  tableName: z.string(),
-  rowId: z.string(),
-  columnName: z.string(),
-  hlc: Hlc,
-  deviceId: z.string(),
-});
-export type SyncFieldMeta = z.infer<typeof SyncFieldMetaSchema>;
-
-export const SyncTombstoneSchema = z.object({
-  tableName: z.string(),
-  rowId: z.string(),
-  hlc: Hlc,
-  deviceId: z.string(),
-  deletedAt: Iso,
-});
-export type SyncTombstone = z.infer<typeof SyncTombstoneSchema>;

@@ -35,7 +35,7 @@ export interface InjectionOptions extends ContextOptions {
   defaultMemoryTokens?: () => number;
   git?: GitRunner;
   userHome?: string;
-  /** Per-directory memory budget (complexity policy): tight for multi-turn / long cards. */
+  /** Per-directory memory budget (complexity policy): tight for multi-turn / long sessions. */
   budgetFor?: (cwd: string) => number | undefined;
   log?: (message: string) => void;
 }

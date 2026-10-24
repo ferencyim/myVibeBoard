@@ -29,11 +29,18 @@ function project(opts: { agentsMd?: boolean } = {}) {
   git(repo, "config", "user.email", "t@example.com");
   git(repo, "config", "user.name", "t");
   git(repo, "config", "core.autocrlf", "false");
-  const store = createMemoryStore({ projectRoot: repo, userHome: home, contextWindowTokens: 100_000 });
+  const store = createMemoryStore({
+    projectRoot: repo,
+    userHome: home,
+    contextWindowTokens: 100_000,
+  });
   store.writeProjectState(MASTER, "Phase: M5. The harbor module is half done.");
   store.recordDecision(MASTER, { body: "Use sqlite for the local store.", tag: "storage" });
   mkdirSync(store.layout.instructionsDir, { recursive: true });
-  writeFileSync(join(store.layout.instructionsDir, "project_goals.md"), "Goal: ship the harbor app.");
+  writeFileSync(
+    join(store.layout.instructionsDir, "project_goals.md"),
+    "Goal: ship the harbor app.",
+  );
   if (opts.agentsMd) writeFileSync(join(repo, "AGENTS.md"), "# Repo rules\nBe terse.\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "init");
@@ -41,7 +48,13 @@ function project(opts: { agentsMd?: boolean } = {}) {
 }
 
 function worktree(p: { base: string; repo: string }, name = "wt") {
-  const dir = join(p.base, name);
+  const root =
+    process.env.VIBE_WORKTREE_ROOT?.trim() ||
+    (process.platform === "win32"
+      ? "D:/devRepoCaches/worktrees"
+      : join(tmpdir(), "vibe-worktrees"));
+  mkdirSync(root, { recursive: true });
+  const dir = join(mkdtempSync(join(root, "context-")), name);
   git(p.repo, "worktree", "add", "-q", "-b", name, dir);
   return dir;
 }

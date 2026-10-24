@@ -1,16 +1,9 @@
-// What wakes the master. Everything arrives as vibe_event rows (the shared bus), nothing calls
-// another plugin:
-//   card.moved -> done                         -> card_done (memory consolidation)
-//   scheduler.quota_low / paused / resumed     -> reminders only
-//   maintenance.paused                         -> master.alert (maintenance_paused); .triggered is only logged
-// WP-105: the master no longer takes part in the card flow (no draft review, no advice on worker
-// questions, no acceptance): planning and execution run on the models picked on the card.
-// WP-109: the one card-flow job the master has is the dispatch pick (`scheduler.dispatch_wanted`).
+// Completed tasks and retained scheduler, context and maintenance events wake the master.
 
-import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } from "../vibe/db";
-import { isEvent } from "../vibe/contract";
 import type { Clock } from "../clock";
 import { type TuningSource } from "../tuning";
+import { isEvent } from "../vibe/contract";
+import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } from "../vibe/db";
 import type { WakeQueue } from "./queue";
 
 /** Owner switches (settings). */
@@ -35,7 +28,7 @@ export interface TriggersOptions {
   onScheduler?(event: SchedulerSignal): void;
   /** vibe-maintain: a rule was paused after repeated rejections (the owner is reminded). */
   onMaintenancePaused?(event: { ruleName: string; rejections: number }): void;
-  /** vibe-scheduler has free slots and asks which waiting card goes first (never awaited: it takes a model call). */
+  /** vibe-scheduler has free slots and asks which waiting task goes first (never awaited: it takes a model call). */
   onMasterContinuation?(request: {
     requestId: string;
     sessionId: string;
@@ -51,7 +44,6 @@ export interface TriggersOptions {
     slots: number;
     workspaceIds: string[];
   }): void;
-  onDispatchWanted?(request: { requestId: string; slots: number; cardIds: string[] }): void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -66,7 +58,7 @@ export type SchedulerSignal =
 
 export interface Triggers {
   consumer: EventConsumer;
-  /** Queue recently finished cards without a memory update. */
+  /** Queue recently finished tasks without a memory update. */
   sweep(): number;
   stop(): Promise<void>;
 }
@@ -94,7 +86,6 @@ export function createTriggers(options: TriggersOptions): Triggers {
       "scheduler.quota_low",
       "scheduler.paused",
       "scheduler.resumed",
-      "scheduler.dispatch_wanted",
       "maintenance.paused",
       "maintenance.triggered",
     ],

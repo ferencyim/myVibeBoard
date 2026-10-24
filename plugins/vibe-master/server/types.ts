@@ -85,12 +85,11 @@ export interface MasterAsk {
   ask(prompt: string, options?: { timeoutMs?: number }): Promise<string>;
 }
 
-/** WP-105: only memory consolidation is left; the master no longer reviews drafts or advises workers. */
-export type WakeKind = "card_done" | "task_done";
-export type WakeJob = (
-  | { kind: "card_done"; cardId: string }
-  | { kind: "task_done"; workspaceId: string }
-) & { force?: boolean };
-export const wakeTarget = (job: WakeJob) =>
-  job.kind === "task_done" ? job.workspaceId : job.cardId;
+export type WakeKind = "task_done";
+export interface WakeJob {
+  kind: WakeKind;
+  workspaceId: string;
+  force?: boolean;
+}
+export const wakeTarget = (job: WakeJob) => job.workspaceId;
 export const jobKey = (job: WakeJob) => job.kind + ":" + wakeTarget(job);

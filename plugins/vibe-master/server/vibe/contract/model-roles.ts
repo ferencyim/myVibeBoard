@@ -1,11 +1,10 @@
 // GENERATED FROM plugins/vibe-shared — DO NOT EDIT (run: node scripts/vibe/sync-shared.mjs)
 // Seven task roles. Task choices override project defaults, then global defaults.
-// Card adapters below remain until the WP-114 cutover.
 
 import { z } from "zod";
 import { PresetEnvironmentKindSchema, PresetPermissionModeSchema, type RoleHint } from "./enums";
-import { presetModels } from "./preset-models";
 import type { Preset } from "./model";
+import { presetModels } from "./preset-models";
 import type { TaskPlan } from "./task";
 
 export const MODEL_ROLES = [
@@ -32,26 +31,6 @@ export const ModelDefaultsSchema = z.object({
 });
 export type ModelDefaults = z.infer<typeof ModelDefaultsSchema>;
 
-export type CardModelField =
-  | "scoutPresetId"
-  | "plannerPresetId"
-  | "planReviewerPresetId"
-  | "presetId"
-  | "subagentPresetId"
-  | "reviewerPresetId"
-  | "verifierPresetId";
-
-/** The card field that holds each job's pick. `presetId` is the main agent. */
-export const CARD_MODEL_FIELD: Record<ModelRole, CardModelField> = {
-  scout: "scoutPresetId",
-  planner: "plannerPresetId",
-  plan_reviewer: "planReviewerPresetId",
-  worker: "presetId",
-  subagent: "subagentPresetId",
-  reviewer: "reviewerPresetId",
-  verifier: "verifierPresetId",
-};
-
 /** The preset purpose the pickers filter by. */
 export const MODEL_ROLE_HINT: Record<ModelRole, RoleHint> = {
   scout: "scout",
@@ -62,19 +41,6 @@ export const MODEL_ROLE_HINT: Record<ModelRole, RoleHint> = {
   reviewer: "reviewer",
   verifier: "verifier",
 };
-
-/**
- * Jobs that are skipped when the card has no pick (不探路 / 不复核): their defaults only prefill new
- * cards. Every other job falls back to the defaults at run time too.
- */
-export const SKIPPABLE_ROLES: readonly ModelRole[] = ["scout", "reviewer"];
-
-export type ModelSource = "card" | "project" | "global";
-
-export interface ResolvedModel {
-  presetId: string | null;
-  source: ModelSource | null;
-}
 
 /** Keep known preset IDs and explicit optional-role disables from settings or JSON columns. */
 export function cleanDefaults(value: unknown): ModelDefaults {
@@ -89,45 +55,6 @@ export function cleanDefaults(value: unknown): ModelDefaults {
       const id = presetId?.trim();
       if (id) out[role] = id;
     }
-  }
-  return out;
-}
-
-/**
- * The preset a job runs with: the card's pick, then the project default, then the global default.
- * `exists` skips an id whose preset was deleted. With a card given, a skippable job without a pick
- * resolves to nothing (the card said "do not"); without a card (a new card) the defaults apply.
- */
-export function resolveModel(
-  role: ModelRole,
-  card: Partial<Record<CardModelField, string | null>> | null | undefined,
-  project: { defaultPresets: ModelDefaults } | null | undefined,
-  global: ModelDefaults | null | undefined,
-  exists: (id: string) => boolean = () => true,
-): ResolvedModel {
-  const own = card?.[CARD_MODEL_FIELD[role]];
-  if (own && exists(own)) return { presetId: own, source: "card" };
-  if (card && SKIPPABLE_ROLES.includes(role)) return { presetId: null, source: null };
-  const fromProject = project?.defaultPresets[role];
-  if (fromProject && exists(fromProject)) return { presetId: fromProject, source: "project" };
-  const fromGlobal = global?.[role];
-  if (fromGlobal && exists(fromGlobal)) return { presetId: fromGlobal, source: "global" };
-  return { presetId: null, source: null };
-}
-
-/** Card fields a new card gets from the defaults, for the jobs the caller left open (`undefined`). */
-export function prefillModels(
-  given: Partial<Record<CardModelField, string | null | undefined>>,
-  project: { defaultPresets: ModelDefaults } | null | undefined,
-  global: ModelDefaults | null | undefined,
-  exists: (id: string) => boolean = () => true,
-): Partial<Record<CardModelField, string>> {
-  const out: Partial<Record<CardModelField, string>> = {};
-  for (const role of MODEL_ROLES) {
-    const field = CARD_MODEL_FIELD[role];
-    if (given[field] !== undefined) continue;
-    const { presetId } = resolveModel(role, null, project, global, exists);
-    if (presetId) out[field] = presetId;
   }
   return out;
 }

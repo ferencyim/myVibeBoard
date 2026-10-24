@@ -12,7 +12,7 @@ export const verifySettings = defineSettings({
   scope: "host",
   version: 1,
   schema: z.object({
-    /** Failed verification (or severe review) sends the card back to the worker; false = leave it in verifying. */
+    /** Failed task verification (or severe review) requests a fix within the confirmed scope. */
     autoReturnOnFail: z.boolean().default(true),
     /**
      * Consecutive review-triggered returns after which a severe review is only "doubt".
@@ -34,7 +34,7 @@ export const verifySettings = defineSettings({
     excerptChars: z.number().int().min(500).max(200_000).default(6000),
     /** How long a collector waits for the dev server's ready URL (seconds); a verify.json value wins. */
     readyTimeoutSeconds: z.number().min(5).max(3600).default(60),
-    /** Where baseline worktrees are created. Empty = env VIBE_WORKTREE_ROOT, else <VIBE_HOME>/worktrees. */
+    /** Empty uses VIBE_WORKTREE_ROOT; otherwise Windows uses D:/devRepoCaches/worktrees, other platforms <VIBE_HOME>/worktrees. */
     worktreeRoot: z.string().default(""),
   }),
 });

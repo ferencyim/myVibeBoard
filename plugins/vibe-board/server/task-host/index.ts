@@ -12,7 +12,7 @@ import {
   type TaskPresetSnapshot,
 } from "../vibe/contract";
 import { createTaskRuntimeCommands, type VibeDb, type VibeStore } from "../vibe/db";
-import { modeIdFor } from "../dispatch/brief";
+import { modeIdFor } from "./permission";
 import { TASK_HOST_PROMPTS } from "./prompts";
 import { createTaskResources } from "./resources";
 import { snapshotPreset, nativeModelSnapshot, bootstrapPlannerSnapshot } from "./presets";

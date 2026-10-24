@@ -101,7 +101,8 @@ export function selectAgent(
 
   if (task.preselected) {
     const picked = profiles.find((p) => p.id === task.preselected);
-    if (!picked) return empty(`Pre-selected agent ${task.preselected} is not in the capability table`);
+    if (!picked)
+      return empty(`Pre-selected agent ${task.preselected} is not in the capability table`);
     const q = quotaOf(picked);
     if (q.level === "exhausted") warnings.push(`${picked.provider} quota is exhausted`);
     else if (q.level === "tight") warnings.push(`${picked.provider} quota is tight`);
@@ -116,7 +117,10 @@ export function selectAgent(
   }
 
   if (task.device && (ctx.devicesFree?.[task.device] ?? Infinity) <= 0) {
-    return empty(`No free ${task.device}`, { until: null, reason: `all ${task.device} devices are leased` });
+    return empty(`No free ${task.device}`, {
+      until: null,
+      reason: `all ${task.device} devices are leased`,
+    });
   }
   if (ctx.memoryPaused) {
     return empty("Memory above threshold", { until: null, reason: "memory pressure" });
@@ -142,7 +146,10 @@ export function selectAgent(
       continue;
     }
     if (q.level === "tight" && rank > minRank) {
-      excluded.push({ agentId: p.id, why: `${p.provider} quota tight, reserved for ${ctx.tightMinPriority ?? "high"}+ priority` });
+      excluded.push({
+        agentId: p.id,
+        why: `${p.provider} quota tight, reserved for ${ctx.tightMinPriority ?? "high"}+ priority`,
+      });
       blockedByQuotaUntil = pickEarlier(blockedByQuotaUntil, q.resetsAt ?? null);
       continue;
     }
@@ -159,7 +166,13 @@ export function selectAgent(
     // Under-powered is worse than over-powered; over-powered only costs quota.
     const fit = gap < 0 ? 12 * gap : -3 * gap;
     score += fit;
-    reasons.push(gap === 0 ? "tier fits the task" : gap < 0 ? `tier ${p.tier} below needed ${need}` : `tier ${p.tier} above needed ${need}`);
+    reasons.push(
+      gap === 0
+        ? "tier fits the task"
+        : gap < 0
+          ? `tier ${p.tier} below needed ${need}`
+          : `tier ${p.tier} above needed ${need}`,
+    );
 
     if (q.remainingPct != null) {
       score += q.remainingPct / 10;
@@ -175,7 +188,9 @@ export function selectAgent(
       const scores = [...tags, ...(platform ? [platform] : [])]
         .map((t) => hist[t])
         .filter((x): x is number => typeof x === "number");
-      const h = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : (hist["*"] ?? 0);
+      const h = scores.length
+        ? scores.reduce((a, b) => a + b, 0) / scores.length
+        : (hist["*"] ?? 0);
       if (h !== 0) {
         score += 10 * h;
         reasons.push(`track record ${h > 0 ? "+" : ""}${h.toFixed(2)}`);
@@ -198,10 +213,20 @@ export function selectAgent(
       ranked,
       excluded,
       warnings,
-      wait: blockedByQuotaUntil !== undefined ? { until: blockedByQuotaUntil, reason: "waiting for quota reset" } : null,
+      wait:
+        blockedByQuotaUntil !== undefined
+          ? { until: blockedByQuotaUntil, reason: "waiting for quota reset" }
+          : null,
     };
   }
-  return { agentId: best.agentId, reason: best.reasons.join("; "), ranked, excluded, warnings, wait: null };
+  return {
+    agentId: best.agentId,
+    reason: best.reasons.join("; "),
+    ranked,
+    excluded,
+    warnings,
+    wait: null,
+  };
 }
 
 function pickEarlier(a: string | null | undefined, b: string | null): string | null {
@@ -260,23 +285,4 @@ export function parseWorkerHistory(markdown: string): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [k, c] of counts) out[k] = (c.pos - c.neg) / (c.pos + c.neg + 2);
   return out;
-}
-
-/**
- * The preset a card's main agent runs with, in the order every dispatch path must use: the card's
- * own pick, the master agent's recommendation (`suggestedPresetId`), the project default, the global
- * default (WP-108, see model-roles.ts). Dispatch and the scheduler's admission both call this so they
- * cannot disagree about which preset a card has. `presetExists` skips a stored id whose preset was
- * deleted and goes on to the next source.
- */
-export function pickPresetId(
-  card: { presetId: string | null; suggestedPresetId: string | null },
-  project: { defaultPresets: { worker?: string } } | null | undefined,
-  presetExists: (id: string) => boolean = () => true,
-  global: { worker?: string } | null = null,
-): string | null {
-  for (const id of [card.presetId, card.suggestedPresetId, project?.defaultPresets.worker, global?.worker]) {
-    if (id && presetExists(id)) return id;
-  }
-  return null;
 }

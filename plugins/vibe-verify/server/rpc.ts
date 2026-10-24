@@ -1,11 +1,10 @@
-// RPC handlers behind shared/rpc.ts, used by the "verification result" block of the board UI.
+// Evidence bytes for the native task verification panel.
 
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import * as rpc from "../shared/rpc";
-import type { VerifyStore } from "./store";
-import type { VibeStore } from "./vibe/db";
+import type { TaskVerifyStore } from "./task-store";
 
 const MIME: Record<string, string> = {
   ".png": "image/png",
@@ -35,23 +34,11 @@ export function readEvidenceBytes(file: string, root?: string): Buffer {
 export function registerVerifyRpcs(
   server: PluginServerContext,
   deps: {
-    board: VibeStore;
     evidenceRoot?: string;
-    verify: VerifyStore;
+    verify: TaskVerifyStore;
   },
 ): void {
-  const { board, verify } = deps;
-  const card = (ref: string) => board.cards.get(ref) ?? fail("not_found", `Card not found: ${ref}`);
-
-  server.handle(rpc.verifyGetRpc, ({ card: ref, verificationId }) => {
-    const c = card(ref);
-    const id = verificationId ?? verify.latest(c.id)?.id;
-    return { detail: (id && verify.detail(id)) || null };
-  });
-
-  server.handle(rpc.verifyListRpc, ({ card: ref }) => ({
-    verifications: verify.list(card(ref).id),
-  }));
+  const { verify } = deps;
 
   server.handle(rpc.verifyEvidenceRpc, ({ evidenceId, thumb }) => {
     const evidence =
@@ -70,10 +57,4 @@ export function registerVerifyRpcs(
       base64: bytes.toString("base64"),
     };
   });
-
-  const retired = () =>
-    fail("unavailable", "旧看板验证操作已停用，请在原生任务对话中继续；旧卡片不会自动恢复或运行。");
-  server.handle(rpc.verifyApproveRpc, retired);
-  server.handle(rpc.verifyRejectRpc, retired);
-  server.handle(rpc.verifyRerunRpc, retired);
 }

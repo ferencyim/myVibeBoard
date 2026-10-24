@@ -994,7 +994,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     targets: () =>
       [...held.values()].map((row) => ({
         sessionId: row.agentId ?? row.id,
-        cardKey: null,
+        workspaceId: row.workspaceId,
         path: row.directory,
       })),
     isPaused: () => paused,

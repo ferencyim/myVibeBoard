@@ -36,9 +36,9 @@ $vibeHome = Join-Path $dataDir "vibe"
 $electronData = Join-Path $dataDir "electron"
 $tokenTarget = Join-Path $dataDir "push-gateway.token"
 
-function Copy-Tree($from, $to) {
+function Copy-Tree($from, $to, $exclude = @()) {
   # robocopy /E copies and overwrites; it never deletes anything in the target.
-  robocopy $from $to /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2 /XD .git test __tests__ | Out-Null
+  robocopy $from $to /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2 /XD .git test __tests__ @exclude | Out-Null
   if ($LASTEXITCODE -ge 8) { throw "robocopy $from -> $to failed ($LASTEXITCODE)" }
   $global:LASTEXITCODE = 0
 }
@@ -57,7 +57,21 @@ if (-not $SkipCopy) {
   foreach ($p in $Plugins) {
     $src = Join-Path $repo "plugins\$p"
     if (-not (Test-Path (Join-Path $src "node_modules"))) { throw "Run npm ci in plugins\$p first" }
-    Copy-Tree $src (Join-Path $pluginsDir $p)
+    $pluginTarget = Join-Path $pluginsDir $p
+    # Source npm ci links the fork SDK. Do not deploy a link to a source checkout.
+    $sdkTarget = Join-Path $pluginTarget "node_modules\@getpaseo\plugin"
+    if (Test-Path -LiteralPath $sdkTarget) {
+      $sdkItem = Get-Item -LiteralPath $sdkTarget -Force
+      if ($sdkItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        # Delete only the junction itself. Never traverse or recursively delete its target.
+        [IO.Directory]::Delete($sdkTarget, $false)
+      }
+    }
+    Copy-Tree $src $pluginTarget @((Join-Path $src "node_modules\@getpaseo\plugin"))
+    New-Item -ItemType Directory -Force -Path $sdkTarget | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo "packages\plugin\package.json") -Destination $sdkTarget -Force
+    Copy-Tree (Join-Path $repo "packages\plugin\dist") (Join-Path $sdkTarget "dist")
+    Copy-Tree (Join-Path $repo "packages\plugin\src") (Join-Path $sdkTarget "src")
   }
 }
 
@@ -125,5 +139,7 @@ $s.WorkingDirectory = $InstallDir
 $s.Save()
 
 Write-Host "Installed to $InstallDir (PASEO_HOME=$paseoHome, port $Port)."
+Write-Host "WP-114: on first database open, the daemon verifies a consistent vibe.db backup before dropping retired card tables. Backup failure stops migration."
+Write-Host "Old cards and phone backlog are not imported. Save ongoing work in its Git worktree before starting the upgraded daemon."
 Write-Host "Next: start the daemon (Start-ScheduledTask 'myVibeBoard Daemon'), then install plugins:"
 foreach ($p in $Plugins) { Write-Host "  & '$InstallDir\paseo.ps1' plugin install '$(Join-Path $pluginsDir $p)'" }

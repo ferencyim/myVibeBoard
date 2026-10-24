@@ -624,42 +624,6 @@ describe("all role watchdog", () => {
   });
 });
 
-describe("legacy session isolation", () => {
-  it.each(["codex", "kimi"])(
-    "does not automatically compact or hand off old %s card sessions",
-    async (provider) => {
-      const s = setup();
-      const project = s.store.projects.create({ name: "旧项目", prefix: "OLD", repoPath: "" });
-      const card = s.store.cards.create({ projectId: project.id, title: "旧卡片" });
-      const old = s.store.sessions.start({
-        cardId: card.id,
-        agentId: "legacy-agent",
-        workspaceId: "legacy-workspace",
-        provider,
-        role: "worker",
-      });
-      s.store.sessions.setState(old.id, "idle");
-      const run = vi.fn();
-      const handoff = vi.fn();
-      const archive = vi.fn();
-      const scheduler = createCompactionScheduler({
-        store: s.store,
-        config: () => ({ enabled: true, ttlSeconds: {} }),
-        now: () => 1000,
-        buildContext: () => "",
-        host: { run, handoff, archive },
-      });
-      scheduler.onTurnEnded({ id: old.agentId, provider, cwd: "unused" });
-      s.store.sessions.touch(old.id, { cacheExpiresAt: new Date(2000).toISOString() });
-      expect(await scheduler.tick()).toEqual([]);
-      expect(run).not.toHaveBeenCalled();
-      expect(handoff).not.toHaveBeenCalled();
-      expect(archive).not.toHaveBeenCalled();
-      expect(s.store.sessions.get(old.id)?.state).toBe("idle");
-    },
-  );
-});
-
 describe("compaction resource ownership", () => {
   it("defers when the ordinary worker still owns a compute slot without running or yielding it", async () => {
     const s = setup();

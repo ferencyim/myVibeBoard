@@ -1,7 +1,4 @@
-// Hand-off summary for a freshly started master agent. Built from the board alone (cards, events,
-// session history), so it works when the previous agent is gone or archived. Size-capped: the new
-// agent still gets full detail from the wake messages and `vibe_show`. The framing text is the
-// registered prompt `master.handoff_summary`; this module only fills its sections.
+// Hand-off summary uses completed task snapshots and the persisted switch history.
 
 import { defaultPromptPort, type PromptPort } from "../prompts/port";
 import { DEFAULT_TUNING } from "../tuning";

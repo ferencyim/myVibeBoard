@@ -35,7 +35,7 @@ export interface SystemProbe {
 
 export interface SessionTarget {
   sessionId: string;
-  cardKey?: string | null;
+  workspaceId?: string | null;
   /** Directory the session works in; null = cannot be attributed. */
   path: string | null;
 }
@@ -45,7 +45,7 @@ export interface SessionUsage {
   /** Fraction of the whole machine's CPU (0-1). */
   cpu: number;
   procs: number;
-  cardKey: string | null;
+  workspaceId: string | null;
 }
 
 export interface ResourceSnapshot {
@@ -131,7 +131,7 @@ function attribute(
   }
   const out: Record<string, SessionUsage> = {};
   for (const t of targets) {
-    out[t.sessionId] = { memBytes: 0, cpu: 0, procs: 0, cardKey: t.cardKey ?? null };
+    out[t.sessionId] = { memBytes: 0, cpu: 0, procs: 0, workspaceId: t.workspaceId ?? null };
   }
   for (const [path, group] of byPath) {
     const seen = new Set<number>();
@@ -152,20 +152,11 @@ function attribute(
         memBytes: Math.round(mem / group.length),
         cpu: clamp01(cpu / group.length),
         procs: Math.ceil(seen.size / group.length),
-        cardKey: t.cardKey ?? null,
+        workspaceId: t.workspaceId ?? null,
       };
     }
   }
   return out;
-}
-
-/** Largest memory consumers first. */
-export function topSessions(snapshot: ResourceSnapshot, n = 3) {
-  return Object.entries(snapshot.perSession)
-    .map(([sessionId, u]) => ({ sessionId, cardKey: u.cardKey, memBytes: u.memBytes }))
-    .filter((s) => s.memBytes > 0)
-    .sort((a, b) => b.memBytes - a.memBytes)
-    .slice(0, n);
 }
 
 // --- real probe -----------------------------------------------------------------------------
@@ -248,7 +239,9 @@ export function createSystemProbe(run: CommandRunner = runCommand): SystemProbe 
     },
     async listProcesses() {
       if (process.platform === "win32") {
-        return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WIN_QUERY]));
+        return parseWindowsProcesses(
+          await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WIN_QUERY]),
+        );
       }
       return parsePsProcesses(await run("ps", ["-eo", "pid=,ppid=,rss=,time=,args="]));
     },

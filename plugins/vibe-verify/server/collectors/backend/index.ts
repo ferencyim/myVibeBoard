@@ -203,7 +203,7 @@ export function createBackendCollector(options: BackendCollectorOptions = {}): E
       const doubts: string[] = [];
       let ran = false;
 
-      // Tests are card-wide evidence; per-check collection only replays that check's requests.
+      // Tests are task-wide evidence; per-check collection only replays that check's requests.
       const testCmd = ctx.check ? undefined : resolveTestCommand(config, ctx.worktreePath);
       if (testCmd) {
         ran = true;

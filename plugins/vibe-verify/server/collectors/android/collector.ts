@@ -204,7 +204,7 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
     states.set(ctx.verificationId, state);
     mkdirSync(ctx.outputDir, { recursive: true });
 
-    const prefix = ctx.check ? slug(ctx.check.id) : "card";
+    const prefix = ctx.check ? slug(ctx.check.id) : "task";
     const addArtifact = (
       kind: EvidenceKind,
       file: string,
@@ -234,7 +234,6 @@ export function createAndroidCollector(options: AndroidCollectorOptions): Eviden
       if (!options.leases) throw new Error("未指定 ctx.deviceId，也未配置 DeviceLeaseProvider");
       const lease = await options.leases.acquire({
         platform: "android",
-        cardId: ctx.cardId,
         verificationId: ctx.verificationId,
         ttlMs: options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS,
         signal: ctx.signal,

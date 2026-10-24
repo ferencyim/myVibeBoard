@@ -1,4 +1,4 @@
-// Small JSON state file under <VIBE_HOME>/master. Cards, assessments and plans live in vibe.db and
+// Small JSON state file under <VIBE_HOME>/master. Task snapshots live in vibe.db and
 // the memory files; this only remembers the running agent and the permission override, so a daemon
 // restart or a preset switch does not lose its place.
 

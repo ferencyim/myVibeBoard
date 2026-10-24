@@ -337,7 +337,7 @@ describe("prompt templates", () => {
   });
 });
 
-describe("default draft card text", () => {
+describe("default maintenance planning text", () => {
   const findings: Finding[] = [
     {
       category: "stale_branch",

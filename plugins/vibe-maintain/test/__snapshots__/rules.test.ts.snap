@@ -1,13 +1,13 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`default draft card text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > acceptance 1`] = `
+exports[`default maintenance planning text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > acceptance 1`] = `
 "- 上面每一项都已处理，或确认是有意保留的
 - 长期未合并的分支：\`git branch --no-merged\` 里不再出现这些分支，或确认它们是有意保留的。
 - 已合并但未删除的分支：\`git branch --merged\` 里不再出现这些分支。
 - 未提交的改动：对应目录里 \`git status\` 显示干净。"
 `;
 
-exports[`default draft card text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > body 1`] = `
+exports[`default maintenance planning text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > body 1`] = `
 "## 为什么出现此维护任务
 自动维护规则「git-health」检查了项目「Demo」的 git 状态。触发原因：已完成任务 10 个，达到阈值 10。这是自动生成的维护建议，不是你提出的需求。
 

@@ -185,7 +185,7 @@ export function createTaskContextService(options: {
       turnId?: string | null,
     ) {
       const current = runtime.getSession(session.id);
-      if (!current || current.state === "ended" || current.cardId) return;
+      if (!current || current.state === "ended") return;
       const task = current.workspaceId ? store.tasks.get(current.workspaceId) : undefined;
       if (
         task &&
@@ -267,7 +267,7 @@ export function registerTaskContext(
   const resources = createContextResources({ ...options, report: service.report });
   const active = (agentId: string) => {
     const session = options.store.sessions.getByAgent(agentId);
-    return session && !session.cardId && session.state !== "ended" ? session : undefined;
+    return session && session.state !== "ended" ? session : undefined;
   };
   const watchdog = createTaskWatchdog({
     store: options.store,

@@ -174,17 +174,11 @@ function setup(limit = 2) {
 }
 
 describe("原生任务准入", () => {
-  it("只准入已确认任务，按确认时间 FIFO，旧 card 不参与生产调度", async () => {
+  it("只准入已确认任务，按确认时间 FIFO", async () => {
     const t = setup(1);
     t.task("unconfirmed", ["x"], false);
     t.task("first");
     t.task("second", ["src/b.ts"]);
-    t.store.cards.create({
-      projectId: t.project.id,
-      title: "旧卡",
-      column: "todo",
-      presetId: t.preset.id,
-    });
     const output = await t.scheduler.tick();
     expect(output.admitted.map((row) => row.workspaceId)).toEqual(["first"]);
     expect(output.deferred.second).toMatch(/全局/);
@@ -459,7 +453,7 @@ describe("原生任务准入", () => {
     expect(await normalizeTaskFiles(["src/{a,b}.ts"], t.dir)).toEqual(["**"]);
     expect(await normalizeTaskFiles(["./src/a.ts"], t.dir)).toEqual(["src/a.ts"]);
   });
-  it("生产runtime消费资源事件并发布响应，旧card不会被tick放行", async () => {
+  it("生产 runtime 消费资源事件并发布拒绝响应", async () => {
     const t = setup();
     t.task("a");
     const runtime = createSchedulerRuntime({
@@ -482,9 +476,6 @@ describe("原生任务准入", () => {
       )
       .get();
     expect(JSON.parse(response!.payload_json)).toMatchObject({ requestId: "bus", ok: false });
-    expect(t.db.prepare("SELECT * FROM vibe_event WHERE type='scheduler.admitted'").all()).toEqual(
-      [],
-    );
     await runtime.stop();
   });
   it("同workspace不同设备kind各持正确设备，不借错设备", async () => {

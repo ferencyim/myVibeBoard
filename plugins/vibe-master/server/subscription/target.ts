@@ -1,5 +1,5 @@
 // Resolve a provider (and optionally a model) into a concrete model from the provider catalog.
-// Used for presets without a model (WP-109) and by the planning sessions.
+// Used for presets without a model (WP-109).
 
 import type { MasterTarget } from "../../shared/rpc";
 import type { MasterPaseo, ModelInfoLike } from "../types";
@@ -10,7 +10,11 @@ export interface TargetRequest {
 }
 
 const MODEL_PREFERENCE: Record<string, RegExp> = { claude: /opus/i };
-export function pickModel(models: ModelInfoLike[], provider: string, requested?: string): ModelInfoLike {
+export function pickModel(
+  models: ModelInfoLike[],
+  provider: string,
+  requested?: string,
+): ModelInfoLike {
   const usable = models.filter((m) => m.isSelectable !== false);
   if (usable.length === 0) throw new Error(`Provider "${provider}" lists no selectable models`);
   if (requested) {
@@ -26,7 +30,8 @@ export function pickModel(models: ModelInfoLike[], provider: string, requested?:
     return found;
   }
   const preference = MODEL_PREFERENCE[provider];
-  const preferred = preference && usable.find((m) => preference.test(m.id) || preference.test(m.label));
+  const preferred =
+    preference && usable.find((m) => preference.test(m.id) || preference.test(m.label));
   return preferred ?? usable.find((m) => m.isDefault) ?? usable[0]!;
 }
 
@@ -46,8 +51,15 @@ export async function resolveTarget(
   };
 }
 
-export const sameTarget = (a: MasterTarget | null | undefined, b: MasterTarget | null | undefined) =>
-  !!a && !!b && a.provider === b.provider && a.model === b.model && (a.thinking ?? null) === (b.thinking ?? null);
+export const sameTarget = (
+  a: MasterTarget | null | undefined,
+  b: MasterTarget | null | undefined,
+) =>
+  !!a &&
+  !!b &&
+  a.provider === b.provider &&
+  a.model === b.model &&
+  (a.thinking ?? null) === (b.thinking ?? null);
 
 /** `provider/model` as the SDK expects it. */
 export const providerSpec = (t: Pick<MasterTarget, "provider" | "model">) =>

@@ -58,7 +58,7 @@ write this block.
 
 ## 原生任务验证（WP-112 / WP-115）
 
-新流程只接收已确认的 workspace/task，旧 card.moved、旧验证恢复和旧写操作 RPC 已停用；旧 UI 与只读证据保留到 WP-114 清理。不创建伪卡片，也不复制原生聊天。
+只接收已确认的 workspace/task；旧卡片验证、恢复、读写 RPC 及界面已删除。证据通过任务面板查看，公开聊天由宿主持久保存。
 
 任务进入 reviewing/verifying 后，先核对 worktree 的 HEAD 与完整 Git 状态。所有改动（包括 .vibe/verify.json）必须已收口提交。复核模型可选，验证模型必须来自本轮冻结的角色快照；预设后续修改不影响本轮。
 
@@ -90,3 +90,5 @@ npm run typecheck
 ```
 
 真实模型、Web/Android 与隔离 daemon 的验收证据由 WP-112 总报告记录；单测使用可注入 runner/模型/采集器，不冒充真实模型或设备实测。
+
+验证的前后对比基线 worktree 保留供复核；验证不会自动删除目录树。通过 `VIBE_WORKTREE_ROOT` 指定基线根，Windows 必须位于 `D:/devRepoCaches/worktrees` 内。本次隔离验收将该根显式指向当前 worktree 的 `.dev/verify-worktrees`。

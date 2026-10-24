@@ -2,7 +2,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMaintenanceEngine } from "../server/engine";
-import { createMaintenanceCommands } from "../server/vibe/db";
+import { createMaintenanceCommands, createUsageCommands } from "../server/vibe/db";
 import type { CheckOutput } from "../server/types";
 import { DAY, setup, tempDir, plan, roles } from "./helpers";
 
@@ -42,7 +42,7 @@ describe("维护规则接入原生任务", () => {
     });
     expect(h.prompts[0]).toContain("/执行");
     expect(h.prompts[0]).toContain("不得修改");
-    expect(h.maintenanceCards()).toEqual([]);
+    expect(h.legacyCardTables()).toEqual([]);
     expect(h.engine.listRuns(ruleId(h))[0]).toMatchObject({
       status: "done",
       cardIds: [],
@@ -280,7 +280,7 @@ describe("维护规则接入原生任务", () => {
       finding(),
       { error: "没有daemon" },
     ]);
-    expect(h.maintenanceCards()).toEqual([]);
+    expect(h.legacyCardTables()).toEqual([]);
   });
 
   it("commit和token触发使用项目归因，不再依赖旧card", async () => {
@@ -298,13 +298,30 @@ describe("维护规则接入原生任务", () => {
       },
     });
     await h.engine.syncRules();
-    // Synthetic usage rows exercise the same optional owner boundary as stats indexing.
-    h.db.exec(
-      "CREATE TABLE usage_event (project_id TEXT, ts TEXT, tokens_in INTEGER, tokens_out INTEGER)",
-    );
-    h.db
-      .prepare("INSERT INTO usage_event VALUES (?,?,?,?)")
-      .run(h.project.id, h.clock.now().toISOString(), 40, 20);
+    const usage = createUsageCommands(h.db);
+    usage.putEvent({
+      ts: h.clock.now().toISOString(),
+      provider: "codex",
+      model: "test",
+      sessionId: "usage-session",
+      tokensIn: 40,
+      tokensOut: 20,
+      tokensCacheRead: 0,
+      tokensCacheWrite: 0,
+      durationMs: null,
+      cost: null,
+      dedupeKey: "maintenance-workload",
+    });
+    usage.relink([
+      {
+        provider: "codex",
+        sessionId: "usage-session",
+        projectId: h.project.id,
+        workspaceId: null,
+        role: null,
+        agentId: null,
+      },
+    ]);
     await h.engine.tick();
     expect(h.engine.listRuns(h.project.id + ":commits")).toHaveLength(1);
     expect(h.engine.listRuns(h.project.id + ":tokens")).toHaveLength(1);

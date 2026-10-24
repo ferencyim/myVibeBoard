@@ -1,27 +1,8 @@
-// vibe-board plugin RPC contract (WP-10). Runtime-neutral: imported by the server handlers, the
-// client UI (WP-11/14), the App offline interceptor and the sync endpoint (WP-41).
-//
-// All names are `vibe.<area>.<verb>`. A "card ref" is a card id (ULID) or key (`ABC-12`).
-// Errors are thrown by the server as `Error("[<code>] <message>")` with code one of
-// not_found | invalid | conflict | illegal_transition | actor_not_allowed | same_column.
-
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
-import { localStatusRpc, replyCheckRpc, replySendRpc, syncExchangeRpc } from "./sync";
 import {
-  AgentSessionSchema,
-  AttachmentSchema,
-  AuthorKindSchema,
-  CardColumnSchema,
-  CardEventSchema,
-  CardEventTypeSchema,
-  CardPrioritySchema,
-  CardViewSchema,
-  ChatThreadSchema,
   ModelDefaultsSchema,
-  PlanSnapshotSchema,
   PromptDefSchema,
-  PlanVersionSchema,
   PresetEnvironmentKindSchema,
   PresetPermissionModeSchema,
   PresetModelInputSchema,
@@ -29,44 +10,12 @@ import {
   ProjectSchema,
   ProjectTypeSchema,
   RoleHintSchema,
-  SubtaskSchema,
-  TagSchema,
   PROJECT_PREFIX_PATTERN,
   ROLE_HINTS,
   isSafeRepoRelativePath,
 } from "../vibe/contract";
-
-export const MAX_ATTACHMENT_SIZE_BYTES = 25 * 1024 * 1024;
-export const CARDS_LIST_DEFAULT_LIMIT = 500;
-
-const cardRef = z.string().min(1);
 const nonBlank = z.string().trim().min(1);
 const prefixSchema = z.string().regex(PROJECT_PREFIX_PATTERN);
-/** Who a UI-originated move is attributed to; the phone may only move draft <-> todo. */
-const moveActorSchema = z.enum(["user", "phone"]);
-
-// --- shapes --------------------------------------------------------------------------------
-
-export const cardDetailSchema = z.object({
-  card: CardViewSchema,
-  events: z.array(CardEventSchema),
-  attachments: z.array(AttachmentSchema),
-  plans: z.array(PlanVersionSchema),
-  /** Sub-cards (cards whose parentCardId is this card). */
-  children: z.array(CardViewSchema),
-  sessions: z.array(AgentSessionSchema),
-});
-export type CardDetail = z.infer<typeof cardDetailSchema>;
-
-export const boardCountsSchema = z.object({
-  draft: z.number().int(),
-  todo: z.number().int(),
-  in_progress: z.number().int(),
-  verifying: z.number().int(),
-  done: z.number().int(),
-});
-export type BoardCounts = z.infer<typeof boardCountsSchema>;
-
 const projectFields = {
   name: nonBlank,
   repoPath: z.string(),
@@ -79,7 +28,9 @@ const projectFields = {
   projectType: ProjectTypeSchema,
   description: z.string(),
   /** Requirements document, relative to the repository root. */
-  requirementsPath: z.string().refine(isSafeRepoRelativePath, "must be relative to the repository root"),
+  requirementsPath: z
+    .string()
+    .refine(isSafeRepoRelativePath, "must be relative to the repository root"),
   /** WP-108: default preset per model job; a missing job follows the global default. */
   defaultPresets: ModelDefaultsSchema,
   concurrencyLimit: z.number().int().min(1).nullable(),
@@ -108,31 +59,6 @@ const presetFields = {
   // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
   roleHint: z.enum(PRESET_ROLE_HINTS).nullable(),
 };
-
-const cardEditable = {
-  title: nonBlank,
-  description: z.string(),
-  priority: CardPrioritySchema,
-  acceptance: z.string(),
-  /** Attachment ids of the reference images. */
-  refImages: z.array(z.string()),
-  needsEvidence: z.boolean(),
-  presetId: z.string().nullable(),
-  /** Preset of the model that reviews the result (null = no review). */
-  reviewerPresetId: z.string().nullable(),
-  /** WP-105: scout model run before planning (null = no scouting) and planning model. */
-  scoutPresetId: z.string().nullable(),
-  plannerPresetId: z.string().nullable(),
-  /** WP-106: default model of the sub-agents (presetId is the main agent). */
-  subagentPresetId: z.string().nullable(),
-  /** WP-108: model of 复核方案, and the verification model (null = the project / global default). */
-  planReviewerPresetId: z.string().nullable(),
-  verifierPresetId: z.string().nullable(),
-  parentCardId: z.string().nullable(),
-  tagIds: z.array(z.string()),
-};
-
-// --- projects ------------------------------------------------------------------------------
 
 export const projectsListRpc = defineRpc({
   name: "vibe.projects.list",
@@ -196,251 +122,6 @@ export const paseoProjectsListRpc = defineRpc({
   }),
 });
 
-// --- board / cards -------------------------------------------------------------------------
-
-/** Per-project card counts per column (general board tab, sidebar badge). Archived excluded. */
-export const boardSummaryRpc = defineRpc({
-  name: "vibe.board.summary",
-  input: z.object({}),
-  output: z.object({
-    projects: z.array(
-      z.object({
-        projectId: z.string(),
-        prefix: z.string(),
-        name: z.string(),
-        counts: boardCountsSchema,
-      }),
-    ),
-    totals: boardCountsSchema,
-  }),
-});
-
-export const cardsListRpc = defineRpc({
-  name: "vibe.cards.list",
-  /** `project` is an id or prefix. `search` matches key, title and description. Cards come
-   *  ordered by sortKey (per column the board order). */
-  input: z.object({
-    project: z.string().optional(),
-    column: CardColumnSchema.optional(),
-    tagId: z.string().optional(),
-    priority: CardPrioritySchema.optional(),
-    search: z.string().optional(),
-    parentCardId: z.string().optional(),
-    includeArchived: z.boolean().optional(),
-    limit: z.number().int().min(1).max(2000).optional(),
-  }),
-  output: z.object({ cards: z.array(CardViewSchema), truncated: z.boolean() }),
-});
-
-export const cardsGetRpc = defineRpc({
-  name: "vibe.cards.get",
-  input: z.object({ card: cardRef }),
-  output: cardDetailSchema,
-});
-
-export const cardsCreateRpc = defineRpc({
-  name: "vibe.cards.create",
-  /** UI cards start in draft (default) or todo. `project` is an id or prefix. */
-  input: z.object({
-    project: z.string().min(1),
-    title: cardEditable.title,
-    description: cardEditable.description.optional(),
-    column: z.enum(["draft", "todo"]).optional(),
-    priority: cardEditable.priority.optional(),
-    acceptance: cardEditable.acceptance.optional(),
-    refImages: cardEditable.refImages.optional(),
-    needsEvidence: cardEditable.needsEvidence.optional(),
-    presetId: cardEditable.presetId.optional(),
-    reviewerPresetId: cardEditable.reviewerPresetId.optional(),
-    scoutPresetId: cardEditable.scoutPresetId.optional(),
-    plannerPresetId: cardEditable.plannerPresetId.optional(),
-    planReviewerPresetId: cardEditable.planReviewerPresetId.optional(),
-    subagentPresetId: cardEditable.subagentPresetId.optional(),
-    verifierPresetId: cardEditable.verifierPresetId.optional(),
-    parentCardId: cardEditable.parentCardId.optional(),
-    tagIds: cardEditable.tagIds.optional(),
-    sortKey: z.string().optional(),
-  }),
-  output: z.object({ card: CardViewSchema }),
-});
-
-export const cardsUpdateRpc = defineRpc({
-  name: "vibe.cards.update",
-  input: z.object({
-    card: cardRef,
-    title: cardEditable.title.optional(),
-    description: cardEditable.description.optional(),
-    priority: cardEditable.priority.optional(),
-    acceptance: cardEditable.acceptance.optional(),
-    refImages: cardEditable.refImages.optional(),
-    needsEvidence: cardEditable.needsEvidence.optional(),
-    presetId: cardEditable.presetId.optional(),
-    reviewerPresetId: cardEditable.reviewerPresetId.optional(),
-    scoutPresetId: cardEditable.scoutPresetId.optional(),
-    plannerPresetId: cardEditable.plannerPresetId.optional(),
-    subagentPresetId: cardEditable.subagentPresetId.optional(),
-    planReviewerPresetId: cardEditable.planReviewerPresetId.optional(),
-    verifierPresetId: cardEditable.verifierPresetId.optional(),
-    /** Read positions of the plan / execution / review / verification tabs (see markReadPatch). */
-    planSeenAt: z.string().nullable().optional(),
-    execSeenAt: z.string().nullable().optional(),
-    reviewSeenAt: z.string().nullable().optional(),
-    verifySeenAt: z.string().nullable().optional(),
-    parentCardId: cardEditable.parentCardId.optional(),
-    tagIds: cardEditable.tagIds.optional(),
-  }),
-  output: z.object({ card: CardViewSchema }),
-});
-
-export const cardsMoveRpc = defineRpc({
-  name: "vibe.cards.move",
-  /** Column move validated by the state machine (UI: draft <-> todo, verifying -> done/in_progress
-   *  by the user; todo -> in_progress is the dispatcher's). `sortKey` default: end of target. */
-  input: z.object({
-    card: cardRef,
-    to: CardColumnSchema,
-    actor: moveActorSchema.optional(),
-    reason: z.string().optional(),
-    sortKey: z.string().optional(),
-  }),
-  output: z.object({ card: CardViewSchema }),
-});
-
-export const cardsReorderRpc = defineRpc({
-  name: "vibe.cards.reorder",
-  /** Place a card within its column: `sortKey` explicit, or between `afterCard` and `beforeCard`
-   *  (neighbour refs; null/omitted = start/end). */
-  input: z.object({
-    card: cardRef,
-    sortKey: z.string().optional(),
-    afterCard: cardRef.nullable().optional(),
-    beforeCard: cardRef.nullable().optional(),
-  }),
-  output: z.object({ card: CardViewSchema }),
-});
-
-export const cardsArchiveRpc = defineRpc({
-  name: "vibe.cards.archive",
-  input: z.object({ card: cardRef, archived: z.boolean().optional() }),
-  output: z.object({ card: CardViewSchema }),
-});
-
-export const cardsDeleteRpc = defineRpc({
-  name: "vibe.cards.delete",
-  input: z.object({ card: cardRef }),
-  output: z.object({ deleted: z.boolean() }),
-});
-
-// --- card events (timeline) ----------------------------------------------------------------
-
-export const eventsListRpc = defineRpc({
-  name: "vibe.events.list",
-  input: z.object({ card: cardRef }),
-  output: z.object({ events: z.array(CardEventSchema) }),
-});
-
-export const eventsAddRpc = defineRpc({
-  name: "vibe.events.add",
-  /** Comment / note on a card. `text` becomes body `{ text }`; pass `body` for structured events. */
-  input: z.object({
-    card: cardRef,
-    type: CardEventTypeSchema.optional(),
-    text: z.string().optional(),
-    body: z.unknown().optional(),
-    authorKind: AuthorKindSchema.optional(),
-    author: z.string().optional(),
-  }),
-  output: z.object({ event: CardEventSchema }),
-});
-
-// --- card conversations (WP-92, split into plan / execution by WP-105) ----------------------
-
-export const chatSendRpc = defineRpc({
-  name: "vibe.chat.send",
-  /** The owner says something in the card's plan conversation (default; the planning session
-   *  answers) or execution conversation (`thread: "exec"`; forwarded to the executor). A `chat`
-   *  card event (author kind user). `actor: "phone"` marks messages typed on the phone. */
-  input: z.object({
-    card: cardRef,
-    text: nonBlank,
-    actor: moveActorSchema.optional(),
-    thread: ChatThreadSchema.optional(),
-    /** WP-106: an execution message for one subtask's sub-agent instead of the main agent. */
-    subtask: z.string().min(1).optional(),
-  }),
-  output: z.object({ event: CardEventSchema }),
-});
-
-export const planStartRpc = defineRpc({
-  name: "vibe.plan.start",
-  /** 制定方案: scouting on the card's scout model (if picked), then planning on its planning model. */
-  input: z.object({ card: cardRef, actor: moveActorSchema.optional() }),
-  output: z.object({ event: CardEventSchema }),
-});
-
-export const planReviewRpc = defineRpc({
-  name: "vibe.plan.review",
-  /** WP-108 复核方案: the plan reviewer model reads the plan, its opinion goes to the planning model,
-   *  which revises the plan. Both models: the card's pick, else the project / global default. */
-  input: z.object({ card: cardRef, actor: moveActorSchema.optional() }),
-  output: z.object({ event: CardEventSchema }),
-});
-
-export const planSubtasksRpc = defineRpc({
-  name: "vibe.plan.subtasks",
-  /** WP-106: the owner's subtasks of the plan (edit, add, remove, pick a model). The planning
-   *  model's next version of them becomes a proposal. Changing the model of a running subtask
-   *  only affects sub-agents started later. */
-  input: z.object({ card: cardRef, subtasks: z.array(SubtaskSchema), actor: moveActorSchema.optional() }),
-  output: z.object({ card: CardViewSchema }),
-});
-
-export const execStartRpc = defineRpc({
-  name: "vibe.exec.start",
-  /** 立即执行: a draft is moved to todo first; then the card is dispatched to its executing model. */
-  input: z.object({ card: cardRef }),
-  output: z.object({ card: CardViewSchema, session: AgentSessionSchema }),
-});
-
-export const execSwitchRpc = defineRpc({
-  name: "vibe.exec.switch",
-  /** Pick the executing model; while the card runs, the work moves to the new model (same worktree,
-   *  plan, criteria and execution conversation). */
-  input: z.object({ card: cardRef, presetId: z.string().nullable() }),
-  output: z.object({ card: CardViewSchema, switched: z.boolean() }),
-});
-
-export const proposalsAcceptRpc = defineRpc({
-  name: "vibe.proposals.accept",
-  /** Applies a pending `proposal` event's changes to the card (one card.updated) and marks it
-   *  accepted. The only way to accept: the phone sync refuses proposal events and edits. */
-  input: z.object({ eventId: z.string().min(1), actor: moveActorSchema.optional() }),
-  output: z.object({ event: CardEventSchema, card: CardViewSchema }),
-});
-
-export const proposalsRejectRpc = defineRpc({
-  name: "vibe.proposals.reject",
-  input: z.object({ eventId: z.string().min(1), actor: moveActorSchema.optional() }),
-  output: z.object({ event: CardEventSchema }),
-});
-
-// --- plan versions -------------------------------------------------------------------------
-
-export const plansListRpc = defineRpc({
-  name: "vibe.plans.list",
-  input: z.object({ card: cardRef }),
-  output: z.object({ versions: z.array(PlanVersionSchema) }),
-});
-
-export const plansSaveRpc = defineRpc({
-  name: "vibe.plans.save",
-  /** Appends the next version (1, 2, ...). */
-  input: z.object({ card: cardRef, snapshot: PlanSnapshotSchema }),
-  output: z.object({ version: PlanVersionSchema }),
-});
-
-// --- default models (WP-108) ----------------------------------------------------------------
-
 export const defaultsGetRpc = defineRpc({
   name: "vibe.defaults.get",
   /** The global default model per job (the project level is project.defaultPresets). */
@@ -453,39 +134,6 @@ export const defaultsSetRpc = defineRpc({
   /** Replaces the global defaults; a missing job = no global default. */
   input: z.object({ global: ModelDefaultsSchema }),
   output: z.object({ global: ModelDefaultsSchema }),
-});
-
-// --- tags / presets / providers ------------------------------------------------------------
-
-export const tagsListRpc = defineRpc({
-  name: "vibe.tags.list",
-  input: z.object({}),
-  output: z.object({ tags: z.array(TagSchema) }),
-});
-
-const tagColor = z.string().regex(/^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6})?$/, "颜色需为 #RGB / #RRGGBB，留空表示自动");
-
-export const tagsCreateRpc = defineRpc({
-  name: "vibe.tags.create",
-  input: z.object({ name: nonBlank, evidence: z.boolean().optional(), color: tagColor.optional() }),
-  output: z.object({ tag: TagSchema }),
-});
-
-export const tagsUpdateRpc = defineRpc({
-  name: "vibe.tags.update",
-  input: z.object({
-    tagId: z.string(),
-    name: nonBlank.optional(),
-    evidence: z.boolean().optional(),
-    color: tagColor.optional(),
-  }),
-  output: z.object({ tag: TagSchema }),
-});
-
-export const tagsDeleteRpc = defineRpc({
-  name: "vibe.tags.delete",
-  input: z.object({ tagId: z.string() }),
-  output: z.object({ deleted: z.boolean() }),
 });
 
 export const presetsListRpc = defineRpc({
@@ -564,65 +212,6 @@ export const providersCatalogRpc = defineRpc({
   }),
 });
 
-// --- attachments (reference images, files) -------------------------------------------------
-
-export const attachmentsListRpc = defineRpc({
-  name: "vibe.attachments.list",
-  input: z.object({ card: cardRef }),
-  output: z.object({ attachments: z.array(AttachmentSchema) }),
-});
-
-export const attachmentsUploadRpc = defineRpc({
-  name: "vibe.attachments.upload",
-  /** `asRefImage` also appends the new attachment id to the card's refImages. */
-  input: z.object({
-    card: cardRef,
-    fileName: nonBlank,
-    mime: z.string().optional(),
-    base64: z.string(),
-    cardEventId: z.string().optional(),
-    asRefImage: z.boolean().optional(),
-  }),
-  output: z.object({ attachment: AttachmentSchema }),
-});
-
-export const attachmentsDownloadRpc = defineRpc({
-  name: "vibe.attachments.download",
-  input: z.object({ attachmentId: z.string() }),
-  output: z.object({ attachment: AttachmentSchema, base64: z.string() }),
-});
-
-export const attachmentsDeleteRpc = defineRpc({
-  name: "vibe.attachments.delete",
-  /** Also removes the id from the owning card's refImages. */
-  input: z.object({ attachmentId: z.string() }),
-  output: z.object({ deleted: z.boolean() }),
-});
-
-// --- sessions (read only; written by WP-12 lifecycle) ---------------------------------------
-
-export const sessionsListRpc = defineRpc({
-  name: "vibe.sessions.list",
-  input: z.object({ card: cardRef.optional() }),
-  output: z.object({ sessions: z.array(AgentSessionSchema) }),
-});
-
-// --- dispatch / lifecycle (WP-12) ------------------------------------------------------------
-
-export const cardsDispatchRpc = defineRpc({
-  name: "vibe.cards.dispatch",
-  /** todo -> in_progress: creates the worktree and starts the worker session from the card's
-   *  preset (or `presetId`). Fails with [illegal_transition] unless the card is in todo. */
-  input: z.object({
-    card: cardRef,
-    presetId: z.string().optional(),
-    extraInstructions: z.string().optional(),
-  }),
-  output: z.object({ card: CardViewSchema, session: AgentSessionSchema }),
-});
-
-// --- project requirements document ---------------------------------------------------------
-
 const requirementsDocShape = {
   /** Repo-relative path, forward slashes. */
   path: z.string(),
@@ -649,22 +238,6 @@ export const requirementsSaveRpc = defineRpc({
   }),
 });
 
-export const sessionsRecordSwitchRpc = defineRpc({
-  name: "vibe.sessions.record_switch",
-  /** The agent was continued on another provider (switch-provider returned `toAgentId`):
-   *  records the switch on the card and moves the session to the new agent. */
-  input: z.object({
-    fromAgentId: z.string().min(1),
-    toAgentId: z.string().min(1),
-    provider: z.string().min(1),
-    reason: z.string().optional(),
-  }),
-  output: z.object({ session: AgentSessionSchema.nullable() }),
-});
-
-// --- agent prompts (WP-98) -------------------------------------------------------------------
-
-/** A registered prompt with its overrides and the text in effect (PromptInfo of the contract). */
 export const promptInfoSchema = PromptDefSchema.extend({
   globalOverride: z.string().nullable(),
   /** Only filled when a project was asked for. */
@@ -698,61 +271,3 @@ export const promptsClearRpc = defineRpc({
   input: z.object({ key: z.string().min(1), projectId: promptScope }),
   output: z.object({ ok: z.literal(true) }),
 });
-
-export const VIBE_BOARD_RPCS = {
-  projectsListRpc,
-  projectsCreateRpc,
-  projectsUpdateRpc,
-  paseoProjectsListRpc,
-  boardSummaryRpc,
-  cardsListRpc,
-  cardsGetRpc,
-  cardsCreateRpc,
-  cardsUpdateRpc,
-  cardsMoveRpc,
-  cardsReorderRpc,
-  cardsArchiveRpc,
-  cardsDeleteRpc,
-  eventsListRpc,
-  eventsAddRpc,
-  chatSendRpc,
-  planStartRpc,
-  planReviewRpc,
-  planSubtasksRpc,
-  defaultsGetRpc,
-  defaultsSetRpc,
-  execStartRpc,
-  execSwitchRpc,
-  proposalsAcceptRpc,
-  proposalsRejectRpc,
-  plansListRpc,
-  plansSaveRpc,
-  tagsListRpc,
-  tagsCreateRpc,
-  tagsUpdateRpc,
-  tagsDeleteRpc,
-  presetsListRpc,
-  presetsCreateRpc,
-  presetsUpdateRpc,
-  presetsDeleteRpc,
-  providersCatalogRpc,
-  attachmentsListRpc,
-  attachmentsUploadRpc,
-  attachmentsDownloadRpc,
-  attachmentsDeleteRpc,
-  sessionsListRpc,
-  cardsDispatchRpc,
-  requirementsGetRpc,
-  requirementsSaveRpc,
-  sessionsRecordSwitchRpc,
-  syncExchangeRpc,
-  replyCheckRpc,
-  replySendRpc,
-  localStatusRpc,
-  promptsListRpc,
-  promptsSetRpc,
-  promptsClearRpc,
-} as const;
-
-export * from "./sync";
-export * from "./verify";

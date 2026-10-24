@@ -13,7 +13,7 @@ import {
   type CompactionConfig,
   type CompactionHost,
 } from "../server/compaction";
-import { createVibeStore, migrateOwner, openVibeDb } from "../server/vibe/db";
+import { createVibeStore, migrateOwner, openVibeDb, readEvents } from "../server/vibe/db";
 
 const T0 = Date.parse("2026-10-19T10:00:00.000Z");
 
@@ -34,11 +34,10 @@ function setup(provider = "codex", opts: SetupOptions = {}) {
   migrateOwner(db, "core");
   const store = createVibeStore(db, { now: () => new Date(t) });
   const project = store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: "" });
-  const card = store.cards.create({ projectId: project.id, title: "Work" });
   const cwd = mkdtempSync(join(tmpdir(), "vibe-cmp-"));
   const agent: AgentInfo = { id: "agent-1", provider, cwd };
   const session = store.sessions.start({
-    cardId: card.id,
+    projectId: project.id,
     agentId: agent.id,
     role: "worker",
     provider,
@@ -63,8 +62,8 @@ function setup(provider = "codex", opts: SetupOptions = {}) {
     },
   };
   const scheduler = createCompactionScheduler({
-    includeLegacyCards: true,
     store,
+    usageDb: db,
     host,
     config: () => config,
     buildContext: () => "GOALS+PROJECT_STATE",
@@ -75,10 +74,10 @@ function setup(provider = "codex", opts: SetupOptions = {}) {
   });
   scheduler.onTurnEnded(agent); // round over: cache written, expires T0 + ttl
   const events = () =>
-    store.events
-      .list(card.id)
-      .filter((e) => e.type === "compaction")
-      .map((e) => e.body);
+    readEvents(db, 0, { types: ["session.compacted"] }).map((e) => {
+      const payload = e.payload as { sessionId: string; strategy: string };
+      return { sessionId: payload.sessionId, strategy: payload.strategy };
+    });
   const ctx = {
     clock,
     config,
@@ -86,7 +85,7 @@ function setup(provider = "codex", opts: SetupOptions = {}) {
     scheduler,
     agent,
     session,
-    card,
+    project,
     prompts,
     handoffs,
     archived,
@@ -146,7 +145,7 @@ describe("trigger rules", () => {
 });
 
 describe("scheduler (fake clock)", () => {
-  it("leaves a hot cache alone, compacts inside the margin, once, with one card event", async () => {
+  it("leaves a hot cache alone, compacts inside the margin, once, with one session event", async () => {
     const s = setup("codex"); // ttl 300 s, margin 60 s
     s.clock.advance(100);
     expect((await s.scheduler.tick())[0]).toMatchObject({ action: "skipped", reason: "cache-hot" });
@@ -155,7 +154,7 @@ describe("scheduler (fake clock)", () => {
     s.clock.advance(150); // 50 s left
     expect(await s.scheduler.tick()).toEqual([{ sessionId: s.session.id, action: "compact" }]);
     expect(s.prompts).toHaveLength(3);
-    expect(s.prompts[0]).toContain(`${s.card.id}.md`); // progress goes to the session .md
+    expect(s.prompts[0]).toContain(`${s.session.id}.md`); // progress goes to the session .md
     expect(existsSync(join(s.cwd, ".vibe", "sessions"))).toBe(true);
     expect(s.prompts[1]).toBe("/compact");
     expect(s.prompts[2]).toContain("GOALS+PROJECT_STATE"); // restored after compaction
@@ -214,7 +213,7 @@ describe("scheduler (fake clock)", () => {
     expect((await s.scheduler.tick())[0]).toMatchObject({ action: "compact" });
   });
 
-  it("does not duplicate an event the board lifecycle already recorded", async () => {
+  it("does not duplicate an event the native lifecycle already recorded", async () => {
     const s = setup("codex", {
       onRun: (text, c) => {
         if (text === "/compact") c.store.sessions.recordCompaction(c.session.id, "auto");
@@ -230,70 +229,12 @@ describe("scheduler (fake clock)", () => {
     s.clock.advance(250);
     expect(await s.scheduler.tick()).toEqual([{ sessionId: s.session.id, action: "handoff" }]);
     expect(s.prompts).toHaveLength(1); // only the progress notes; no /compact
-    expect(s.handoffs[0]).toContain(`${s.card.id}.md`);
+    expect(s.handoffs[0]).toContain(`${s.session.id}.md`);
     expect(s.handoffs[0]).toContain("GOALS+PROJECT_STATE");
     expect(s.archived).toEqual(["agent-1"]);
     expect(s.store.sessions.get(s.session.id)?.state).toBe("ended");
-    expect(s.store.sessions.getByAgent("agent-1-next")?.cardId).toBe(s.card.id);
+    expect(s.store.sessions.getByAgent("agent-1-next")?.projectId).toBe(s.project.id);
     expect(s.events()).toEqual([{ sessionId: s.session.id, strategy: "handoff" }]);
-  });
-
-  it("preserves the active candidate index in a cold handoff", async () => {
-    const s = setup("kimi");
-    const selection = {
-      kind: "model_selected",
-      sessionId: s.session.id,
-      presetId: "preset",
-      modelIndex: 1,
-      provider: "kimi",
-      model: "k2",
-    };
-    s.store.events.add({
-      cardId: s.card.id,
-      type: "status",
-      authorKind: "system",
-      author: "failover",
-      body: selection,
-    });
-    s.clock.advance(250);
-    expect(await s.scheduler.tick()).toEqual([{ sessionId: s.session.id, action: "handoff" }]);
-    const next = s.store.sessions.getByAgent("agent-1-next")!;
-    expect(
-      s.store.events
-        .list(s.card.id)
-        .map((e) => e.body)
-        .filter((b: any) => b?.kind === "model_selected"),
-    ).toEqual([selection, { ...selection, sessionId: next.id }]);
-  });
-
-  it("updates a handed-off sub-agent's run without changing its task progress", async () => {
-    const s = setup("kimi");
-    s.store.sessions.setState(s.session.id, "ended");
-    const sub = s.store.sessions.start({
-      cardId: s.card.id,
-      agentId: "sub-agent",
-      role: "subagent",
-      provider: "kimi",
-    });
-    s.store.sessions.setState(sub.id, "idle");
-    s.store.cards.setSubtaskRun(s.card.id, "s1", {
-      sessionId: sub.id,
-      agentId: "sub-agent",
-      presetId: "preset",
-      status: "running",
-      attempts: 2,
-    });
-    s.scheduler.onTurnEnded({ ...s.agent, id: "sub-agent" });
-    s.clock.advance(250);
-    expect(await s.scheduler.tick()).toContainEqual({ sessionId: sub.id, action: "handoff" });
-    const next = s.store.sessions.getByAgent("sub-agent-next")!;
-    expect(s.store.cards.get(s.card.id)!.subtaskRuns.s1).toMatchObject({
-      sessionId: next.id,
-      agentId: "sub-agent-next",
-      presetId: "preset",
-      status: "running",
-      attempts: 2,
-    });
   });
 
   it("leaves claude to Claude Code when native idle compaction exists", async () => {

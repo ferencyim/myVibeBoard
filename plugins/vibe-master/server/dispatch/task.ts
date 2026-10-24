@@ -1,12 +1,51 @@
 import { z } from "zod";
 import { parseReply } from "../assess/parse";
 import { buildRepairMessage } from "../master/prompts";
-import { MasterError } from "../types";
-import { publishEvent } from "../vibe/db";
-import type { Task } from "../vibe/contract";
+import type { PromptPort } from "../prompts/port";
 import { defaultPromptPort } from "../prompts/port";
+import type { TuningSource } from "../tuning";
 import { defaultTuning } from "../tuning";
-import { failureReason, type DispatcherDeps } from "./dispatch";
+import type { MasterAsk } from "../types";
+import { MasterError } from "../types";
+import type { Task } from "../vibe/contract";
+import type { VibeDb, VibeStore } from "../vibe/db";
+import { publishEvent } from "../vibe/db";
+
+export interface DispatcherDeps {
+  db: VibeDb;
+  store: VibeStore;
+  master: MasterAsk;
+  /** Runs `fn` between the master's other jobs (the master has one conversation). */
+  exclusive<T>(fn: () => Promise<T>): Promise<T>;
+  prompts?: PromptPort;
+  tuning?: TuningSource;
+  /** Owner switches: the master is enabled and master dispatch is on. */
+  enabled(): boolean;
+  /** Seconds one question may take (settings). */
+  timeoutSeconds(): number;
+  now?: () => Date;
+  log?: (message: string, error?: unknown) => void;
+}
+
+const clip = (text: string, max: number) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+const FAILURE_TEXT: Record<string, string> = {
+  unavailable: "总 agent 暂不可用",
+  quota: "总 agent 的额度已用完",
+  timeout: "总 agent 没有及时回复",
+  permission: "总 agent 在等待权限批准",
+  agent: "总 agent 出错",
+};
+
+export function failureReason(error: unknown): string {
+  if (error instanceof MasterError) {
+    return `${FAILURE_TEXT[error.kind] ?? "总 agent 出错"}：${clip(error.message, 160)}`;
+  }
+  return `总 agent 出错：${clip(error instanceof Error ? error.message : String(error), 160)}`;
+}
 
 export interface TaskDispatchRequest {
   requestId: string;

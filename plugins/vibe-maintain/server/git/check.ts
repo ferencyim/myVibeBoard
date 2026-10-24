@@ -1,6 +1,6 @@
 // Built-in "git health" check (deterministic, no model): stale / merged-but-kept branches,
 // leftover worktrees, uncommitted changes, unpushed commits, conflicts with the trunk, large
-// files and outdated dependencies. Its output is both the draft card and the sub agent's input.
+// files and outdated dependencies. Its output is both the maintenance task and the sub agent's input.
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -13,7 +13,7 @@ export interface GitCheckOptions {
   largeFileMb: number;
   /** Look for outdated npm dependencies (needs network). */
   outdated: boolean;
-  /** Findings listed per category in the card text (all stay in the run's findings). */
+  /** Findings listed per category in the task text (all stay in the run's findings). */
   maxPerCategory: number;
 }
 
@@ -351,7 +351,7 @@ const CATEGORY_GUIDE: Record<string, CategoryGuide> = {
   },
 };
 
-/** Why the card exists, in one sentence. */
+/** Why the task exists, in one sentence. */
 function whyText(ctx: Pick<CheckContext, "rule" | "project" | "trigger">): string {
   const reason =
     ctx.trigger.reason === "手动触发"

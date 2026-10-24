@@ -2,7 +2,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
-import { createScriptedRunner, type CollectorContext } from "../server/vibe/contract/collector";
+import {
+  createScriptedRunner,
+  type TaskCollectorContext as CollectorContext,
+} from "../server/vibe/contract/collector";
 
 export function solidPng(width: number, height: number, rgb: [number, number, number]): Buffer {
   const png = new PNG({ width, height });
@@ -12,7 +15,9 @@ export function solidPng(width: number, height: number, rgb: [number, number, nu
 
 export function makeCtx(overrides: Partial<CollectorContext> = {}): CollectorContext {
   return {
-    cardId: "card_1",
+    cardId: null,
+    workspaceId: "ws-test",
+    confirmedAt: "2026-10-19T00:00:00.000Z",
     verificationId: "ver_1",
     projectType: "web",
     projectPath: "/proj",

@@ -317,6 +317,12 @@ Canonical replacement owns both timeline lanes. A matching local row keeps its p
 payload while taking the canonical row's ordered position. If a live assistant head is the
 canonical assistant prefix, it stays in the head lane. No row may be returned in both lanes.
 
+## Task conversation crash recovery: known limitation
+
+Task conversations batch ordinary public stream writes in WAL/NORMAL. Accepted delivery and turn completion use FULL commits: the former marks the member for recovery, and the latter removes that marker after its public output is durable. Restart can therefore replay the provider history for an interrupted accepted turn.
+
+A power failure can still lose the final uncommitted batch after a client has seen its live rows. The persisted last sequence then trails that client, and recovery may reuse those sequence numbers in the same conversation epoch. Do not treat this as an exactly-once cursor guarantee across power failure. Reopening and fetching authoritative history recovers the public content; a client retaining an ahead cursor may need to reload its conversation. Reserving durable sequence ranges or advancing an epoch at crash recovery is future work. Ordinary disconnect/reconnect and process restart tests do not prove power-loss cursor continuity.
+
 ## Relevant code
 
 - Server live stream forwarding: `packages/server/src/server/session.ts`

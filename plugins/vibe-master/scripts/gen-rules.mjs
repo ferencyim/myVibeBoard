@@ -14,7 +14,10 @@ const output = `// GENERATED FROM skills/vibe-master/SKILL.md by scripts/gen-rul
 
 if (process.argv.includes("--check")) {
   const current = existsSync(target) ? readFileSync(target, "utf8").replace(/\r\n/g, "\n") : "";
-  if (current !== output) {
+  const generated = current
+    ? await import("data:text/javascript;base64," + Buffer.from(current).toString("base64"))
+    : null;
+  if (generated?.MASTER_RULES !== body) {
     console.error("server/master/rules.generated.ts is stale: run `npm run gen:rules`.");
     process.exit(1);
   }

@@ -1,11 +1,13 @@
 # Upstream
 
+> WP-114：保留上游来源和改造历史用于许可证追溯。当前插件提供原生任务流程；下列卡片、看板、旧 MCP/CLI 和 LWW 路径均已退役，不是当前接口文档。
+
 - Source: https://github.com/anh-chu/paseo-plugin-tasks
 - Commit: 147b5ea33d2dfed0c53beae4fdaae79f36d817fa
 - Published as: npm paseo-plugin-tasks@0.1.1 (Paseo registry id anh-chu/tasks)
 - License: Apache-2.0 (see LICENSE in this directory; no NOTICE file upstream)
 - Imported: 2026-10-19
-- Role in myVibeBoard: base of the vibe-board kanban plugin (server rewritten in WP-10, UI rewritten in WP-11).
+- Role in myVibeBoard: historical base of vibe-board; rewritten for native task conversations in round 5.
 
 ## Local changes versus upstream
 

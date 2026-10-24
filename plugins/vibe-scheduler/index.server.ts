@@ -6,7 +6,6 @@ import {
   registerDeviceRpc,
   removeDeviceRpc,
   schedulerSettings,
-  selectAgentRpc,
   statusRpc,
   taskResourceRpc,
   taskTickRpc,
@@ -63,7 +62,6 @@ export default function contribute(server: PluginServerContext) {
     runtime.setSettings({
       ...DEFAULT_SETTINGS,
       ...state.values,
-      leaseTtlMinutes: state.values.deviceLeaseMinutes,
     } as RuntimeSettings);
   };
   const ready = settings.read().then(apply);
@@ -115,12 +113,6 @@ export default function contribute(server: PluginServerContext) {
   server.handle(taskTickRpc, async (_input, context) => {
     remember(context.paseo);
     return { ...(await runtime.tickOnce()) };
-  });
-
-  server.handle(selectAgentRpc, async ({ repoPath, ...task }, c) => {
-    remember(c.paseo);
-    await runtime.refreshUsage(true);
-    return { ...(await runtime.select(task, repoPath)) };
   });
 
   server.handle(devicesRpc, () => ({

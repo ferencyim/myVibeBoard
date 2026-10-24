@@ -1,29 +1,15 @@
 import type { CollectorContext } from "../collectors/context";
-// Check items (from the card) and the always-on automatic checks: tests and lint.
+// Confirmed task checks and automatic tests/lint.
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { CardView, EvidenceArtifact, Judgement, PlanVersion, Runner } from "../vibe/contract";
+import type { EvidenceArtifact, Judgement, Runner } from "../vibe/contract";
 import { loadVerifyConfig, writeArtifact } from "../collectors/common";
 import { resolveTestCommand } from "../collectors/backend";
 
 export interface CheckSpec {
   text: string;
   method: string;
-}
-
-const BULLET = /^\s*(?:[-*+]|\d+[.)])\s*(?:\[[ xX]\]\s*)?/;
-
-/** Latest plan checks, else acceptance criteria one per line, else the card title. */
-export function splitChecks(card: CardView, plan?: PlanVersion): CheckSpec[] {
-  const planned = plan?.snapshot.checks.filter((c) => c.text.trim());
-  if (planned?.length) return planned.map((c) => ({ text: c.text.trim(), method: c.method ?? "" }));
-  const lines = card.acceptance
-    .split(/\r?\n/)
-    .map((l) => l.replace(BULLET, "").trim())
-    .filter(Boolean);
-  if (lines.length) return lines.map((text) => ({ text, method: "" }));
-  return [{ text: `The change does what the card asks: ${card.title}`, method: "" }];
 }
 
 export interface AutoCheck extends CheckSpec {

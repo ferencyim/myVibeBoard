@@ -1,11 +1,21 @@
 # myVibeBoard 技术设计（可派工版）
 
-> 本文保留前四轮实现及 WP-00…109 的历史记录。第五轮第三版「一个任务 = 一个原生会话」、群聊多模型、会话内任务面板及 WP-110…115 以 [ROUND5-DESIGN.md](ROUND5-DESIGN.md) 为准；WP-110 已合入，其余包未整体验收。本文旧看板、分散角色 tab、卡片迁移、LWW/离线配置与旧收尾设计不再作为实施依据。
+> 第五轮已实现原生任务会话与 WP-114 最终切换，当前设计以 [ROUND5-DESIGN.md](ROUND5-DESIGN.md) 为准，操作见 [USER-GUIDE.md](USER-GUIDE.md)。本次发布的实际验收结果与未测项记录在 WP-114 报告。下文前四轮和 WP-00…109 作为历史保留，其中看板、分散角色 tab、LWW、旧卡迁移和移除 worktree 的收尾设计均已退役。
 
 > 状态：设计稿 v1（基于 paseo 0.12.0，分支 `arch/design`）。读者是后续并行实现 P1/P2/P3 的子代理。
 > 上游需求见 [PRODUCT-REQUIREMENTS.md](../../PRODUCT-REQUIREMENTS.md)，完整方案见 [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md)，
 > 构建见 [BUILD.md](BUILD.md)，fork 约定见 [FORK-WORKFLOW.md](FORK-WORKFLOW.md)。
 > 公开仓库：本文及所有后续文档、脚本、配置**不得出现主机 IP、用户名、域名、密钥**，一律用 `<MAC_HOST>`、`<RELAY_HOST>`、`<RELAY_DOMAIN>` 等占位符。
+
+## 当前架构：原生任务会话
+
+原生项目与 workspace 身份、独立 worktree、公开群聊历史、成员路由、审批与 Stop、首消息 outbox 归宿主。vibe-board 的任务面板负责七角色选择、方案确认、artifact 与流程编排；vibe-scheduler 统一准入，vibe-verify 以本轮确认及代码提交为依据取证，vibe-context 管理上下文与记忆。总 agent 只派发已确认任务并在完成后整理。
+
+侧栏 workspace 是任务列表，所有角色在同一个任务 tab 接续，子代理在会话内展开。面板在宽屏为侧栏、窄屏为 sheet。只有执行按钮或 /执行 授权执行；验证后用户通过才安全合并并 push，群聊与 worktree 保留。旧卡表及旧手机副本删除前先做一致性备份，不将旧卡生成新 task。保留数据清单、删除步骤和职责边界统一见第五轮设计 §4–7。
+
+插件开发依赖仓库内 packages/plugin，npm 锁文件只使用仓库相对路径；日用安装复制 SDK 实目录，避免依赖源码 worktree 的联接。
+
+## 历史架构（前四轮）
 
 ## 0. 关键结论
 

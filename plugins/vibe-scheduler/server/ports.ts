@@ -1,4 +1,4 @@
-// Dev-server port allocation: one stable port per key (card id), never shared between two live keys
+// Dev-server port allocation: one stable port per resource lease, never shared between two live keys
 // and verified free on the machine at allocation time. The map is persisted so a scheduler restart
 // does not hand a worker's port to somebody else.
 

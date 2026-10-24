@@ -1,17 +1,46 @@
 import { existsSync } from "node:fs";
-import { MemoryUpdateSchema, type MemoryUpdate } from "../assess/schema";
 import { parseReply } from "../assess/parse";
+import { MemoryUpdateSchema, type MemoryUpdate } from "../assess/schema";
 import {
   buildRepairMessage,
-  requirementsExcerpt,
   DEFAULT_REQUIREMENTS_CHARS,
+  requirementsExcerpt,
 } from "../master/prompts";
+import type { PromptPort } from "../prompts/port";
 import { defaultPromptPort } from "../prompts/port";
 import type { MasterStateFile } from "../subscription/state";
+import type { TuningSource } from "../tuning";
 import { defaultTuning } from "../tuning";
+import type { MasterAsk } from "../types";
 import type { Project, Task, TaskPlan } from "../vibe/contract";
+import type { GitRunner, VibeDb, VibeStore } from "../vibe/db";
 import { writeRequirementsDoc } from "../vibe/db";
-import type { ConsolidateDeps, ConsolidateOutcome } from "./consolidate";
+import type { ApplyResult, MemoryPort } from "./files";
+
+export interface ConsolidateDeps {
+  db: VibeDb;
+  store: VibeStore;
+  master: MasterAsk;
+  memory: MemoryPort;
+  /** Prompt texts (registry); built-in defaults when omitted. */
+  prompts?: PromptPort;
+  /** Owner settings (read on every use). All optional: 6000 chars, no requirements writes, default tuning. */
+  options?: {
+    requirementsChars?(): number;
+    maintainRequirements?(): boolean;
+    tuning?: TuningSource;
+  };
+  /** A requirements update failed: remind the owner (once per cooldown). */
+  onRequirementsFailure?(workspaceId: string, message: string): void;
+  /** Injectable git for the requirements commit. */
+  git?: GitRunner;
+  log?: (message: string, error?: unknown) => void;
+}
+
+export type ConsolidateOutcome =
+  | { status: "updated"; summary: string; applied: ApplyResult }
+  | { status: "failed"; error: string }
+  | { status: "skipped"; reason: "not_found" | "not_done" | "no_repo" | "already_done" };
 
 export interface TaskConsolidateDeps extends ConsolidateDeps {
   state: MasterStateFile;

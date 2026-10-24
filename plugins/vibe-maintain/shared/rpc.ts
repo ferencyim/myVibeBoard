@@ -12,7 +12,7 @@ export const maintainSettings = defineSettings({
     enabled: z.boolean().default(true),
     /** How often triggers (workload, cron, watched files) are evaluated. */
     tickSeconds: z.number().int().min(5).max(3600).default(30),
-    /** A rule is paused after this many consecutive rejected maintenance cards. */
+    /** A rule is paused after this many consecutive rejected maintenance tasks. */
     pauseAfterRejections: z.number().int().min(1).max(20).default(3),
     /** Agent (provider/model) for sub agents and fixes when a rule does not name one. */
     defaultAgent: z.string().default("claude/sonnet"),
@@ -22,10 +22,14 @@ export const maintainSettings = defineSettings({
     subAgentTimeoutMinutes: z.number().min(1).max(240).default(10),
     /** Minimum seconds between `git rev-list` polls per rule (commit-count triggers). */
     commitPollSeconds: z.number().int().min(5).max(3600).default(60),
-    /** Permission mode of a fix worker that runs unattended, per provider; others use the provider default. */
-    unattendedModes: z.record(z.string(), z.string().min(1)).default({ claude: "acceptEdits", codex: "auto-review" }),
+    /** Historical setting retained for stored preferences; maintenance tasks require explicit confirmation. */
+    unattendedModes: z
+      .record(z.string(), z.string().min(1))
+      .default({ claude: "acceptEdits", codex: "auto-review" }),
     /** Permission mode of read-only sub agents, per provider. */
-    readOnlyModes: z.record(z.string(), z.string().min(1)).default({ claude: "plan", codex: "read-only" }),
+    readOnlyModes: z
+      .record(z.string(), z.string().min(1))
+      .default({ claude: "plan", codex: "read-only" }),
   }),
 });
 export type MaintainSettings = z.output<typeof maintainSettings.schema>;
@@ -54,7 +58,9 @@ const RuleView = z.object({
   sources: z.record(z.string(), z.string()).nullable().default(null),
   /** The built-in default of a built-in rule (for restore-default). */
   base: z.unknown().nullable().default(null),
-  prompts: z.object({ review: z.string().nullable(), fix: z.string().nullable() }).default({ review: null, fix: null }),
+  prompts: z
+    .object({ review: z.string().nullable(), fix: z.string().nullable() })
+    .default({ review: null, fix: null }),
   triggerText: z.string().default(""),
   progressText: z.string().nullable().default(null),
   checkText: z.string().default(""),

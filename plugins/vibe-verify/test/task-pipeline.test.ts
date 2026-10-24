@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,6 @@ import type { PaseoApi } from "@getpaseo/client";
 import { createTaskHost } from "../../vibe-board/server/task-host";
 import { createTaskPipeline, taskTree, verificationBaselineRoot } from "../server/task-pipeline";
 import { createTaskVerifyStore } from "../server/task-store";
-import { createVerifyStore } from "../server/store";
 import { writeArtifact } from "../server/collectors/common";
 import { DEFAULT_TUNING } from "../server/tuning";
 import { createVerifyPrompts } from "../server/prompts";
@@ -39,6 +38,8 @@ function setup(
     headChanges?: boolean;
     closeFails?: boolean;
     noEvidence?: boolean;
+    gitEvidenceFails?: boolean;
+    verdictEvidence?: string[];
     maxReturns?: number;
     duplicate?: boolean;
     stop?: boolean;
@@ -117,6 +118,13 @@ function setup(
       if (call.args[0] === "rev-parse") return { stdout: head };
       if (call.args[0] === "status") return { stdout: options.dirty ? "?? .vibe/verify.json" : "" };
       if (call.args[0] === "merge-base") return { stdout: "base123" };
+      if (call.args[0] === "log")
+        return options.gitEvidenceFails
+          ? { exitCode: 1, stderr: "无法读取提交原文" }
+          : { stdout: head + "\n完成中文交付\n\nA\tsrc/task.ts\n" };
+      if (call.args[0] === "ls-files") return { stdout: "src/task.ts\nREADME.md\n" };
+      if (call.args[0] === "diff")
+        return { stdout: call.args.includes("--stat") ? "src/task.ts | 1 +\n" : "+任务修改\n" };
     }
     return undefined;
   });
@@ -174,7 +182,12 @@ function setup(
             ref: () => ({
               directory: worktree,
               projectId: project.id,
-              refresh: async () => undefined,
+              refresh: async () => ({
+                workspaceKind: "worktree",
+                projectKind: "git",
+                workspaceDirectory: worktree,
+                projectRootPath: join(root, "main"),
+              }),
             }),
           },
           taskConversations: {
@@ -207,11 +220,10 @@ function setup(
           },
           { paseo, signal: new AbortController().signal },
         );
-        expect(prepared?.ready).toBe(true);
+        expect(prepared?.ready, prepared?.reason).toBe(true);
         calls.push("prepare:" + input.role + ":" + board.tasks.get("ws-task")!.phase);
       }
       calls.push("launch:" + input.role);
-      expect(input.card).toBeUndefined();
       expect(input.task).toEqual({
         workspaceId: "ws-task",
         anchorAgentId: "anchor",
@@ -265,7 +277,7 @@ function setup(
             check: 1,
             judgement: options.judgement ?? "pass",
             note: "结论",
-            evidence: ["result.log"],
+            evidence: options.verdictEvidence ?? ["result.log"],
           };
           return {
             status: "idle",
@@ -387,11 +399,69 @@ function setup(
       return seenConfig;
     },
     latest: () => verify.list("ws-task").at(-1)!,
-    legacy: createVerifyStore(db, { root }),
   };
 }
 
 describe("原生 workspace 验证", () => {
+  it("本轮Git原文保存为绑定提交的可引用证据，判定仅引用真实文件名", async () => {
+    const h = setup({ verdictEvidence: ["git-evidence.json"] });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "pass", commitHash: "abc123" });
+    const detail = h.verify.detail(result!.verificationId)!;
+    const evidence = detail.evidence.find((file) => file.path.endsWith("git-evidence.json"))!;
+    expect(evidence).toMatchObject({ commitHash: "abc123", simulated: false });
+    const raw = readFileSync(evidence.path, "utf8");
+    expect(evidence.sha256).toBe(createHash("sha256").update(raw).digest("hex"));
+    const saved = JSON.parse(raw);
+    expect(saved).toMatchObject({
+      workspaceId: "ws-task",
+      confirmedAt: h.board.tasks.get("ws-task")!.confirmedAt,
+      commitHash: "abc123",
+      status: "collected",
+      error: null,
+    });
+    expect(saved.commands.map((command: { args: string[] }) => command.args)).toEqual([
+      ["rev-parse", "HEAD"],
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      ["log", "-1", "--format=%H%n%s", "--name-status", "abc123"],
+      ["ls-files"],
+      ["merge-base", "abc123", "main"],
+      ["diff", "--stat", "base123", "abc123", "--"],
+      ["diff", "base123", "abc123", "--"],
+    ]);
+    expect(saved.commands[2].result.stdout).toContain("完成中文交付");
+    expect(saved.commands[3].result.stdout).toContain("src/task.ts");
+    expect(saved.commands[6].result.stdout).toContain("+任务修改");
+    const judged = h.sentPrompts.find((prompt) => prompt.text.includes('"judgement"'))!.text;
+    expect(judged).toContain("git-evidence.json");
+    expect(judged).toContain("只能填写");
+    expect(detail.items[0]!.evidenceIds).toEqual([evidence.id]);
+  });
+  it("Git证据采集失败保留原始错误且整轮存疑，不伪造干净提交证据", async () => {
+    const h = setup({ gitEvidenceFails: true });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "doubt" });
+    const detail = h.verify.detail(result!.verificationId)!;
+    const evidence = detail.evidence.find((file) => file.path.endsWith("git-evidence.json"))!;
+    const saved = JSON.parse(readFileSync(evidence.path, "utf8"));
+    expect(saved.status).toBe("incomplete");
+    expect(saved.error).toContain("无法读取提交原文");
+    expect(saved.commands.at(-1).result).toMatchObject({ exitCode: 1, stderr: "无法读取提交原文" });
+    expect(detail.items.find((item) => item.checkText === "Git 原始证据")).toMatchObject({
+      judgement: "doubt",
+      evidenceIds: [evidence.id],
+    });
+    expect(h.board.tasks.get("ws-task")!.phase).toBe("paused");
+  });
+  it("MCP描述或固定fixture自述没有同名证据文件时仍降为存疑", async () => {
+    const h = setup({ verdictEvidence: ["固定fixture：已核对全部Git信息"] });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "doubt" });
+    expect(h.verify.detail(result!.verificationId)!.items[0]).toMatchObject({
+      judgement: "doubt",
+      evidenceIds: [],
+    });
+  });
   it("setup误回review对象须明确拒绝，不得strip为{}后悄悄运行采集或judge", async () => {
     const h = setup({ setupReply: { verdict: "pass", summary: "误按旧复核格式", issues: [] } });
     const result = await h.pipeline.run("ws-task");
@@ -738,7 +808,9 @@ describe("原生 workspace 验证", () => {
       commitHash: "abc123",
     });
     expect(h.board.tasks.get("ws-task")!.phase).toBe("awaiting_acceptance");
-    expect(h.board.cards.list()).toHaveLength(0);
+    expect(
+      h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'card'").get(),
+    ).toBeUndefined();
     expect(h.board.sessions.list({ workspaceId: "ws-task" })).toMatchObject([
       { cardId: null, role: "verifier", model: "native-resolved-model", state: "idle" },
     ]);
@@ -750,8 +822,6 @@ describe("原生 workspace 验证", () => {
     expect(h.calls.indexOf("bind:verifier")).toBeLessThan(h.calls.indexOf("run:verifier"));
     expect(h.calls.indexOf("collect")).toBeLessThan(h.calls.indexOf("release:verifier"));
     expect(h.reportIds).toEqual([result!.verificationId]);
-    expect(h.legacy.running()).toHaveLength(0);
-    expect(h.legacy.get(result!.verificationId)).toBeUndefined();
     const detail = h.verify.detail(result!.verificationId)!;
     expect(detail.evidence.some((e) => e.path.endsWith("verification-report.json"))).toBe(true);
     expect(h.board.taskArtifacts.list("ws-task", { kind: "verification" })).toMatchObject([

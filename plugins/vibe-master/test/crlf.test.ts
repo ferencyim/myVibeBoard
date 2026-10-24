@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { parseWorkerHistory } from "../server/vibe/contract";
 import { parseMemory } from "../server/memory/files";
 
 const crlf = (text: string) => text.replace(/\r?\n/g, "\r\n");
@@ -18,10 +17,5 @@ describe("CRLF checkouts", () => {
     expect(cr.entries).toEqual(lf.entries);
     expect(cr.entries[0]!.body).toBe("Use SQLite.");
     expect(cr.preamble).toBe(lf.preamble);
-  });
-
-  it("reads the track record from a CRLF worker MEMORY.md", () => {
-    const md = "- success: fixed layout #web\n- failed: android build #android\n";
-    expect(parseWorkerHistory(crlf(md))).toEqual(parseWorkerHistory(md));
   });
 });

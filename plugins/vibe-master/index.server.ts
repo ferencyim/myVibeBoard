@@ -1,22 +1,20 @@
-import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { join } from "node:path";
+import { startNotifyConsumer, type PushNotification } from "./server/notify";
+import { createMasterRuntime } from "./server/runtime";
+import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import {
   masterSettings,
   permissionRpc,
-  sessionsRpc,
-  statusRpc,
-  wakeRpc,
-  taskWakeRpc,
+  promptsClearRpc,
   promptsListRpc,
   promptsSetRpc,
-  promptsClearRpc,
+  sessionsRpc,
+  statusRpc,
+  taskWakeRpc,
   type MasterSettings,
 } from "./shared/rpc";
-import { createMasterRuntime } from "./server/runtime";
-import { startNotifyConsumer, type PushNotification } from "./server/notify";
-import { CARD_KEY_PATTERN } from "./server/vibe/contract";
-import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 
 export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
@@ -30,7 +28,7 @@ export default function contribute(server: PluginServerContext) {
   const applySettings = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
     current = state.values;
-    // The card_done reply format depends on this switch: refresh the registered suffix.
+    // The task_done reply format depends on this switch: refresh the registered suffix.
     if (current.maintainRequirements !== maintainRequirements) {
       maintainRequirements = current.maintainRequirements;
       runtime?.prompts.register();
@@ -98,19 +96,9 @@ export default function contribute(server: PluginServerContext) {
     return { sessions: master.sessions(input.limit) };
   });
 
-  server.handle(wakeRpc, async (input, { paseo: api }) => {
-    onPaseo(api);
-    const upper = input.card.toUpperCase();
-    return master.wake(
-      CARD_KEY_PATTERN.test(upper) ? upper : input.card,
-      input.reason,
-      input.force,
-    );
-  });
-
   server.handle(taskWakeRpc, (input, { paseo: api }) => {
     onPaseo(api);
-    return master.wake(input.workspaceId, "card_done", input.force);
+    return master.wake(input.workspaceId, input.force);
   });
 
   const masterPrompt = (key: string) => {
@@ -149,7 +137,6 @@ export default function contribute(server: PluginServerContext) {
     : null;
 
   master.startQuotaMonitor();
-  master.planning.start();
   master.sweep();
 
   return async () => {

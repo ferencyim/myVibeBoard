@@ -1,30 +1,23 @@
-// Wires the master together: wake triggers -> serial queue -> consolidator -> master session, the
-// per-card planning sessions (on the card's planning model, WP-105), the quota monitor and the
-// status/switch/wake operations behind the RPCs. Everything external (daemon handle, clock, memory
-// writer) is injected.
+// Task dispatch, completion memory, master sessions and subscription alerts.
 
 import { join } from "node:path";
-import type { MasterSettings, MasterStatus, PresetChoice } from "../shared/rpc";
+import type { MasterSettings, MasterStatus, MasterTarget, PresetChoice } from "../shared/rpc";
 import { systemClock, type Clock } from "./clock";
+import { createTaskDispatcher } from "./dispatch/task";
 import { MASTER_RULES } from "./master/rules.generated";
 import { createMasterSession } from "./master/session";
-import { createConsolidator } from "./memory/consolidate";
 import { createFileMemoryPort, type MemoryPort } from "./memory/files";
-import { createPlanning } from "./planning/planner";
-import { createTaskDispatcher } from "./dispatch/task";
 import { createTaskConsolidator } from "./memory/task";
-import { createDispatcher } from "./dispatch/dispatch";
-import { createPromptPort, rulesFor } from "./prompts/port";
 import { migrateLegacyPromptSettings } from "./prompts/migrate";
-import { tuningOf } from "./tuning";
+import { createPromptPort, rulesFor } from "./prompts/port";
 import { createAlerts } from "./subscription/alerts";
-import { createPermissionResolver, isBoardMcpCall } from "./subscription/permission";
+import { createPermissionResolver } from "./subscription/permission";
+import { resolveMasterPreset } from "./subscription/preset";
 import { createQuotaReader } from "./subscription/quota";
 import { createMasterResources } from "./subscription/resources";
-import type { MasterAgentHandle } from "./types";
-import type { MasterTarget } from "../shared/rpc";
 import { createStateFile } from "./subscription/state";
-import { resolveMasterPreset } from "./subscription/preset";
+import { tuningOf } from "./tuning";
+import type { MasterAgentHandle } from "./types";
 import { MasterError, wakeTarget, type MasterPaseo, type WakeJob } from "./types";
 import { publishEvent, type GitRunner, type VibeDb, type VibeStore } from "./vibe/db";
 import { createWakeQueue } from "./wake/queue";
@@ -96,22 +89,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   /** Provider the master runs on: the live agent, else the chosen preset. */
   const ownProvider = () => session.activeProvider() ?? currentPreset().preset?.provider ?? null;
   const memory = deps.memory ?? createFileMemoryPort();
-  const consolidator = createConsolidator({
-    db,
-    store,
-    master: session,
-    memory,
-    prompts,
-    options: {
-      tuning,
-      requirementsChars: () => deps.settings().requirementsExcerptChars,
-      maintainRequirements: () => deps.settings().maintainRequirements,
-    },
-    onRequirementsFailure: (cardKey, message) =>
-      alerts.raise("requirements_failed", cardKey, message),
-    git: deps.git,
-    log,
-  });
   const taskConsolidator = createTaskConsolidator({
     db,
     store,
@@ -142,30 +119,11 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     git: deps.git,
     log,
   });
-  // Per-card planning sessions (WP-33 / WP-105): separate agents on the card's planning model.
-  const planning = createPlanning({
-    db,
-    store,
-    getPaseo: deps.getPaseo,
-    prompts,
-    tuning,
-    requirementsChars: () => deps.settings().requirementsExcerptChars,
-    dataDir: deps.dataDir,
-    clock,
-    memory,
-    alerts,
-    enabled: () => deps.settings().enabled,
-    pollIntervalMs: deps.pollIntervalMs,
-    log,
-  });
-
   async function run(job: WakeJob): Promise<void> {
     if (!deps.settings().enabled) return;
-    const outcome = await (job.kind === "task_done"
-      ? taskConsolidator.consolidate(job.workspaceId, { force: job.force })
-      : consolidator.consolidate(job.cardId, { force: job.force }));
+    const outcome = await taskConsolidator.consolidate(job.workspaceId, { force: job.force });
     log(`memory ${wakeTarget(job)}: ${outcome.status}`);
-    if (job.kind === "task_done" && outcome.status === "failed") {
+    if (outcome.status === "failed") {
       const task = store.tasks.get(job.workspaceId);
       const text = "项目记忆整理失败：" + outcome.error;
       if (task && !task.summary.includes(text))
@@ -210,17 +168,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   let schedulerPaused = false;
   // Master dispatch (WP-109): the scheduler asks, the master picks, the scheduler admits.
-  const dispatcher = createDispatcher({
-    db,
-    store,
-    master: session,
-    exclusive: (fn) => queue.exclusive(fn),
-    prompts,
-    tuning,
-    enabled: () => deps.settings().enabled && deps.settings().dispatch,
-    timeoutSeconds: () => deps.settings().dispatchTimeoutSeconds,
-    log,
-  });
   const taskDispatcher = createTaskDispatcher({
     db,
     store,
@@ -388,8 +335,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   async function status(): Promise<MasterStatus> {
     const snap = queue.snapshot();
-    const keyOf = (job: WakeJob) =>
-      job.kind === "task_done" ? job.workspaceId : (store.cards.get(job.cardId)?.key ?? null);
+    const keyOf = (job: WakeJob) => job.workspaceId;
     const record = state.read();
     let target = null;
     try {
@@ -473,8 +419,14 @@ export function createMasterRuntime(deps: RuntimeDeps) {
           }
         : null,
       queue: {
-        running: snap.running ? { kind: snap.running.kind, cardKey: keyOf(snap.running) } : null,
-        pending: snap.pending.map((j) => ({ kind: j.kind, cardKey: keyOf(j), dueInSeconds: 0 })),
+        running: snap.running
+          ? { kind: snap.running.kind, workspaceId: keyOf(snap.running) }
+          : null,
+        pending: snap.pending.map((j) => ({
+          kind: j.kind,
+          workspaceId: keyOf(j),
+          dueInSeconds: 0,
+        })),
         blocked: snap.blocked.length,
       },
       schedulerPaused,
@@ -492,9 +444,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     session,
     queue,
     triggers,
-    consolidator,
-    planning,
-    dispatcher,
     taskDispatcher,
     taskConsolidator,
     quota,
@@ -503,13 +452,12 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     startQuotaMonitor,
     checkQuota,
 
-    /** A daemon handle became available: retry parked jobs and planning turns. */
+    /** A daemon handle became available: retry parked task jobs. */
     onPaseoAvailable(): void {
       queue.resume();
-      planning.resume();
     },
 
-    /** Startup catch-up (recently done cards without a memory update). */
+    /** Startup catch-up (completed tasks without a memory update). */
     sweep: () => (deps.settings().sweepOnStart ? triggers.sweep() : 0),
 
     /** All master sessions, newest first (the history list of the screen). */
@@ -537,22 +485,14 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       return result;
     },
 
-    /**
-     * A permission request of an agent. Only calls of the vibe-board MCP tools by the master or a
-     * planner are approved (they would stall an assessment otherwise); every other request of those
-     * agents waits for the owner, who is reminded with a master.alert.
-     */
+    /** The master never auto-approves tools; remind the owner about pending permission. */
     async onPermissionRequest(
       agentId: string,
       request: { id: string; kind: string; name?: string; metadata?: unknown },
-      approve: (requestId: string) => Promise<void>,
-    ): Promise<"approved" | "alerted" | "ignored"> {
+      _approve: (requestId: string) => Promise<void>,
+    ): Promise<"alerted" | "ignored"> {
       const owner = store.sessions.getByAgent(agentId);
-      if (owner?.role !== "master" && owner?.role !== "planner") return "ignored";
-      if (owner.role === "planner" && isBoardMcpCall(request)) {
-        await approve(request.id);
-        return "approved";
-      }
+      if (owner?.role !== "master") return "ignored";
       alerts.raise(
         "permission_wait",
         owner.currentProvider,
@@ -561,13 +501,13 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       return "alerted";
     },
 
-    wake(cardRef: string, reason: "card_done", force: boolean) {
-      const task = store.tasks.get(cardRef);
+    wake(workspaceId: string, force: boolean) {
+      const task = store.tasks.get(workspaceId);
       if (task) {
         queue.enqueue({ kind: "task_done", workspaceId: task.workspaceId, force });
         return { queued: true, message: `已排队整理任务 ${task.workspaceId}` };
       }
-      return { queued: false, message: "旧卡片入口已停用，请使用原生 workspace 任务" };
+      return { queued: false, message: "任务不存在，请使用原生 workspace 任务" };
     },
 
     async dispose(): Promise<void> {
@@ -575,7 +515,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       stopMonitor?.();
       for (const stop of resourceRetries) stop();
       await resources?.stop();
-      await planning.stop();
       await triggers.stop();
     },
   };

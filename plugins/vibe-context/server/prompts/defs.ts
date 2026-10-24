@@ -7,7 +7,7 @@ import type { PromptDef } from "../vibe/contract";
 const PLUGIN = "vibe-context";
 
 const COMPACT_NOTES =
-  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、关键文件与决策、未解决的问题。请将笔记写到 `{{mdPath}}`（创建或覆盖）；若当前原生任务提供支持该路径的会话笔记工具，可使用它。会话定位信息：{{keyClause}}。除此之外什么都不要做。完成后回复“saved”。";
+  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、关键文件与决策、未解决的问题。请将笔记写到 `{{mdPath}}`（创建或覆盖）；若当前原生任务提供支持该路径的会话笔记工具，可使用它。除此之外什么都不要做。完成后回复“saved”。";
 
 const COMPACT_RESTORE =
   "上下文已压缩。下面的项目上下文是权威依据；请根据你的会话笔记继续。" +
@@ -53,7 +53,10 @@ export const CONTEXT_PROMPT_DEFS: readonly PromptDef[] = [
     audience: "被压缩的 agent",
     defaultText: COMPACT_NOTES,
     placeholders: [
-      { name: "keyClause", description: '有工作区时为 `，key 为 "ABC-1"`，否则为空' },
+      {
+        name: "keyClause",
+        description: "兼容既有提示词覆盖的占位符；原生会话使用 mdPath 定位，此值始终为空",
+      },
       { name: "mdPath", description: "会话笔记文件路径" },
     ],
     order: 10,

@@ -1,294 +1,267 @@
-// Integration smoke (WP-70) against an isolated dev daemon with all vibe plugins and the local codex.
-// Server-side half of the flow; the phone steps (approve the waiting session, "pass" the card,
-// offline edit) are done by hand / adb while this script waits and logs "PHONE:" prompts.
-// Never part of `npm test`; costs a few small codex turns.
-//
-//   pwsh scripts/vibe/dev-daemon.ps1 -HomeDir <dir> -Port 16767   (then `plugin install` the 7 vibe-* plugins)
-//   VIBE_E2E_CLIENT=<repo>/packages/client/dist/daemon-client.js VIBE_E2E_CLI=<repo>/packages/cli/dist/index.js \
-//   VIBE_E2E_HOME=<dir> node scripts/vibe/e2e-smoke.mjs
-//
-// Env: VIBE_E2E_CLIENT, VIBE_E2E_CLI, VIBE_E2E_HOME (required); VIBE_E2E_PORT (16767),
-// VIBE_E2E_PROVIDER (codex), SMOKE_STEP_TIMEOUT_MIN (10).
-
+// WP-114 live smoke: native task conversation -> plan/review -> execute -> verify -> accept.
+// Run only against scripts/vibe/dev-daemon.ps1 with all current vibe plugins installed.
+// Required: VIBE_E2E_HOME=D:/devRepoCaches/r5-114-home, VIBE_E2E_MODEL=<cheap Codex model>.
+// Optional: VIBE_E2E_PORT=17114, VIBE_E2E_CLIENT=<built daemon-client.js>, SMOKE_STEP_TIMEOUT_MIN=12.
+// The daemon must use isolated CODEX_HOME and worktrees.root=<this checkout>/.dev/wp114-worktrees.
+// Creates unique test repositories and keeps every artifact; never deletes or touches the product Git tree.
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const need = (name) => {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-};
-const clientPath = need("VIBE_E2E_CLIENT");
-need("VIBE_E2E_HOME");
-const port = process.env.VIBE_E2E_PORT || "16767";
-const provider = process.env.VIBE_E2E_PROVIDER || "codex";
-const stepTimeout = Number(process.env.SMOKE_STEP_TIMEOUT_MIN || 10) * 60_000;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
-const results = [];
-const step = (name, ok, note = "") => {
-  results.push({ name, ok, note });
-  log(`STEP ${ok ? "OK  " : "FAIL"} ${name}${note ? " - " + note : ""}`);
-};
-
-const { DaemonClient } = await import(pathToFileURL(clientPath).href);
+const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const home = path.resolve(process.env.VIBE_E2E_HOME || "");
+const allowedHome = path.resolve("D:/devRepoCaches/r5-114-home");
+assert.equal(
+  home.toLowerCase(),
+  allowedHome.toLowerCase(),
+  "VIBE_E2E_HOME must explicitly name the WP-114 isolated home",
+);
+const model = process.env.VIBE_E2E_MODEL;
+assert.ok(
+  model,
+  "Set VIBE_E2E_MODEL to an available cheap Codex model; no automatic costly fallback",
+);
+const port = Number(process.env.VIBE_E2E_PORT || 17114);
+assert.ok(port === 17114 || (port >= 17140 && port <= 17199), "Use the WP-114 isolated port range");
+const config = JSON.parse(
+  readFileSync(path.join(home, "paseo/config.json"), "utf8").replace(/^\uFEFF/, ""),
+);
+assert.equal(config.daemon?.relay?.enabled, false, "Isolated daemon relay must be disabled");
+const worktreesRoot = path.resolve(config.worktrees?.root || "");
+const expectedRoot = path.join(checkout, ".dev/wp114-worktrees");
+assert.equal(
+  worktreesRoot.toLowerCase(),
+  expectedRoot.toLowerCase(),
+  "Set isolated worktrees.root to this checkout/.dev/wp114-worktrees",
+);
+execFileSync("git", ["check-ignore", expectedRoot], { cwd: checkout, stdio: "pipe" });
+const runId = `wp114-${Date.now()}-${process.pid}`;
+const runDir = path.join(home, runId);
+const repo = path.join(runDir, "main");
+const origin = path.join(runDir, "origin.git");
+mkdirSync(repo, { recursive: true });
+const git = (cwd, ...args) =>
+  execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe", windowsHide: true });
+git(runDir, "init", "--bare", "--initial-branch=main", origin);
+git(repo, "init", "--initial-branch=main");
+git(repo, "config", "user.email", "smoke@example.invalid");
+git(repo, "config", "user.name", "隔离烟测");
+git(repo, "config", "core.autocrlf", "false");
+writeFileSync(path.join(repo, "README.md"), "# 隔离新流程烟测\n");
+writeFileSync(
+  path.join(repo, "package.json"),
+  JSON.stringify({ private: true, scripts: { test: "node check.cjs" } }, null, 2) + "\n",
+);
+writeFileSync(
+  path.join(repo, "check.cjs"),
+  'const assert = require("node:assert/strict");\nassert.equal(require("node:fs").readFileSync("hello.txt", "utf8"), "hello vibe\\n");\nconsole.log("hello.txt ok");\n',
+);
+git(repo, "add", "README.md", "package.json", "check.cjs");
+git(repo, "commit", "-m", "初始化隔离烟测仓库");
+git(repo, "remote", "add", "origin", origin);
+git(repo, "push", "-u", "origin", "main");
+const { DaemonClient } = await import(
+  pathToFileURL(
+    process.env.VIBE_E2E_CLIENT || path.join(checkout, "packages/client/dist/daemon-client.js"),
+  ).href
+);
 const client = new DaemonClient({
   url: `ws://127.0.0.1:${port}/ws`,
-  clientId: "vibe-e2e-smoke",
+  clientId: runId,
   appVersion: "0.12.0",
+  localCredential: () => readFileSync(path.join(home, "paseo/local-credential"), "utf8").trim(),
+  reconnect: { enabled: false },
 });
-await client.connect();
+const evidence = { runId, repo, origin, model, steps: [] };
+const save = () =>
+  writeFileSync(path.join(runDir, "evidence.json"), JSON.stringify(evidence, null, 2) + "\n");
+const record = (name, detail) => {
+  evidence.steps.push({ name, at: new Date().toISOString(), detail });
+  save();
+  console.log(name, typeof detail === "string" ? detail : "");
+};
 const board = (name, input) => client.invokePluginRpc("vibe-board", name, input);
-const master = (name, input) => client.invokePluginRpc("vibe-master", name, input);
-const verify = (name, input) => client.invokePluginRpc("vibe-verify", name, input);
-const scheduler = (name, input) => client.invokePluginRpc("vibe-scheduler", name, input);
-
-async function waitFor(what, fn, timeoutMs = stepTimeout) {
-  const end = Date.now() + timeoutMs;
-  for (;;) {
-    const value = await fn();
-    if (value) return value;
-    if (Date.now() > end) throw new Error(`timeout waiting for ${what}`);
-    await sleep(2500);
+const timeout = Number(process.env.SMOKE_STEP_TIMEOUT_MIN || 12) * 60_000;
+let workspaceId, conversationId;
+const panel = () => board("vibe.task.conversation.panel", { workspaceId, conversationId });
+const command = (action, extra = {}) =>
+  board("vibe.task.conversation.command", {
+    workspaceId,
+    conversationId,
+    action,
+    requestId: `${runId}:${action}:${Date.now()}`,
+    ...extra,
+  });
+async function waitFor(label, predicate) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    const current = await panel();
+    evidence.lastPanel = current;
+    save();
+    if (await predicate(current)) {
+      record(label, current.task?.phase);
+      return current;
+    }
+    if (["paused", "failed"].includes(current.task?.phase))
+      throw new Error(`${label}: ${current.task.phase}: ${current.task.summary}`);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
+  throw new Error(`Timed out: ${label}; inspect ${runDir}/evidence.json`);
 }
-
-// ---- project repo ----
-const resumeRepo = process.env.SMOKE_REPO; // with SMOKE_RESUME_CARD: reuse the repository of the earlier run
-const repo = resumeRepo || mkdtempSync(join(tmpdir(), "vibe-smoke-repo-"));
-const git = (...args) => execFileSync("git", args, { cwd: repo, stdio: "pipe", encoding: "utf8" });
-if (!resumeRepo) {
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "smoke@example.invalid");
-  git("config", "user.name", "smoke");
-  writeFileSync(join(repo, "README.md"), "# smoke repo\n");
-  writeFileSync(
-    join(repo, "check.js"),
-    [
-      'const fs = require("fs");',
-      'const t = fs.existsSync("hello.txt") ? fs.readFileSync("hello.txt", "utf8") : "";',
-      'if (t !== "hello vibe\\n") { console.error("hello.txt wrong: " + JSON.stringify(t)); process.exit(1); }',
-      'console.log("hello.txt ok");',
-      "",
-    ].join("\n"),
-  );
-  git("add", "-A");
-  git("commit", "-q", "-m", "init");
-  await client.openProject(repo);
-}
-log("repo", repo);
-
-const resume = process.env.SMOKE_RESUME_CARD; // card key (e.g. SMK-1) already in todo: continue at step 5b
-let card;
 try {
-  if (resume) {
-    card = (await board("vibe.cards.get", { card: resume })).card;
-    log("resuming", card.key, card.column);
-  } else {
-    // 1. project + preset
-    const status = await master("master.status", { includeProviders: true });
-    const info = status.providers.find((p) => p.id === provider);
-    if (!info) throw new Error(`provider ${provider} not available`);
-    const model = info.models.find((m) => m.isDefault) ?? info.models[0];
-    const thinking = model.thinking[0]?.id;
-    await master("master.switch", { provider, model: model.id, thinking, reason: "smoke" });
-    const { project } = await board("vibe.projects.create", {
-      name: "Smoke",
-      prefix: "SMK",
-      repoPath: repo,
-      projectType: "backend",
-    });
-    const { preset } = await board("vibe.presets.create", {
-      name: "smoke-worker",
-      provider,
-      model: model.id,
-      thinking: thinking ?? "default",
-      permissionMode: "accept-edits",
-      environmentKind: "new-worktree",
-      baseBranch: null,
-      runtimeEnv: null,
-      instructions: "",
-    });
-    await board("vibe.projects.update", {
-      project: project.id,
-      defaultPresets: { worker: preset.id, verifier: preset.id },
-    });
-    step("1 project + preset created", true, `${project.prefix}, ${provider}/${model.id}`);
-
-    // 2. draft card
-    ({ card } = await board("vibe.cards.create", {
-      project: project.prefix,
-      title: "Add hello.txt",
-      description:
-        'Create hello.txt in the repository root containing exactly "hello vibe" and a newline. Then commit it with `git add hello.txt && git commit -m "add hello"`. `node check.js` must exit 0.',
-      acceptance: "node check.js exits 0; hello.txt is committed",
-      column: "draft",
-      presetId: preset.id,
-      needsEvidence: true,
-    }));
-    step("2 draft card created", card.column === "draft", card.key);
-
-    // 3. master assesses the draft
-    const assessed = await waitFor("master assessment", async () => {
-      const d = await detail();
-      return d.events.some((e) => e.type === "evaluation") && d.plans.length > 0 ? d : null;
-    });
-    const ev = assessed.events.find((e) => e.type === "evaluation");
-    step(
-      "3 master assessment comment + plan version",
-      true,
-      `plan v${assessed.plans.at(-1).version}, checks ${assessed.plans.at(-1).snapshot?.checks?.length ?? "?"}; ${String(
-        ev.body?.text ?? "",
-      )
-        .slice(0, 80)
-        .replace(/\s+/g, " ")}`,
-    );
-
-    // 4. one discussion round
-    const sent = (
-      await board("vibe.events.add", {
-        card: card.id,
-        type: "note",
-        authorKind: "user",
-        author: "user",
-        body: {
-          kind: "discussion",
-          role: "user",
-          text: "Keep it minimal: only hello.txt, commit it. Anything open? Answer briefly.",
+  await client.connect();
+  const plugins = await client.listPlugins();
+  assert.ok(
+    plugins.some((plugin) => plugin.id === "vibe-board" && plugin.status === "running"),
+    "The task owner plugin must be running before the first message",
+  );
+  const { preset } = await board("vibe.presets.create", {
+    name: runId,
+    provider: "codex",
+    model,
+    thinking: process.env.VIBE_E2E_THINKING || "low",
+    permissionMode: "full",
+    environmentKind: "new-worktree",
+    instructions:
+      "所有输出用中文。仅在本次隔离测试仓库内工作。提交信息用中文。不自行合并或推送。" +
+      (process.env.VIBE_E2E_INSTRUCTIONS || ""),
+  });
+  await board("vibe.defaults.set", {
+    global: {
+      planner: preset.id,
+      worker: preset.id,
+      subagent: preset.id,
+      reviewer: preset.id,
+      verifier: preset.id,
+    },
+  });
+  const created = await client.createWorkspace({
+    source: {
+      kind: "worktree",
+      cwd: repo,
+      action: "branch-off",
+      baseBranch: "main",
+      branchName: runId,
+      worktreeSlug: runId,
+    },
+    title: "WP-114 隔离完整流程",
+    taskConversation: {
+      ownerPluginId: "vibe-board",
+      idempotencyKey: runId,
+      initialRecipient: {
+        role: "planner",
+        presetId: preset.id,
+        config: {
+          provider: "codex",
+          cwd: repo,
+          model,
+          thinkingOptionId: process.env.VIBE_E2E_THINKING || "low",
+          modeId: "auto",
+          providerOptions: { sandbox_mode: "read-only", approval_policy: "never" },
         },
-      })
-    ).event;
-    const reply = await waitFor("planner reply", async () =>
-      (await detail()).events.find(
-        (e) =>
-          e.authorKind === "agent" &&
-          Array.isArray(e.body?.answers) &&
-          e.body.answers.includes(sent.id),
-      ),
-    );
-    step(
-      "4 draft discussion round answered by planner",
-      !reply.body.error,
-      String(reply.body.text).slice(0, 100).replace(/\s+/g, " "),
-    );
-
-    // 5. to todo, scheduler admits and dispatches
-    await board("vibe.cards.move", { card: card.id, to: "todo", actor: "user" });
-    step("5a card moved to todo", true);
-  }
-  const detail = () => board("vibe.cards.get", { card: card.id });
-  if (process.env.SMOKE_DISPATCH_NOW) {
-    await board("vibe.cards.dispatch", { card: card.id });
-    log("dispatched directly (scheduler bypassed)");
-  }
-  const started = await waitFor("scheduler admission + dispatch", async () => {
-    const d = await detail();
-    return d.card.column === "in_progress" && d.sessions.some((s) => s.role === "worker")
-      ? d
-      : null;
-  });
-  const worker = started.sessions.find((s) => s.role === "worker");
-  const sstat = await scheduler("scheduler.status", {});
-  step(
-    "5b scheduler admitted and card dispatched",
-    true,
-    `worker ${worker.agentId}, worktree ${started.card.worktree}; scheduler admitted=${JSON.stringify(sstat.admitted ?? sstat.running ?? null)}`,
-  );
-
-  // 6. waiting for approval (phone)
-  const waiting = await waitFor("worker waiting for approval", async () => {
-    const d = await detail();
-    if (d.card.column === "verifying") return "skipped";
-    return d.sessions.find((s) => s.role === "worker" && s.state === "waiting") ?? null;
-  });
-  if (waiting === "skipped") {
-    step(
-      "6 worker waited for approval",
-      false,
-      "worker never asked (card went straight to verifying)",
-    );
-  } else {
-    log(
-      "PHONE: worker waiting for approval ->",
-      JSON.stringify(waiting.question ?? waiting.waitingFor ?? null),
-    );
-    step("6a worker session waiting", true, `agent ${waiting.agentId}`);
-    await waitFor(
-      "approval answered (phone)",
-      async () => {
-        const d = await detail();
-        return d.sessions.find((s) => s.role === "worker" && s.state !== "waiting") ? true : null;
       },
-      20 * 60_000,
-    );
-    step("6b approval answered (phone or fallback)", true);
-  }
-
-  // 7. verifying + evidence
+      initialMessage: {
+        clientMessageId: `${runId}:first`,
+        text: "请为本隔离仓库制定最小完整方案：在根目录新增 hello.txt，内容严格为 hello vibe 加一个换行，运行 node check.cjs 验证，git add hello.txt 后用中文信息提交。必须规划一个子任务，由主代理使用 vibe-delegate 委派该子任务完成文件修改与提交；主代理复查。仅改 hello.txt，不合并、不推送，等待用户通过。验收标准为内容正确、check.cjs 成功、改动已提交、工作树干净。先制定方案，禁止执行。",
+      },
+    },
+  });
+  if (created.error) throw new Error(created.error);
+  workspaceId = created.workspace?.id;
+  assert.ok(workspaceId, "workspace created");
+  assert.ok(created.workspace.projectId, "native project exists");
+  // Verification uses explicit project settings, just like a user configuring
+  // 任务设置 → 管理项目与 Agent 预设. The product must not guess this association.
+  const { project } = await board("vibe.projects.create", {
+    name: runId,
+    prefix: `W${Date.now().toString(36).toUpperCase()}`,
+    repoPath: repo,
+    paseoProjectId: created.workspace.projectId,
+    projectType: "backend",
+    description: "隔离烟测：唯一测试命令 npm test，实际运行 node check.cjs。",
+    defaultPresets: {
+      planner: preset.id,
+      worker: preset.id,
+      subagent: preset.id,
+      reviewer: preset.id,
+      verifier: preset.id,
+    },
+  });
+  record("关联原生项目的任务扩展配置", {
+    projectId: project.id,
+    paseoProjectId: created.workspace.projectId,
+  });
+  const resolved = await client.resolveTaskConversation({ workspaceId });
+  assert.ok(resolved.conversation, resolved.error || "conversation created");
+  conversationId = resolved.conversation.conversationId;
+  evidence.workspaceId = workspaceId;
+  evidence.conversationId = conversationId;
+  record("首消息创建原生任务会话", { workspaceId, conversationId });
   await waitFor(
-    "card in verifying",
-    async () => {
-      const d = await detail();
-      return d.card.column === "verifying" ? d : null;
-    },
-    15 * 60_000,
+    "初始方案完成",
+    (p) => p.task?.phase === "awaiting_confirmation" && !!p.latestPlanSource,
   );
-  step("7a worker finished, card in verifying", true);
-  const ver = await waitFor(
-    "verification result",
-    async () => {
-      const { detail: v } = await verify("vibe.verify.get", { card: card.id });
-      return v && v.verification.conclusion ? v : null;
-    },
-    15 * 60_000,
+  for (const role of ["scout", "plan_reviewer", "worker", "subagent", "reviewer", "verifier"])
+    await board("vibe.task.conversation.select_role", {
+      workspaceId,
+      conversationId,
+      role,
+      selection: { mode: "preset", presetId: preset.id },
+    });
+  await command("plan", { reason: "先只读探路，再保留同一个最小子任务并更新方案。" });
+  const scouted = await waitFor(
+    "探路及规划接续完成",
+    (p) =>
+      p.task?.phase === "awaiting_confirmation" &&
+      !!p.latestPlanSource &&
+      p.artifacts.some((a) => a.kind === "scout") &&
+      !p.members.some((m) => ["running", "initializing"].includes(m.status)),
   );
-  step(
-    "7b verification evidence bundle",
-    ver.evidence.length > 0,
-    `conclusion=${ver.verification.conclusion}, items ${ver.items.length}, evidence files ${ver.evidence.length}: ${ver.summary}`,
+  await command("review_plan", { source: scouted.latestPlanSource });
+  const planned = await waitFor(
+    "方案复核交回规划完成",
+    (p) =>
+      p.task?.phase === "awaiting_confirmation" &&
+      !!p.latestPlanSource &&
+      p.artifacts.some((a) => a.kind === "plan_review") &&
+      !p.members.some((m) => ["running", "initializing"].includes(m.status)),
   );
-
-  // 8. pass (phone) -> done -> merged + worktree removed
-  log("PHONE: press Pass on the card now");
-  await waitFor(
-    "card done",
-    async () => ((await detail()).card.column === "done" ? true : null),
-    20 * 60_000,
+  assert.ok(planned.latestPlanSource, "latest complete plan has source");
+  await command("execute", { source: planned.latestPlanSource });
+  record("显式执行已确认最新方案", "执行授权由任务命令发出");
+  const verified = await waitFor(
+    "执行、代码复核与必需验证完成",
+    (p) => p.task?.phase === "awaiting_acceptance",
   );
-  step("8a card done (phone pass or fallback)", true);
-  const finalized = await waitFor(
-    "finalize",
-    async () => {
-      const d = await detail();
-      return d.events.find(
-        (e) =>
-          e.body?.kind === "finalized" ||
-          e.body?.kind === "finalize_pending" ||
-          e.body?.kind === "finalize_blocked",
-      );
-    },
-    3 * 60_000,
+  assert.ok(
+    verified.artifacts.some((a) => a.kind === "review"),
+    "review artifact exists",
   );
-  const merged = existsSync(join(repo, "hello.txt"));
-  const wtList = git("worktree", "list");
-  step(
-    "8b merged into main and worktree removed",
-    merged && wtList.trim().split("\n").length === 1,
-    `${finalized.body?.kind}: ${String(finalized.body?.text).slice(0, 120)}; hello.txt on main=${merged}`,
+  assert.ok(
+    verified.artifacts.some((a) => a.kind === "verification"),
+    "verification artifact exists",
   );
+  await command("accept");
+  const done = await waitFor("通过后完成安全合并与 push", (p) => p.task?.phase === "completed");
+  assert.equal(readFileSync(path.join(repo, "hello.txt"), "utf8"), "hello vibe\n");
+  const mainCommit = git(repo, "rev-parse", "main").trim();
+  assert.equal(git(origin, "rev-parse", "refs/heads/main").trim(), mainCommit);
+  assert.equal(git(repo, "status", "--porcelain").trim(), "");
+  assert.ok(git(repo, "worktree", "list").includes(runId), "completed worktree is retained");
+  record("本地 main 与裸 origin 一致、主检出干净、worktree 保留", {
+    mainCommit,
+    artifacts: done.artifacts.map((a) => a.kind),
+  });
+  evidence.ok = true;
 } catch (error) {
-  step("ABORT", false, String(error?.message ?? error));
+  evidence.ok = false;
+  evidence.error = String(error?.stack || error);
+  record("失败", evidence.error);
+  process.exitCode = 1;
+} finally {
+  save();
+  await client.close?.();
+  console.log(`Evidence: ${path.join(runDir, "evidence.json")}`);
 }
-
-log(
-  "SUMMARY\n" +
-    results
-      .map((r) => `${r.ok ? "OK  " : "FAIL"} ${r.name}${r.note ? " - " + r.note : ""}`)
-      .join("\n"),
-);
-await client.close?.();
-process.exit(results.every((r) => r.ok) ? 0 : 1);

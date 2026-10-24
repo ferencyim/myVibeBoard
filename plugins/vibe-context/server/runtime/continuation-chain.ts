@@ -11,7 +11,6 @@ export function isTaskContinuationChain(
   for (let depth = 0; current && depth < 256; depth++) {
     if (
       visited.has(current.id) ||
-      current.cardId !== null ||
       current.workspaceId !== old.workspaceId ||
       current.projectId !== old.projectId ||
       current.role !== old.role ||

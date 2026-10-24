@@ -22,6 +22,8 @@ npm ci        # 约 4 分钟，2677 个包；postinstall 会打 patches/ 下的�
 
 注意 `npm ci` 触发 `prepare` 会安装 lefthook 的 git pre-commit 钩子。
 
+vibe 插件各自执行 `npm ci && npm run typecheck`，SDK 使用仓库内 `packages/plugin`，并配套同仓库 client/protocol 声明。插件 tsconfig 统一 Zod 的解析来源：优先根依赖，独立安装时回落本地依赖。不要把 SDK 改回 npm 发布版或混用不同 Zod 声明；重复版本的结构类型比较曾导致默认 TypeScript 堆内存耗尽，增加 NODE_OPTIONS 不能替代依赖统一。安装部署脚本把 SDK 复制为实目录，避免依赖源码 worktree 联接。
+
 ## 1. daemon / server / CLI
 
 ```bash

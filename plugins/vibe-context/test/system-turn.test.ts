@@ -24,10 +24,9 @@ it("registers a short-lived marker per agent in $VIBE_HOME/system-turns", () => 
 
 it("writes notes by the native session path without requiring the old card tool", async () => {
   const { notesPrompt } = await import("../server/compaction");
-  const prompt = notesPrompt("/wt/.vibe/sessions/c1.md", "DEMO-3");
+  const prompt = notesPrompt("/wt/.vibe/sessions/c1.md");
   expect(prompt).toContain("原生任务");
   expect(prompt).not.toContain("vibe_session_note");
-  expect(prompt).toContain('key 为 "DEMO-3"');
   expect(prompt).toContain("/wt/.vibe/sessions/c1.md");
 });
 

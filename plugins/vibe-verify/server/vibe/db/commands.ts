@@ -1,68 +1,6 @@
 // GENERATED FROM plugins/vibe-shared — DO NOT EDIT (run: node scripts/vibe/sync-shared.mjs)
-// Command layer: the only sanctioned way to write project/card/card_event/agent_session/
-// preset/tag/plan_version (docs/vibe/ARCHITECTURE.md 3.4). Every command, in ONE write
-// transaction:
-//   1. validates input and the state machine,
-//   2. writes the rows,
-//   3. stamps an HLC (updated_hlc + field-level sync_meta for syncable tables, tombstones for
-//      deletes),
-//   4. publishes the matching vibe_event rows.
-// Plugins never write these tables with raw SQL.
+// Shared settings, task and session command layer. All writes use one transaction.
 
-import {
-  CARD_KEY_PATTERN,
-  DEFAULT_REQUIREMENTS_PATH,
-  PROJECT_PREFIX_PATTERN,
-  ROLE_HINTS,
-  type AuthorKind,
-  type CardColumn,
-  type CardEventType,
-  type CardOrigin,
-  type CardPriority,
-  type ChatThread,
-  type PresetEnvironmentKind,
-  type ChatKind,
-  type PresetPermissionMode,
-  type ProjectType,
-  type RoleHint,
-  type SessionComplexity,
-  type SessionRole,
-  type SessionState,
-} from "../contract/enums";
-import { type Hlc, tickHlc } from "../contract/hlc";
-import { newId } from "../contract/ids";
-import { presetModels } from "../contract/preset-models";
-import {
-  AgentSessionSchema,
-  CardEventSchema,
-  CardSchema,
-  GitSnapshotSchema,
-  PlanSnapshotSchema,
-  PlanVersionSchema,
-  PresetSchema,
-  PresetModelInputSchema,
-  ProjectSchema,
-  ProposalChangesSchema,
-  ProposalEventBodySchema,
-  SubtaskRunSchema,
-  SubtaskSchema,
-  TagSchema,
-  type AgentSession,
-  type CardEvent,
-  type CardView,
-  type ChatEventBody,
-  type GitSnapshot,
-  type PlanSnapshot,
-  type PlanVersion,
-  type Preset,
-  type PresetModel,
-  type ProposalChanges,
-  type ProposalEventBody,
-  type Project,
-  type Subtask,
-  type SubtaskRun,
-  type Tag,
-} from "../contract/model";
 import {
   DEFAULT_MASTER_DISPATCH,
   MASTER_DISPATCH_KEY,
@@ -70,13 +8,40 @@ import {
   type MasterDispatchMode,
 } from "../contract/dispatch";
 import {
-  DEFAULT_SCHEDULER_LIMITS,
-  SCHEDULER_LIMITS_KEY,
-  SchedulerLimitsSchema,
-  emptyRun,
-  subtaskListError,
-  type SchedulerLimits,
-} from "../contract/subtasks";
+  DEFAULT_REQUIREMENTS_PATH,
+  PROJECT_PREFIX_PATTERN,
+  ROLE_HINTS,
+  type PresetEnvironmentKind,
+  type PresetPermissionMode,
+  type ProjectType,
+  type RoleHint,
+  type SessionComplexity,
+  type SessionRole,
+  type SessionState,
+} from "../contract/enums";
+import { tickHlc, type Hlc } from "../contract/hlc";
+import { newId } from "../contract/ids";
+import {
+  AgentSessionSchema,
+  PresetModelInputSchema,
+  PresetSchema,
+  ProjectSchema,
+  type AgentSession,
+  type Preset,
+  type PresetModel,
+  type Project,
+} from "../contract/model";
+import {
+  MODEL_ROLES,
+  ModelDefaultsSchema,
+  cleanDefaults,
+  resolveTaskRoles,
+  type ModelDefaults,
+  type TaskRoleSelections,
+  type TaskRoleSnapshot,
+} from "../contract/model-roles";
+import { isSafeRepoRelativePath } from "../contract/paths";
+import { presetModels } from "../contract/preset-models";
 import {
   PROMPT_OVERRIDE_MAX_CHARS,
   PromptDefSchema,
@@ -87,34 +52,20 @@ import {
   type PromptInfo,
   type PromptSource,
 } from "../contract/prompts";
-import { sortKeyAfter } from "../contract/sort-key";
+import { assertSessionTransition } from "../contract/state-machine";
 import {
-  type MoveActor,
-  StateMachineError,
-  assertSessionTransition,
-  assertTransition,
-  canCreateIn,
-} from "../contract/state-machine";
-import { isSafeRepoRelativePath } from "../contract/paths";
-import { syncSpec } from "../contract/sync-spec";
-import { ACTIVITY_COLUMN, activityTabsOf } from "../contract/card-tabs";
-import {
-  MODEL_ROLES,
-  ModelDefaultsSchema,
-  cleanDefaults,
-  prefillModels,
-  resolveTaskRoles,
-  type ModelDefaults,
-  type TaskRoleSelections,
-  type TaskRoleSnapshot,
-} from "../contract/model-roles";
+  DEFAULT_SCHEDULER_LIMITS,
+  SCHEDULER_LIMITS_KEY,
+  SchedulerLimitsSchema,
+  type SchedulerLimits,
+} from "../contract/subtasks";
+import { TASK_PLAN_PROMPT } from "../contract/task";
 import { publishEvent } from "./events";
 import { findProjectConfig } from "./project-config";
-import { createTaskCommands } from "./tasks";
-import { createTaskArtifactCommands } from "./task-artifacts";
-import { TASK_PLAN_PROMPT } from "../contract/task";
 import { decodeRow, decodeRows } from "./rows";
-import type { Row, SqlParam, VibeDb } from "./sqlite";
+import type { SqlParam, VibeDb } from "./sqlite";
+import { createTaskArtifactCommands } from "./task-artifacts";
+import { createTaskCommands } from "./tasks";
 
 export class CommandError extends Error {
   readonly code: "not_found" | "invalid" | "conflict";
@@ -127,7 +78,7 @@ export class CommandError extends Error {
 
 export interface StoreOptions {
   now?: () => Date;
-  /** Sync device id; default: generated once and kept in vibe_meta. Phone replicas pass their own. */
+  /** Local writer identity used for monotonic update timestamps. */
   deviceId?: string;
 }
 
@@ -180,151 +131,9 @@ export interface CreatePresetInput {
 }
 export type UpdatePresetInput = Partial<CreatePresetInput>;
 
-export interface CreateCardInput {
-  /** Sync materialization: keep the id/creation time a replica generated offline. */
-  id?: string;
-  createdAt?: string;
-  projectId: string;
-  title: string;
-  description?: string;
-  column?: CardColumn;
-  priority?: CardPriority;
-  acceptance?: string;
-  refImages?: string[];
-  /** Default: true if any applied tag defaults to evidence. */
-  needsEvidence?: boolean;
-  presetId?: string | null;
-  suggestedPresetId?: string | null;
-  reviewerPresetId?: string | null;
-  scoutPresetId?: string | null;
-  plannerPresetId?: string | null;
-  subagentPresetId?: string | null;
-  planReviewerPresetId?: string | null;
-  verifierPresetId?: string | null;
-  origin?: CardOrigin;
-  originRef?: string | null;
-  dedupeKey?: string | null;
-  planSessionId?: string | null;
-  parentCardId?: string | null;
-  tagIds?: string[];
-  /** Default: end of the target column. */
-  sortKey?: string;
-  worktree?: string | null;
-}
-
-export interface UpdateCardInput {
-  title?: string;
-  description?: string;
-  priority?: CardPriority;
-  acceptance?: string;
-  refImages?: string[];
-  needsEvidence?: boolean;
-  presetId?: string | null;
-  suggestedPresetId?: string | null;
-  reviewerPresetId?: string | null;
-  scoutPresetId?: string | null;
-  plannerPresetId?: string | null;
-  /** WP-106: default model of the sub-agents. */
-  subagentPresetId?: string | null;
-  /** WP-108: plan reviewer and verification model. */
-  planReviewerPresetId?: string | null;
-  verifierPresetId?: string | null;
-  /** Read positions of the card tabs (WP-105/108); see contract/card-tabs.ts markReadPatch. */
-  planSeenAt?: string | null;
-  execSeenAt?: string | null;
-  reviewSeenAt?: string | null;
-  verifySeenAt?: string | null;
-  parentCardId?: string | null;
-  planSessionId?: string | null;
-  worktree?: string | null;
-}
-
-/** Card fields that only move a read position (no edit of the card). */
-const READ_POSITION_FIELDS = new Set(["planSeenAt", "execSeenAt", "reviewSeenAt", "verifySeenAt"]);
-
-/** vibe_meta key of the global default models (WP-108; computer-only, not synced). */
-export const MODEL_DEFAULTS_KEY = "models.defaults";
-
-/** A plan with nothing in it (subtasks edited before any plan was made). */
-const EMPTY_PLAN: PlanSnapshot = { description: "", checks: [], subCards: [], tags: [], recommendedPresetId: null };
-
-/** WP-105: the planning model's result for a card (cards.setPlan). */
-export interface SetPlanInput {
-  /** The complete new plan; omitted = plan unchanged (only the criteria changed). */
-  plan?: PlanSnapshot;
-  /** New acceptance criteria; omitted or blank = unchanged. */
-  acceptance?: string;
-  /** Who wrote it (event author), e.g. "planner". */
-  author?: string;
-  /** Shown with an acceptance proposal when the owner had edited the criteria. */
-  rationale?: string;
-}
-
-export interface SetPlanResult {
-  card: CardView;
-  planChanged: boolean;
-  /** applied: written to the card; proposed: the owner edited it, so a proposal waits in the plan chat. */
-  acceptance: "applied" | "proposed" | "unchanged" | "none";
-  /** WP-106: the subtasks the model sent were applied, or wait as a proposal (the owner edited them). */
-  subtasks: "applied" | "proposed";
-}
-
-export interface AddChatInput {
-  /** Sync materialization: keep the id/creation time a replica generated offline. */
-  id?: string;
-  createdAt?: string;
-  cardId: string;
-  authorKind: AuthorKind;
-  author?: string;
-  text: string;
-  sessionId?: string;
-  agentId?: string;
-  kind?: ChatKind;
-  /** Idempotency key (unique per card): writing the same key again returns the first event. */
-  key?: string;
-  answers?: string[];
-  fallback?: string[];
-  detail?: string;
-  planVersion?: number;
-  ready?: boolean;
-  error?: boolean;
-  thread?: ChatThread;
-  action?: "make_plan" | "review_plan";
-  /** WP-106: subtask of the sub-agent that wrote it / the owner addresses. */
-  subtask?: string;
-}
-
-export interface ProposeInput {
-  cardId: string;
-  /** At least one of title / description / acceptance. */
-  changes: ProposalChanges;
-  rationale: string;
-  /** Default: master. */
-  authorKind?: AuthorKind;
-  author?: string;
-}
-
-export interface MoveCardInput {
-  to: CardColumn;
-  actor: MoveActor;
-  reason?: string;
-  /** Default: end of the target column. */
-  sortKey?: string;
-}
-
-export interface AddCardEventInput {
-  /** Sync materialization: keep the id/creation time a replica generated offline. */
-  id?: string;
-  createdAt?: string;
-  cardId: string;
-  type: CardEventType;
-  authorKind: AuthorKind;
-  author?: string;
-  body?: unknown;
-}
-
 export interface StartSessionInput {
-  cardId: string | null;
+  cardId?: null;
+  projectId?: string | null;
   agentId: string;
   workspaceId?: string | null;
   role: SessionRole;
@@ -342,16 +151,7 @@ export interface RecordReassignInput {
   provider: string;
   /** Why: error | stalled | quota | ... */
   reason: string;
-  /** Preset the replacement runs on; also written to card.preset_id when given. */
-  presetId?: string | null;
-}
-
-export interface DispatchCardInput {
-  cardId: string;
-  agentId: string;
-  workspaceId?: string | null;
-  provider: string;
-  worktree: string | null;
+  /** Preset used by the replacement. */
   presetId?: string | null;
 }
 
@@ -364,19 +164,10 @@ export interface SetSessionStateOptions {
   outcome?: string;
 }
 
-export interface ListCardsFilter {
-  projectId?: string;
-  column?: CardColumn;
-  tagId?: string;
-  includeArchived?: boolean;
-  parentCardId?: string;
-}
-
 // --- store ------------------------------------------------------------------------------------
 
 type Enc = (value: never) => SqlParam;
 const asJson: Enc = (v) => JSON.stringify(v);
-const asBool: Enc = (v) => ((v as unknown as boolean) ? 1 : 0);
 const asJsonOrNull: Enc = (v) => (v === null || v === undefined ? null : JSON.stringify(v));
 const asIs: Enc = (v) => v as unknown as SqlParam;
 
@@ -410,30 +201,6 @@ const PRESET_FIELDS: FieldMap = {
   roleHints: ["role_hints_json", asJson],
   roleHint: ["role_hint", asIs],
 };
-const CARD_FIELDS: FieldMap = {
-  title: ["title", asIs],
-  description: ["description", asIs],
-  priority: ["priority", asIs],
-  acceptance: ["acceptance", asIs],
-  refImages: ["ref_images_json", asJson],
-  needsEvidence: ["needs_evidence", asBool],
-  presetId: ["preset_id", asIs],
-  suggestedPresetId: ["suggested_preset_id", asIs],
-  reviewerPresetId: ["reviewer_preset_id", asIs],
-  scoutPresetId: ["scout_preset_id", asIs],
-  plannerPresetId: ["planner_preset_id", asIs],
-  subagentPresetId: ["subagent_preset_id", asIs],
-  planReviewerPresetId: ["plan_reviewer_preset_id", asIs],
-  verifierPresetId: ["verifier_preset_id", asIs],
-  planSeenAt: ["plan_seen_at", asIs],
-  execSeenAt: ["exec_seen_at", asIs],
-  reviewSeenAt: ["review_seen_at", asIs],
-  verifySeenAt: ["verify_seen_at", asIs],
-  parentCardId: ["parent_card_id", asIs],
-  planSessionId: ["plan_session_id", asIs],
-  worktree: ["worktree", asIs],
-};
-
 /** Collects optional WHERE conditions; a condition with an undefined parameter is skipped. */
 class WhereBuilder {
   private readonly conditions: string[] = [];
@@ -452,9 +219,9 @@ class WhereBuilder {
  * projectTypes / projectType -> both columns, kept consistent (projectType = projectTypes[0]).
  * Returns the patch with both set, or unchanged when neither is present.
  */
-function normalizeProjectInput<T extends { projectTypes?: ProjectType[]; projectType?: ProjectType }>(
-  input: T,
-): T {
+function normalizeProjectInput<
+  T extends { projectTypes?: ProjectType[]; projectType?: ProjectType },
+>(input: T): T {
   let types = input.projectTypes;
   if (types === undefined && input.projectType === undefined) return input;
   types = [...new Set(types ?? [input.projectType!])];
@@ -482,12 +249,14 @@ function normalizePresetInput<T extends { roleHints?: RoleHint[]; roleHint?: str
   return { ...input, roleHints: hints, roleHint: hints[0] ?? null };
 }
 
+export const MODEL_DEFAULTS_KEY = "models.defaults";
+
 export type VibeStore = ReturnType<typeof createVibeStore>;
 
-export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
-  const now = options.now ?? (() => new Date());
+export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
+  const now = storeOptions.now ?? (() => new Date());
   const iso = () => now().toISOString();
-  let cachedDeviceId = options.deviceId;
+  let cachedDeviceId = storeOptions.deviceId;
 
   // ---- internals ----
 
@@ -512,26 +281,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       "INSERT INTO vibe_meta (key, value) VALUES ('hlc', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(hlc);
     return hlc;
-  }
-
-  function stampFields(table: string, rowId: string, columns: readonly string[], hlc: Hlc): void {
-    const spec = syncSpec(table);
-    if (!spec || spec.direction !== "both") return;
-    const stmt = db.prepare(
-      `INSERT INTO sync_meta (table_name, row_id, column_name, hlc, device_id) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(table_name, row_id, column_name) DO UPDATE SET hlc = excluded.hlc, device_id = excluded.device_id`,
-    );
-    for (const column of columns)
-      if (spec.fields.includes(column)) stmt.run(table, rowId, column, hlc, deviceId());
-  }
-
-  function tombstone(table: string, rowId: string, hlc: Hlc): void {
-    db.prepare(
-      `INSERT INTO sync_tombstone (table_name, row_id, hlc, device_id, deleted_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(table_name, row_id) DO UPDATE SET hlc = excluded.hlc, device_id = excluded.device_id,
-         deleted_at = excluded.deleted_at`,
-    ).run(table, rowId, hlc, deviceId(), iso());
-    db.prepare("DELETE FROM sync_meta WHERE table_name = ? AND row_id = ?").run(table, rowId);
   }
 
   /** UPDATE the mapped fields of `patch` that are present; returns the changed column names. */
@@ -563,7 +312,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       values.push(iso());
     }
     db.prepare(`UPDATE ${table} SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
-    stampFields(table, id, columns, hlc);
     return { keys, columns };
   }
 
@@ -579,112 +327,10 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     );
   }
 
-  function insertCardEvent(input: AddCardEventInput, hlc: Hlc): CardEvent {
-    const id = input.id ?? newId(now().getTime());
-    db.prepare(
-      `INSERT INTO card_event (id, card_id, type, author_kind, author, body_json, created_at, updated_hlc)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      input.cardId,
-      input.type,
-      input.authorKind,
-      input.author ?? "",
-      JSON.stringify(input.body ?? {}),
-      input.createdAt ?? iso(),
-      hlc,
-    );
-    stampFields("card_event", id, syncSpec("card_event")!.fields, hlc);
-    const created = decodeRow(
-      CardEventSchema,
-      db.prepare("SELECT * FROM card_event WHERE id = ?").get(id)!,
-    );
-    // Unread markers (WP-105): the tabs this event gives new content. Daemon-owned display
-    // columns: no sync stamp, no card.updated.
-    for (const tab of activityTabsOf(created)) {
-      const column = ACTIVITY_COLUMN[tab];
-      db.prepare(
-        `UPDATE card SET ${column} = ? WHERE id = ? AND (${column} IS NULL OR ${column} < ?)`,
-      ).run(created.createdAt, created.cardId, created.createdAt);
-    }
-    return created;
-  }
-
-  /** The card's plan (WP-105 plan_json), null when there is none yet. */
-  function planOf(row: Row): PlanSnapshot | null {
-    return row.plan_json ? PlanSnapshotSchema.parse(JSON.parse(row.plan_json as string)) : null;
-  }
-
-  function writePlan(id: string, plan: PlanSnapshot, hlc: Hlc): void {
-    db.prepare("UPDATE card SET plan_json = ?, updated_at = ?, updated_hlc = ? WHERE id = ?").run(
-      JSON.stringify(plan),
-      iso(),
-      hlc,
-      id,
-    );
-  }
-
-  function rawCard(id: string): Row {
-    const row = db.prepare("SELECT * FROM card WHERE id = ?").get(id);
-    if (!row) throw new CommandError("not_found", `Card not found: ${id}`);
-    return row;
-  }
-
-  function viewOf(row: Row): CardView {
-    const tags = db
-      .prepare<{ tag_id: string }>("SELECT tag_id FROM card_tag WHERE card_id = ? ORDER BY tag_id")
-      .all(row.id as string)
-      .map((r) => r.tag_id);
-    return { ...decodeRow(CardSchema, row), tags };
-  }
-
-  function lastSortKey(projectId: string, column: CardColumn): string | null {
-    return (
-      db
-        .prepare<{ k: string | null }>(
-          `SELECT MAX(sort_key) AS k FROM card WHERE project_id = ? AND "column" = ? AND archived_at IS NULL`,
-        )
-        .get(projectId, column)?.k ?? null
-    );
-  }
-
   function mustProject(id: string): Project {
     const row = db.prepare("SELECT * FROM project WHERE id = ?").get(id);
     if (!row) throw new CommandError("not_found", `Project not found: ${id}`);
     return decodeRow(ProjectSchema, row);
-  }
-
-  function writeCardTags(cardId: string, tagIds: readonly string[], hlc: Hlc): boolean {
-    const wanted = new Set(tagIds);
-    const have = new Set(
-      db
-        .prepare<{ tag_id: string }>("SELECT tag_id FROM card_tag WHERE card_id = ?")
-        .all(cardId)
-        .map((r) => r.tag_id),
-    );
-    let changed = false;
-    for (const tagId of wanted) {
-      if (have.has(tagId)) continue;
-      if (!db.prepare("SELECT 1 AS x FROM tag WHERE id = ?").get(tagId)) {
-        throw new CommandError("not_found", `Tag not found: ${tagId}`);
-      }
-      db.prepare("INSERT INTO card_tag (card_id, tag_id, updated_hlc) VALUES (?, ?, ?)").run(
-        cardId,
-        tagId,
-        hlc,
-      );
-      db.prepare("DELETE FROM sync_tombstone WHERE table_name = 'card_tag' AND row_id = ?").run(
-        `${cardId}:${tagId}`,
-      );
-      changed = true;
-    }
-    for (const tagId of have) {
-      if (wanted.has(tagId)) continue;
-      db.prepare("DELETE FROM card_tag WHERE card_id = ? AND tag_id = ?").run(cardId, tagId);
-      tombstone("card_tag", `${cardId}:${tagId}`, hlc);
-      changed = true;
-    }
-    return changed;
   }
 
   const write = <T>(fn: (hlc: Hlc) => T): T =>
@@ -693,56 +339,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       return fn(hlc);
     });
 
-  // ---- proposals (card events of type "proposal") ----
-
-  function pendingProposals(cardId: string): Array<{ id: string; body: ProposalEventBody }> {
-    const rows = db
-      .prepare<{ id: string; body_json: string }>(
-        "SELECT id, body_json FROM card_event WHERE card_id = ? AND type = 'proposal' ORDER BY created_at, id",
-      )
-      .all(cardId);
-    return rows.flatMap((r) => {
-      const parsed = ProposalEventBodySchema.safeParse(JSON.parse(r.body_json));
-      return parsed.success && parsed.data.status === "pending"
-        ? [{ id: r.id, body: parsed.data }]
-        : [];
-    });
-  }
-
-  function mustPendingProposal(eventId: string): { event: CardEvent; body: ProposalEventBody } {
-    const row = db.prepare("SELECT * FROM card_event WHERE id = ?").get(eventId);
-    if (!row) throw new CommandError("not_found", `Card event not found: ${eventId}`);
-    const event = decodeRow(CardEventSchema, row);
-    if (event.type !== "proposal")
-      throw new CommandError("invalid", `Card event ${eventId} is not a proposal`);
-    const body = ProposalEventBodySchema.parse(event.body);
-    if (body.status !== "pending")
-      throw new CommandError("conflict", `Proposal ${eventId} is already ${body.status}`);
-    return { event, body };
-  }
-
-  function setProposalStatus(
-    eventId: string,
-    body: ProposalEventBody,
-    status: ProposalEventBody["status"],
-    hlc: Hlc,
-    resolvedBy?: string,
-  ): CardEvent {
-    const next: ProposalEventBody = { ...body, status };
-    if (resolvedBy !== undefined) {
-      next.resolvedBy = resolvedBy;
-      next.resolvedAt = iso();
-    }
-    db.prepare("UPDATE card_event SET body_json = ?, updated_hlc = ? WHERE id = ?").run(
-      JSON.stringify(next),
-      hlc,
-      eventId,
-    );
-    stampFields("card_event", eventId, ["body_json"], hlc);
-    return decodeRow(CardEventSchema, db.prepare("SELECT * FROM card_event WHERE id = ?").get(eventId)!);
-  }
-
-  // ---- projects ----
+  // ---- model defaults ----
 
   function validateDefaults(value: ModelDefaults | undefined): void {
     if (value === undefined) return;
@@ -795,12 +392,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             throw new CommandError("conflict", `Project prefix "${input.prefix}" already exists`);
           throw error;
         }
-        stampFields(
-          "project",
-          id,
-          Object.values(PROJECT_FIELDS).map((f) => f[0]),
-          hlc,
-        );
         return mustProject(id);
       });
     },
@@ -816,7 +407,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           db.prepare(
             "UPDATE project SET archived_at = ?, updated_at = ?, updated_hlc = ? WHERE id = ?",
           ).run(archived ? iso() : null, iso(), hlc, id);
-          stampFields("project", id, ["archived_at"], hlc);
         }
         return mustProject(id);
       });
@@ -902,12 +492,17 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
   const presets = {
     create(rawInput: CreatePresetInput): Preset {
       const input = normalizePresetInput(rawInput);
-      const candidates = input.models ?? legacyPresetModels({
-        provider: input.provider,
-        model: input.model,
-        thinking: input.thinking ?? "",
-        permissionMode: input.permissionMode ?? "accept-edits",
-      }, input.fallbackPresetIds ?? []);
+      const candidates =
+        input.models ??
+        legacyPresetModels(
+          {
+            provider: input.provider,
+            model: input.model,
+            thinking: input.thinking ?? "",
+            permissionMode: input.permissionMode ?? "accept-edits",
+          },
+          input.fallbackPresetIds ?? [],
+        );
       const models = PresetModelInputSchema.array().min(1).parse(candidates);
       const first = models[0]!;
       return write((hlc) => {
@@ -942,12 +537,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             throw new CommandError("conflict", `Preset "${input.name}" already exists`);
           throw error;
         }
-        stampFields(
-          "preset",
-          id,
-          Object.values(PRESET_FIELDS).map((f) => f[0]),
-          hlc,
-        );
         return mustPreset(id);
       });
     },
@@ -956,8 +545,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       return write((hlc) => {
         const current = mustPreset(id);
         const { builtin: _ignored, ...rest } = patch;
-        const editsModel = ["provider", "model", "thinking", "permissionMode"].some(
-          (field) => Object.hasOwn(patch, field),
+        const editsModel = ["provider", "model", "thinking", "permissionMode"].some((field) =>
+          Object.hasOwn(patch, field),
         );
         if (patch.models !== undefined) {
           const models = PresetModelInputSchema.array().min(1).parse(patch.models);
@@ -965,9 +554,10 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         } else if (editsModel || patch.fallbackPresetIds !== undefined) {
           const models = [...presetModels(current)];
           models[0] = PresetModelInputSchema.parse({ ...models[0], ...rest });
-          const candidates = patch.fallbackPresetIds === undefined
-            ? models
-            : legacyPresetModels(models[0], patch.fallbackPresetIds ?? []);
+          const candidates =
+            patch.fallbackPresetIds === undefined
+              ? models
+              : legacyPresetModels(models[0], patch.fallbackPresetIds ?? []);
           Object.assign(rest, models[0], { models: candidates });
         }
         patchRow("preset", id, PRESET_FIELDS, rest, hlc);
@@ -979,25 +569,18 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         mustPreset(id);
         // WP-108: forget the preset in the project and global default models.
         for (const p of projects.list(true)) {
-          const kept = Object.fromEntries(Object.entries(p.defaultPresets).filter(([, v]) => v !== id));
+          const kept = Object.fromEntries(
+            Object.entries(p.defaultPresets).filter(([, v]) => v !== id),
+          );
           if (Object.keys(kept).length !== Object.keys(p.defaultPresets).length)
             patchRow("project", p.id, PROJECT_FIELDS, { defaultPresets: kept }, hlc);
         }
         const globals = modelDefaults.global();
         if (Object.values(globals).includes(id))
-          writeGlobalDefaults(Object.fromEntries(Object.entries(globals).filter(([, v]) => v !== id)));
-        db.prepare("UPDATE card SET preset_id = NULL WHERE preset_id = ?").run(id);
-        db.prepare("UPDATE card SET suggested_preset_id = NULL WHERE suggested_preset_id = ?").run(
-          id,
-        );
-        db.prepare("UPDATE card SET reviewer_preset_id = NULL WHERE reviewer_preset_id = ?").run(id);
-        db.prepare("UPDATE card SET scout_preset_id = NULL WHERE scout_preset_id = ?").run(id);
-        db.prepare("UPDATE card SET planner_preset_id = NULL WHERE planner_preset_id = ?").run(id);
-        db.prepare("UPDATE card SET subagent_preset_id = NULL WHERE subagent_preset_id = ?").run(id);
-        db.prepare("UPDATE card SET plan_reviewer_preset_id = NULL WHERE plan_reviewer_preset_id = ?").run(id);
-        db.prepare("UPDATE card SET verifier_preset_id = NULL WHERE verifier_preset_id = ?").run(id);
+          writeGlobalDefaults(
+            Object.fromEntries(Object.entries(globals).filter(([, v]) => v !== id)),
+          );
         db.prepare("DELETE FROM preset WHERE id = ?").run(id);
-        tombstone("preset", id, hlc);
         // Drop the deleted id from other presets' fallback chains.
         for (const other of presets.list()) {
           if (!other.fallbackPresetIds?.includes(id)) continue;
@@ -1020,701 +603,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       decodeRows(PresetSchema, db.prepare("SELECT * FROM preset ORDER BY name").all()),
   };
 
-  const tags = {
-    list: (): Tag[] =>
-      decodeRows(TagSchema, db.prepare("SELECT * FROM tag ORDER BY builtin DESC, rowid").all()),
-    create(name: string, evidence = false, tagId?: string, color = ""): Tag {
-      return write((hlc) => {
-        const id = tagId ?? newId(now().getTime());
-        try {
-          db.prepare(
-            "INSERT INTO tag (id, name, evidence, color, builtin, updated_hlc) VALUES (?, ?, ?, ?, 0, ?)",
-          ).run(id, name, evidence ? 1 : 0, color, hlc);
-        } catch (error) {
-          if (String(error).includes("UNIQUE"))
-            throw new CommandError("conflict", `Tag "${name}" already exists`);
-          throw error;
-        }
-        stampFields("tag", id, ["name", "evidence", "color"], hlc);
-        return decodeRow(TagSchema, db.prepare("SELECT * FROM tag WHERE id = ?").get(id)!);
-      });
-    },
-    /** Rename / recolor / toggle the evidence default. Cards keep the same tag id, so they follow. */
-    update(id: string, patch: { name?: string; evidence?: boolean; color?: string }): Tag {
-      return write((hlc) => {
-        if (!db.prepare("SELECT 1 AS x FROM tag WHERE id = ?").get(id))
-          throw new CommandError("not_found", `Tag not found: ${id}`);
-        const name = patch.name?.trim();
-        if (patch.name !== undefined && !name) throw new CommandError("invalid", "Tag name is empty");
-        const sets: string[] = [];
-        const params: (string | number)[] = [];
-        const changed: string[] = [];
-        if (name !== undefined) {
-          sets.push("name = ?");
-          params.push(name);
-          changed.push("name");
-        }
-        if (patch.evidence !== undefined) {
-          sets.push("evidence = ?");
-          params.push(patch.evidence ? 1 : 0);
-          changed.push("evidence");
-        }
-        if (patch.color !== undefined) {
-          sets.push("color = ?");
-          params.push(patch.color.trim());
-          changed.push("color");
-        }
-        if (changed.length) {
-          try {
-            db.prepare(`UPDATE tag SET ${sets.join(", ")}, updated_hlc = ? WHERE id = ?`).run(
-              ...params,
-              hlc,
-              id,
-            );
-          } catch (error) {
-            if (String(error).includes("UNIQUE"))
-              throw new CommandError("conflict", `Tag "${name}" already exists`);
-            throw error;
-          }
-          stampFields("tag", id, changed, hlc);
-        }
-        return decodeRow(TagSchema, db.prepare("SELECT * FROM tag WHERE id = ?").get(id)!);
-      });
-    },
-    /** Custom tags only; the default vocabulary is fixed. */
-    delete(id: string): void {
-      write((hlc) => {
-        const row = db.prepare<{ builtin: number }>("SELECT builtin FROM tag WHERE id = ?").get(id);
-        if (!row) throw new CommandError("not_found", `Tag not found: ${id}`);
-        if (row.builtin) throw new CommandError("invalid", "Built-in tags cannot be deleted");
-        for (const r of db
-          .prepare<{ card_id: string }>("SELECT card_id FROM card_tag WHERE tag_id = ?")
-          .all(id)) {
-          tombstone("card_tag", `${r.card_id}:${id}`, hlc);
-        }
-        db.prepare("DELETE FROM tag WHERE id = ?").run(id);
-        tombstone("tag", id, hlc);
-      });
-    },
-  };
-
-  // ---- cards ----
-
-  const cards = {
-    get(idOrKey: string): CardView | undefined {
-      const row = CARD_KEY_PATTERN.test(idOrKey)
-        ? db.prepare("SELECT * FROM card WHERE key = ?").get(idOrKey)
-        : db.prepare("SELECT * FROM card WHERE id = ?").get(idOrKey);
-      return row ? viewOf(row) : undefined;
-    },
-
-    list(filter: ListCardsFilter = {}): CardView[] {
-      const w = new WhereBuilder();
-      w.add("c.project_id = ?", filter.projectId);
-      w.add('c."column" = ?', filter.column);
-      w.add("c.parent_card_id = ?", filter.parentCardId);
-      w.add(
-        "EXISTS (SELECT 1 FROM card_tag t WHERE t.card_id = c.id AND t.tag_id = ?)",
-        filter.tagId,
-      );
-      if (!filter.includeArchived) w.add("c.archived_at IS NULL");
-      return db
-        .prepare(`SELECT c.* FROM card c ${w.clause()} ORDER BY c.sort_key, c.id`)
-        .all(...w.params)
-        .map(viewOf);
-    },
-
-    create(rawInput: CreateCardInput, actor: MoveActor = "user", author = ""): CardView {
-      let input = rawInput;
-      const column = input.column ?? "draft";
-      const origin = input.origin ?? "manual";
-      if (!input.title.trim()) throw new CommandError("invalid", "Card title is required");
-      if (!canCreateIn(column, origin, actor)) {
-        throw new StateMachineError(
-          "illegal_create",
-          `"${actor}" may not create a ${origin} card in "${column}"`,
-        );
-      }
-      return write((hlc) => {
-        const project = mustProject(input.projectId);
-        // WP-108: jobs the caller left open start from the project, then the global default model.
-        input = { ...input, ...prefillModels(input, project, modelDefaults.global(), (p) => !!presets.get(p)) };
-        const id = input.id ?? newId(now().getTime());
-        const createdAt = input.createdAt ?? iso();
-        const number = project.nextNumber;
-        const key = `${project.prefix}-${number}`;
-        const tagIds = input.tagIds ?? [];
-        let needsEvidence = input.needsEvidence;
-        if (needsEvidence === undefined) {
-          needsEvidence = tagIds.some(
-            (t) =>
-              db.prepare<{ evidence: number }>("SELECT evidence FROM tag WHERE id = ?").get(t)
-                ?.evidence === 1,
-          );
-        }
-        db.prepare("UPDATE project SET next_number = next_number + 1 WHERE id = ?").run(project.id);
-        db.prepare(
-          `INSERT INTO card (id, project_id, number, key, title, description, "column", sort_key, priority, acceptance,
-             ref_images_json, needs_evidence, preset_id, suggested_preset_id, reviewer_preset_id, scout_preset_id, planner_preset_id,
-             subagent_preset_id, plan_reviewer_preset_id, verifier_preset_id, worktree, origin, origin_ref, dedupe_key, plan_session_id,
-             parent_card_id, created_at, updated_at, updated_hlc)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          id,
-          project.id,
-          number,
-          key,
-          input.title.trim(),
-          input.description ?? "",
-          column,
-          input.sortKey ?? sortKeyAfter(lastSortKey(project.id, column)),
-          input.priority ?? "none",
-          input.acceptance ?? "",
-          JSON.stringify(input.refImages ?? []),
-          needsEvidence ? 1 : 0,
-          input.presetId ?? null,
-          input.suggestedPresetId ?? null,
-          input.reviewerPresetId ?? null,
-          input.scoutPresetId ?? null,
-          input.plannerPresetId ?? null,
-          input.subagentPresetId ?? null,
-          input.planReviewerPresetId ?? null,
-          input.verifierPresetId ?? null,
-          input.worktree ?? null,
-          origin,
-          input.originRef ?? null,
-          input.dedupeKey ?? null,
-          input.planSessionId ?? null,
-          input.parentCardId ?? null,
-          createdAt,
-          createdAt,
-          hlc,
-        );
-        stampFields("card", id, syncSpec("card")!.fields, hlc);
-        writeCardTags(id, tagIds, hlc);
-        insertCardEvent(
-          {
-            cardId: id,
-            type: "status",
-            authorKind: actor === "user" || actor === "phone" ? "user" : "system",
-            author,
-            body: { kind: "created", column, origin },
-          },
-          hlc,
-        );
-        emit(
-          "card.created",
-          { key, title: input.title.trim(), column, origin },
-          { cardId: id, projectId: project.id },
-        );
-        return viewOf(rawCard(id));
-      });
-    },
-
-    update(id: string, patch: UpdateCardInput): CardView {
-      return write((hlc) => {
-        const before = rawCard(id);
-        if (patch.title !== undefined && !patch.title.trim())
-          throw new CommandError("invalid", "Card title is required");
-        // Marking a tab read is not an edit of the card: no updated_at bump, no card.updated.
-        const readOnly = Object.entries(patch).every(
-          ([k, v]) => v === undefined || READ_POSITION_FIELDS.has(k),
-        );
-        const { keys } = patchRow(
-          "card",
-          id,
-          CARD_FIELDS,
-          patch as Record<string, unknown>,
-          hlc,
-          !readOnly,
-        );
-        if (keys.length > 0 && !readOnly)
-          emit(
-            "card.updated",
-            { fields: keys },
-            { cardId: id, projectId: before.project_id as string },
-          );
-        return viewOf(rawCard(id));
-      });
-    },
-
-    /** Group-chat message on a card (card event type "chat"). */
-    addChat(input: AddChatInput): CardEvent {
-      if (!input.text.trim()) throw new CommandError("invalid", "Chat text is required");
-      if (input.key !== undefined) {
-        const row = db
-          .prepare(
-            "SELECT * FROM card_event WHERE card_id = ? AND type = 'chat' AND json_extract(body_json, '$.key') = ? ORDER BY created_at, id LIMIT 1",
-          )
-          .get(input.cardId, input.key);
-        if (row) return decodeRow(CardEventSchema, row);
-      }
-      const body: ChatEventBody = { text: input.text };
-      if (input.sessionId !== undefined) body.sessionId = input.sessionId;
-      if (input.agentId !== undefined) body.agentId = input.agentId;
-      if (input.kind !== undefined) body.kind = input.kind;
-      if (input.key !== undefined) body.key = input.key;
-      if (input.answers !== undefined) body.answers = input.answers;
-      if (input.fallback !== undefined) body.fallback = input.fallback;
-      if (input.detail !== undefined) body.detail = input.detail;
-      if (input.planVersion !== undefined) body.planVersion = input.planVersion;
-      if (input.ready !== undefined) body.ready = input.ready;
-      if (input.error !== undefined) body.error = input.error;
-      if (input.thread !== undefined) body.thread = input.thread;
-      if (input.action !== undefined) body.action = input.action;
-      if (input.subtask !== undefined) body.subtask = input.subtask;
-      return events.add({
-        id: input.id,
-        createdAt: input.createdAt,
-        cardId: input.cardId,
-        type: "chat",
-        authorKind: input.authorKind,
-        author: input.author,
-        body,
-      });
-    },
-
-    /**
-     * The master suggests new title / description / acceptance. A proposal is a "proposal" card
-     * event whose body.status moves pending -> accepted | rejected | superseded (body_json is a
-     * field-level LWW sync field, so status changes sync like any edit). A new proposal supersedes
-     * the card's earlier pending ones.
-     */
-    propose(input: ProposeInput): CardEvent {
-      const changes = ProposalChangesSchema.parse(input.changes);
-      if (Object.values(changes).every((v) => v === undefined))
-        throw new CommandError("invalid", "A proposal needs at least one change");
-      return write((hlc) => {
-        const row = rawCard(input.cardId);
-        for (const p of pendingProposals(input.cardId)) setProposalStatus(p.id, p.body, "superseded", hlc);
-        const before: ProposalChanges = {};
-        for (const key of ["title", "description", "acceptance"] as const) {
-          if (changes[key] !== undefined) before[key] = row[key] as string;
-        }
-        if (changes.subtasks !== undefined) before.subtasks = planOf(row)?.subtasks ?? [];
-        const body: ProposalEventBody = { changes, rationale: input.rationale, status: "pending", before };
-        return insertCardEvent(
-          {
-            cardId: input.cardId,
-            type: "proposal",
-            authorKind: input.authorKind ?? "master",
-            author: input.author,
-            body,
-          },
-          hlc,
-        );
-      });
-    },
-
-    /** Apply a pending proposal's changes to the card (one card.updated event) and mark it accepted. */
-    acceptProposal(eventId: string, actor: MoveActor): CardEvent {
-      return write((hlc) => {
-        const { event, body } = mustPendingProposal(eventId);
-        const changes: UpdateCardInput = {};
-        if (body.changes.title !== undefined) changes.title = body.changes.title;
-        if (body.changes.description !== undefined) changes.description = body.changes.description;
-        if (body.changes.acceptance !== undefined) changes.acceptance = body.changes.acceptance;
-        cards.update(event.cardId, changes);
-        // WP-106: the model's subtasks replace the owner's; its next version applies directly again.
-        if (body.changes.subtasks !== undefined) {
-          const row = rawCard(event.cardId);
-          const next: PlanSnapshot = { ...(planOf(row) ?? EMPTY_PLAN), subtasks: body.changes.subtasks };
-          delete next.subtasksEdited;
-          writePlan(event.cardId, next, hlc);
-          emit("card.updated", { fields: ["plan"] }, { cardId: event.cardId, projectId: row.project_id as string });
-        }
-        // The criteria are the model's text again: its next revision may overwrite them.
-        if (changes.acceptance !== undefined)
-          db.prepare("UPDATE card SET model_acceptance = ? WHERE id = ?").run(
-            changes.acceptance,
-            event.cardId,
-          );
-        return setProposalStatus(eventId, body, "accepted", hlc, actor);
-      });
-    },
-
-    rejectProposal(eventId: string, actor: MoveActor): CardEvent {
-      return write((hlc) => {
-        const { body } = mustPendingProposal(eventId);
-        return setProposalStatus(eventId, body, "rejected", hlc, actor);
-      });
-    },
-
-    /**
-     * WP-105: store the planning model's plan as the card's only plan (overwrite) and its acceptance
-     * criteria. Criteria the owner edited since the model last wrote them are never overwritten: the
-     * new text becomes a pending proposal in the plan chat instead.
-     */
-    setPlan(id: string, input: SetPlanInput): SetPlanResult {
-      const plan = input.plan === undefined ? undefined : PlanSnapshotSchema.parse(input.plan);
-      return write((hlc) => {
-        const before = rawCard(id);
-        const projectId = before.project_id as string;
-        // WP-106: subtasks the owner edited are kept; the model's version waits as a proposal.
-        let proposedSubtasks: Subtask[] | null = null;
-        if (plan) {
-          const listError = plan.subtasks ? subtaskListError(plan.subtasks) : null;
-          if (listError) throw new CommandError("invalid", listError);
-          const current = planOf(before);
-          if (current?.subtasksEdited) {
-            const mine = current.subtasks ?? [];
-            if (plan.subtasks !== undefined && JSON.stringify(plan.subtasks) !== JSON.stringify(mine)) {
-              proposedSubtasks = plan.subtasks;
-            }
-            plan.subtasks = mine;
-            plan.subtasksEdited = true;
-          } else {
-            delete plan.subtasksEdited;
-          }
-        }
-        const json = plan === undefined ? null : JSON.stringify(plan);
-        const planChanged = json !== null && json !== before.plan_json;
-        if (planChanged) {
-          db.prepare(
-            "UPDATE card SET plan_json = ?, updated_at = ?, updated_hlc = ? WHERE id = ?",
-          ).run(json, iso(), hlc, id);
-          insertCardEvent(
-            {
-              cardId: id,
-              type: "note",
-              authorKind: "agent",
-              author: input.author ?? "planner",
-              body: { kind: "plan_updated", text: "方案已更新" },
-            },
-            hlc,
-          );
-          emit("card.updated", { fields: ["plan"] }, { cardId: id, projectId });
-        }
-        const proposed = proposedSubtasks;
-        if (
-          proposed &&
-          !pendingProposals(id).some((pp) => JSON.stringify(pp.body.changes.subtasks) === JSON.stringify(proposed))
-        ) {
-          cards.propose({
-            cardId: id,
-            changes: { subtasks: proposed },
-            rationale: "你改过子任务，所以规划模型这次的子任务先作为建议提出，由你决定是否采纳。",
-            authorKind: "master",
-            author: input.author ?? "planner",
-          });
-        }
-        let acceptance: SetPlanResult["acceptance"] = "none";
-        const next = input.acceptance?.trim();
-        if (next) {
-          const current = before.acceptance as string;
-          const model = before.model_acceptance as string;
-          if (next === current.trim()) {
-            acceptance = "unchanged";
-            db.prepare("UPDATE card SET model_acceptance = ? WHERE id = ?").run(current, id);
-          } else if (!current.trim() || current === model) {
-            cards.update(id, { acceptance: next });
-            db.prepare("UPDATE card SET model_acceptance = ? WHERE id = ?").run(next, id);
-            acceptance = "applied";
-          } else {
-            if (!pendingProposals(id).some((pp) => pp.body.changes.acceptance?.trim() === next)) {
-              cards.propose({
-                cardId: id,
-                changes: { acceptance: next },
-                rationale: input.rationale ?? "你改过验收标准，所以这次的修改先作为建议提出，由你决定是否采纳。",
-                authorKind: "master",
-                author: input.author ?? "planner",
-              });
-            }
-            acceptance = "proposed";
-          }
-        }
-        return {
-          card: viewOf(rawCard(id)),
-          planChanged,
-          acceptance,
-          subtasks: proposed ? ("proposed" as const) : ("applied" as const),
-        };
-      });
-    },
-
-    /**
-     * WP-106: the owner's version of the plan's subtasks (add, remove, edit, pick a model). Marks the
-     * subtasks as edited, so the planning model's next version becomes a proposal instead.
-     */
-    setSubtasks(id: string, subtasks: readonly Subtask[], author = "user"): CardView {
-      const list = subtasks.map((s) => SubtaskSchema.parse(s));
-      const error = subtaskListError(list);
-      if (error) throw new CommandError("invalid", error);
-      return write((hlc) => {
-        const before = rawCard(id);
-        const current = planOf(before) ?? EMPTY_PLAN;
-        if (JSON.stringify(current.subtasks ?? []) === JSON.stringify(list)) return viewOf(before);
-        for (const s of list) if (s.presetId !== null) mustPreset(s.presetId);
-        writePlan(id, { ...current, subtasks: list, subtasksEdited: true }, hlc);
-        insertCardEvent(
-          { cardId: id, type: "note", authorKind: "user", author, body: { kind: "subtasks_edited", text: "子任务已修改" } },
-          hlc,
-        );
-        emit("card.updated", { fields: ["plan"] }, { cardId: id, projectId: before.project_id as string });
-        return viewOf(rawCard(id));
-      });
-    },
-
-    /** WP-106: update the runtime state of one subtask (daemon only; a display column, no sync stamp). */
-    setSubtaskRun(id: string, subtaskId: string, patch: Partial<SubtaskRun>): SubtaskRun {
-      return write(() => {
-        const before = rawCard(id);
-        const runs = JSON.parse((before.subtask_runs_json as string) || "{}") as Record<string, SubtaskRun>;
-        const next = SubtaskRunSchema.parse({ ...emptyRun(), ...runs[subtaskId], ...patch });
-        runs[subtaskId] = next;
-        db.prepare("UPDATE card SET subtask_runs_json = ? WHERE id = ?").run(JSON.stringify(runs), id);
-        return next;
-      });
-    },
-
-    /** Pick (or clear with null) the preset that reviews the result of this card. */
-    setReviewer(id: string, presetId: string | null): CardView {
-      return write((hlc) => {
-        const before = rawCard(id);
-        if (presetId !== null) mustPreset(presetId);
-        if (before.reviewer_preset_id !== presetId) {
-          patchRow("card", id, CARD_FIELDS, { reviewerPresetId: presetId }, hlc);
-          emit(
-            "card.updated",
-            { fields: ["reviewerPresetId"] },
-            { cardId: id, projectId: before.project_id as string },
-          );
-        }
-        return viewOf(rawCard(id));
-      });
-    },
-
-    setTags(id: string, tagIds: readonly string[]): CardView {
-      return write((hlc) => {
-        const before = rawCard(id);
-        if (writeCardTags(id, tagIds, hlc)) {
-          db.prepare("UPDATE card SET updated_at = ? WHERE id = ?").run(iso(), id);
-          emit(
-            "card.updated",
-            { fields: ["tags"] },
-            { cardId: id, projectId: before.project_id as string },
-          );
-        }
-        return viewOf(rawCard(id));
-      });
-    },
-
-    /** Change order inside a column (fractional key). Not a state transition. */
-    reorder(id: string, sortKey: string): CardView {
-      return write((hlc) => {
-        const before = rawCard(id);
-        patchRowSort(id, sortKey, hlc);
-        emit(
-          "card.updated",
-          { fields: ["sortKey"] },
-          { cardId: id, projectId: before.project_id as string },
-        );
-        return viewOf(rawCard(id));
-      });
-    },
-
-    /** Move between columns. The state machine decides who may do what; see contract/state-machine.ts. */
-    move(id: string, input: MoveCardInput): CardView {
-      return write((hlc) => {
-        const before = rawCard(id);
-        const from = before.column as CardColumn;
-        assertTransition(from, input.to, input.actor);
-        if (from === "todo" && input.to === "in_progress") {
-          const live = db
-            .prepare(
-              "SELECT 1 AS x FROM agent_session WHERE card_id = ? AND role = 'worker' AND state NOT IN ('ended','error')",
-            )
-            .get(id);
-          if (!live)
-            throw new CommandError(
-              "invalid",
-              "A card can only enter in_progress through dispatch (needs a live worker session)",
-            );
-        }
-        applyMove(before, input, hlc);
-        return viewOf(rawCard(id));
-      });
-    },
-
-    archive(id: string, archived = true): CardView {
-      return write((hlc) => {
-        const before = rawCard(id);
-        db.prepare(
-          "UPDATE card SET archived_at = ?, updated_at = ?, updated_hlc = ? WHERE id = ?",
-        ).run(archived ? iso() : null, iso(), hlc, id);
-        stampFields("card", id, ["archived_at"], hlc);
-        emit(
-          "card.updated",
-          { fields: ["archivedAt"] },
-          { cardId: id, projectId: before.project_id as string },
-        );
-        return viewOf(rawCard(id));
-      });
-    },
-
-    /** Hard delete; only drafts that never ran. Leaves a tombstone for sync. */
-    delete(id: string): void {
-      write((hlc) => {
-        const before = rawCard(id);
-        if (before.column !== "draft")
-          throw new CommandError("invalid", "Only draft cards can be deleted; archive others");
-        if (db.prepare("SELECT 1 AS x FROM agent_session WHERE card_id = ?").get(id)) {
-          throw new CommandError("invalid", "Card has sessions; archive it instead");
-        }
-        for (const r of db
-          .prepare<{ id: string }>("SELECT id FROM card_event WHERE card_id = ?")
-          .all(id))
-          tombstone("card_event", r.id, hlc);
-        for (const r of db
-          .prepare<{ tag_id: string }>("SELECT tag_id FROM card_tag WHERE card_id = ?")
-          .all(id)) {
-          tombstone("card_tag", `${id}:${r.tag_id}`, hlc);
-        }
-        db.prepare("UPDATE card SET parent_card_id = NULL WHERE parent_card_id = ?").run(id);
-        db.prepare("DELETE FROM card WHERE id = ?").run(id);
-        tombstone("card", id, hlc);
-        emit(
-          "card.deleted",
-          { key: before.key },
-          { cardId: id, projectId: before.project_id as string },
-        );
-      });
-    },
-
-    /**
-     * todo -> in_progress as one atomic step: creates the worker session, records worktree and
-     * session start, and moves the card as "dispatcher".
-     */
-    dispatch(input: DispatchCardInput): { card: CardView; session: AgentSession } {
-      return write((hlc) => {
-        const before = rawCard(input.cardId);
-        assertTransition(before.column as CardColumn, "in_progress", "dispatcher");
-        const session = insertSession(
-          {
-            cardId: input.cardId,
-            agentId: input.agentId,
-            workspaceId: input.workspaceId,
-            role: "worker",
-            provider: input.provider,
-          },
-          hlc,
-        );
-        db.prepare(
-          "UPDATE card SET worktree = ?, preset_id = COALESCE(?, preset_id), updated_hlc = ? WHERE id = ?",
-        ).run(input.worktree, input.presetId ?? null, hlc, input.cardId);
-        applyMove(before, { to: "in_progress", actor: "dispatcher" }, hlc);
-        emit(
-          "card.dispatched",
-          {
-            sessionId: session.id,
-            agentId: input.agentId,
-            worktree: input.worktree,
-            presetId: input.presetId ?? null,
-          },
-          { cardId: input.cardId, projectId: before.project_id as string },
-        );
-        return { card: viewOf(rawCard(input.cardId)), session };
-      });
-    },
-  };
-
-  function patchRowSort(id: string, sortKey: string, hlc: Hlc): void {
-    db.prepare("UPDATE card SET sort_key = ?, updated_at = ?, updated_hlc = ? WHERE id = ?").run(
-      sortKey,
-      iso(),
-      hlc,
-      id,
-    );
-    stampFields("card", id, ["sort_key"], hlc);
-  }
-
-  function applyMove(before: Row, input: MoveCardInput, hlc: Hlc): void {
-    const id = before.id as string;
-    const projectId = before.project_id as string;
-    const from = before.column as CardColumn;
-    db.prepare(
-      `UPDATE card SET "column" = ?, sort_key = ?, updated_at = ?, updated_hlc = ? WHERE id = ?`,
-    ).run(
-      input.to,
-      input.sortKey ?? sortKeyAfter(lastSortKey(projectId, input.to)),
-      iso(),
-      hlc,
-      id,
-    );
-    stampFields("card", id, ["column", "sort_key"], hlc);
-    insertCardEvent(
-      {
-        cardId: id,
-        type: "status",
-        authorKind: input.actor === "user" || input.actor === "phone" ? "user" : "system",
-        author: input.actor,
-        body: { kind: "moved", from, to: input.to, actor: input.actor, reason: input.reason },
-      },
-      hlc,
-    );
-    emit(
-      "card.moved",
-      { from, to: input.to, actor: input.actor, reason: input.reason },
-      { cardId: id, projectId },
-    );
-  }
-
-  // ---- card events & plan versions ----
-
-  const events = {
-    add(input: AddCardEventInput): CardEvent {
-      return write((hlc) => {
-        const card = rawCard(input.cardId);
-        const created = insertCardEvent(input, hlc);
-        if (input.type === "evaluation") {
-          emit(
-            "card.assessed",
-            { cardEventId: created.id },
-            { cardId: input.cardId, projectId: card.project_id as string },
-          );
-        }
-        return created;
-      });
-    },
-    list: (cardId: string): CardEvent[] =>
-      decodeRows(
-        CardEventSchema,
-        db
-          .prepare("SELECT * FROM card_event WHERE card_id = ? ORDER BY created_at, id")
-          .all(cardId),
-      ),
-  };
-
-  const plans = {
-    /** Append the next plan version (1, 2, ...) for a card. */
-    save(cardId: string, snapshot: PlanSnapshot): PlanVersion {
-      const parsed = PlanSnapshotSchema.parse(snapshot);
-      return write(() => {
-        const card = rawCard(cardId);
-        const next =
-          (db
-            .prepare<{ v: number | null }>(
-              "SELECT MAX(version) AS v FROM plan_version WHERE card_id = ?",
-            )
-            .get(cardId)?.v ?? 0) + 1;
-        const id = newId(now().getTime());
-        db.prepare(
-          "INSERT INTO plan_version (id, card_id, version, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)",
-        ).run(id, cardId, next, JSON.stringify(parsed), iso());
-        emit("plan.updated", { version: next }, { cardId, projectId: card.project_id as string });
-        return decodeRow(
-          PlanVersionSchema,
-          db.prepare("SELECT * FROM plan_version WHERE id = ?").get(id)!,
-        );
-      });
-    },
-    list: (cardId: string): PlanVersion[] =>
-      decodeRows(
-        PlanVersionSchema,
-        db.prepare("SELECT * FROM plan_version WHERE card_id = ? ORDER BY version").all(cardId),
-      ),
-  };
-
   // ---- agent sessions ----
 
   function mustSession(id: string): AgentSession {
@@ -1723,25 +611,18 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     return decodeRow(AgentSessionSchema, row);
   }
 
-  function projectOfCard(cardId: string | null): string | null {
-    if (!cardId) return null;
-    return (
-      db.prepare<{ project_id: string }>("SELECT project_id FROM card WHERE id = ?").get(cardId)
-        ?.project_id ?? null
-    );
-  }
-
   function insertSession(input: StartSessionInput, hlc: Hlc): AgentSession {
-    if (input.cardId) rawCard(input.cardId);
+    if (input.cardId != null)
+      throw new CommandError("invalid", "旧卡片入口已停用，请在 workspace 中发起任务");
     const id = newId(now().getTime());
     try {
       db.prepare(
         `INSERT INTO agent_session (id, card_id, agent_id, workspace_id, role, current_provider, state,
-           last_activity_at, started_at, complexity, reassigned_from_session_id, updated_hlc)
-         VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?)`,
+           last_activity_at, started_at, complexity, reassigned_from_session_id, updated_hlc, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
-        input.cardId,
+        null,
         input.agentId,
         input.workspaceId ?? null,
         input.role,
@@ -1751,45 +632,30 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         input.complexity ?? null,
         input.reassignedFromSessionId ?? null,
         hlc,
+        input.projectId ?? null,
       );
     } catch (error) {
       if (String(error).includes("UNIQUE"))
         throw new CommandError("conflict", `Agent already has a session: ${input.agentId}`);
       throw error;
     }
-    if (input.cardId) {
-      insertCardEvent(
-        {
-          cardId: input.cardId,
-          type: "status",
-          authorKind: "system",
-          author: input.role,
-          body: {
-            kind: "session_started",
-            sessionId: id,
-            role: input.role,
-            provider: input.provider,
-          },
-        },
-        hlc,
-      );
-    }
+
     emit(
       "session.started",
       { sessionId: id, agentId: input.agentId, role: input.role, provider: input.provider },
-      { cardId: input.cardId, projectId: projectOfCard(input.cardId) },
+      { cardId: input.cardId, projectId: input.projectId ?? null },
     );
     return mustSession(id);
   }
 
-  /** session.* bus events and the card timeline entry for a state change. */
+  /** Publish the durable native session state notification. */
   function announceSessionState(
     s: AgentSession,
     to: SessionState,
     opts: SetSessionStateOptions,
-    hlc: Hlc,
+    _hlc: Hlc,
   ): void {
-    const refs = { cardId: s.cardId, projectId: projectOfCard(s.cardId) };
+    const refs = { cardId: s.cardId, projectId: s.projectId ?? null };
     const base = { sessionId: s.id, agentId: s.agentId };
     if (to === "waiting") emit("session.waiting", { ...base, question: opts.question }, refs);
     else if (to === "working" && s.state === "waiting") emit("session.answered", base, refs);
@@ -1797,43 +663,14 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     else if (to === "error") {
       emit("session.error", { ...base, message: opts.message ?? "unknown error" }, refs);
     }
-    if (s.cardId && (to === "waiting" || to === "ended" || to === "error")) {
-      insertCardEvent(
-        {
-          cardId: s.cardId,
-          type: "status",
-          authorKind: "system",
-          author: s.role,
-          body: {
-            kind: `session_${to}`,
-            sessionId: s.id,
-            outcome: opts.outcome,
-            message: opts.message,
-          },
-        },
-        hlc,
-      );
-    }
   }
 
-  function announceUnstalled(s: AgentSession, hlc: Hlc): void {
+  function announceUnstalled(s: AgentSession, _hlc: Hlc): void {
     emit(
       "session.unstalled",
       { sessionId: s.id, agentId: s.agentId },
-      { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+      { cardId: s.cardId, projectId: s.projectId ?? null },
     );
-    if (s.cardId) {
-      insertCardEvent(
-        {
-          cardId: s.cardId,
-          type: "status",
-          authorKind: "system",
-          author: s.role,
-          body: { kind: "session_unstalled", sessionId: s.id },
-        },
-        hlc,
-      );
-    }
   }
 
   const sessions = {
@@ -1951,20 +788,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         emit(
           "session.stalled",
           { sessionId: id, agentId: s.agentId, stalledSince: since, idleMs: opts.idleMs },
-          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+          { cardId: s.cardId, projectId: s.projectId ?? null },
         );
-        if (s.cardId) {
-          insertCardEvent(
-            {
-              cardId: s.cardId,
-              type: "status",
-              authorKind: "system",
-              author: s.role,
-              body: { kind: "session_stalled", sessionId: id, since },
-            },
-            hlc,
-          );
-        }
+
         return mustSession(id);
       });
     },
@@ -1995,17 +821,13 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         emit(
           "session.complexity_changed",
           { sessionId: id, agentId: s.agentId, from: s.complexity, to: complexity },
-          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+          { cardId: s.cardId, projectId: s.projectId ?? null },
         );
         return mustSession(id);
       });
     },
 
-    /**
-     * Failure reassignment in ONE transaction: end the old session (outcome "reassigned"),
-     * start its replacement (same card/role/complexity, reassigned_from_session_id set),
-     * optionally switch card.preset_id, write a switch_agent card event, emit session.reassigned.
-     */
+    /** Atomically end a session and register its replacement. */
     recordReassign(input: RecordReassignInput): { from: AgentSession; to: AgentSession } {
       return write((hlc) => {
         const old = mustSession(input.fromSessionId);
@@ -2021,7 +843,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         announceSessionState(old, "ended", { outcome: "reassigned" }, hlc);
         const next = insertSession(
           {
-            cardId: old.cardId,
+            projectId: old.projectId,
             agentId: input.agentId,
             workspaceId: input.workspaceId,
             role: old.role,
@@ -2031,30 +853,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           },
           hlc,
         );
-        // A sub-agent's replacement changes its subtask's model, not the card's main agent (WP-106).
-        if (old.cardId && input.presetId && old.role !== "subagent") {
-          patchRow("card", old.cardId, CARD_FIELDS, { presetId: input.presetId }, hlc);
-        }
-        if (old.cardId) {
-          insertCardEvent(
-            {
-              cardId: old.cardId,
-              type: "switch_agent",
-              authorKind: "system",
-              author: old.role,
-              body: {
-                kind: "reassigned",
-                fromSessionId: old.id,
-                toSessionId: next.id,
-                from: old.currentProvider,
-                to: input.provider,
-                presetId: input.presetId ?? null,
-                reason: input.reason,
-              },
-            },
-            hlc,
-          );
-        }
+
         emit(
           "session.reassigned",
           {
@@ -2067,13 +866,13 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             presetId: input.presetId ?? null,
             reason: input.reason,
           },
-          { cardId: old.cardId, projectId: projectOfCard(old.cardId) },
+          { cardId: old.cardId, projectId: old.projectId ?? null },
         );
         return { from: ended, to: next };
       });
     },
 
-    /** Subscription / provider switch inside a session; recorded in history and as a card event. */
+    /** Provider switch inside a session, retained in history. */
     switchProvider(id: string, to: string, reason?: string): AgentSession {
       return write((hlc) => {
         const s = mustSession(id);
@@ -2082,22 +881,11 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
         db.prepare(
           "UPDATE agent_session SET current_provider = ?, switch_history_json = ?, updated_hlc = ? WHERE id = ?",
         ).run(to, JSON.stringify(history), hlc, id);
-        if (s.cardId) {
-          insertCardEvent(
-            {
-              cardId: s.cardId,
-              type: "switch_agent",
-              authorKind: "system",
-              author: s.role,
-              body: { sessionId: id, from: s.currentProvider, to, reason },
-            },
-            hlc,
-          );
-        }
+
         emit(
           "session.switched",
           { sessionId: id, agentId: s.agentId, from: s.currentProvider, to },
-          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+          { cardId: s.cardId, projectId: s.projectId ?? null },
         );
         return mustSession(id);
       });
@@ -2106,59 +894,15 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     recordCompaction(id: string, strategy = "compact"): AgentSession {
       return write((hlc) => {
         const s = mustSession(id);
-        if (s.cardId) {
-          insertCardEvent(
-            {
-              cardId: s.cardId,
-              type: "compaction",
-              authorKind: "system",
-              author: s.role,
-              body: { sessionId: id, strategy },
-            },
-            hlc,
-          );
-        }
+
         db.prepare("UPDATE agent_session SET updated_hlc = ? WHERE id = ?").run(hlc, id);
         emit(
           "session.compacted",
           { sessionId: id, agentId: s.agentId, strategy },
-          { cardId: s.cardId, projectId: projectOfCard(s.cardId) },
+          { cardId: s.cardId, projectId: s.projectId ?? null },
         );
         return mustSession(id);
       });
-    },
-  };
-
-  // ---- git snapshot ----
-
-  const gitSnapshots = {
-    upsert(snapshot: Omit<GitSnapshot, "takenAt"> & { takenAt?: string }): GitSnapshot {
-      return write(() => {
-        mustProject(snapshot.projectId);
-        db.prepare(
-          `INSERT INTO git_snapshot (project_id, branch, ahead, behind, dirty_files, diff_stat, taken_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(project_id) DO UPDATE SET branch = excluded.branch, ahead = excluded.ahead,
-             behind = excluded.behind, dirty_files = excluded.dirty_files, diff_stat = excluded.diff_stat,
-             taken_at = excluded.taken_at`,
-        ).run(
-          snapshot.projectId,
-          snapshot.branch,
-          snapshot.ahead,
-          snapshot.behind,
-          snapshot.dirtyFiles,
-          snapshot.diffStat,
-          snapshot.takenAt ?? iso(),
-        );
-        return decodeRow(
-          GitSnapshotSchema,
-          db.prepare("SELECT * FROM git_snapshot WHERE project_id = ?").get(snapshot.projectId)!,
-        );
-      });
-    },
-    get: (projectId: string): GitSnapshot | undefined => {
-      const row = db.prepare("SELECT * FROM git_snapshot WHERE project_id = ?").get(projectId);
-      return row ? decodeRow(GitSnapshotSchema, row) : undefined;
     },
   };
 
@@ -2203,7 +947,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       const parsed = defs.map((d) => PromptDefSchema.parse(d));
       write(() => {
         for (const d of parsed) {
-          const have = db.prepare<TemplateRow>("SELECT * FROM prompt_template WHERE key = ?").get(d.key);
+          const have = db
+            .prepare<TemplateRow>("SELECT * FROM prompt_template WHERE key = ?")
+            .get(d.key);
           const next = [
             d.plugin,
             d.role,
@@ -2249,7 +995,8 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
             for (const row of db
               .prepare<{ key: string }>("SELECT key FROM prompt_template WHERE plugin = ?")
               .all(plugin)) {
-              if (!keep.has(row.key)) db.prepare("DELETE FROM prompt_template WHERE key = ?").run(row.key);
+              if (!keep.has(row.key))
+                db.prepare("DELETE FROM prompt_template WHERE key = ?").run(row.key);
             }
           }
         }
@@ -2299,7 +1046,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           );
         const value = text.trim() ? text : "";
         const id = promptOverrideId(key, projectId);
-        const row = db.prepare<{ text: string }>("SELECT text FROM prompt_override WHERE id = ?").get(id);
+        const row = db
+          .prepare<{ text: string }>("SELECT text FROM prompt_override WHERE id = ?")
+          .get(id);
         if (row ? row.text === value : !value) return;
         db.prepare(
           `INSERT INTO prompt_override (id, key, project_id, text, created_at, updated_at, updated_hlc)
@@ -2307,7 +1056,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
            ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at,
              updated_hlc = excluded.updated_hlc`,
         ).run(id, key, projectId, value, iso(), iso(), hlc);
-        stampFields("prompt_override", id, ["text"], hlc);
       });
     },
 
@@ -2331,8 +1079,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
           const projectOverride = options.projectId
             ? (mine.find((o) => o.project_id === options.projectId)?.text ?? null)
             : null;
-          const source: PromptSource =
-            projectOverride !== null ? "project" : globalOverride !== null ? "global" : "default";
+          let source: PromptSource = "default";
+          if (globalOverride !== null) source = "global";
+          if (projectOverride !== null) source = "project";
           return {
             key: r.key,
             plugin: r.plugin,
@@ -2366,7 +1115,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       ).run(SCHEDULER_LIMITS_KEY, JSON.stringify(parsed));
     },
     get(): SchedulerLimits {
-      const raw = db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(SCHEDULER_LIMITS_KEY)?.value;
+      const raw = db
+        .prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?")
+        .get(SCHEDULER_LIMITS_KEY)?.value;
       if (!raw) return DEFAULT_SCHEDULER_LIMITS;
       try {
         return SchedulerLimitsSchema.parse(JSON.parse(raw));
@@ -2397,7 +1148,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
 
     global(): ModelDefaults {
-      const raw = db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(MODEL_DEFAULTS_KEY)?.value;
+      const raw = db
+        .prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?")
+        .get(MODEL_DEFAULTS_KEY)?.value;
       if (!raw) return {};
       try {
         return cleanDefaults(JSON.parse(raw));
@@ -2418,7 +1171,6 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     },
   };
 
-
   // ---- master dispatch mode (WP-109): vibe-master publishes, vibe-scheduler reads ----
 
   const masterDispatch = {
@@ -2429,7 +1181,9 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
       ).run(MASTER_DISPATCH_KEY, JSON.stringify(parsed));
     },
     get(): MasterDispatchMode {
-      const raw = db.prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?").get(MASTER_DISPATCH_KEY)?.value;
+      const raw = db
+        .prepare<{ value: string }>("SELECT value FROM vibe_meta WHERE key = ?")
+        .get(MASTER_DISPATCH_KEY)?.value;
       if (!raw) return DEFAULT_MASTER_DISPATCH;
       try {
         return MasterDispatchModeSchema.parse(JSON.parse(raw));
@@ -2455,12 +1209,7 @@ export function createVibeStore(db: VibeDb, options: StoreOptions = {}) {
     tasks,
     taskArtifacts: createTaskArtifactCommands(db, { now }),
     presets,
-    tags,
-    cards,
-    events,
-    plans,
     sessions,
-    gitSnapshots,
     prompts,
     limits,
     masterDispatch,

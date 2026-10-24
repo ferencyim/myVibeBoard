@@ -1,5 +1,5 @@
-// The independent verifier agent: created through the Paseo SDK in the worker's workspace with
-// VIBE_ROLE=verifier (board MCP: read + comment only). `VerifierLauncher` is the injection seam;
+// The verifier is a read-only auxiliary member in the task conversation.
+// `VerifierLauncher` is the injection seam;
 // unit tests use a scripted fake, the plugin wires `createPaseoVerifierLauncher`.
 
 import { randomUUID } from "node:crypto";
@@ -11,7 +11,6 @@ import {
   presetModels,
   isModelUnavailableError,
   classifyFailure,
-  type CardView,
   type Preset,
   type Project,
   type TaskPresetSnapshot,
@@ -44,8 +43,7 @@ export interface VerifierAgent {
 }
 
 export interface LaunchInput {
-  card?: CardView;
-  task?: {
+  task: {
     workspaceId: string;
     anchorAgentId: string;
     conversationId: string;
@@ -85,31 +83,6 @@ export interface LaunchInput {
 export interface VerifierLauncher {
   launch(input: LaunchInput): Promise<VerifierAgent>;
 }
-
-/** Called by the pipeline to choose the verifier's provider; WP-32 (master) will replace this. */
-export type PickVerifier = (input: {
-  card: CardView;
-  project: Project;
-  workerProvider: string | null;
-  presets: readonly Preset[];
-}) => { provider: string; model?: string };
-
-/**
- * Default: a preset whose provider differs from the worker's, else the worker's own provider.
- * With `preferDifferent` off the worker's own provider comes first.
- */
-export const pickProvider =
-  (preferDifferent: () => boolean = () => true): PickVerifier =>
-  ({ workerProvider, presets }) => {
-    const same = presets.find((p) => p.provider === workerProvider);
-    const other = presets.find((p) => p.provider !== workerProvider);
-    const chosen = (preferDifferent() ? other : same) ?? presets[0];
-    return chosen
-      ? { provider: chosen.provider, model: chosen.model || undefined }
-      : { provider: workerProvider ?? "claude" };
-  };
-
-export const pickDifferentProvider: PickVerifier = pickProvider();
 
 // --- verdict ---------------------------------------------------------------------------------
 
@@ -202,7 +175,7 @@ function verifierStatus(status: string): VerifierRun["status"] {
 }
 
 function taskEvidenceScope(input: LaunchInput, prompts: PromptResolver): string {
-  if (!input.task?.confirmedAt || !input.task.commitHash) return "";
+  if (!input.task.confirmedAt || !input.task.commitHash) return "";
   return (
     "\n\n" +
     prompts.resolve("verify.task.evidence_scope", {
@@ -212,34 +185,28 @@ function taskEvidenceScope(input: LaunchInput, prompts: PromptResolver): string 
   );
 }
 function taskEvidenceEnv(task: LaunchInput["task"]): Record<string, string> {
-  return task?.commitHash ? { VIBE_VERIFICATION_COMMIT: task.commitHash } : {};
+  return task.commitHash ? { VIBE_VERIFICATION_COMMIT: task.commitHash } : {};
 }
 
 function nativeRequest(input: LaunchInput, agentId: string, spec: string, prompts: PromptResolver) {
   return {
     agentId,
-    title: `${input.task?.workspaceId ?? input.card?.key} ${
-      input.role === "reviewer" ? "代码复核" : "证据验证"
-    }`,
-    ...(input.task ? { parent: input.task.anchorAgentId } : {}),
+    title: `${input.task.workspaceId} ${input.role === "reviewer" ? "代码复核" : "证据验证"}`,
+    parent: input.task.anchorAgentId,
     labels: {
-      ...(input.task
-        ? { workspaceId: input.task.workspaceId }
-        : { cardKey: input.card!.key, cardId: input.card!.id }),
+      workspaceId: input.task.workspaceId,
       role: input.role ?? "verifier",
     },
     env: {
       VIBE_ROLE: "verifier",
-      ...(input.task
-        ? { VIBE_WORKSPACE_ID: input.task.workspaceId }
-        : { VIBE_CARD_ID: input.card!.id, VIBE_CARD_KEY: input.card!.key }),
+      VIBE_WORKSPACE_ID: input.task.workspaceId,
       ...(input.snapshot?.runtimeEnv ? { VIBE_RUNTIME_ENV: input.snapshot.runtimeEnv } : {}),
       ...taskEvidenceEnv(input.task),
     },
     config: {
       provider: spec,
-      ...(input.task && input.provider === "claude" ? { modeId: "plan" } : {}),
-      ...(input.task && input.provider === "codex"
+      ...(input.provider === "claude" ? { modeId: "plan" } : {}),
+      ...(input.provider === "codex"
         ? { options: { sandbox_mode: "read-only", approval_policy: "never" } }
         : {}),
       ...(input.thinking && input.thinking !== "default"
@@ -257,18 +224,16 @@ function nativeRequest(input: LaunchInput, agentId: string, spec: string, prompt
 }
 
 async function recordActualModel(handle: PaseoAgentHandle, input: LaunchInput, agentId: string) {
-  if (input.task) {
-    await handle.refresh();
-    const actual = handle.current();
-    if (!actual?.model) throw new Error("无法核对验证会话实际模型，保留租约等待核对");
-    input.onCreated?.({
-      agentId,
-      provider: actual.provider,
-      model: actual.model,
-      thinking: actual.thinkingOptionId ?? undefined,
-      candidateIndex: input.candidateIndex ?? 0,
-    });
-  }
+  await handle.refresh();
+  const actual = handle.current();
+  if (!actual?.model) throw new Error("无法核对验证会话实际模型，保留租约等待核对");
+  input.onCreated?.({
+    agentId,
+    provider: actual.provider,
+    model: actual.model,
+    thinking: actual.thinkingOptionId ?? undefined,
+    candidateIndex: input.candidateIndex ?? 0,
+  });
 }
 
 async function taskConversationVerifier(
@@ -279,12 +244,11 @@ async function taskConversationVerifier(
   model: string,
   note?: string,
 ): Promise<VerifierAgent> {
-  if (!input.task) throw new Error("验证缺少任务群聊定位");
   if (!paseo.taskConversations) throw new Error("宿主不支持任务群聊验证");
   const conversation = paseo.taskConversations.ref(input.task.conversationId);
   const snapshot = await conversation.refresh();
   const anchor = snapshot?.members.find(
-    (member) => member.backendAgentId === input.task!.anchorAgentId,
+    (member) => member.backendAgentId === input.task.anchorAgentId,
   );
   if (!snapshot || snapshot.workspaceId !== input.workspaceId || !anchor)
     throw new Error("验证任务群聊或规划成员不存在");
@@ -404,8 +368,8 @@ async function taskConversationVerifier(
 function createSingleVerifierLauncher(options: PaseoLauncherOptions): VerifierLauncher {
   return {
     async launch(input) {
-      if (!input.card && !input.task) throw new Error("验证缺少原生任务定位");
-      if (input.task && input.workspaceId !== input.task.workspaceId)
+      if (!input.task) throw new Error("验证缺少任务群聊定位");
+      if (input.workspaceId !== input.task.workspaceId)
         throw new Error("验证会话必须使用任务原生 workspace");
       const paseo = options.getPaseo();
       if (!paseo) throw new Error("验证需要可用的 Paseo 原生连接");
@@ -413,69 +377,7 @@ function createSingleVerifierLauncher(options: PaseoLauncherOptions): VerifierLa
       const { model, note } = await resolveNativeModel(paseo, input);
       const spec = model.startsWith(`${input.provider}/`) ? model : `${input.provider}/${model}`;
       const create = nativeRequest(input, agentId, spec, options.prompts ?? defaultPrompts);
-      if (input.task) return taskConversationVerifier(options, paseo, input, create, model, note);
-      const lease = await input.acquire?.(input.provider, input.candidateIndex ?? 0);
-      let handle;
-      try {
-        handle = input.workspaceId
-          ? await paseo.workspaces.ref(input.workspaceId).agents.create(create)
-          : await paseo.agents.create({ ...create, cwd: input.cwd });
-      } catch (error) {
-        await lease?.release();
-        throw error;
-      }
-      await lease?.bind(agentId);
-      await recordActualModel(handle, input, agentId);
-      const configured = options.roundTimeoutMs;
-      const roundTimeout =
-        (typeof configured === "function" ? configured() : configured) ?? 20 * 60_000;
-
-      let failed = false;
-      let closed = false;
-      return {
-        agentId,
-        provider: input.provider,
-        model,
-        note,
-        async run(prompt) {
-          let result = await handle.run(prompt, {
-            timeoutMs: roundTimeout,
-            ...(input.task ? { sourceAgentId: input.task.anchorAgentId } : {}),
-          });
-          // "permission": the round paused on a request; the policy hook answers it, then we resume.
-          const deadline = Date.now() + roundTimeout;
-          while (result.status === "permission" && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, options.pollMs ?? 500));
-            result = await handle.waitForFinish(Math.max(1_000, deadline - Date.now()));
-          }
-          const status = verifierStatus(result.status);
-          failed = status !== "idle";
-          return {
-            status,
-            text: result.lastMessage ?? "",
-            error: result.error ?? undefined,
-          };
-        },
-        async close() {
-          if (closed) return;
-          if (!input.task) {
-            await handle.archive().catch(() => undefined);
-            closed = true;
-            return;
-          }
-          // A timeout does not prove that the native agent stopped. Keep its resource lease.
-          await handle.refresh();
-          if (
-            !handle.current() ||
-            handle.activeTurn ||
-            (handle.status !== "idle" && handle.status !== "error")
-          )
-            throw new Error("验证 agent 尚未停止，保留资源租约");
-          input.onStopped?.(agentId, failed ? "failed" : "completed");
-          await lease?.release();
-          closed = true;
-        },
-      };
+      return taskConversationVerifier(options, paseo, input, create, model, note);
     },
   };
 }
@@ -486,7 +388,6 @@ export function createPaseoVerifierLauncher(options: PaseoLauncherOptions): Veri
   return {
     async launch(input) {
       const unavailable = (error: unknown) => {
-        if (!input.task) return isModelUnavailableError(error);
         const message = error instanceof Error ? error.message : String(error);
         const category = classifyFailure(message);
         if (category !== "unavailable") return category !== "other";

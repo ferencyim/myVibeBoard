@@ -3,19 +3,25 @@
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
-const num = (v: unknown, fallback = 0) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+const num = (v: unknown, fallback = 0) =>
+  typeof v === "number" && Number.isFinite(v) ? v : fallback;
 const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback);
 
 export interface SchedulerView {
   paused: boolean;
   running: { total: number; byProvider: Record<string, number> };
-  /** Cards admitted and waiting for vibe-board to dispatch them. */
-  pending: Array<{ cardKey: string; provider: string; port: number }>;
-  /** Waiting cards that were not admitted, with the reason. */
-  deferred: Array<{ cardKey: string; reason: string }>;
+  /** Native task resource leases. */
+  pending: Array<{ id: string; workspaceId: string; role: string; provider: string; port: number }>;
+  /** Queued tasks that were not admitted, with the reason. */
+  deferred: Array<{ workspaceId: string; reason: string }>;
   resources: { cpu: number; mem: number } | null;
-  quota: Array<{ provider: string; level: string; remainingPct: number | null; resetsAt: string | null }>;
-  pool: Array<{ name: string; kind: string; leased: boolean; cardId: string | null }>;
+  quota: Array<{
+    provider: string;
+    level: string;
+    remainingPct: number | null;
+    resetsAt: string | null;
+  }>;
+  pool: Array<{ name: string; kind: string; leased: boolean }>;
 }
 
 export function parseStatus(raw: unknown): SchedulerView {
@@ -31,12 +37,14 @@ export function parseStatus(raw: unknown): SchedulerView {
       byProvider: Object.fromEntries(Object.entries(byProvider).map(([k, v]) => [k, num(v)])),
     },
     pending: (Array.isArray(o.pending) ? o.pending : []).filter(isObj).map((a) => ({
-      cardKey: str(a.cardKey),
+      id: str(a.id),
+      workspaceId: str(a.workspaceId),
+      role: str(a.role),
       provider: str(a.provider),
       port: num(a.port),
     })),
-    deferred: Object.entries(isObj(o.deferred) ? o.deferred : {}).map(([cardKey, reason]) => ({
-      cardKey,
+    deferred: Object.entries(isObj(o.deferred) ? o.deferred : {}).map(([workspaceId, reason]) => ({
+      workspaceId,
       reason: str(reason),
     })),
     resources: resources ? { cpu: num(resources.cpu), mem: num(resources.mem) } : null,
@@ -55,7 +63,6 @@ export function parseStatus(raw: unknown): SchedulerView {
         name,
         kind: str(x.kind, "other"),
         leased: x.leased === true,
-        cardId: typeof x.cardId === "string" ? x.cardId : null,
       };
     }),
   };
@@ -101,6 +108,8 @@ export const formatLimits = (limits: Record<string, number>): string =>
 
 export function pauseReason(view: SchedulerView, threshold: number): string | null {
   if (!view.paused) return null;
-  const mem = view.resources ? `（内存 ${fmtPct(view.resources.mem)}，阈值 ${fmtPct(threshold)}）` : "";
-  return `内存超过阈值，已暂停放行新卡片${mem}`;
+  const mem = view.resources
+    ? `（内存 ${fmtPct(view.resources.mem)}，阈值 ${fmtPct(threshold)}）`
+    : "";
+  return `内存超过阈值，已暂停放行新任务${mem}`;
 }

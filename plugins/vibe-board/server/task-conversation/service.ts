@@ -1273,32 +1273,41 @@ export function createTaskConversationService(options: TaskFlowOptions) {
     });
   }
   async function acceptCommand(input: TaskActionInput) {
-    if (accepting.has(input.workspaceId))
-      throw new Error("Git 收尾正在进行，请等待结果或先停止任务");
-    accepting.set(input.workspaceId, { cancelled: false });
+    let active: { cancelled: boolean } | undefined;
     try {
       const finish = await serial(input.workspaceId, async () => {
         const current = task(input.workspaceId, input.conversationId);
+        // Persist the authorization before any await or Git operation. A failed or crashed
+        // attempt needs a fresh explicit user request; historical requests never authorize retries.
+        const attemptKey = "accept-request:" + input.requestId;
         if (
-          Array.isArray(current.control?.completedRequestIds) &&
-          current.control.completedRequestIds.includes(input.requestId)
-        )
-          return async () => ({ task: current, message: "本次操作已经处理，未重复运行" });
-        const recorded = current.control?.git as GitState | undefined;
-        if (
-          current.phase === "completed" &&
-          current.control?.acceptanceRequestId === input.requestId &&
-          recorded?.status === "completed"
+          store.taskArtifacts.get(current.workspaceId, "git", attemptKey) ||
+          current.control?.acceptanceRequestId === input.requestId ||
+          (Array.isArray(current.control?.completedRequestIds) &&
+            current.control.completedRequestIds.includes(input.requestId))
         ) {
           await publishPendingArtifacts(current.workspaceId);
-          rememberRequest(current.workspaceId, input.requestId);
-          return async () => ({ task: task(current.workspaceId), message: recorded.message });
+          throw new Error("本次通过请求已经处理；请核对结果后重新点击通过");
         }
+        store.taskArtifacts.record({
+          workspaceId: current.workspaceId,
+          kind: "git",
+          sourceKey: attemptKey,
+          confirmedAt: current.confirmedAt,
+          source: input.source ?? { conversationId: input.conversationId, sourceKey: attemptKey },
+          summary: "用户发起通过尝试",
+          data: { action: "accept", requestId: input.requestId },
+        });
+        if (accepting.has(input.workspaceId))
+          throw new Error("Git 收尾正在进行，请等待结果或先停止任务");
+        active = { cancelled: false };
+        accepting.set(input.workspaceId, active);
         return prepareAcceptance(current, input.requestId, input.source);
       });
       return await finish();
     } finally {
-      accepting.delete(input.workspaceId);
+      if (active && accepting.get(input.workspaceId) === active)
+        accepting.delete(input.workspaceId);
     }
   }
   return {

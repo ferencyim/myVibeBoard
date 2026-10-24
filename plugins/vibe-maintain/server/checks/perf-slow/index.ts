@@ -53,7 +53,7 @@ const MAX_READ_BYTES = 8 * 1024 * 1024;
 
 interface SourceRead {
   samples: SlowSample[];
-  /** Cursor value to store after the card exists. */
+  /** Cursor value to store after the task exists. */
   next: number;
   skippedBytes: number;
 }
@@ -166,7 +166,7 @@ export function createPerfSlowCheck(): CheckFn {
       for (const [key, value] of nextCursors) ctx.cursor.set(key, value);
     };
 
-    // Compare with the existing cards: a call site that already has an open card is not filed again.
+    // Compare with the existing tasks: a call site that already has an unfinished task is not filed again.
     const fresh = candidates.sort((a, b) => b.p95Ms / b.thresholdMs - a.p95Ms / a.thresholdMs);
     if (fresh.length === 0) {
       commit();

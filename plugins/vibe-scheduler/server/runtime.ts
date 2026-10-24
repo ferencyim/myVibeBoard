@@ -1,7 +1,6 @@
 // Wires the scheduler to the real world: timers, resource_sample persistence, the usage cache and
-// the event consumer that hears back from vibe-board. `index.server.ts` only adds Paseo plumbing.
+// the event consumer for native task resource requests. `index.server.ts` only adds Paseo plumbing.
 
-import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizeUsage, type UsageProviderLike } from "./quota";
 import { createPortAllocator, type PortAllocator } from "./ports";
@@ -19,15 +18,7 @@ import {
   type TaskResourceRequest,
 } from "./task-scheduler";
 import type { EventType, NewEvent } from "./vibe/contract";
-import {
-  mergeProfiles,
-  presetModels,
-  parseWorkerHistory,
-  selectAgent,
-  type AgentProfile,
-  type ProviderQuota,
-  type TaskNeeds,
-} from "./vibe/contract";
+import type { ProviderQuota } from "./vibe/contract";
 import {
   createDeviceLeases,
   createEventConsumer,
@@ -45,7 +36,6 @@ export interface RuntimeSettings extends SchedulerConfig {
   tickSeconds: number;
   sampleSeconds: number;
   sampleRetentionDays: number;
-  agentProfiles: AgentProfile[];
 }
 
 export const DEFAULT_SETTINGS: RuntimeSettings = {
@@ -57,7 +47,6 @@ export const DEFAULT_SETTINGS: RuntimeSettings = {
   tickSeconds: 5,
   sampleSeconds: 15,
   sampleRetentionDays: 7,
-  agentProfiles: [],
 };
 
 export interface RuntimeOptions {
@@ -101,7 +90,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   let usageBusy = false;
   let lastPrune = 0;
 
-  /** WP-106: the board checks sub-agent starts against the same limits (vibe_meta, see contract/subtasks.ts). */
+  /** Publish the limits shared by all task members. */
   const publishLimits = () => {
     try {
       store.limits.publish({
@@ -217,44 +206,6 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     return scheduler.tick();
   }
 
-  async function loadHistory(repoPath: string | undefined, profiles: readonly AgentProfile[]) {
-    const history: Record<string, Record<string, number>> = {};
-    if (!repoPath) return history;
-    for (const p of profiles) {
-      try {
-        const md = await readFile(join(repoPath, ".vibe", "workers", p.id, "MEMORY.md"), "utf8");
-        history[p.id] = parseWorkerHistory(md);
-      } catch {
-        // No memory file yet: no track record.
-      }
-    }
-    return history;
-  }
-
-  /** Entry for the master agent (WP-32) through the `scheduler.selectAgent` RPC. */
-  async function select(task: TaskNeeds, repoPath?: string) {
-    // Providers come from what exists: the usage catalog and the presets in use.
-    const providerIds = [
-      ...Object.keys(quota),
-      ...store.presets.list().flatMap((p) => presetModels(p).map((m) => m.provider)),
-    ];
-    const profiles = mergeProfiles(settings.agentProfiles, providerIds);
-    const running = scheduler.status().running.byProvider;
-    const devicesFree: Record<string, number> = {};
-    const busy = new Set(leases.activeLeases().map((l) => l.device_id));
-    for (const d of leases.listDevices()) {
-      devicesFree[d.kind] = (devicesFree[d.kind] ?? 0) + (busy.has(d.id) ? 0 : 1);
-    }
-    return selectAgent(profiles, task, {
-      quota,
-      devicesFree,
-      memoryPaused: scheduler.isPaused(),
-      history: await loadHistory(repoPath, profiles),
-      running,
-      tightMinPriority: settings.tightMinPriority,
-    });
-  }
-
   let tickTimer: ReturnType<typeof setTimeout> | null = null;
   let sampleTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = true;
@@ -282,7 +233,6 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     scheduler,
     sampleNow,
     tickOnce,
-    select,
     refreshUsage,
     latest: () => latest,
     quota: () => quota,

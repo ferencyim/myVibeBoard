@@ -1,10 +1,10 @@
-// "管理" dialog: projects, presets (with live quota) and tags.
+// Project extensions and ordered model presets.
 
 import { Modal, useToast } from "@getpaseo/plugin/client/react-native";
 import { SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import {
   PRESET_ENVIRONMENT_KINDS,
   PRESET_PERMISSION_MODES,
@@ -13,13 +13,11 @@ import {
   type ModelDefaults,
   type Preset,
   type Project,
-  type Tag,
 } from "../../shared/vibe/contract";
-import { errorMessage, projectColor } from "../board/logic";
+import { errorMessage, projectColor } from "../common/logic";
 import { queryKey, useGlobalDefaults, type BoardApi } from "../common/api";
-import { TAG_PALETTE, tagColor } from "../common/colors";
 import { HostProvider, useHost } from "../common/ctx";
-import { Btn, Check, Chip, Dot, Field, Muted, TextField } from "../common/ui";
+import { Btn, Chip, Dot, Field, Muted, TextField } from "../common/ui";
 import {
   ENVIRONMENT_LABELS,
   EMPTY_PRESET_DRAFT,
@@ -46,9 +44,18 @@ import { DefaultModelsEditor, GlobalDefaultsPanel } from "./defaults";
 import { RequirementsPanel } from "./requirements";
 import { QuotaBadge } from "./usage";
 
-export const COLOR_CHOICES = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
+export const COLOR_CHOICES = [
+  "#3b82f6",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#8b5cf6",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
+];
 
-type Tab = "projects" | "presets" | "tags";
+type Tab = "projects" | "presets";
 
 export interface ManageProps {
   open: boolean;
@@ -56,7 +63,6 @@ export interface ManageProps {
   api: BoardApi;
   projects: readonly Project[];
   presets: readonly Preset[];
-  tags: readonly Tag[];
   usage: readonly ProviderUsageLike[] | null;
   refresh: () => void;
   initialTab?: Tab;
@@ -70,20 +76,22 @@ export function ManageModal(props: ManageProps) {
     <Modal title="管理" open={props.open} onOpenChange={(o) => !o && props.onClose()}>
       <Modal.Content>
         <HostProvider value={host}>
-        <View style={{ gap: 14 }}>
-          <View style={{ flexDirection: "row", gap: 6 }}>
-            <Chip label="项目" selected={tab === "projects"} onPress={() => setTab("projects")} />
-            <Chip label="Agent 预设" selected={tab === "presets"} onPress={() => setTab("presets")} />
-            <Chip label="标签" selected={tab === "tags"} onPress={() => setTab("tags")} />
+          <View style={{ gap: 14 }}>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              <Chip label="项目" selected={tab === "projects"} onPress={() => setTab("projects")} />
+              <Chip
+                label="Agent 预设"
+                selected={tab === "presets"}
+                onPress={() => setTab("presets")}
+              />
+            </View>
+            {tab === "projects" ? <ProjectsTab {...props} /> : null}
+            {tab === "presets" ? <PresetsTab {...props} /> : null}
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+              数据保存在本机 vibe.db，所有端共享。
+            </Text>
           </View>
-          {tab === "projects" ? <ProjectsTab {...props} /> : null}
-          {tab === "presets" ? <PresetsTab {...props} /> : null}
-          {tab === "tags" ? <TagsTab {...props} /> : null}
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
-            数据保存在本机 vibe.db，所有端共享。
-          </Text>
-        </View>
-      </HostProvider>
+        </HostProvider>
       </Modal.Content>
     </Modal>
   );
@@ -110,17 +118,35 @@ function ProjectForm({
   return (
     <View style={{ gap: 10 }}>
       <Field label="名称">
-        <TextField value={draft.name} onChangeText={(name) => onChange({ name })} placeholder="例如 官网" />
+        <TextField
+          value={draft.name}
+          onChangeText={(name) => onChange({ name })}
+          placeholder="例如 官网"
+        />
       </Field>
-      <Field label={mode === "create" ? "前缀（大写字母数字，如 WEB，用于卡片编号 WEB-1）" : "前缀（创建后不可修改）"}>
+      <Field
+        label={
+          mode === "create" ? "前缀（大写字母数字，如 WEB，项目标识）" : "前缀（创建后不可修改）"
+        }
+      >
         {mode === "create" ? (
-          <TextField value={draft.prefix} onChangeText={(prefix) => onChange({ prefix })} autoCapitalize="characters" placeholder="WEB" />
+          <TextField
+            value={draft.prefix}
+            onChangeText={(prefix) => onChange({ prefix })}
+            autoCapitalize="characters"
+            placeholder="WEB"
+          />
         ) : (
           <Text style={{ fontWeight: "600" }}>{draft.prefix}</Text>
         )}
       </Field>
       <Field label="仓库路径">
-        <TextField value={draft.repoPath} onChangeText={(repoPath) => onChange({ repoPath })} placeholder="D:\repo\my-app" autoCapitalize="none" />
+        <TextField
+          value={draft.repoPath}
+          onChangeText={(repoPath) => onChange({ repoPath })}
+          placeholder="D:\repo\my-app"
+          autoCapitalize="none"
+        />
       </Field>
       <Field label="类型（可多选，至少一个；第一个为主类型）">
         <Row>
@@ -135,10 +161,18 @@ function ProjectForm({
         </Row>
       </Field>
       <Field label="简介（目标、技术栈等，会作为上下文交给 agent）">
-        <TextField multiline value={draft.description} onChangeText={(description) => onChange({ description })} />
+        <TextField
+          multiline
+          value={draft.description}
+          onChangeText={(description) => onChange({ description })}
+        />
       </Field>
       <Field label="需求文档路径（相对仓库根目录）">
-        <TextField value={draft.requirementsPath} onChangeText={(requirementsPath) => onChange({ requirementsPath })} autoCapitalize="none" />
+        <TextField
+          value={draft.requirementsPath}
+          onChangeText={(requirementsPath) => onChange({ requirementsPath })}
+          autoCapitalize="none"
+        />
       </Field>
       <Field label="默认模型（覆盖全局；不选则沿用全局）">
         <DefaultModelsEditor
@@ -149,15 +183,29 @@ function ProjectForm({
         />
       </Field>
       <Field label="并发上限（留空不限）">
-        <TextField value={draft.concurrencyLimit} onChangeText={(concurrencyLimit) => onChange({ concurrencyLimit })} keyboardType="number-pad" />
+        <TextField
+          value={draft.concurrencyLimit}
+          onChangeText={(concurrencyLimit) => onChange({ concurrencyLimit })}
+          keyboardType="number-pad"
+        />
       </Field>
       <Field label="设备（逗号分隔，留空不限）">
-        <TextField value={draft.devices} onChangeText={(devices) => onChange({ devices })} autoCapitalize="none" />
+        <TextField
+          value={draft.devices}
+          onChangeText={(devices) => onChange({ devices })}
+          autoCapitalize="none"
+        />
       </Field>
       <Field label="颜色">
         <Row>
           {COLOR_CHOICES.map((c) => (
-            <Chip key={c} label="" color={c} selected={draft.color === c} onPress={() => onChange({ color: c })} />
+            <Chip
+              key={c}
+              label=""
+              color={c}
+              selected={draft.color === c}
+              onPress={() => onChange({ color: c })}
+            />
           ))}
         </Row>
       </Field>
@@ -168,7 +216,9 @@ function ProjectForm({
 function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
   const toast = useToast();
   const nextColor = (n: number) => COLOR_CHOICES[n % COLOR_CHOICES.length]!;
-  const [createDraft, setCreateDraft] = useState<ProjectDraft>(() => emptyProjectDraft(nextColor(projects.length)));
+  const [createDraft, setCreateDraft] = useState<ProjectDraft>(() =>
+    emptyProjectDraft(nextColor(projects.length)),
+  );
   const [edit, setEdit] = useState<{ id: string; draft: ProjectDraft } | null>(null);
   const globalDefaults = useGlobalDefaults();
 
@@ -185,7 +235,10 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
     const problem = validateProjectDraft(createDraft, "create");
     if (problem) return toast.error(problem);
     return run(async () => {
-      await api.projectsCreate({ ...projectDraftToPayload(createDraft), prefix: createDraft.prefix.trim().toUpperCase() });
+      await api.projectsCreate({
+        ...projectDraftToPayload(createDraft),
+        prefix: createDraft.prefix.trim().toUpperCase(),
+      });
       setCreateDraft(emptyProjectDraft(nextColor(projects.length + 1)));
     });
   };
@@ -211,7 +264,9 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
               draft={edit.draft}
               presets={presets}
               globalDefaults={globalDefaults}
-              onChange={(patch) => setEdit((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e))}
+              onChange={(patch) =>
+                setEdit((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e))
+              }
             />
             <View style={{ flexDirection: "row", gap: 8 }}>
               <Btn variant="primary" label="保存项目" onPress={saveEdit} />
@@ -229,16 +284,37 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
               </Text>
               <Muted>{p.projectTypes.map((t) => PROJECT_TYPE_LABELS[t]).join(" / ")}</Muted>
             </View>
-            <Btn small label="编辑" onPress={() => setEdit({ id: p.id, draft: projectToDraft(p, nextColor(i)) })} />
-            <Btn small variant="ghost" label="归档" onPress={() => run(() => api.projectsUpdate({ project: p.id, archived: true }))} />
+            <Btn
+              small
+              label="编辑"
+              onPress={() => setEdit({ id: p.id, draft: projectToDraft(p, nextColor(i)) })}
+            />
+            <Btn
+              small
+              variant="ghost"
+              label="归档"
+              onPress={() => run(() => api.projectsUpdate({ project: p.id, archived: true }))}
+            />
           </View>
         ),
       )}
       {projects.length === 0 ? <Muted>还没有项目，先在下面创建一个。</Muted> : null}
       <View style={{ gap: 10 }}>
         <Text style={{ fontWeight: "600" }}>新建项目</Text>
-        <ProjectForm mode="create" draft={createDraft} presets={presets} globalDefaults={globalDefaults} onChange={(patch) => setCreateDraft((d) => ({ ...d, ...patch }))} />
-        <Btn variant="primary" label="创建项目" icon="Plus" disabled={!createDraft.name.trim() || !createDraft.prefix.trim()} onPress={create} />
+        <ProjectForm
+          mode="create"
+          draft={createDraft}
+          presets={presets}
+          globalDefaults={globalDefaults}
+          onChange={(patch) => setCreateDraft((d) => ({ ...d, ...patch }))}
+        />
+        <Btn
+          variant="primary"
+          label="创建项目"
+          icon="Plus"
+          disabled={!createDraft.name.trim() || !createDraft.prefix.trim()}
+          onPress={create}
+        />
       </View>
     </View>
   );
@@ -255,14 +331,20 @@ function PresetModelEditor({
 }) {
   const models = providers.find((p) => p.id === value.provider)?.models ?? [];
   return (
-    <ScrollView horizontal contentContainerStyle={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+    <ScrollView
+      horizontal
+      contentContainerStyle={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+    >
       <SettingsSelect
         inline
         label="Agent（provider）"
         value={value.provider}
         options={[
           ...(!value.provider ? [{ value: "", label: "请选择" }] : []),
-          ...providers.map((p) => ({ value: p.id, label: `${p.id}${p.available ? "" : "（不可用）"}` })),
+          ...providers.map((p) => ({
+            value: p.id,
+            label: `${p.id}${p.available ? "" : "（不可用）"}`,
+          })),
           ...(value.provider && !providers.some((p) => p.id === value.provider)
             ? [{ value: value.provider, label: `${value.provider}（已保存）` }]
             : []),
@@ -292,7 +374,10 @@ function PresetModelEditor({
         inline
         label="思考强度"
         value={value.thinking}
-        options={thinkingChoices(models, value.model, value.thinking).map((o) => ({ value: o.id, label: o.label }))}
+        options={thinkingChoices(models, value.model, value.thinking).map((o) => ({
+          value: o.id,
+          label: o.label,
+        }))}
         onValueChange={(thinking) => patch({ thinking })}
       />
       <SettingsSelect
@@ -498,120 +583,3 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
 }
 
 /** Palette swatches for a tag; the first (empty) one means "automatic" (derived from the tag id). */
-function TagColorPicker({ id, value, onChange }: { id: string; value: string; onChange: (color: string) => void }) {
-  const { theme } = useHost();
-  const auto = tagColor({ id, color: "" });
-  const swatches = [{ key: "auto", value: "", shown: auto }, ...TAG_PALETTE.map((c) => ({ key: c, value: c, shown: c }))];
-  return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-      {swatches.map((sw) => {
-        const selected = value.toLowerCase() === sw.value;
-        return (
-          <Pressable
-            key={sw.key}
-            accessibilityRole="radio"
-            accessibilityLabel={sw.value ? `颜色 ${sw.value}` : "自动颜色"}
-            accessibilityState={{ selected }}
-            onPress={() => onChange(sw.value)}
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: 12,
-              backgroundColor: sw.shown,
-              borderWidth: selected ? 3 : 1,
-              borderColor: selected ? theme.colors.foreground : theme.colors.border,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {!sw.value ? <Text style={{ color: "#fff", fontSize: 9 }}>自动</Text> : null}
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-function TagRow({ tag, api, refresh }: { tag: Tag; api: BoardApi; refresh: () => void }) {
-  const toast = useToast();
-  const [name, setName] = useState(tag.name);
-  const [evidence, setEvidence] = useState(tag.evidence);
-  const [color, setColor] = useState(tag.color);
-  const dirty = name.trim() !== tag.name || evidence !== tag.evidence || color !== tag.color;
-  const run = async (fn: () => Promise<unknown>) => {
-    try {
-      await fn();
-      refresh();
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  };
-  return (
-    <View style={{ gap: 8, paddingBottom: 10 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <Dot color={tagColor({ id: tag.id, color })} size={12} />
-        <TextField style={{ flex: 1 }} value={name} onChangeText={setName} />
-        {!tag.builtin ? (
-          <Btn small variant="danger" icon="Trash2" onPress={() => run(() => api.tagsDelete({ tagId: tag.id }))} />
-        ) : null}
-      </View>
-      <TagColorPicker id={tag.id} value={color} onChange={setColor} />
-      <Check label="默认需要验证证据" value={evidence} onChange={setEvidence} />
-      {dirty ? (
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <Btn
-            small
-            variant="primary"
-            label="保存"
-            disabled={!name.trim()}
-            onPress={() => run(() => api.tagsUpdate({ tagId: tag.id, name: name.trim(), evidence, color }))}
-          />
-          <Btn
-            small
-            label="还原"
-            onPress={() => {
-              setName(tag.name);
-              setEvidence(tag.evidence);
-              setColor(tag.color);
-            }}
-          />
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-function TagsTab({ api, tags, refresh }: ManageProps) {
-  const toast = useToast();
-  const [name, setName] = useState("");
-  const [evidence, setEvidence] = useState(false);
-  const [color, setColor] = useState("");
-  return (
-    <View style={{ gap: 10 }}>
-      {tags.map((t) => (
-        <TagRow key={`${t.id}:${t.name}:${t.color}:${t.evidence}`} tag={t} api={api} refresh={refresh} />
-      ))}
-      <Field label="新标签">
-        <TextField value={name} onChangeText={setName} />
-      </Field>
-      <TagColorPicker id="new" value={color} onChange={setColor} />
-      <Check label="默认需要验证证据" value={evidence} onChange={setEvidence} />
-      <Btn
-        variant="primary"
-        icon="Plus"
-        label="添加标签"
-        disabled={!name.trim()}
-        onPress={async () => {
-          try {
-            await api.tagsCreate({ name, evidence, color });
-            setName("");
-            setColor("");
-            refresh();
-          } catch (e) {
-            toast.error(errorMessage(e));
-          }
-        }}
-      />
-    </View>
-  );
-}

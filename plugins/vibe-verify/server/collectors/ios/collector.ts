@@ -171,7 +171,7 @@ export function createIosCollector(options: IosCollectorOptions = {}): EvidenceC
     const failures: string[] = [];
     let degraded = false;
     mkdirSync(ctx.outputDir, { recursive: true });
-    const prefix = ctx.check ? slug(ctx.check.id) : "card";
+    const prefix = ctx.check ? slug(ctx.check.id) : "task";
     const workDir = `${remoteRoot}/${slug(ctx.verificationId)}-${Date.now()}`;
     assertValidRemotePath(workDir);
 

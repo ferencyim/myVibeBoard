@@ -4,18 +4,17 @@ import { BoardError, type BoardService } from "../service";
 import {
   RequirementsDocError,
   execGit,
-  publishEvent,
   readRequirementsDoc,
   writeRequirementsDoc,
   type GitRunner,
-  type VibeDb,
 } from "../vibe/db";
 
-export const REQUIREMENTS_COMMIT_MESSAGE = "docs: update product requirements (myVibeBoard)";
+export const REQUIREMENTS_COMMIT_MESSAGE = "更新项目需求文档";
 
 /** RequirementsDocError -> board error with a user-facing Chinese message. */
 export function toRequirementsError(error: unknown): Error {
-  if (!(error instanceof RequirementsDocError)) return error instanceof Error ? error : new Error(String(error));
+  if (!(error instanceof RequirementsDocError))
+    return error instanceof Error ? error : new Error(String(error));
   switch (error.code) {
     case "repo_busy":
       return new BoardError("conflict", "仓库正在合并、变基或拣选中，稍后再保存");
@@ -28,8 +27,8 @@ export function toRequirementsError(error: unknown): Error {
   }
 }
 
-export function createRequirementsService(opts: { board: BoardService; db: VibeDb; git?: GitRunner }) {
-  const { board, db, git = execGit } = opts;
+export function createRequirementsService(opts: { board: BoardService; git?: GitRunner }) {
+  const { board, git = execGit } = opts;
 
   function repoOf(ref: string) {
     const project = board.projects.resolve(ref);

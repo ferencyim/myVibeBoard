@@ -59,8 +59,10 @@ export default function contribute(server: PluginServerContext) {
   const stopRules = rulesStore.subscribe((state) => {
     if (state.status === "ready") rulesConfig = state.values;
   });
-  void rulesStore.read().then((state) => {
-    if (state.status === "ready") rulesConfig = state.values;
+  const rulesReady = rulesStore.read().then((state) => {
+    if (state.status !== "ready") throw new Error("维护规则配置尚未就绪，保留已有规则并暂停同步。");
+    rulesConfig = state.values;
+    return state.values;
   });
 
   // The SDK handle only reaches plugins through hook/RPC contexts: keep the newest one.
@@ -167,6 +169,7 @@ export default function contribute(server: PluginServerContext) {
     p.model.startsWith(`${p.provider}/`) ? p.model : `${p.provider}/${p.model}`;
   server.handle(statusRpc, async (_input, c) => {
     remember(c.paseo);
+    await rulesReady;
     await engine.syncRules(); // a UI edit shows up without waiting for the next tick
     return JSON.parse(
       JSON.stringify({
@@ -178,12 +181,13 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(runRpc, async ({ ruleId, ruleName, projectId }, c) => {
     remember(c.paseo);
+    await rulesReady;
     await engine.syncRules();
     if (ruleName) {
       const results = (await engine.runRuleNow(ruleName, projectId)).map((r) => ({
         projectId: r.projectId,
         status: r.outcome.status,
-        ...(r.outcome.status === "blocked" ? { why: r.outcome.why } : {}),
+        why: r.outcome.status === "blocked" ? r.outcome.why : undefined,
       }));
       return { status: results.some((r) => r.status === "fired") ? "fired" : "blocked", results };
     }
@@ -195,7 +199,6 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(resumeRpc, ({ ruleId }) => ({ rule: engine.resume(ruleId) }));
 
-  engine.start();
   let ticking = false;
   const runTick = () => {
     if (ticking) return;
@@ -207,12 +210,17 @@ export default function contribute(server: PluginServerContext) {
   };
   // The tick period is a setting: start the timer once the settings are loaded.
   let timer: ReturnType<typeof setInterval> | null = null;
-  void settings.read().then((state) => {
-    apply(state);
-    timer = setInterval(runTick, current.tickSeconds * 1000);
-    (timer as unknown as { unref?: () => void }).unref?.();
-    runTick();
-  });
+  void Promise.all([settings.read(), rulesReady])
+    .then(([state]) => {
+      if (lifetime.signal.aborted) return null;
+      apply(state);
+      engine.start();
+      timer = setInterval(runTick, current.tickSeconds * 1000);
+      (timer as unknown as { unref?: () => void }).unref?.();
+      runTick();
+      return null;
+    })
+    .catch((error) => console.error("vibe-maintain: 维护配置读取失败，未启动规则同步", error));
 
   return async () => {
     lifetime.abort();

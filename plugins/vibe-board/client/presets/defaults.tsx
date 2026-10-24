@@ -6,11 +6,19 @@ import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Text, View } from "react-native";
 import { MODEL_ROLES, type ModelDefaults, type Preset } from "../../shared/vibe/contract";
-import { errorMessage } from "../board/logic";
+import { errorMessage } from "../common/logic";
 import { queryKey, type BoardApi } from "../common/api";
 import { Btn, Muted } from "../common/ui";
-import { ModelPicker } from "../planning/ModelPicker";
-import { MODEL_ROLE_LABELS } from "../planning/logic";
+import { ModelPicker } from "./ModelPicker";
+const MODEL_ROLE_LABELS = {
+  scout: "探路",
+  planner: "规划方案",
+  plan_reviewer: "方案复核",
+  worker: "执行主代理",
+  subagent: "执行子代理",
+  reviewer: "代码复核",
+  verifier: "验证",
+};
 import { setDefault } from "./logic";
 
 /** Seven pickers. `inherited` (project level) names the global default each job follows when empty. */
@@ -80,7 +88,7 @@ export function GlobalDefaultsPanel({
     <View style={{ gap: 6 }}>
       <Text style={{ fontWeight: "600" }}>默认模型（全局）</Text>
       <Muted>
-        新卡片按「项目 → 全局」预填各项模型；卡片没选时运行也按此回落（探路、复核没选表示不做）。项目可在项目编辑里单独覆盖。
+        新任务按「项目 → 全局」选择角色模型；任务中的临时选择优先。项目可在项目编辑里单独覆盖。
       </Muted>
       {query.error ? <Muted>{errorMessage(query.error)}</Muted> : null}
       <DefaultModelsEditor value={shown} presets={presets} onChange={setDraft} />

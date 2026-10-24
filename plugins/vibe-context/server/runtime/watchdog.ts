@@ -20,7 +20,6 @@ export function createTaskWatchdog(options: TaskWatchdogOptions) {
         if (!config.enabled) return;
         const now = options.now ?? Date.now;
         for (const session of options.store.sessions.list({ states: ["starting", "working"] })) {
-          if (session.cardId) continue;
           let activity: number | null = null;
           try {
             activity = await options.activity(session);

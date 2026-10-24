@@ -15,7 +15,7 @@ import {
   SidebarRow,
 } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   masterSettings,
@@ -25,7 +25,6 @@ import {
   type PresetChoice,
 } from "../shared/rpc";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
-import { MasterPrompts } from "./prompts";
 import {
   dispatchLabel,
   presetChoices,
@@ -35,6 +34,7 @@ import {
   sessionTitle,
   targetLabel,
 } from "./format";
+import { MasterPrompts } from "./prompts";
 
 /** Modes a provider may offer; one the provider lacks falls back to auto. */
 const PERMISSION_CHOICES = [
@@ -158,7 +158,7 @@ export function MasterScreen(props: PluginScreenProps) {
 
           <Section theme={theme} title="历次会话">
             <Muted theme={theme}>
-              更换预设或权限模式后，旧会话不会被归档，可随时打开查看当时的对话。新会话的第一条消息带有插件按看板生成的交接摘要。
+              更换预设或权限模式后，旧会话不会被归档，可随时打开查看当时的对话。新会话的第一条消息带有插件按任务快照生成的交接摘要。
             </Muted>
             {(sessions.data?.sessions ?? []).map((row) => (
               <View
@@ -210,13 +210,13 @@ export function MasterScreen(props: PluginScreenProps) {
           <Section theme={theme} title="队列">
             <Muted theme={theme}>
               {s.queue.running
-                ? `正在处理 ${s.queue.running.kind}${s.queue.running.cardKey ? `（${s.queue.running.cardKey}）` : ""}`
+                ? `正在处理 ${s.queue.running.kind}${s.queue.running.workspaceId ? `（${s.queue.running.workspaceId}）` : ""}`
                 : "空闲"}
               {s.queue.blocked ? ` - ${s.queue.blocked} 个任务在等待 daemon 或额度` : ""}
             </Muted>
             {s.queue.pending.map((j, i) => (
               <Text key={i} style={{ color: theme.colors.foreground, fontSize: 13 }}>
-                {j.kind} {j.cardKey ?? ""}
+                {j.kind} {j.workspaceId ?? ""}
                 {j.dueInSeconds > 0 ? ` ${j.dueInSeconds} 秒后` : " 已排队"}
               </Text>
             ))}
@@ -231,7 +231,7 @@ export function MasterScreen(props: PluginScreenProps) {
               </Text>
               <Muted theme={theme}>
                 {s.permission.source === "switched" ? "你手动切换的模式" : "设置里的默认模式"}。对总
-                agent 生效；运行中的总 agent 会以新模式重建，卡片不受影响。
+                agent 生效；运行中的总 agent 会以新模式重建，任务不受影响。
               </Muted>
               {[
                 { id: "auto", label: "自动（provider 的自动审批模式）" },
@@ -323,7 +323,7 @@ function Group({
   );
 }
 
-/** Agent preset picker for the master: same rows as the card's selectors (name, provider / model, quota). */
+/** Agent preset picker for the master: shared preset rows (name, provider / model, quota). */
 function PresetPicker({
   theme,
   presets,
@@ -386,7 +386,7 @@ function PresetPicker({
         );
       })}
       {loaded && choices.length === 0 ? (
-        <Muted theme={theme}>还没有预设，请先在看板的「管理」里添加。</Muted>
+        <Muted theme={theme}>还没有预设，请先在「Agent 行为」设置里添加。</Muted>
       ) : null}
     </View>
   );
@@ -491,7 +491,7 @@ function MasterConfiguration(props: PluginSurfaceProps) {
           />
           <SettingsSwitch
             label="由总 agent 决定先派发哪些待办卡"
-            hint="调度器有空位时，总 agent 在可开始的待办卡里选先开始的（考虑优先级、依赖、涉及文件冲突和项目并发上限），仍由调度器检查并放行。关闭，或总 agent 不可用（没选预设、额度用完、出错、超时）时，调度器按自己的规则派发，并在卡片时间线写明原因。"
+            hint="调度器有空位时，总 agent 为已确认排队任务推荐顺序，仍由调度器检查资源与文件冲突后放行。关闭或总 agent 不可用时按确认时间 FIFO 派发。"
             value={values.dispatch}
             onValueChange={(dispatch: boolean) => save({ ...values, dispatch })}
           />
@@ -512,22 +512,22 @@ function MasterConfiguration(props: PluginSurfaceProps) {
       <Group theme={theme} title="触发：什么时候唤醒总 agent">
         <SettingsCard>
           <Muted theme={theme}>
-            总 agent
-            不参与卡片的方案、执行和验收：这些由卡片上选的模型完成。它只做两件事：决定先派发哪些待办卡（上面的派发开关），以及卡片完成后整理项目记忆。
+            方案、执行与验收由原生任务的对应角色负责。总 agent
+            只推荐已确认任务的派发顺序，并在任务完成后整理项目记忆。
           </Muted>
           <SettingsSwitch
-            label="启动时补扫未整理的完成卡"
+            label="启动时补扫未整理的完成任务"
             value={values.sweepOnStart}
             onValueChange={(sweepOnStart: boolean) => save({ ...values, sweepOnStart })}
           />
           <SettingsSwitch
-            label="卡片完成后整理项目记忆"
+            label="任务完成后整理项目记忆"
             value={values.consolidateOnDone}
             onValueChange={(consolidateOnDone: boolean) => save({ ...values, consolidateOnDone })}
           />
           <SettingsSwitch
-            label="维护需求文档（卡片完成时允许总 agent 更新并提交）"
-            hint="只提交需求文档这一个文件，不推送；仓库忙或文件被忽略时只在卡片上记一条备注并提醒。"
+            label="维护需求文档（任务完成时允许总 agent 更新并提交）"
+            hint="只提交需求文档这一个文件，不推送；仓库忙或文件被忽略时只在任务摘要中记录并提醒。"
             value={values.maintainRequirements}
             onValueChange={(maintainRequirements: boolean) =>
               save({ ...values, maintainRequirements })
@@ -575,35 +575,7 @@ function MasterConfiguration(props: PluginSurfaceProps) {
               save({ ...values, askTimeoutMinutes: integer(text, 5, 1, 120) })
             }
           />
-          <SettingsInput
-            label="规划会话单回合超时（分钟，1-120）"
-            initialValue={String(values.planTurnTimeoutMinutes)}
-            onChangeText={(text) =>
-              save({ ...values, planTurnTimeoutMinutes: integer(text, 10, 1, 120) })
-            }
-          />
-          <SettingsInput
-            label="探路超时（分钟，1-120）"
-            initialValue={String(values.scoutTimeoutMinutes)}
-            onChangeText={(text) =>
-              save({ ...values, scoutTimeoutMinutes: integer(text, 5, 1, 120) })
-            }
-          />
-          <SettingsInput
-            label="规划会话每条消息最多请求探路的轮数（0-10）"
-            initialValue={String(values.maxResearchRounds)}
-            onChangeText={(text) =>
-              save({
-                ...values,
-                maxResearchRounds: Math.round(Math.min(10, Math.max(0, Number(text) || 0))),
-              })
-            }
-          />
-          <SettingsInput
-            label="规划会话一次处理最多连续回合数（1-100）"
-            initialValue={String(values.maxPlanLoops)}
-            onChangeText={(text) => save({ ...values, maxPlanLoops: integer(text, 10, 1, 100) })}
-          />
+
           <SettingsInput
             label="回复格式不合规时的重试次数（0-5，0 为不重试）"
             initialValue={String(values.jsonRepairRetries)}
@@ -614,13 +586,7 @@ function MasterConfiguration(props: PluginSurfaceProps) {
               })
             }
           />
-          <SettingsInput
-            label="启动补扫：多少小时内完成的卡要整理记忆（1-720）"
-            initialValue={String(values.sweepDoneWindowHours)}
-            onChangeText={(text) =>
-              save({ ...values, sweepDoneWindowHours: integer(text, 48, 1, 720) })
-            }
-          />
+
           <SettingsInput
             label="额度偏低提醒的冷却（分钟，1-1440）"
             initialValue={String(values.alertCooldownQuotaLowMinutes)}
@@ -642,16 +608,7 @@ function MasterConfiguration(props: PluginSurfaceProps) {
               save({ ...values, alertCooldownRoutineMinutes: integer(text, 60, 1, 1440) })
             }
           />
-          <SettingsInput
-            label="项目块里列出的其它未完成卡片数量（0-200）"
-            initialValue={String(values.projectBlockCardLimit)}
-            onChangeText={(text) =>
-              save({
-                ...values,
-                projectBlockCardLimit: Math.round(Math.min(200, Math.max(0, Number(text) || 0))),
-              })
-            }
-          />
+
           <SettingsInput
             label="交接摘要的最大字符数（500-30000）"
             initialValue={String(values.handoffMaxChars)}

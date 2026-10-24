@@ -115,7 +115,7 @@ describe("native sessions and tasks", () => {
     clock += 30_000;
     store.sessions.setState(session.id, "ended", { outcome: "done" });
 
-    // A compaction inside the card's session: 150k context, then 30k.
+    // A compaction inside the task's session: 150k context, then 30k.
     write(
       join(base, "claude", "projects", "p", "s.jsonl"),
       lines(

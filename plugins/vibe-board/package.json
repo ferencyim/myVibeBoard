@@ -2,11 +2,8 @@
   "name": "@vibe/board",
   "version": "0.1.0",
   "private": true,
-  "description": "myVibeBoard kanban board plugin: five-column cards, events, plans, board MCP and CLI on the shared vibe.db.",
+  "description": "myVibeBoard native task conversations, task panels and workflow settings.",
   "license": "Apache-2.0",
-  "bin": {
-    "vibe-board": "./bin/vibe-board.mjs"
-  },
   "files": [
     "paseo-plugin.json",
     "OVERVIEW.md",
@@ -17,7 +14,6 @@
     "client/",
     "server/",
     "shared/",
-    "bin/",
     "assets/"
   ],
   "scripts": {
@@ -26,7 +22,7 @@
   },
   "devDependencies": {
     "@getpaseo/client": "^0.12.0",
-    "@getpaseo/plugin": "0.12.0",
+    "@getpaseo/plugin": "file:../../packages/plugin",
     "@tanstack/react-query": "^5.90.11",
     "@types/node": "^24.19.2",
     "@types/react": "~19.2.0",
@@ -44,8 +40,7 @@
       ],
       "server": [
         "contract",
-        "db",
-        "sync"
+        "db"
       ],
       "client": [
         "prompts"

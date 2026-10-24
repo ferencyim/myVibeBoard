@@ -10,14 +10,12 @@ import {
   SettingsCard,
   SettingsInput,
   SettingsSection,
-  SettingsSelect,
   SidebarRow,
 } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
-import { FieldsCard, Group, type Field as SettingField } from "./settings-kit";
 import {
   devicesRpc,
   registerDeviceRpc,
@@ -45,10 +43,22 @@ const KIND_ZH: Record<string, string> = {
   camera: "摄像头",
   other: "其它",
 };
-const LEVEL_ZH: Record<string, string> = { ok: "充足", tight: "紧张", exhausted: "用完", unknown: "未知" };
-const PRIORITY_ZH: Record<string, string> = { urgent: "紧急", high: "高", medium: "中", low: "低", none: "无" };
+const LEVEL_ZH: Record<string, string> = {
+  ok: "充足",
+  tight: "紧张",
+  exhausted: "用完",
+  unknown: "未知",
+};
 
-function Section({ theme, title, children }: { theme: PluginTheme; title: string; children: ReactNode }) {
+function Section({
+  theme,
+  title,
+  children,
+}: {
+  theme: PluginTheme;
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <View
       style={{
@@ -60,7 +70,9 @@ function Section({ theme, title, children }: { theme: PluginTheme; title: string
         gap: 8,
       }}
     >
-      <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>{title}</Text>
+      <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>
+        {title}
+      </Text>
       {children}
     </View>
   );
@@ -74,7 +86,9 @@ function Row({ theme, left, right }: { theme: PluginTheme; left: string; right: 
   return (
     <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
       <Text style={{ color: theme.colors.foreground, flexShrink: 1 }}>{left}</Text>
-      <Text style={{ color: theme.colors.foregroundMuted, flexShrink: 1, textAlign: "right" }}>{right}</Text>
+      <Text style={{ color: theme.colors.foregroundMuted, flexShrink: 1, textAlign: "right" }}>
+        {right}
+      </Text>
     </View>
   );
 }
@@ -104,7 +118,12 @@ function Button({
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      <Text style={{ color: active ? theme.colors.accentForeground : theme.colors.foreground, fontSize: 12 }}>
+      <Text
+        style={{
+          color: active ? theme.colors.accentForeground : theme.colors.foreground,
+          fontSize: 12,
+        }}
+      >
         {label}
       </Text>
     </Pressable>
@@ -189,9 +208,14 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
   const leased = new Map(s?.pool.map((d) => [d.name, d.leased]));
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
+      contentContainerStyle={{ padding: 16, gap: 12 }}
+    >
       {status.error ? (
-        <Text style={{ color: theme.colors.statusDanger }}>无法加载调度器：{formatRpcError(status.error)}</Text>
+        <Text style={{ color: theme.colors.statusDanger }}>
+          无法加载调度器：{formatRpcError(status.error)}
+        </Text>
       ) : null}
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
       {s ? (
@@ -200,14 +224,20 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
             <Row
               theme={theme}
               left="运行中的 worker"
-              right={limits ? `${s.running.total} / ${limits.globalLimit}` : String(s.running.total)}
+              right={
+                limits ? `${s.running.total} / ${limits.globalLimit}` : String(s.running.total)
+              }
             />
             {Object.entries(s.running.byProvider).map(([provider, n]) => (
               <Row
                 key={provider}
                 theme={theme}
                 left={provider}
-                right={limits?.providerLimits[provider] ? `${n} / ${limits.providerLimits[provider]}` : String(n)}
+                right={
+                  limits?.providerLimits[provider]
+                    ? `${n} / ${limits.providerLimits[provider]}`
+                    : String(n)
+                }
               />
             ))}
             {s.resources ? (
@@ -222,7 +252,7 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
                 {pauseReason(s, limits?.memoryThreshold ?? 0.85)}
               </Text>
             ) : (
-              <Muted theme={theme}>正在正常放行卡片。</Muted>
+              <Muted theme={theme}>正在正常放行任务。</Muted>
             )}
           </Section>
 
@@ -233,11 +263,17 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
                 <Row
                   theme={theme}
                   left={q.provider}
-                  right={q.remainingPct === null ? (LEVEL_ZH[q.level] ?? q.level) : `剩余 ${Math.round(q.remainingPct)}% · ${LEVEL_ZH[q.level] ?? q.level}`}
+                  right={
+                    q.remainingPct === null
+                      ? (LEVEL_ZH[q.level] ?? q.level)
+                      : `剩余 ${Math.round(q.remainingPct)}% · ${LEVEL_ZH[q.level] ?? q.level}`
+                  }
                 />
                 {q.level === "tight" || q.level === "exhausted" ? (
                   <Text style={{ color: levelColor(theme, q.level), fontSize: 12 }}>
-                    {q.level === "exhausted" ? "不再给这个 provider 派新卡" : "仅留给高优先级卡片"}
+                    {q.level === "exhausted"
+                      ? "不再给这个 provider 派新任务"
+                      : "剩余额度紧张，请留意消耗"}
                     {q.resetsAt ? ` · ${q.resetsAt.slice(5, 16).replace("T", " ")} 恢复` : ""}
                   </Text>
                 ) : null}
@@ -245,15 +281,20 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
             ))}
           </Section>
 
-          <Section theme={theme} title="排队的卡片">
+          <Section theme={theme} title="任务资源与排队">
             {s.pending.map((a) => (
-              <Row key={a.cardKey} theme={theme} left={a.cardKey} right={`已放行（${a.provider}），正在派发`} />
+              <Row
+                key={a.id}
+                theme={theme}
+                left={`${a.workspaceId} · ${a.role}`}
+                right={`${a.provider} · 端口 ${a.port}`}
+              />
             ))}
             {s.deferred.map((d) => (
-              <Row key={d.cardKey} theme={theme} left={d.cardKey} right={d.reason} />
+              <Row key={d.workspaceId} theme={theme} left={d.workspaceId} right={d.reason} />
             ))}
             {s.pending.length + s.deferred.length === 0 ? (
-              <Muted theme={theme}>没有卡片在等名额。</Muted>
+              <Muted theme={theme}>没有任务占用资源或排队。</Muted>
             ) : null}
           </Section>
         </>
@@ -263,7 +304,15 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
         {error ? <Text style={{ color: theme.colors.statusDanger }}>{error}</Text> : null}
         {devices.data?.length === 0 ? <Muted theme={theme}>还没有登记设备。</Muted> : null}
         {devices.data?.map((d) => (
-          <View key={d.id} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <View
+            key={d.id}
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
             <View style={{ flexShrink: 1 }}>
               <Text style={{ color: theme.colors.foreground }}>
                 {d.name} · {KIND_ZH[d.kind] ?? d.kind}
@@ -273,17 +322,37 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
                 {d.detail ? ` · ${d.detail}` : ""}
               </Muted>
             </View>
-            <Button theme={theme} label="移除" onPress={() => void act(() => removeCall({ id: d.id }))} />
+            <Button
+              theme={theme}
+              label="移除"
+              onPress={() => void act(() => removeCall({ id: d.id }))}
+            />
           </View>
         ))}
         <Muted theme={theme}>登记设备</Muted>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
           {DEVICE_KINDS.map((k) => (
-            <Button key={k} theme={theme} label={KIND_ZH[k] ?? k} active={k === kind} onPress={() => setKind(k)} />
+            <Button
+              key={k}
+              theme={theme}
+              label={KIND_ZH[k] ?? k}
+              active={k === kind}
+              onPress={() => setKind(k)}
+            />
           ))}
         </View>
-        <Field theme={theme} value={name} onChangeText={setName} placeholder="名称（例如 pixel-emulator）" />
-        <Field theme={theme} value={serial} onChangeText={setSerial} placeholder="adb 序列号（可选）" />
+        <Field
+          theme={theme}
+          value={name}
+          onChangeText={setName}
+          placeholder="名称（例如 pixel-emulator）"
+        />
+        <Field
+          theme={theme}
+          value={serial}
+          onChangeText={setSerial}
+          placeholder="adb 序列号（可选）"
+        />
         <Field theme={theme} value={avd} onChangeText={setAvd} placeholder="AVD 名称（可选）" />
         <View style={{ flexDirection: "row" }}>
           <Button
@@ -321,15 +390,6 @@ export function SchedulerSidebarItem({ currentScreen, openScreen }: PluginSideba
   );
 }
 
-const PRIORITIES = ["urgent", "high", "medium", "low", "none"] as const;
-
-/** Defaults equal the values that used to be hard-coded (WP-99). */
-export const ADVANCED_FIELDS: readonly SettingField[] = [
-  { kind: "number", key: "pendingTimeoutMinutes", label: "已放行但迟迟没人派发的卡片，多少分钟后收回（1-240）", min: 1, max: 240 },
-  { kind: "int", key: "retryCooldownSeconds", label: "派发失败后，等多少秒再重新放行（0-86400）", min: 0, max: 86_400 },
-  { kind: "int", key: "maxAdmitAttempts", label: "同一张卡派发失败多少次后不再放行（1-20）", min: 1, max: 20 },
-];
-
 export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
   const settings = useSettings(schedulerSettings);
   if (settings.status !== "ready") {
@@ -344,13 +404,28 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
   const { values, revision } = settings;
   const save = (next: typeof values) => void settings.save(next, revision);
   // Numbers: ignore text that is not a number inside [min, max] so a half-typed value never saves.
-  const numeric = (key: keyof typeof values, min: number, max: number, int = true) => (text: string) => {
-    const n = Number(text);
-    if (text.trim() && Number.isFinite(n) && n >= min && n <= max && (!int || Number.isInteger(n))) {
-      save({ ...values, [key]: n });
-    }
-  };
-  const field = (label: string, key: keyof typeof values, min: number, max: number, int = true, hint?: string) => (
+  const numeric =
+    (key: keyof typeof values, min: number, max: number, int = true) =>
+    (text: string) => {
+      const n = Number(text);
+      if (
+        text.trim() &&
+        Number.isFinite(n) &&
+        n >= min &&
+        n <= max &&
+        (!int || Number.isInteger(n))
+      ) {
+        save({ ...values, [key]: n });
+      }
+    };
+  const field = (
+    label: string,
+    key: keyof typeof values,
+    min: number,
+    max: number,
+    int = true,
+    hint?: string,
+  ) => (
     <SettingsInput
       label={label}
       hint={hint}
@@ -368,34 +443,22 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
           initialValue={formatLimits(values.providerLimits)}
           onChangeText={(text) => save({ ...values, providerLimits: parseLimits(text) })}
         />
-        {field("内存占用超过多少比例时暂停放行", "memoryThreshold", 0.5, 0.99, false, "0.5 到 0.99")}
+        {field(
+          "内存占用超过多少比例时暂停放行",
+          "memoryThreshold",
+          0.5,
+          0.99,
+          false,
+          "0.5 到 0.99",
+        )}
         {field("剩余额度低于多少百分比算“紧张”", "quotaTightPct", 0, 100, false)}
         {field("剩余额度低于多少百分比算“用完”", "quotaExhaustedPct", 0, 100, false)}
-        <SettingsSelect
-          label="provider 额度紧张时，仅放行不低于此优先级的卡片"
-          value={values.tightMinPriority}
-          options={PRIORITIES.map((p) => ({ label: PRIORITY_ZH[p] ?? p, value: p }))}
-          onValueChange={(tightMinPriority) => save({ ...values, tightMinPriority })}
-        />
-        <SettingsSelect
-          label="避免同时运行改动相同文件的卡片"
-          value={values.conflictAvoidance ? "on" : "off"}
-          options={[
-            { label: "开", value: "on" },
-            { label: "关", value: "off" },
-          ]}
-          onValueChange={(v) => save({ ...values, conflictAvoidance: v === "on" })}
-        />
         {field("开发服务器端口起点", "devPortBase", 1024, 65000)}
         {field("开发服务器端口范围大小", "devPortSpan", 10, 5000)}
-        {field("设备租期（分钟）", "deviceLeaseMinutes", 1, 100000)}
         {field("放行检查间隔（秒）", "tickSeconds", 1, 600)}
         {field("资源采样间隔（秒）", "sampleSeconds", 5, 3600)}
         {field("采样保留天数", "sampleRetentionDays", 1, 365)}
       </SettingsCard>
-      <Group theme={theme} title="高级">
-        <FieldsCard fields={ADVANCED_FIELDS} values={values} save={save} />
-      </Group>
     </SettingsSection>
   );
 }

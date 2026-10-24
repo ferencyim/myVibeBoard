@@ -1,9 +1,7 @@
 // Prompt templates of maintenance rules. Pure (shared by the engine and the editor screen).
 //
-// A rule may override the editable part of the "review" prompt (read-only sub agent that analyses a
-// draft card) and of the "fix" prompt (worker that repairs in a worktree). The system constraint
-// block is always appended after the template, so an edited template cannot lift the read-only /
-// no-merge rules or drop the check's own instructions.
+// Both output modes enter planning and wait for explicit task confirmation. Rule overrides only
+// change the editable template; the appended constraint preserves the planning boundary.
 
 export const PLACEHOLDERS = [
   { name: "project", description: "项目名称" },
@@ -13,6 +11,7 @@ export const PLACEHOLDERS = [
     description: "本次为什么触发，例如「已完成任务 10 个，达到阈值 10」或「手动触发」",
   },
   { name: "check_description", description: "这条规则检查什么（自然语言说明）" },
+  // Preserve this historical placeholder in existing prompt overrides.
   { name: "card_title", description: "将要创建（或已创建）的任务标题" },
   { name: "summary", description: "检查生成的任务正文：触发原因、发现、影响、建议和验证方法" },
   { name: "findings_json", description: "全部发现的 JSON 明细" },

@@ -44,7 +44,7 @@ export const AUTOMATION_LINKS = [
   {
     pluginId: "vibe-board",
     screenId: "preferences",
-    label: "Vibe Board：派发、卡死检测、探路兵、brief 限值",
+    label: "任务设置：项目扩展、默认模型与有序预设",
   },
   {
     pluginId: "vibe-verify",

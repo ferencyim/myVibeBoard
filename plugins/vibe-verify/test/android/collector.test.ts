@@ -68,7 +68,9 @@ ${PKG}/.MainActivity
 function makeCtx(runner: CollectorContext["runner"], extra: Partial<CollectorContext> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "vibe-android-"));
   const ctx: CollectorContext = {
-    cardId: "card-1",
+    cardId: null,
+    workspaceId: "ws-android",
+    confirmedAt: "2026-10-23T00:00:00.000Z",
     verificationId: "ver-1",
     projectType: "android",
     projectPath: dir,

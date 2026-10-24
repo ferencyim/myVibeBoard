@@ -1,4 +1,4 @@
-// MemoryPort: how the master's card_done reply reaches the project memory files.
+// MemoryPort: how the master's task_done reply reaches the project memory files.
 //
 // Plugins cannot import each other, and the budgeted store lives in vibe-context (WP-30), so this
 // is a deliberately small writer for the same on-disk format (`<!-- vibe:entry id= created=
@@ -12,7 +12,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import type { MemoryUpdate } from "../assess/schema";
 
-export const PROJECT_FILES = ["PROJECT_STATE.md", "DECISIONS.md", "LESSONS.md", "INDEX.md"] as const;
+export const PROJECT_FILES = [
+  "PROJECT_STATE.md",
+  "DECISIONS.md",
+  "LESSONS.md",
+  "INDEX.md",
+] as const;
 export type ProjectFile = (typeof PROJECT_FILES)[number];
 
 export interface MemoryEntryView {
@@ -147,7 +152,13 @@ export function createFileMemoryPort(now: () => Date = () => new Date()): Memory
     },
 
     apply(repo, update) {
-      const result: ApplyResult = { stateWritten: false, added: 0, superseded: 0, archived: 0, duplicates: 0 };
+      const result: ApplyResult = {
+        stateWritten: false,
+        added: 0,
+        superseded: 0,
+        archived: 0,
+        duplicates: 0,
+      };
       const archiveAdds = new Map<string, Entry[]>();
       const toArchive = (file: string, e: Entry, note?: string) => {
         const list = archiveAdds.get(file) ?? [];
@@ -214,7 +225,10 @@ export function createFileMemoryPort(now: () => Date = () => new Date()): Memory
         const parsed = touched[file] ?? load(repo, file);
         const hit = parsed.entries.find((e) => e.id === id);
         if (!hit) continue;
-        touched[file] = { preamble: parsed.preamble, entries: parsed.entries.filter((e) => e.id !== id) };
+        touched[file] = {
+          preamble: parsed.preamble,
+          entries: parsed.entries.filter((e) => e.id !== id),
+        };
         toArchive(file, hit);
         result.archived++;
       }
