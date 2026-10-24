@@ -24,7 +24,7 @@ import {
 } from "../vibe/contract";
 import { createTaskRuntimeCommands, type VibeDb, type VibeStore } from "../vibe/db";
 import { createTaskResources } from "../task-host/resources";
-import { modeIdFor, readOnlyConfigFor } from "../task-host/permission";
+import { modeIdFor, readOnlyConfigFor, writableConfigFor } from "../task-host/permission";
 import { createTaskGitFinalizer, type GitState } from "../task-conversation/git";
 import { TASK_FLOW_PROMPTS } from "../task-conversation/prompts";
 import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
@@ -53,6 +53,38 @@ interface TimelinePage {
 const DELIVERY = /^```vibe-delivery[ \t]*\r?\n([\s\S]*?)^```[ \t]*$/m;
 const BUSY_ROLES = new Set(["worker", "subagent", "reviewer", "verifier"]);
 const HANDOFF_NUMBER = /#\s*(\d+)/;
+const READ_ONLY_ROLE_LABELS: Partial<Record<keyof TaskRoleSnapshot, string>> = {
+  scout: "探路",
+  plan_reviewer: "方案复核",
+  reviewer: "代码复核",
+};
+
+/** Reject an execution confirmation whose role presets cannot run under the required policy. */
+function assertRolePolicies(roles: TaskRoleSnapshot): void {
+  for (const role of ["scout", "plan_reviewer", "reviewer"] as const) {
+    const snapshot = roles[role];
+    if (!snapshot) continue;
+    const label = READ_ONLY_ROLE_LABELS[role];
+    for (const model of snapshot.models) {
+      try {
+        readOnlyConfigFor(model.provider);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`${label}角色的预设不可用：${detail}`);
+      }
+    }
+  }
+  if (roles.verifier) {
+    for (const model of roles.verifier.models) {
+      try {
+        writableConfigFor(model.provider);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`验证角色的预设不可用：${detail}`);
+      }
+    }
+  }
+}
 
 function handoffTarget(reason: string | undefined): number | undefined {
   if (!reason) return undefined;
@@ -293,6 +325,7 @@ export function createTaskFlow(options: {
     tab: TaskTab,
   ) {
     const roles = await rolesFor(task, tab);
+    assertRolePolicies(roles);
     const frozen = freezeTaskSubtaskPresets(plan, roles, (id) => store.presets.get(id));
     validateTaskSubtaskPresets(plan, frozen);
     const confirmed = store.tasks.confirm(task.workspaceId, {
@@ -403,7 +436,7 @@ export function createTaskFlow(options: {
           reason,
         },
       });
-      await handle.send(prompt);
+      await handle.send(prompt, { sourceAgentId: task.anchorAgentId });
       if (reason) store.tasks.updateControl(task.workspaceId, { executionReason: null });
       store.tasks.setSummary(
         task.workspaceId,
@@ -603,16 +636,18 @@ export function createTaskFlow(options: {
     return { task: result.task, text: result.text };
   }
   /** Stop queued dispatch, cancel running tabs and release confirmed leases before pausing. */
-  async function stop(input: {
+  function stop(input: {
     workspaceId: string;
     agentId: string;
     requestId: string;
     reason?: string;
   }) {
+    // Signal the running finalizer before waiting in the queue; otherwise stop would sit behind
+    // the very Git run it is meant to interrupt.
+    const activeAccept = accepting.get(input.workspaceId);
+    if (activeAccept) activeAccept.cancelled = true;
     return queue(input.workspaceId, async () => {
       const task = requireTask(input.workspaceId);
-      const activeAccept = accepting.get(task.workspaceId);
-      if (activeAccept) activeAccept.cancelled = true;
       const views = await tabs.tabsFor(task, true);
       const failures: string[] = [];
       for (const view of views) {
@@ -683,10 +718,13 @@ export function createTaskFlow(options: {
       const views = await tabs.tabsFor(task, true);
       const toView = views.find((view) => view.agentId === input.agentId);
       if (!toView) throw new Error("当前 tab 尚未登记为任务 tab");
-      // A read-only role must keep its provider-enforced restriction when it changes owner.
-      const readOnly = READ_ONLY_ROLES.has(from.role)
+      // A read-only role must keep its provider-enforced restriction when it changes owner;
+      // the verifier keeps a writable mode because it runs tests and builds.
+      const roleConfig = READ_ONLY_ROLES.has(from.role)
         ? readOnlyConfigFor(toView.provider)
-        : undefined;
+        : from.role === "verifier"
+          ? writableConfigFor(toView.provider)
+          : undefined;
       let worker: { presetId: string; index: number } | undefined;
       if (from.role === "worker") {
         const preset =
@@ -719,6 +757,13 @@ export function createTaskFlow(options: {
       if (fromHandle.current()?.activeTurn) {
         await fromHandle.cancelRun();
         await waitStopped(fromHandle);
+      }
+      // The receiving tab may still be mid-turn; stop it before changing mode or role.
+      const toHandle = paseo().agents.ref(input.agentId);
+      await toHandle.refresh();
+      if (toHandle.current()?.activeTurn) {
+        await toHandle.cancelRun();
+        await waitStopped(toHandle);
       }
       try {
         const { projectId } = await projectFor(task.workspaceId);
@@ -771,8 +816,7 @@ export function createTaskFlow(options: {
         const updatedFrom = store.tasks.updateTab(task.workspaceId, from.agentId, {
           role: "session",
         });
-        const toHandle = paseo().agents.ref(input.agentId);
-        if (readOnly?.modeId) await toHandle.setMode(readOnly.modeId);
+        if (roleConfig?.modeId) await toHandle.setMode(roleConfig.modeId);
         await Promise.all([
           toHandle
             .setTitle(tabTitle(updatedTo))
@@ -801,7 +845,7 @@ export function createTaskFlow(options: {
         const message = [roleText ? store.prompts.resolve(roleText, { projectId }) : "", continuation]
           .filter(Boolean)
           .join("\n\n");
-        await toHandle.send(message);
+        await toHandle.send(message, { sourceAgentId: from.agentId });
         const text = `#${from.number} 已由 #${updatedTo.number} 接手（${TASK_TAB_ROLE_LABELS[from.role]}）。`;
         store.tasks.setSummary(task.workspaceId, text);
         await tabs.appendStatus(from.agentId, `已停止，由 #${updatedTo.number} 接手。`);
@@ -825,7 +869,8 @@ export function createTaskFlow(options: {
       (entry) =>
         entry.item.type === "user_message" &&
         (!turnId || entry.turnId === turnId) &&
-        entry.item.text.trim() === "通过",
+        entry.item.text.trim() === "通过" &&
+        !entry.item.text.trimStart().startsWith("<paseo-system"),
     );
     const message = messages.at(-1);
     if (!message) return;
@@ -841,18 +886,22 @@ export function createTaskFlow(options: {
       throw error;
     }
   }
-  /** A user message like "继续 #2 的工作" in a different tab hands that tab's role over. */
+  /** A user's whole message "继续 #2 的工作" hands that tab's role to this session tab. */
   async function naturalHandoff(
     task: Task,
     tab: TaskTab,
     page: TimelinePage,
     turnId: string | null,
   ): Promise<boolean> {
+    // Natural-language takeover is only for tabs the user opened; a main/worker tab keeps its
+    // role even when its text happens to contain a handoff phrase.
+    if (tab.role !== "session") return false;
     const messages = page.entries.filter(
       (entry) =>
         entry.item.type === "user_message" &&
         (!turnId || entry.turnId === turnId) &&
-        !!entry.item.text.trim(),
+        !!entry.item.text.trim() &&
+        !entry.item.text.trimStart().startsWith("<paseo-system"),
     );
     const message = messages.at(-1);
     if (!message || message.item.type !== "user_message") return false;

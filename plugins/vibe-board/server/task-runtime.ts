@@ -34,7 +34,7 @@ export function registerTaskRuntime(
     }),
     server.on("workspace.created", ({ workspace }, context) => {
       options.onPaseo(context.paseo);
-      tabs.claimCreatedWorkspace(workspace.id, workspace.projectId);
+      tabs.claimCreatedWorkspace(workspace.id);
     }),
     server.before("agent.create", async ({ request }, context) => {
       options.onPaseo(context.paseo);

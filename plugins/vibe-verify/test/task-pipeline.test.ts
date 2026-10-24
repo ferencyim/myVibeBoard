@@ -33,6 +33,7 @@ function setup(
     review?: "pass" | "severe";
     busy?: boolean;
     dirty?: boolean;
+    dirtyChanges?: boolean;
     headChanges?: boolean;
     closeFails?: boolean;
     noEvidence?: boolean;
@@ -105,6 +106,7 @@ function setup(
     options.review && !options.startVerifying ? "reviewing" : "verifying",
   );
   let head = "abc123";
+  let dirty = options.dirty ?? false;
   const calls: string[] = [];
   const sentPrompts: Array<{ role: string; text: string }> = [];
   const launched: LaunchInput[] = [];
@@ -117,7 +119,7 @@ function setup(
   const runner = createScriptedRunner((call) => {
     if (call.command === "git") {
       if (call.args[0] === "rev-parse") return { stdout: head };
-      if (call.args[0] === "status") return { stdout: options.dirty ? "?? .vibe/verify.json" : "" };
+      if (call.args[0] === "status") return { stdout: dirty ? "?? .vibe/verify.json" : "" };
       if (call.args[0] === "merge-base") return { stdout: "base123" };
       if (call.args[0] === "log")
         return options.gitEvidenceFails
@@ -150,6 +152,7 @@ function setup(
       seenConfig = configs.get(ctx.verificationId);
       calls.push("collect");
       if (options.headChanges) head = "def456";
+      if (options.dirtyChanges) dirty = true;
       if (options.stop) board.tasks.setPhase("ws-task", "paused");
       if (options.reconfirm) {
         const task = board.tasks.get("ws-task")!;
@@ -850,8 +853,8 @@ describe("原生 workspace 验证", () => {
     expect(h.verify.list("ws-task")).toHaveLength(0);
     expect(h.board.tasks.get("ws-task")!.summary).toContain("未提交");
   });
-  it.each([{ headChanges: true }, { closeFails: true }, { stop: true }])(
-    "HEAD变化、停止不明或用户停止使结论作废 %j",
+  it.each([{ headChanges: true }, { dirtyChanges: true }, { closeFails: true }, { stop: true }])(
+    "HEAD或工作树变化、停止不明或用户停止使结论作废 %j",
     async (option) => {
       const h = setup(option);
       expect(await h.pipeline.run("ws-task")).toMatchObject({

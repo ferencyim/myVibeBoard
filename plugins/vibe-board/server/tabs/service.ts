@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
 import type { PaseoAgent, PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { PluginBeforeRequests } from "@getpaseo/plugin/server";
@@ -8,7 +7,6 @@ import {
   TASK_PHASE_LABELS,
   TASK_TAB_ROLE_LABEL,
   TASK_TAB_ROLE_LABELS,
-  TASK_TAB_ROLES,
   TASK_TAB_PRESET_LABEL,
   UNRESOLVED_TAB_MODEL,
   tabTitle,
@@ -38,22 +36,10 @@ export const READ_ONLY_ROLES = new Set<TaskTabRole>([
   "scout",
   "plan_reviewer",
   "reviewer",
-  "verifier",
 ]);
-/** A user types "/接手 #2" or "继续 #2 的工作"; the reason carries the raw argument. */
-export const HANDOFF_PATTERN = /(?:^|\s)[/／]?接手\s*#?(\d+)|继续\s*#(\d+)\s*的工作/;
-
-function pathKey(path: string) {
-  const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function labeledRole(agent: Pick<PaseoAgent, "labels">): TaskTabRole | undefined {
-  const value = agent.labels?.[TASK_TAB_ROLE_LABEL];
-  return value && (TASK_TAB_ROLES as readonly string[]).includes(value)
-    ? (value as TaskTabRole)
-    : undefined;
-}
+/** The whole message must be one of the two user-native handoff forms. */
+export const HANDOFF_PATTERN =
+  /^\s*(?:[/／]?\s*接手\s*#?(\d+)|继续\s*#(\d+)\s*的工作)\s*$/;
 
 function isSubagent(agent: Pick<PaseoAgent, "labels">): boolean {
   return !!agent.labels?.[PARENT_AGENT_ID_LABEL];
@@ -75,9 +61,11 @@ export function formatTabs(tabs: readonly Pick<TaskTabView, "number" | "roleLabe
 export function createTaskTabs(options: {
   store: VibeStore;
   getPaseo(): PaseoApi | null;
+  now?: () => number;
   log?: (message: string, error?: unknown) => void;
 }) {
   const { store } = options;
+  const now = options.now ?? (() => Date.now());
   const log = options.log ?? ((message, error) => console.error("[vibe-board]", message, error ?? ""));
   function paseo(): PaseoApi {
     const api = options.getPaseo();
@@ -98,32 +86,29 @@ export function createTaskTabs(options: {
     return placement;
   }
   /** Records a UI-created worktree so its first agent becomes tab #1; agent-created worktrees stay out. */
-  const pendingWorktreeCreates: Array<{ projectId: string | null; at: number }> = [];
+  const PENDING_WORKSPACE_TTL_MS = 5 * 60_000;
+  const pendingWorktreeCreates = new Map<string, number>();
+  function prunePending(nowMs: number): void {
+    for (const [workspaceId, at] of pendingWorktreeCreates) {
+      if (nowMs - at > PENDING_WORKSPACE_TTL_MS) pendingWorktreeCreates.delete(workspaceId);
+    }
+  }
   function trackWorkspaceCreate(request: PluginBeforeRequests["workspace.create"]): void {
     const source = request.source;
     if (source.kind !== "worktree" || request.callerAgentId) return;
     // Only the conversation-list "new workspace" form ships the first agent with the creation
     // request; `paseo workspace create` / `paseo agent run` create the workspace without one.
     if (!request.agent && !request.firstAgentContext) return;
-    const projectId =
-      source.projectId ??
-      store.projects
-        .list()
-        .find(
-          (project) =>
-            project.paseoProjectId && pathKey(project.repoPath) === pathKey(source.cwd ?? ""),
-        )?.paseoProjectId ??
-      null;
-    pendingWorktreeCreates.push({ projectId, at: Date.now() });
+    // Core hands the pre-allocated id to the hook; claiming by id avoids confusing concurrent
+    // creations in the same project and entries for creations that never complete.
+    if (!request.workspaceId) return;
+    const nowMs = now();
+    prunePending(nowMs);
+    pendingWorktreeCreates.set(request.workspaceId, nowMs);
   }
-  function claimCreatedWorkspace(workspaceId: string, projectId: string | null): void {
-    const index = pendingWorktreeCreates.findIndex(
-      (pending) =>
-        pending.projectId === projectId ||
-        (pending.projectId === null && Date.now() - pending.at < 60_000),
-    );
-    if (index < 0) return;
-    pendingWorktreeCreates.splice(index, 1);
+  function claimCreatedWorkspace(workspaceId: string): void {
+    prunePending(now());
+    if (!pendingWorktreeCreates.delete(workspaceId)) return;
     store.tasks.markTaskWorkspace(workspaceId);
   }
   /** Old tasks predate the marker; the task row itself is the durable proof. */
@@ -264,10 +249,9 @@ export function createTaskTabs(options: {
     if (task) isTaskWorkspace(workspaceId);
     else if (!store.tasks.isTaskWorkspace(workspaceId)) return request;
     task = store.tasks.get(workspaceId);
-    // Labels are trustworthy here: core strips agent-supplied `vibe.*` labels from create_agent.
-    const role =
-      labeledRole({ labels: request.labels ?? {} }) ??
-      (task?.tabs.length ? ("session" as const) : ("main" as const));
+    // Plugin-opened tabs carry their role instructions in the initial prompt; a tab created by
+    // the user gets the planner rules only when it is the task's first tab.
+    const role: TaskTabRole = task?.tabs.length ? "session" : "main";
     const tabs = task ? await tabsFor(task, false) : [];
     const projectId = placement.projectId;
     const guide = store.prompts.resolve(TASK_TAB_GUIDE_PROMPT.key, {
@@ -382,10 +366,12 @@ export function createTaskTabs(options: {
         [TASK_TAB_ROLE_LABEL]: input.role,
         ...(input.presetId ? { [TASK_TAB_PRESET_LABEL]: input.presetId } : {}),
       },
-      prompt,
     });
     const tab = await ensureTab(handle.id, { role: input.role, presetId: input.presetId });
     if (!tab) throw new Error("新 tab 未登记到任务");
+    // The task text is agent-to-agent context, never a user turn: provenance keeps it out of
+    // the user-message lane so it cannot authorise acceptance or handoff.
+    await handle.send(prompt, { sourceAgentId: callerAgentId });
     return { agentId: handle.id, number: tab.number, role: tab.role, title: tabTitle(tab) };
   }
   return {

@@ -8,6 +8,7 @@ interface CreateOptions {
   config: {
     provider: string;
     modeId?: string;
+    providerOptions?: Record<string, unknown>;
     options?: Record<string, unknown>;
     systemPrompt?: string;
   };
@@ -28,7 +29,7 @@ interface FakeHandle {
   current(): { provider: string; model?: string; thinkingOptionId?: string };
   readonly status: string;
   readonly activeTurn: unknown;
-  send(text: string): Promise<void>;
+  send(text: string, options?: { sourceAgentId?: string }): Promise<void>;
   waitForFinish(ms: number): Promise<WaitResult>;
   timeline: {
     refetch(input: { direction: "tail"; limit: number }): Promise<{
@@ -40,7 +41,8 @@ interface FakeHandle {
 
 function fakePaseo() {
   const created: CreateOptions[] = [];
-  const sends: Array<{ agentId: string; text: string }> = [];
+  const sends: Array<{ agentId: string; text: string; options?: { sourceAgentId?: string } }> =
+    [];
   const handles: FakeHandle[] = [];
   let models: Array<{ id: string; isDefault?: boolean }> | "throw" = [
     { id: "default", isDefault: true },
@@ -82,8 +84,8 @@ function fakePaseo() {
               get activeTurn() {
                 return activeTurn;
               },
-              send: async (text: string) => {
-                sends.push({ agentId: handle.id, text });
+              send: async (text, options) => {
+                sends.push({ agentId: handle.id, text, ...(options ? { options } : {}) });
                 status = "running";
                 activeTurn = { id: "turn-" + sends.length };
               },
@@ -251,7 +253,9 @@ describe("验证/复核 tab", () => {
       status: "idle",
       text: "完整验证结论",
     });
-    expect(f.sends).toEqual([{ agentId: "tab-1", text: "核对证据" }]);
+    expect(f.sends).toEqual([
+      { agentId: "tab-1", text: "核对证据", options: { sourceAgentId: "tab-1" } },
+    ]);
     expect(agent.source).toMatchObject({
       memberId: "tab-1",
       backendAgentId: "tab-1",
@@ -264,16 +268,25 @@ describe("验证/复核 tab", () => {
     expect(released).toBe(1);
   });
 
-  it("只读配置：Claude 使用 plan 模式，codex 使用只读沙箱", async () => {
+  it("只读配置：复核使用 Claude plan / codex 只读沙箱；验证使用可写模式", async () => {
     const f = fakePaseo();
     const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo as never });
-    await launcher.launch(input({ provider: "claude" }));
-    await launcher.launch(input({ provider: "codex" }));
+    await launcher.launch(input({ provider: "claude", role: "reviewer" }));
+    await launcher.launch(input({ provider: "codex", role: "reviewer" }));
+    await launcher.launch(input({ provider: "codex", role: "verifier" }));
     expect(f.created[0].config.modeId).toBe("plan");
-    expect(f.created[1].config.options).toEqual({
-      sandbox_mode: "read-only",
-      approval_policy: "never",
-    });
+    if (process.platform === "win32") {
+      // Windows cannot run the Codex read-only sandbox; the reviewer prompt is the guard.
+      expect(f.created[1].config.modeId).toBe("auto");
+      expect(f.created[1].config.providerOptions).toBeUndefined();
+    } else {
+      expect(f.created[1].config.modeId).toBe("auto");
+      expect(f.created[1].config.providerOptions).toEqual({
+        sandbox_mode: "read-only",
+        approval_policy: "never",
+      });
+    }
+    expect(f.created[2].config).toMatchObject({ modeId: "auto" });
   });
 
   it.each(["reviewer", "verifier"] as const)(
