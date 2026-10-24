@@ -146,6 +146,16 @@ export interface PaseoLauncherOptions {
   prompts?: PromptResolver;
   /** Max wait for a stuck permission prompt to be answered by the policy hook. */
   pollMs?: number;
+  /** Claims the new native agent as the task's referee tab (role, model and title). */
+  claimTab?: (input: {
+    workspaceId: string;
+    agentId: string;
+    role: "verifier" | "reviewer";
+    provider: string;
+    model: string;
+    thinking?: string;
+    presetId?: string;
+  }) => Promise<void>;
 }
 
 async function resolveNativeModel(paseo: VerifierPaseo, input: LaunchInput) {
@@ -182,11 +192,22 @@ function taskEvidenceEnv(task: LaunchInput["task"]): Record<string, string> {
 }
 
 function nativeConfig(input: LaunchInput, prompt: string) {
+  const provider = input.provider.toLowerCase();
+  const readOnly =
+    provider === "claude"
+      ? { modeId: "plan" }
+      : provider === "codex"
+        ? {
+            modeId: "read-only",
+            options: { sandbox_mode: "read-only", approval_policy: "never" },
+          }
+        : undefined;
+  if (!readOnly)
+    throw new Error(
+      `该 provider 尚无受支持的强制只读策略，不能打开复核或验证 tab：${input.provider}`,
+    );
   return {
-    ...(input.provider === "claude" ? { modeId: "plan" } : {}),
-    ...(input.provider === "codex"
-      ? { options: { sandbox_mode: "read-only", approval_policy: "never" } }
-      : {}),
+    ...readOnly,
     ...(input.thinking && input.thinking !== "default"
       ? { thinkingOptionId: input.thinking }
       : {}),
@@ -238,6 +259,15 @@ async function tabVerifier(
     await lease?.release().catch(() => {});
     throw error;
   }
+  await options.claimTab?.({
+    workspaceId: input.task.workspaceId,
+    agentId: handle.id,
+    role,
+    provider: actual.provider,
+    model: actual.model,
+    thinking: actual.thinkingOptionId ?? undefined,
+    ...(input.snapshot?.presetId ? { presetId: input.snapshot.presetId } : {}),
+  });
   input.onCreated?.({
     agentId: handle.id,
     provider: actual.provider,

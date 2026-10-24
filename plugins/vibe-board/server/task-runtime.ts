@@ -4,7 +4,7 @@ import { EVENT_PAYLOADS } from "./vibe/contract";
 import { createEventConsumer, type VibeDb, type VibeStore } from "./vibe/db";
 import { createTaskTabs } from "./tabs/service";
 import { createTaskFlow } from "./tabs/flow";
-import { taskTabCommandRpc, taskTabStatusRpc } from "../shared/task-tabs";
+import { taskTabCommandRpc } from "../shared/task-tabs";
 
 /** The business owner for numbered task tabs and the open-tab task flow. */
 export function registerTaskRuntime(
@@ -29,6 +29,13 @@ export function registerTaskRuntime(
   });
   flow.registerPrompts();
   const cleanups = [
+    server.before("workspace.create", ({ request }) => {
+      tabs.trackWorkspaceCreate(request);
+    }),
+    server.on("workspace.created", ({ workspace }, context) => {
+      options.onPaseo(context.paseo);
+      tabs.claimCreatedWorkspace(workspace.id, workspace.projectId);
+    }),
     server.before("agent.create", async ({ request }, context) => {
       options.onPaseo(context.paseo);
       return tabs.injectGuide(request);
@@ -60,12 +67,16 @@ export function registerTaskRuntime(
       const result = await flow.accept(input);
       return { task: result.task, message: result.message };
     }
+    if (input.action === "stop") {
+      const result = await flow.stop(input);
+      return { task: result.task, message: result.message };
+    }
+    if (input.action === "handoff") {
+      const result = await flow.handoff(input);
+      return { task: result.task, message: result.message };
+    }
     const result = await flow.status(input);
     return { task: result.task, message: result.text };
-  });
-  server.handle(taskTabStatusRpc, async (input, context) => {
-    options.onPaseo(context.paseo);
-    return flow.status(input);
   });
   const consumer = createEventConsumer({
     db: options.db,

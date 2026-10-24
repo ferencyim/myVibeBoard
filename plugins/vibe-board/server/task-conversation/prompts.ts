@@ -43,7 +43,7 @@ export const TASK_FLOW_PROMPTS: PromptDef[] = [
     whenSent: "调度准入或范围内修复时",
     audience: "执行主代理",
     defaultText:
-      "请按已确认方案执行，保持需求范围。需要并行调查或分工时，可用 Paseo create_agent 打开新的 tab（asTab: true），用 send_agent_prompt 说明目标、文件范围和验收（由 agent 发起时默认在对方完成后通知你，也可随时用 get_agent_activity 查看进度）；同一文件的写入不能并行。等待子代理完成并审核后交付，列明改动、自检结果和剩余问题。完成代码提交并输出 vibe-delivery 后由插件自动进入复核与证据验证；不要自行创建复核或验证 tab，不自行合并或推送 main。\n{{plan}}\n{{reason}}",
+      "请按已确认方案执行，保持需求范围。需要并行调查或分工时，可用 Paseo create_agent 打开普通子代理，用 send_agent_prompt 说明目标、文件范围和验收（由 agent 发起时默认在对方完成后通知你，也可随时用 get_agent_activity 查看进度）；不要用 labels 或 asTab 把子代理伪装成任务 tab，同一文件的写入不能并行。等待子代理完成并审核后交付，列明改动、自检结果和剩余问题。完成代码提交并输出 vibe-delivery 后由插件自动进入复核与证据验证；不要自行创建复核或验证 tab，不自行合并或推送 main。\n{{plan}}\n{{reason}}",
     placeholders: [
       { name: "plan", description: "已确认方案" },
       { name: "reason", description: "修复要求" },

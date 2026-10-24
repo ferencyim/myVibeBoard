@@ -93,6 +93,7 @@ export function createTaskResources(db: VibeDb, timeoutMs = 10_000) {
   return {
     request,
     admissionFor: (workspaceId: string) => admissions.get(workspaceId),
+    hasLease: (agentId: string) => leases.has(agentId),
     noteTurnStarted(agentId: string, turnId: string | null) {
       const lease = leases.get(agentId);
       if (lease && turnId) turns.set(agentId, { ...lease, turnId });

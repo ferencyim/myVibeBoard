@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import type { PaseoAgent, PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { PluginBeforeRequests } from "@getpaseo/plugin/server";
@@ -9,12 +10,17 @@ import {
   TASK_TAB_ROLE_LABELS,
   TASK_TAB_ROLES,
   TASK_TAB_PRESET_LABEL,
+  UNRESOLVED_TAB_MODEL,
+  tabTitle,
   type Task,
   type TaskTab,
   type TaskTabRole,
 } from "../vibe/contract";
 import { assertTaskWorkspace } from "../task-host/workspace";
+import { readOnlyConfigFor } from "../task-host/permission";
 import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
+
+export { tabTitle };
 
 export interface TaskTabView {
   number: number;
@@ -26,6 +32,20 @@ export interface TaskTabView {
   status: string;
   title: string | null;
   busy: boolean;
+}
+
+export const READ_ONLY_ROLES = new Set<TaskTabRole>([
+  "scout",
+  "plan_reviewer",
+  "reviewer",
+  "verifier",
+]);
+/** A user types "/接手 #2" or "继续 #2 的工作"; the reason carries the raw argument. */
+export const HANDOFF_PATTERN = /(?:^|\s)[/／]?接手\s*#?(\d+)|继续\s*#(\d+)\s*的工作/;
+
+function pathKey(path: string) {
+  const normalized = resolve(path).replace(/\\/g, "/").replace(/\/$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function labeledRole(agent: Pick<PaseoAgent, "labels">): TaskTabRole | undefined {
@@ -45,9 +65,6 @@ function statusOf(agent: PaseoAgent): string {
   if (agent.status === "error") return "错误";
   if (agent.status === "closed") return "已关闭";
   return agent.status;
-}
-export function tabTitle(tab: Pick<TaskTab, "number" | "role" | "model">): string {
-  return `#${tab.number} ${TASK_TAB_ROLE_LABELS[tab.role]} · ${tab.model}`;
 }
 export function formatTabs(tabs: readonly Pick<TaskTabView, "number" | "roleLabel" | "model" | "status">[]) {
   if (!tabs.length) return "（尚无）";
@@ -80,8 +97,65 @@ export function createTaskTabs(options: {
     assertTaskWorkspace(placement.current());
     return placement;
   }
-  /** Allocates a number once per agent; subagents and archived agents stay out of the tab list. */
-  async function ensureTab(agentId: string): Promise<TaskTab | null> {
+  /** Records a UI-created worktree so its first agent becomes tab #1; agent-created worktrees stay out. */
+  const pendingWorktreeCreates: Array<{ projectId: string | null; at: number }> = [];
+  function trackWorkspaceCreate(request: PluginBeforeRequests["workspace.create"]): void {
+    const source = request.source;
+    if (source.kind !== "worktree" || request.callerAgentId) return;
+    // Only the conversation-list "new workspace" form ships the first agent with the creation
+    // request; `paseo workspace create` / `paseo agent run` create the workspace without one.
+    if (!request.agent && !request.firstAgentContext) return;
+    const projectId =
+      source.projectId ??
+      store.projects
+        .list()
+        .find(
+          (project) =>
+            project.paseoProjectId && pathKey(project.repoPath) === pathKey(source.cwd ?? ""),
+        )?.paseoProjectId ??
+      null;
+    pendingWorktreeCreates.push({ projectId, at: Date.now() });
+  }
+  function claimCreatedWorkspace(workspaceId: string, projectId: string | null): void {
+    const index = pendingWorktreeCreates.findIndex(
+      (pending) =>
+        pending.projectId === projectId ||
+        (pending.projectId === null && Date.now() - pending.at < 60_000),
+    );
+    if (index < 0) return;
+    pendingWorktreeCreates.splice(index, 1);
+    store.tasks.markTaskWorkspace(workspaceId);
+  }
+  /** Old tasks predate the marker; the task row itself is the durable proof. */
+  function isTaskWorkspace(workspaceId: string): boolean {
+    if (store.tasks.isTaskWorkspace(workspaceId)) return true;
+    if (!store.tasks.get(workspaceId)) return false;
+    store.tasks.markTaskWorkspace(workspaceId);
+    return true;
+  }
+  async function syncResolvedModel(
+    workspaceId: string,
+    tab: TaskTab,
+    agent: PaseoAgent,
+    handle: PaseoAgentHandle,
+  ) {
+    const model = agent.model?.trim();
+    if (!model || model === tab.model) return tab;
+    const updated = store.tasks.updateTab(workspaceId, tab.agentId, {
+      model,
+      provider: agent.provider,
+    });
+    await handle.setTitle(tabTitle(updated)).catch((error) => {
+      log("任务 tab 标题更新失败", error);
+    });
+    return updated;
+  }
+  /** Allocates a number once per agent; subagents and archived agents stay out of the tab list.
+   *  A role claim is accepted only from plugin code, never from agent-supplied labels. */
+  async function ensureTab(
+    agentId: string,
+    claim: { role?: TaskTabRole; presetId?: string } = {},
+  ): Promise<TaskTab | null> {
     const { handle, agent } = await refreshAgent(agentId);
     const workspaceId = agent.workspaceId;
     if (!workspaceId || agent.internal || agent.archivedAt || isSubagent(agent)) return null;
@@ -91,18 +165,47 @@ export function createTaskTabs(options: {
     } catch {
       return null;
     }
+    if (!isTaskWorkspace(workspaceId)) return null;
     let task = store.tasks.get(workspaceId);
-    if (!task) task = store.tasks.create({ workspaceId, anchorAgentId: agentId });
+    if (!task) {
+      task = store.tasks.create({ workspaceId, anchorAgentId: agentId });
+    } else if (task.tabs.length === 0 && task.anchorAgentId !== agentId) {
+      // Backfill tasks created before tab numbering: the anchor is always #1.
+      await ensureTab(task.anchorAgentId, { role: "main" }).catch((error) => {
+        log("旧任务 #1 登记失败", error);
+      });
+      task = store.tasks.get(workspaceId)!;
+    }
     const existing = task.tabs.find((tab) => tab.agentId === agentId);
-    if (existing) return existing;
-    const role = labeledRole(agent) ?? (agentId === task.anchorAgentId ? "main" : "session");
+    if (existing) {
+      const updates: {
+        role?: TaskTabRole;
+        presetId?: string;
+        model?: string;
+        provider?: string;
+      } = {};
+      if (claim.role && claim.role !== existing.role) updates.role = claim.role;
+      if (claim.presetId && claim.presetId !== existing.presetId) updates.presetId = claim.presetId;
+      const resolved = agent.model?.trim();
+      if (resolved && resolved !== existing.model) {
+        updates.model = resolved;
+        updates.provider = agent.provider;
+      }
+      if (Object.keys(updates).length === 0) return existing;
+      const updated = store.tasks.updateTab(workspaceId, agentId, updates);
+      await handle.setTitle(tabTitle(updated)).catch((error) => {
+        log("任务 tab 标题更新失败", error);
+      });
+      return updated;
+    }
+    const role = claim.role ?? (agentId === task.anchorAgentId ? "main" : "session");
     const { tab } = store.tasks.allocateTab(workspaceId, {
       agentId,
       role,
       provider: agent.provider,
-      model: agent.model?.trim() || "default",
+      model: agent.model?.trim() || UNRESOLVED_TAB_MODEL,
       thinking: agent.thinkingOptionId ?? undefined,
-      presetId: agent.labels?.[TASK_TAB_PRESET_LABEL] || undefined,
+      ...(claim.presetId ? { presetId: claim.presetId } : {}),
     });
     await handle.setTitle(tabTitle(tab)).catch((error) => {
       log("任务 tab 标题设置失败（编号已保留）", error);
@@ -113,22 +216,27 @@ export function createTaskTabs(options: {
     return Promise.all(
       task.tabs.map(async (tab) => {
         let agent: PaseoAgent | undefined;
+        let handle: PaseoAgentHandle | undefined;
+        let current = tab;
         if (refresh) {
           try {
-            agent = (await refreshAgent(tab.agentId)).agent;
+            const result = await refreshAgent(tab.agentId);
+            agent = result.agent;
+            handle = result.handle;
+            current = await syncResolvedModel(task.workspaceId, tab, agent, handle);
           } catch {
             agent = undefined;
           }
         }
         return {
-          number: tab.number,
-          agentId: tab.agentId,
-          role: tab.role,
-          roleLabel: TASK_TAB_ROLE_LABELS[tab.role],
-          provider: agent?.provider ?? tab.provider,
-          model: agent?.model ?? tab.model,
+          number: current.number,
+          agentId: current.agentId,
+          role: current.role,
+          roleLabel: TASK_TAB_ROLE_LABELS[current.role],
+          provider: agent?.provider ?? current.provider,
+          model: agent?.model ?? current.model,
           status: agent ? statusOf(agent) : "已关闭",
-          title: agent?.title ?? tabTitle(tab),
+          title: agent?.title ?? tabTitle(current),
           busy: !!agent?.activeTurn,
         };
       }),
@@ -152,7 +260,11 @@ export function createTaskTabs(options: {
     } catch {
       return request;
     }
-    const task = store.tasks.get(workspaceId);
+    let task = store.tasks.get(workspaceId);
+    if (task) isTaskWorkspace(workspaceId);
+    else if (!store.tasks.isTaskWorkspace(workspaceId)) return request;
+    task = store.tasks.get(workspaceId);
+    // Labels are trustworthy here: core strips agent-supplied `vibe.*` labels from create_agent.
     const role =
       labeledRole({ labels: request.labels ?? {} }) ??
       (task?.tabs.length ? ("session" as const) : ("main" as const));
@@ -227,15 +339,67 @@ export function createTaskTabs(options: {
       })),
     };
   }
+  /** Opens a plugin-owned tab. Agents cannot reach this surface; `vibe_open_tab` enforces the role. */
+  async function openTab(
+    callerAgentId: string,
+    input: { role: "scout" | "plan_reviewer" | "session"; task: string; provider?: string; presetId?: string },
+  ) {
+    const { agent: caller } = await refreshAgent(callerAgentId);
+    const workspaceId = caller.workspaceId;
+    if (!workspaceId) throw new Error("当前 agent 不属于任务 workspace");
+    if (!isTaskWorkspace(workspaceId)) throw new Error("当前 workspace 不是 Vibe 任务");
+    const task = store.tasks.get(workspaceId);
+    if (!task) throw new Error("任务尚未登记主会话");
+    const preset = input.presetId ? store.presets.get(input.presetId) : undefined;
+    if (input.presetId && !preset) throw new Error("预设不存在或不可用：" + input.presetId);
+    const spec =
+      input.provider?.trim() ||
+      (preset ? `${preset.provider}/${preset.model}` : "") ||
+      (caller.model ? `${caller.provider}/${caller.model}` : "");
+    if (!/^[^/]+\/[^/]+$/.test(spec))
+      throw new Error("无法解析当前 tab 的 provider/model，请在调用时指定 provider（provider/model）");
+    const provider = spec.split("/")[0]!;
+    const placement = await taskWorkspace(workspaceId);
+    const projectId = placement.projectId;
+    const roleKey = rolePromptKey(input.role);
+    const roleText = roleKey ? store.prompts.resolve(roleKey, { projectId }) : "";
+    const prompt = [roleText, preset?.instructions, input.task.trim()]
+      .filter(Boolean)
+      .join("\n\n");
+    const config: Record<string, unknown> = { provider: spec };
+    if (preset?.thinking && preset.thinking !== "default")
+      config.thinkingOptionId = preset.thinking;
+    // Read-only roles never inherit a writable preset mode.
+    if (READ_ONLY_ROLES.has(input.role)) Object.assign(config, readOnlyConfigFor(provider));
+    const handle = await paseo().workspaces.ref(workspaceId).agents.create({
+      config: config as never,
+      env: {
+        VIBE_ROLE: input.role,
+        VIBE_WORKSPACE_ID: workspaceId,
+        ...(preset?.runtimeEnv ? { VIBE_RUNTIME_ENV: preset.runtimeEnv } : {}),
+      },
+      labels: {
+        [TASK_TAB_ROLE_LABEL]: input.role,
+        ...(input.presetId ? { [TASK_TAB_PRESET_LABEL]: input.presetId } : {}),
+      },
+      prompt,
+    });
+    const tab = await ensureTab(handle.id, { role: input.role, presetId: input.presetId });
+    if (!tab) throw new Error("新 tab 未登记到任务");
+    return { agentId: handle.id, number: tab.number, role: tab.role, title: tabTitle(tab) };
+  }
   return {
     injectGuide,
     ensureTab,
+    openTab,
     tabsFor,
     status,
     appendStatus,
     vibeTabs,
     formatTabs,
     workspace: taskWorkspace,
+    trackWorkspaceCreate,
+    claimCreatedWorkspace,
   };
 }
 export type TaskTabs = ReturnType<typeof createTaskTabs>;

@@ -638,4 +638,15 @@ ALTER TABLE task ADD COLUMN tabs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_val
 ALTER TABLE task ADD COLUMN next_tab_number INTEGER NOT NULL DEFAULT 1 CHECK (next_tab_number >= 1);
 `,
   },
+  {
+    // Only user-created task workspaces get tab numbering; other worktrees must stay untouched.
+    version: 16,
+    name: "task_workspace_marker",
+    sql: `
+CREATE TABLE task_workspace (
+  workspace_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+`,
+  },
 ];

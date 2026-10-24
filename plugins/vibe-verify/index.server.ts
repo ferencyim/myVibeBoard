@@ -4,13 +4,14 @@ import { createTaskVerifyStore } from "./server/task-store";
 import { createTaskResources } from "./server/task-resources";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { createNodeRunner } from "./server/collectors/common";
 import { verifySettings } from "./shared/settings";
 import { createVerifyPrompts } from "./server/prompts";
 import { tuningOf, type VerifyTuning } from "./server/tuning";
-import { isEvent } from "./server/vibe/contract";
+import { isEvent, tabTitle } from "./server/vibe/contract";
 import { createVerifyRegistry, type RunConfigs } from "./server/registry";
 import { registerVerifyRpcs } from "./server/rpc";
 import { createPaseoVerifierLauncher, type VerifierLauncher } from "./server/verifier/agent";
@@ -61,10 +62,48 @@ export default function contribute(server: PluginServerContext) {
   // Verifier agents -> where they may write (their output directory); read-only otherwise.
   const taskRuntime = createTaskRuntimeCommands(db);
   const verifierDirs = new Map<string, PolicyContext>();
+  // The board registers every created agent from its agent.created hook; this claim overrides
+  // that default registration with the referee identity once the task row is readable.
+  const claimTab: NonNullable<
+    Parameters<typeof createPaseoVerifierLauncher>[0]["claimTab"]
+  > = async (input) => {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const task = board.tasks.get(input.workspaceId);
+      if (task) {
+        const extra = {
+          ...(input.thinking ? { thinking: input.thinking } : {}),
+          ...(input.presetId ? { presetId: input.presetId } : {}),
+        };
+        board.tasks.allocateTab(input.workspaceId, {
+          agentId: input.agentId,
+          role: input.role,
+          provider: input.provider,
+          model: input.model,
+          ...extra,
+        });
+        const tab = board.tasks.updateTab(input.workspaceId, input.agentId, {
+          role: input.role,
+          provider: input.provider,
+          model: input.model,
+          ...extra,
+        });
+        await paseo?.agents
+          .ref(input.agentId)
+          .setTitle(tabTitle(tab))
+          .catch((error) => log("验证 tab 标题设置失败", error));
+        return;
+      }
+      if (Date.now() >= deadline)
+        throw new Error("验证 tab 未能登记到任务：等待任务登记超时");
+      await delay(200);
+    }
+  };
   const inner = createPaseoVerifierLauncher({
     getPaseo: () => paseo,
     prompts,
     roundTimeoutMs: () => tuning.roundTimeoutMs,
+    claimTab,
   });
   const launcher: VerifierLauncher = {
     async launch(input) {

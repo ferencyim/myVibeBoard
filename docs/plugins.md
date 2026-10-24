@@ -575,21 +575,6 @@ one section's order from built-ins, plugin groups, and the section's preference
 
 ## Contribute buttons
 
-Task conversations reuse agent-context panels through the `conversation` placement. The app host
-lives in `plugins/workspace-panels/conversation.tsx`; it owns the side panel and compact native
-sheet, while the plugin owns the content. Conversation identity, panel and slash/pill contracts,
-and owner-scoped preparation/admission hooks are defined in the
-[public reference](../public-docs/plugins/reference.md#task-conversation-hooks).
-
-Provider-local turn counters can restart when a runtime resumes. Public assistant source keys
-use the durable host delivery identity; `sourceTurnId` remains a native detail locator. Treat
-source keys as opaque and retain completed public rows when replaying provider history.
-
-Native compaction may emit a provider `turn_ended` before its out-of-band command settles.
-An owner tracking task completion must recognize its active compact control scope and leave
-resource release to `compact` settlement; treating that event as a normal task turn can freeze
-the task while the provider is still finishing the command.
-
 Header buttons and composer pills share the client-only descriptor and registration lifecycle in
 `packages/app/src/plugins/buttons/`. The [public button reference](../public-docs/plugins/reference.md#header-buttons)
 owns the author API and placement rules. Keep presentation policy in this module so another

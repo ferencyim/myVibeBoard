@@ -155,6 +155,12 @@ export const TaskTabSchema = z
   })
   .strict();
 export type TaskTab = z.infer<typeof TaskTabSchema>;
+/** A provider can report its model only after the session starts; the title must not invent one. */
+export const UNRESOLVED_TAB_MODEL = "未解析";
+export function tabTitle(tab: Pick<TaskTab, "number" | "role" | "model">): string {
+  const model = tab.model && tab.model !== UNRESOLVED_TAB_MODEL ? ` · ${tab.model}` : "";
+  return `#${tab.number} ${TASK_TAB_ROLE_LABELS[tab.role]}${model}`;
+}
 
 /** Public timeline locator. Message contents remain in the host's durable history. */
 export const TaskPlanSourceSchema = z

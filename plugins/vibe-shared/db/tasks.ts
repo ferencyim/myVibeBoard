@@ -51,6 +51,13 @@ export interface AllocateTaskTabInput {
   thinking?: string;
   presetId?: string;
 }
+export interface UpdateTaskTabInput {
+  role?: TaskTabRole;
+  provider?: string;
+  model?: string;
+  thinking?: string | null;
+  presetId?: string | null;
+}
 export interface SetTaskSubtaskRunInput {
   subtaskId: string;
   state: TaskSubtaskRun["state"];
@@ -141,6 +148,16 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
   };
   return {
     get,
+    /** Only workspaces the user created as tasks carry tabs; other worktrees stay untouched. */
+    markTaskWorkspace(workspaceId: string): void {
+      z.string().trim().min(1).parse(workspaceId);
+      db.prepare(
+        "INSERT OR IGNORE INTO task_workspace (workspace_id, created_at) VALUES (?, ?)",
+      ).run(workspaceId, now().toISOString());
+    },
+    isTaskWorkspace(workspaceId: string): boolean {
+      return !!db.prepare("SELECT 1 AS x FROM task_workspace WHERE workspace_id = ?").get(workspaceId);
+    },
     list(filter: { phase?: TaskPhase } = {}): Task[] {
       const rows = filter.phase
         ? db
@@ -268,6 +285,50 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           "UPDATE task SET tabs_json = ?, next_tab_number = ? WHERE workspace_id = ?",
         ).run(JSON.stringify([...task.tabs, tab]), tab.number + 1, workspaceId);
         return { task: changed(workspaceId, ["tabs"]), tab };
+      });
+    },
+    /** Updates the identity of an existing tab; the number never changes. */
+    updateTab(workspaceId: string, agentId: string, input: UpdateTaskTabInput): TaskTab {
+      const patch = z
+        .object({
+          role: TaskTabRoleSchema.optional(),
+          provider: z.string().trim().min(1).optional(),
+          model: z.string().trim().min(1).optional(),
+          thinking: z.string().trim().min(1).nullable().optional(),
+          presetId: z.string().trim().min(1).nullable().optional(),
+        })
+        .strict()
+        .parse(input);
+      return db.immediate(() => {
+        const task = requireTask(workspaceId);
+        const existing = task.tabs.find((tab) => tab.agentId === agentId);
+        if (!existing) throw new TaskCommandError("not_found", "任务没有该 tab：" + agentId);
+        const tab = TaskTabSchema.parse({
+          ...existing,
+          ...(patch.role !== undefined ? { role: patch.role } : {}),
+          ...(patch.provider !== undefined ? { provider: patch.provider } : {}),
+          ...(patch.model !== undefined ? { model: patch.model } : {}),
+          ...(patch.thinking !== undefined
+            ? patch.thinking
+              ? { thinking: patch.thinking }
+              : {}
+            : existing.thinking !== undefined
+              ? { thinking: existing.thinking }
+              : {}),
+          ...(patch.presetId !== undefined
+            ? patch.presetId
+              ? { presetId: patch.presetId }
+              : {}
+            : existing.presetId !== undefined
+              ? { presetId: existing.presetId }
+              : {}),
+        });
+        db.prepare("UPDATE task SET tabs_json = ? WHERE workspace_id = ?").run(
+          JSON.stringify(task.tabs.map((item) => (item.agentId === agentId ? tab : item))),
+          workspaceId,
+        );
+        publishEvent(db, { type: "task.updated", payload: { workspaceId, fields: ["tabs"] } }, now);
+        return tab;
       });
     },
     setRoleSelections(workspaceId: string, input: TaskRoleSelections): Task {

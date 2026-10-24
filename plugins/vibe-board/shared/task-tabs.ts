@@ -6,7 +6,7 @@ import { TaskSchema } from "./vibe/contract";
 export const TaskTabCommandSchema = z.object({
   workspaceId: z.string().min(1),
   agentId: z.string().min(1),
-  action: z.enum(["execute", "accept", "status"]),
+  action: z.enum(["execute", "accept", "stop", "handoff", "status"]),
   requestId: z.string().min(1),
   reason: z.string().optional(),
 });
@@ -16,13 +16,4 @@ export const taskTabCommandRpc = defineRpc({
   name: "vibe.task.tabs.command",
   input: TaskTabCommandSchema,
   output: z.object({ task: TaskSchema, message: z.string() }),
-});
-
-export const taskTabStatusRpc = defineRpc({
-  name: "vibe.task.tabs.status",
-  input: z.object({
-    workspaceId: z.string().min(1),
-    agentId: z.string().min(1),
-  }),
-  output: z.object({ task: TaskSchema, text: z.string() }),
 });

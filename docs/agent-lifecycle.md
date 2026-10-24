@@ -112,14 +112,9 @@ lifecycle is separate from public workspace visibility and is not a public creat
 
 ## Archive
 
-Task members belong to a stable conversation in addition to their parent relationship. Their
-ordinary send/configuration/detach paths cannot bypass conversation admission. Task Stop and
-archive use the complete member index and wait for cancellation; an unknown result retains the
-control barrier. Workspace archive first archives every owned task conversation and aborts if
-cancellation is uncertain, before setup, ordinary agent, or terminal teardown starts. Ordinary
-agent and terminal teardown failures are logged and the remaining archive work continues.
-Approval follow-ups keep replacement semantics and can resume the
-original member while the conversation is paused. Codex synthetic plan approvals retain their
+Workspace archive aborts if cancellation is uncertain, before setup, ordinary agent, or terminal
+teardown starts. Ordinary agent and terminal teardown failures are logged and the remaining
+archive work continues. Codex synthetic plan approvals retain their
 request identity across daemon restarts; replies load that original member before resolving the
 request. Provider RPC approvals tied to a dead process are not reconstructed as live requests.
 Task members automatically open one conversation tab on each device, including when discovered
