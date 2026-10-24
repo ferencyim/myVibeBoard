@@ -519,7 +519,7 @@ draft ──(用户)──▶ todo ──(调度器放行→dispatch)──▶ i
 - 每个 WP 先写失败测试再实现；外部工具一律经可注入 `Runner`；真环境测试用 `VIBE_E2E_*` 环境变量开关，默认跳过，CI 只跑单元。
 - 插件测试用 `:memory:` 或临时 `VIBE_HOME`；`PaseoApi`/`PluginServerContext` 用手写 mock（参考 `plugins/vibe-board/test/tasks.test.ts` 与 `packages/server/src/server/plugins/*.e2e.test.ts`）。
 - 带 UI 的 WP 必须附 Web 与 Android 模拟器截图（Paseo 内置浏览器/ adb），对应 `docs/qa.md` 证据标准。
-- 每次合并上游前先跑 `plugins/*` 测试（FORK-WORKFLOW §2）；每个插件 `paseo-plugin.json` 的 `requirements.paseo` 写 `>=0.12.0 <0.13.0`。
+- 每次合并上游前先跑 `plugins/*` 测试（FORK-WORKFLOW §2）；每个插件 `paseo-plugin.json` 的 `requirements.paseo` 写 `>=0.13.0 <0.14.0`。
 - 提交：普通提交英文信息；`[core]` 提交单独成提交、只做一件事（FORK-WORKFLOW §3）。
 
 ## 9. 风险与需要用户决策

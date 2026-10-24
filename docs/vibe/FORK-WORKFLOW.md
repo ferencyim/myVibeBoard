@@ -34,7 +34,7 @@ myVibeBoard 是 `getpaseo/paseo` 的 fork。自研内容尽量放 `plugins/`，�
 
 ## 4. 插件声明支持的 Paseo 版本
 
-每个自研插件在自己的 manifest/README 中写明已验证的 Paseo 版本范围（如 `paseo >=0.12.0 <0.13.0`）。每次合并上游 release 并通过测试后，更新这个范围。版本范围不满足时，插件应拒绝加载或给出明确提示，而不是静默失效。
+每个自研插件在自己的 manifest/README 中写明已验证的 Paseo 版本范围（如 `paseo >=0.13.0 <0.14.0`）。每次合并上游 release 并通过测试后，更新这个范围。版本范围不满足时，插件应拒绝加载或给出明确提示，而不是静默失效。
 
 ## 5. 合并演练脚本
 
@@ -50,6 +50,18 @@ myVibeBoard 是 `getpaseo/paseo` 的 fork。自研内容尽量放 `plugins/`，�
 - 本地 `git fetch upstream --tags` 后，最新稳定 tag 为 `v0.12.0`，已是当前基线的祖先，脚本报告 "已合并，无需操作"。
 - 用 `-Tag FETCH_HEAD`（`git fetch upstream main` 之后）演练 upstream/main 合并路径：upstream/main 为 `19749baee`，相对基线无新提交，结果 "clean merge"，冲突 0，与 `[core]` 提交重叠 0；脚本正常切回原分支并删除临时分支。
 - 目前仓库内尚无 `[core]` 提交。下次有新 release 时再跑一次。
+
+### v0.13.0 合并记录（2026-10-24）
+
+- 在新分支 `sync/upstream-v0.13.0` 上 `git merge v0.13.0`；冲突 6 个文件，全部逐个对照 fork 提交意图重做，没有整体取一边。
+- 上游主要变化：通知点击改为 `notification-open` 模块（替换 `PushNotificationRouter`）；插件 UI 入口统一到 `@getpaseo/plugin/client/ui`，`client/react-native` 变为兼容重导出，`Markdown` 改为 `children` 接口；App 端 Expo SDK 54 → 57。
+- fork 能力保留方式：
+  - vivo 通知点击从 `_layout.tsx` 的旧路由迁到 `notification-open/source.native.ts`；旧看板 toast 与 workspace 路由通过 `model.ts` 的 `openForkTap` 钩子接入。
+  - `Markdown` 采用上游 `children` 接口，删除自研 `plugins/react-native/runtime.ts`（v0.13 已无引用），并更新 `vibe-board` 预设页的唯一调用点。
+  - `app.config.js` 同时保留 vivo 插件、watchdog 与上游 fdroid/profileable 逻辑。
+- 插件范围更新为 `>=0.13.0 <0.14.0`（7 个 vibe 插件），`check-plugins` 通过。
+- 本轮 `[core]` 涉及文件：`packages/app/app.config.js`、`packages/app/src/app/_layout.tsx`、`packages/app/src/notification-open/model.ts`、`packages/app/src/notification-open/react/index.tsx`、`packages/app/src/notification-open/source.native.ts`、`packages/app/src/plugins/react-native/markdown.tsx`、`packages/app/src/plugins/react-native/runtime.ts`（删除）、`packages/plugin/src/client/react-native.ts`。另有文档改动 `public-docs/plugins/reference.md`（Markdown / Settings / Panel 参考）。
+- 注意：worktree 的 `node_modules` 仍是 v0.12 时代的安装（Expo 54），升级到 Expo 57 需要一次完整安装；在未重装的环境里 `packages/app` 的 typecheck 会报 `expo-router/react-navigation` 缺失，属环境未更新，不是合并代码错误。
 
 ## 6. GitHub Actions 处理
 

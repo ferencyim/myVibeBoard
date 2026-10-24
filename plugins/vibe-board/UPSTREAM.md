@@ -17,7 +17,7 @@
 
 ## WP-10 server rework (plugin id `tasks` -> `vibe-board`)
 
-- Manifest: id `vibe-board`, `requirements.paseo` `>=0.12.0 <0.13.0`; package `@vibe/board` (private); `vibe.shared` consumer declaration; `@getpaseo/*` bumped to 0.12.0.
+- Manifest: id `vibe-board`, `requirements.paseo` `>=0.13.0 <0.14.0`; package `@vibe/board` (private); `vibe.shared` consumer declaration; `@getpaseo/*` bumped to 0.13.0.
 - Removed upstream server code: `server/{store,domain,schema,sqlite,types,bridge,cli-runner,attachments}.ts`, the 45 `tasks.*` RPCs on the server side, folders, subtask/label/comment/thread/delegate/due-date model, the private `tasks.db` (old data is not migrated: new database, new structure) and `test/tasks.test.ts`.
 - New server: `server/service.ts` (board service over `createVibeStore` from vibe-shared and the shared `vibe.db`), `server/rpc.ts`, `server/attachments.ts` (blobs in the `attachment` table), `server/mcp/{bridge,tools,instructions}.ts` (tools `vibe_*`, loopback bridge), `server/cli/runner.ts`, `bin/vibe-board.mjs`. New RPC contract in `shared/rpc/` (`vibe.*`).
 - Kept as-is until WP-11 replaces the UI: `client/**`, `index.client.tsx`, `shared/{contract,constants,directive}.ts` (legacy Tasks contract the old UI still imports; no server handles it any more). `shared/settings.ts` now exports `boardSettings` (`tasksSettings` is a compatibility alias).
