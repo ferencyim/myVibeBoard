@@ -49,6 +49,13 @@ export type PromptDefParsed = z.output<typeof PromptDefSchema>;
 
 export type PromptSource = "default" | "global" | "project";
 
+/** An override whose prompt key is no longer registered (merged or deleted); shown to the owner. */
+export interface PromptOrphan {
+  key: string;
+  /** null = global override. */
+  projectId: string | null;
+}
+
 /** A registered prompt as listed: definition + overrides + the text that is in effect. */
 export interface PromptInfo extends PromptDefParsed {
   globalOverride: string | null;

@@ -65,6 +65,18 @@ function BehaviourContent({ nav }: { nav?: CrossNav }) {
     (g) => g.role !== "master",
   );
   const projects = query.data?.projects ?? [];
+  const orphans = query.data?.orphans ?? [];
+  const [orphanError, setOrphanError] = useState<string | null>(null);
+  const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? id;
+  const discardOrphan = async (key: string, owner: string | null) => {
+    try {
+      await clear({ key, projectId: owner });
+      setOrphanError(null);
+      await refresh();
+    } catch (error) {
+      setOrphanError(errorMessage(error));
+    }
+  };
   const link = (pluginId: string, screenId: string, settings: boolean) => () =>
     settings
       ? nav?.openPluginSettings?.({ pluginId, screenId })
@@ -76,7 +88,8 @@ function BehaviourContent({ nav }: { nav?: CrossNav }) {
         Agent 行为
       </Text>
       <Muted>
-        任务规划、执行、探路和接续等提示词在这里编辑；总 agent 设置和提示词集中在总 agent 面板。
+        这里只保留每个场景一条提示词：主会话、探路、方案复核、执行、子任务、复核、验证、tab
+        交流说明、接手接续、上下文压缩/交接。总 agent 设置和提示词集中在总 agent 面板。
         按「默认 → 全局覆盖 → 项目覆盖」生效，项目覆盖优先。 占位符 {"{{name}}"}{" "}
         在发送时替换；灰色的「固定格式段」由程序追加，保证回复能被解析，不能修改。
       </Muted>
@@ -127,6 +140,35 @@ function BehaviourContent({ nav }: { nav?: CrossNav }) {
           />
         ))}
       </View>
+
+      {orphans.length ? (
+        <BehaviourSection>
+          <Text style={{ color: theme.colors.statusDanger, fontWeight: "600" }}>
+            旧覆盖已失效，请重新设置
+          </Text>
+          <Muted>
+            以下提示词已被合并或删除，原来的覆盖不会再生效。请在上面的分组里重新设置；确认不再需要后可删除旧覆盖。
+          </Muted>
+          {orphans.map((orphan) => (
+            <View
+              key={`${orphan.key}@${orphan.projectId ?? "*"}`}
+              style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+            >
+              <Muted>
+                {orphan.key} · {orphan.projectId ? projectName(orphan.projectId) : "全局"}
+              </Muted>
+              <Btn
+                small
+                label="删除旧覆盖"
+                onPress={() => void discardOrphan(orphan.key, orphan.projectId)}
+              />
+            </View>
+          ))}
+          {orphanError ? (
+            <Text style={{ color: theme.colors.statusDanger }}>{orphanError}</Text>
+          ) : null}
+        </BehaviourSection>
+      ) : null}
 
       {query.isLoading ? <Muted>加载中...</Muted> : null}
       {query.error ? (

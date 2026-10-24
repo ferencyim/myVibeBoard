@@ -91,6 +91,23 @@ Android 在线使用原生 workspace 和 tab，斜杠命令与桌面一致。首
 
 侧栏保留「Agent 行为」「自动维护」「总 agent」「调度器」等设置入口，不再有「Vibe Board」或「会话汇总」看板入口。自动维护先创建任务会话和方案，仍需你显式确认执行。总 agent 只排序派发已确认任务，并在完成后整理记忆与需求文档。维护规则、提示词和配置仍按一份配置选择多个项目，不为各项目复制规则。
 
+### Agent 行为
+
+「Agent 行为」页按插件分组列出当前注册的提示词，可直接编辑正文，也可只对某个项目覆盖；生效顺序为项目覆盖 > 全局覆盖 > 默认。占位符（如 `{{tabs}}`、`{{plan}}`、`{{summary}}`）和末尾的固定回复格式（`vibe-plan` 方案段、`vibe-delivery` 完成标记、维护方案的只读约束）只读，避免改坏解析。
+
+第六轮精简后，一个场景对应一条模板：
+
+| 插件          | 保留的提示词                                                                                                                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| vibe-shared   | `task.plan_format`（方案固定 JSON 段，只读后缀）                                                                                                                                                                                                          |
+| vibe-board    | `task.role.planner`（主会话/出方案）、`task.role.scout`（探路）、`task.role.plan_reviewer`（方案复核）、`board.task.work`（执行主代理）、`task.role.subagent`（子任务）、`board.tabs.guide`（tab 交流说明）、`board.task.continuation`（`/接手 #n` 接续） |
+| vibe-verify   | `verify.task.setup`、`verify.task.judge`、`verify.task.review`、`verify.task.fix`（验证四阶段）、`verify.verifier_system`、`verify.reviewer_system`（验证/复核角色规则）                                                                                  |
+| vibe-context  | `context.compact_notes`、`context.compact_restore`（上下文压缩）、`context.cold_start`、`context.failure_handoff`、`context.inject_frame`（冷启动与接续）                                                                                                 |
+| vibe-master   | `master.task_dispatch`、`master.wake.task_done`、`master.rules`、`master.rules_supplement`、`master.rules_updated`、`master.repair_json`、`master.handoff_summary`（总 agent 派发、记忆与需求整理）                                                       |
+| vibe-maintain | `maintenance.review`、`maintenance.fix`（自动维护的复核/修复两种产出，使用同一组规则参数）                                                                                                                                                                |
+
+合并掉的旧 key（`board.task.plan`、`board.task.scout`、`board.task.plan_review`、`task.role.worker`、`board.task.subtask`、`task.role.reviewer`、`task.role.verifier`）在你升级后第一次启动时会先把原覆盖迁移到新 key；如果新 key 在同一作用域已有覆盖，则保留新覆盖、旧覆盖不动。删除的 `verify.task.evidence_scope` 没有替代 key；若你曾设置覆盖，页面顶部会显示「旧覆盖已失效，请重新设置」，可逐条删除后重新编辑对应角色的提示词。
+
 ## 从旧版本升级
 
 **旧卡片不迁移。** 旧卡、旧群聊、旧提案、旧事件和手机积压不变成新任务。升级会先对本机 `vibe.db` 做一致性备份并只读检查；备份失败就中止删除。成功后删除旧卡片及附属表、无消费者的旧同步表，保留项目扩展、预设及候选顺序、默认模型、提示词覆盖、维护规则及计数、记忆、统计，以及新 task/artifact/证据。

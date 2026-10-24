@@ -147,6 +147,44 @@ describe("prompt registry", () => {
     expect(() => store.prompts.register([def({ role: "boss" })])).toThrow();
   });
 
+  it("moves overrides of merged keys, keeps conflicts as orphans and can discard them", () => {
+    const { store, projectId } = seed();
+    store.prompts.setOverride("demo.hello", "old global");
+    store.prompts.setOverride("demo.hello", "old project", { projectId });
+    store.prompts.register(
+      [
+        def({
+          key: "demo.merged",
+          defaultText: "Merged",
+          placeholders: [],
+          fixedSuffix: "",
+        }),
+      ],
+      { pruneMissing: true, aliases: { "demo.hello": "demo.merged" } },
+    );
+    const merged = store.prompts.list({ projectId })[0]!;
+    expect(merged).toMatchObject({
+      key: "demo.merged",
+      globalOverride: "old global",
+      projectOverride: "old project",
+    });
+    expect(store.prompts.orphans()).toEqual([]);
+
+    // A target that already has its own override keeps it; the old one is reported, not lost.
+    store.prompts.register([def({ key: "demo.hello" })]);
+    store.prompts.setOverride("demo.merged", "new global");
+    store.prompts.setOverride("demo.hello", "stale global");
+    store.prompts.register(
+      [def({ key: "demo.merged", defaultText: "Merged", placeholders: [], fixedSuffix: "" })],
+      { pruneMissing: true, aliases: { "demo.hello": "demo.merged" } },
+    );
+    expect(store.prompts.body("demo.merged").text).toBe("new global");
+    expect(store.prompts.orphans()).toEqual([{ key: "demo.hello", projectId: null }]);
+
+    store.prompts.clearOverride("demo.hello");
+    expect(store.prompts.orphans()).toEqual([]);
+  });
+
   it("pruneMissing drops this plugin's stale templates only", () => {
     const { store } = seed();
     store.prompts.register([def({ key: "other.one", plugin: "other" })]);

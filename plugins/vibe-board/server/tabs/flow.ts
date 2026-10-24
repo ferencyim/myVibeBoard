@@ -64,9 +64,16 @@ function naturalHandoffTarget(text: string): number | undefined {
   const match = HANDOFF_PATTERN.exec(text);
   return match ? Number(match[1] ?? match[2]) : undefined;
 }
+const ROLE_PROMPT_KEYS: Partial<Record<TaskTab["role"], string>> = {
+  main: "task.role.planner",
+  scout: "task.role.scout",
+  plan_reviewer: "task.role.plan_reviewer",
+  worker: "board.task.work",
+  reviewer: "verify.reviewer_system",
+  verifier: "verify.verifier_system",
+};
 function rolePromptKey(role: TaskTab["role"]): string | undefined {
-  if (role === "session") return undefined;
-  return role === "main" ? "task.role.planner" : "task.role." + role;
+  return ROLE_PROMPT_KEYS[role];
 }
 
 function parseDelivery(text: string): { status: "completed" | "blocked"; summary: string } | undefined {
@@ -1138,7 +1145,17 @@ export function createTaskFlow(options: {
   function registerPrompts() {
     store.prompts.register(
       [TASK_PLAN_PROMPT, ...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS, TASK_TAB_GUIDE_PROMPT],
-      { pruneMissing: true },
+      {
+        pruneMissing: true,
+        // WP-122 merges these scenario templates into their replacement keys.
+        aliases: {
+          "board.task.plan": "task.role.planner",
+          "board.task.scout": "task.role.scout",
+          "board.task.plan_review": "task.role.plan_reviewer",
+          "task.role.worker": "board.task.work",
+          "board.task.subtask": "task.role.subagent",
+        },
+      },
     );
   }
   return {

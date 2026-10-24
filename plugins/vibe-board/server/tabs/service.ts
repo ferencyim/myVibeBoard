@@ -302,8 +302,7 @@ export function createTaskTabs(options: {
   }
   function rolePromptKey(role: TaskTabRole): string | undefined {
     if (role === "main") return "task.role.planner";
-    if (role === "scout" || role === "plan_reviewer" || role === "worker")
-      return "task.role." + role;
+    if (role === "scout" || role === "plan_reviewer") return "task.role." + role;
     return undefined;
   }
   async function injectGuide(
@@ -311,7 +310,7 @@ export function createTaskTabs(options: {
   ): Promise<PluginBeforeRequests["agent.create"]> {
     const workspaceId = request.workspaceId;
     if (!workspaceId) return request;
-    if (request.labels?.[PARENT_AGENT_ID_LABEL] || request.parentAgentId) return request;
+    const subagent = !!(request.labels?.[PARENT_AGENT_ID_LABEL] || request.parentAgentId);
     let placement;
     try {
       placement = await taskWorkspace(workspaceId);
@@ -322,11 +321,25 @@ export function createTaskTabs(options: {
     if (task) isTaskWorkspace(workspaceId);
     else if (!store.tasks.isTaskWorkspace(workspaceId)) return request;
     task = store.tasks.get(workspaceId);
+    const projectId = placement.projectId;
+    const supplied = request.config.systemPrompt ?? "";
+    if (subagent) {
+      // Native subagents are spawned by the worker through create_agent; they are not task tabs,
+      // but the task's 子任务 role rules still apply.
+      const roleText = store.prompts.resolve("task.role.subagent", { projectId });
+      if (!roleText || supplied.includes(roleText)) return request;
+      return {
+        ...request,
+        config: {
+          ...request.config,
+          systemPrompt: [roleText, supplied].filter(Boolean).join("\n\n"),
+        },
+      };
+    }
     // Plugin-opened tabs carry their role instructions in the initial prompt; a tab created by
     // the user gets the planner rules only when it is the task's first tab.
     const role: TaskTabRole = task?.tabs.length ? "session" : "main";
     const tabs = task ? await tabsFor(task, false) : [];
-    const projectId = placement.projectId;
     const guide = store.prompts.resolve(TASK_TAB_GUIDE_PROMPT.key, {
       projectId,
       vars: { tabs: formatTabs(tabs) },
@@ -334,7 +347,6 @@ export function createTaskTabs(options: {
     const roleKey = rolePromptKey(role);
     const roleText = roleKey ? store.prompts.resolve(roleKey, { projectId }) : "";
     const format = role === "main" ? store.prompts.resolve("task.plan_format", { projectId }) : "";
-    const supplied = request.config.systemPrompt ?? "";
     const parts = [guide, roleText, format].filter(
       (text): text is string => !!text && !supplied.includes(text),
     );

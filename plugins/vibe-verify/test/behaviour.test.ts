@@ -25,7 +25,6 @@ describe("原生任务提示词注册表", () => {
           .sort(),
       ).toEqual(VERIFY_PROMPT_DEFS.map((p) => p.key).sort());
       expect(VERIFY_PROMPT_DEFS.map((p) => p.key)).toEqual([
-        "verify.task.evidence_scope",
         "verify.task.setup",
         "verify.task.judge",
         "verify.task.review",

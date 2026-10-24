@@ -309,7 +309,7 @@ describe("验证/复核 tab", () => {
   });
 
   it.each(["reviewer", "verifier"] as const)(
-    "%s 的提示词和环境限定在本轮确认范围",
+    "%s 的提示词要求按本轮材料范围判断，环境带本轮提交",
     async (role) => {
       const f = fakePaseo();
       const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo as never });
@@ -332,11 +332,9 @@ describe("验证/复核 tab", () => {
         "commit-current",
       ]);
       expect(f.created[0].config.systemPrompt).toContain(
-        "confirmedAt=2030-01-01T00:00:00.000Z",
+        "本次材料范围以任务消息中的 confirmedAt 与 commit 为准",
       );
-      expect(f.created[0].config.systemPrompt).toContain("commit=commit-before");
-      expect(f.created[1].config.systemPrompt).toContain("commit=commit-current");
-      expect(f.created[1].config.systemPrompt).not.toContain("commit-before");
+      expect(f.created[0].config.systemPrompt).toContain("任务历史里的旧报告");
     },
   );
 

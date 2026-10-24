@@ -40,6 +40,21 @@
 
 盘点全部注册提示词，只保留：主会话（规划）、探路、方案复核、执行、子任务、复核、验证、tab 交流说明、总 agent 派发与记忆整理、自动维护各规则模板、上下文压缩/交接。合并按场景拆得过细的模板，删除没有调用方的；固定格式段保持只读。
 
+精简结果：注册提示词 **36 → 28** 条。一个场景一条模板；仍然分开的只在阶段或解析器确实不同（验证 setup/judge/review/fix 四阶段、压缩摘要与恢复、维护复核与修复）。固定格式集中在两处：`task.plan_format`（`vibe-plan`）和各角色提示词的 `fixedSuffix`（`vibe-delivery`、当前轮次规则、维护只读约束）。
+
+最终保留清单：
+
+| 插件          | key                                                                                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| vibe-shared   | `task.plan_format`                                                                                                                                                 |
+| vibe-board    | `task.role.planner`、`task.role.scout`、`task.role.plan_reviewer`、`board.task.work`、`task.role.subagent`、`board.tabs.guide`、`board.task.continuation`          |
+| vibe-verify   | `verify.task.setup`、`verify.task.judge`、`verify.task.review`、`verify.task.fix`、`verify.verifier_system`、`verify.reviewer_system`                              |
+| vibe-context  | `context.compact_notes`、`context.compact_restore`、`context.cold_start`、`context.failure_handoff`、`context.inject_frame`                                        |
+| vibe-master   | `master.task_dispatch`、`master.wake.task_done`、`master.rules`、`master.rules_supplement`、`master.rules_updated`、`master.repair_json`、`master.handoff_summary` |
+| vibe-maintain | `maintenance.review`、`maintenance.fix`                                                                                                                            |
+
+合并映射（`register({ aliases })`，仅当新 key 同作用域没有覆盖时才搬移）：`board.task.plan` → `task.role.planner`、`board.task.scout` → `task.role.scout`、`board.task.plan_review` → `task.role.plan_reviewer`、`task.role.worker` → `board.task.work`、`board.task.subtask` → `task.role.subagent`、`task.role.reviewer` → `verify.reviewer_system`、`task.role.verifier` → `verify.verifier_system`。`verify.task.evidence_scope` 无调用方且无替代场景，整条删除；如用户曾覆盖，`orphans()` 会让「Agent 行为」页提示「旧覆盖已失效，请重新设置」并提供删除。被删除 key 的模板行由各插件 `pruneMissing: true` 清理，`prompt_override` 表结构不变。
+
 ## 6. 工作包
 
 | 包            | 内容                                                                                       | 依赖 |
