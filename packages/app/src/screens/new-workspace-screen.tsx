@@ -1181,6 +1181,7 @@ export function NewWorkspaceScreen({
             connected: isConnected,
             catalogLoaded: pluginRegistry.hasLoadedCatalog(selectedServerId),
             catalogError: pluginRegistry.getCatalogError(selectedServerId),
+            getPluginError: (pluginId) => pluginRegistry.getPluginError(selectedServerId, pluginId),
             pluginsSupported: supportsPlugins,
           }),
           isolation: effectiveIsolation,

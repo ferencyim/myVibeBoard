@@ -3,7 +3,6 @@ import {
   resolveFirstMessageOutboxOwner,
   resolveFirstMessageSubmissionOwner,
   saveFirstMessageOutboxOwner,
-  assertFirstMessagePluginsReady,
 } from "./first-message-outbox";
 
 const owner = {
@@ -46,13 +45,7 @@ describe("first-message submission routing", () => {
       resolveFirstMessageSubmissionOwner({ ...input, plugins: [], catalogLoaded: false }),
     ).rejects.toThrow("插件尚未加载完成");
   });
-  it("reports enabled plugins that failed before they could appear in the catalog", async () => {
-    expect(() =>
-      assertFirstMessagePluginsReady([{ id: "task-owner", enabled: true, status: "failed" }]),
-    ).toThrow("task-owner");
-    expect(() =>
-      assertFirstMessagePluginsReady([{ id: "disabled", enabled: false, status: "disabled" }]),
-    ).not.toThrow();
+  it("reports a catalog request failure while preserving the draft", async () => {
     await expect(
       resolveFirstMessageSubmissionOwner({
         ...input,
@@ -62,6 +55,59 @@ describe("first-message submission routing", () => {
       }),
     ).rejects.toThrow("插件加载失败：task-owner");
   });
+  it.each(["startup failed", "client evaluation failed"])(
+    "allows ordinary and task creation when an unrelated plugin has %s",
+    async (error) => {
+      const getPluginError = (pluginId: string) =>
+        pluginId === "unrelated-plugin" ? error : undefined;
+      await expect(
+        resolveFirstMessageSubmissionOwner({ ...input, plugins: [], getPluginError }),
+      ).resolves.toBeUndefined();
+      await expect(
+        resolveFirstMessageSubmissionOwner({ ...input, getPluginError }),
+      ).resolves.toEqual({ pluginId: owner.id, initialRole: "planner" });
+    },
+  );
+  it("blocks only the live first-message owner when it is unavailable", async () => {
+    await expect(
+      resolveFirstMessageSubmissionOwner({
+        ...input,
+        getPluginError: (pluginId) => (pluginId === owner.id ? "startup failed" : undefined),
+      }),
+    ).rejects.toThrow(`首消息负责插件 ${owner.id} 不可用`);
+  });
+  it.each(["startup failed", "client evaluation failed"])(
+    "retains the saved owner after its %s and blocks its submission",
+    async (error) => {
+      const serverId = `failed-owner-${error}`;
+      const plugins = [{ ...owner, serverId }];
+      const getPluginError = (pluginId: string) => (pluginId === owner.id ? error : undefined);
+      await saveFirstMessageOutboxOwner(serverId, plugins);
+      await saveFirstMessageOutboxOwner(serverId, [], getPluginError);
+      await expect(
+        resolveFirstMessageSubmissionOwner({
+          ...input,
+          serverId,
+          plugins: [],
+          getPluginError,
+        }),
+      ).rejects.toThrow(`首消息负责插件 ${owner.id} 不可用`);
+      await expect(
+        resolveFirstMessageSubmissionOwner({
+          ...input,
+          serverId,
+          plugins: [],
+          connected: false,
+          getPluginError,
+        }),
+      ).resolves.toEqual({ pluginId: owner.id, initialRole: "planner" });
+      // An explicit disable/removal has no error and restores ordinary creation.
+      await saveFirstMessageOutboxOwner(serverId, [], () => undefined);
+      await expect(
+        resolveFirstMessageSubmissionOwner({ ...input, serverId, plugins: [] }),
+      ).resolves.toBeUndefined();
+    },
+  );
   it("allows ordinary sessions only after a loaded catalog has no owner", async () => {
     await expect(
       resolveFirstMessageSubmissionOwner({ ...input, plugins: [] }),

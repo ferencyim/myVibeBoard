@@ -23,12 +23,29 @@ const FirstMessageOwnerSchema = z.object({
 const ownerStorageKey = (serverId: string) =>
   `paseo:first-message-owner:v1:${encodeURIComponent(serverId)}`;
 
+async function loadFirstMessageOutboxOwner(serverId: string) {
+  const stored = await AsyncStorage.getItem(ownerStorageKey(serverId));
+  let value: unknown;
+  try {
+    value = stored ? JSON.parse(stored) : null;
+  } catch {
+    value = null;
+  }
+  return FirstMessageOwnerSchema.safeParse(value);
+}
+
 /** Persist routing metadata only; offline first messages never evaluate cached plugin code. */
 export async function saveFirstMessageOutboxOwner(
   serverId: string,
   plugins: Parameters<typeof resolveFirstMessageOutboxOwner>[0],
+  getPluginError?: (pluginId: string) => string | undefined,
 ): Promise<void> {
   const owner = resolveFirstMessageOutboxOwner(plugins, serverId);
+  if (!owner && getPluginError) {
+    const stored = await loadFirstMessageOutboxOwner(serverId);
+    // A failed owner is absent from the installed catalog, not disabled by the user.
+    if (stored.success && stored.data.owner && getPluginError(stored.data.owner.pluginId)) return;
+  }
   await AsyncStorage.setItem(ownerStorageKey(serverId), JSON.stringify({ owner: owner ?? null }));
 }
 
@@ -39,6 +56,7 @@ export async function resolveFirstMessageSubmissionOwner(input: {
   catalogLoaded: boolean;
   catalogError?: string;
   pluginsSupported: boolean;
+  getPluginError?: (pluginId: string) => string | undefined;
 }): Promise<ReturnType<typeof resolveFirstMessageOutboxOwner>> {
   if (input.connected) {
     if (input.pluginsSupported && !input.catalogLoaded) {
@@ -48,27 +66,21 @@ export async function resolveFirstMessageSubmissionOwner(input: {
           : "插件尚未加载完成，请稍后重试；首消息仍保留在草稿中",
       );
     }
-    return resolveFirstMessageOutboxOwner(input.plugins, input.serverId);
+    const owner = resolveFirstMessageOutboxOwner(input.plugins, input.serverId);
+    const stored = !owner ? await loadFirstMessageOutboxOwner(input.serverId) : undefined;
+    const previousOwner = stored?.success ? stored.data.owner : undefined;
+    const candidate = owner ?? previousOwner;
+    const error = candidate ? input.getPluginError?.(candidate.pluginId) : undefined;
+    if (error) {
+      throw new Error(
+        `首消息负责插件 ${candidate!.pluginId} 不可用：${error}；首消息仍保留在草稿中`,
+      );
+    }
+    return owner;
   }
-  const stored = await AsyncStorage.getItem(ownerStorageKey(input.serverId));
-  let value: unknown;
-  try {
-    value = stored ? JSON.parse(stored) : null;
-  } catch {
-    value = null;
-  }
-  const result = FirstMessageOwnerSchema.safeParse(value);
+  const result = await loadFirstMessageOutboxOwner(input.serverId);
   if (!result.success) {
     throw new Error("尚未取得主机的首消息配置，请先联网一次；首消息仍保留在草稿中");
   }
   return result.data.owner ?? undefined;
-}
-
-/** Failed enabled plugins cannot silently change a task's first message into an ordinary chat. */
-export function assertFirstMessagePluginsReady(
-  plugins: readonly { id: string; enabled: boolean; status: string }[],
-): void {
-  const unavailable = plugins.filter((plugin) => plugin.enabled && plugin.status !== "running");
-  if (unavailable.length)
-    throw new Error(`已启用插件尚未运行：${unavailable.map((plugin) => plugin.id).join("、")}`);
 }

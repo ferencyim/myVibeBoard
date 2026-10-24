@@ -4,10 +4,7 @@ import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeature } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
-import {
-  assertFirstMessagePluginsReady,
-  saveFirstMessageOutboxOwner,
-} from "./first-message-outbox";
+import { saveFirstMessageOutboxOwner } from "./first-message-outbox";
 import { pluginRegistry } from "./registry";
 
 export function PluginCatalogSync({
@@ -31,20 +28,25 @@ export function PluginCatalogSync({
       return;
     }
     if (!client || !connected) return;
+    const getPluginError = (pluginId: string) => pluginRegistry.getPluginError(serverId, pluginId);
     const refresh = (replacePluginId?: string) => {
       pluginRegistry.markCatalogLoading(serverId);
       refreshQueue = refreshQueue.then(() =>
         Promise.all([client.getPluginCatalog(), client.listPlugins()])
           .then(async ([catalog, configured]) => {
             if (!cancelled) {
-              assertFirstMessagePluginsReady(configured);
               pluginRegistry.installCatalog(serverId, catalog, {
                 replacePluginId,
                 client,
                 audio,
+                configured,
               });
               if (pluginRegistry.hasLoadedCatalog(serverId)) {
-                await saveFirstMessageOutboxOwner(serverId, pluginRegistry.getSnapshot());
+                await saveFirstMessageOutboxOwner(
+                  serverId,
+                  pluginRegistry.getSnapshot(),
+                  getPluginError,
+                );
               }
             }
             return undefined;
