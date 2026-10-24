@@ -4,13 +4,7 @@ import type { PluginHostProps, PluginIcon } from "./contracts.js";
 
 export type PluginButtonContext =
   | { context: "workspace"; workspaceId: string }
-  | {
-      context: "agent";
-      workspaceId: string;
-      agentId: string;
-      conversationId?: string;
-      anchorAgentId?: string;
-    };
+  | { context: "agent"; workspaceId: string; agentId: string };
 
 export type PluginButtonIconProps = PluginHostProps & PluginButtonContext & PluginIconProps;
 
@@ -60,6 +54,4 @@ export interface PluginHeaderButtonContribution {
 
 export interface PluginComposerPillContribution extends PluginHeaderButtonContribution {
   agentId: string;
-  conversationId?: string;
-  anchorAgentId?: string;
 }

@@ -49,16 +49,6 @@ const toolCall = {
 };
 
 describe("plugin timeline transforms", () => {
-  it("passes task context only when the group timeline supplies it", () => {
-    const transform = vi.fn((_input: unknown) => undefined);
-    const plugins = [plugin({ id: "reports", transform })];
-    const input = { item: toolCall, phase: "complete" as const, sourceId: "source", plugins };
-    transformTimelineItem(input);
-    expect(transform.mock.calls[0]?.[0]).not.toHaveProperty("taskConversation");
-    const taskConversation = { conversationId: "conversation", ownerPluginId: "reports" };
-    transformTimelineItem({ ...input, taskConversation });
-    expect(transform.mock.calls[1]?.[0]).toMatchObject({ taskConversation });
-  });
   it("adds installation and source identity to plain transformed items", () => {
     const transformed = transformTimelineItem({
       item: toolCall,

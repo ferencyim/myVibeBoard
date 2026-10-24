@@ -1,6 +1,5 @@
 import type { ComponentType } from "react";
 import type { PaseoApi } from "@getpaseo/client";
-import type { TaskConversationRecipient } from "@getpaseo/protocol/messages";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
 import type { PluginRpcContract } from "../rpc.js";
@@ -35,15 +34,6 @@ export interface PluginHostProps {
 interface PluginNavigableHostProps extends PluginHostProps {
   /** Client-owned navigation. Undefined on older hosts; hide dependent affordances when absent. */
   readonly navigation?: {
-    readonly setTaskConversationRecipients?: (input: PluginTaskConversationRecipientsInput) => void;
-    readonly openTaskConversationSource?: (input: {
-      readonly conversationId: string;
-      readonly sourceKey: string;
-    }) => Promise<void>;
-    readonly openTaskConversationMember?: (input: {
-      readonly conversationId: string;
-      readonly memberId: string;
-    }) => Promise<void>;
     /** Present only on Electron. The browser runs locally; serverId selects workspace ownership. */
     readonly openBrowser?: (input: {
       readonly url: string;
@@ -69,21 +59,6 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly serverId?: string;
     }) => void;
   };
-}
-
-export interface PluginTaskConversationRecipientOption {
-  id: string;
-  label: string;
-  recipient: TaskConversationRecipient;
-  /** Estimated provider prompt cache expiry, in Unix milliseconds. */
-  cacheExpiresAt?: number | null;
-}
-
-export interface PluginTaskConversationRecipientsInput {
-  workspaceId: string;
-  conversationId: string;
-  recipients: readonly PluginTaskConversationRecipientOption[];
-  selectedRecipientId?: string;
 }
 
 /** String keys and values: params travel in the screen's URL. */
@@ -134,7 +109,7 @@ export type PluginIcon<Props extends PluginIconProps = PluginIconProps> =
   | PluginSerializableIcon
   | ComponentType<Props>;
 
-export type PluginPanelLocation = "workspace" | "explorer" | "conversation";
+export type PluginPanelLocation = "workspace" | "explorer";
 
 export interface PluginOpenPanelOptions {
   location?: PluginPanelLocation;
@@ -156,27 +131,11 @@ export interface PluginAgentPanelProps extends PluginNavigableHostProps {
   context: "agent";
   workspaceId: string;
   agentId: string;
-  /** Present in the conversation placement. agentId always identifies this stable anchor. */
-  conversationId?: string;
-  anchorAgentId?: string;
-}
-
-export interface PluginConversationPanelProps extends PluginNavigableHostProps {
-  context: "agent";
-  workspaceId: string;
-  conversationId: string;
-  anchorAgentId: string | null;
-  /** Current composer recipient; updated when the user switches roles or models. */
-  recipient?: TaskConversationRecipient | null;
-  /** Absent until the first recipient creates the anchor. Never identifies the current recipient. */
-  agentId?: string;
 }
 
 export interface PluginClientOpenPanelOptions extends PluginOpenPanelOptions {
   workspaceId: string;
   agentId?: string;
-  conversationId?: string;
-  anchorAgentId?: string | null;
 }
 
 // COMPAT(pluginSidebarAliases): added in v0.11.0, remove after 2027-03-29
@@ -187,17 +146,7 @@ interface PluginClientContextAliases {
   addSidebarItem(contribution: PluginSidebarContribution): PluginCleanup;
 }
 
-export interface PluginFirstMessageOutboxOwnerContribution {
-  /** Role receiving the first message in this plugin's task conversation. */
-  initialRole: TaskConversationRecipient["role"];
-}
-
 export interface PluginClientContext extends PluginCommandCapabilities, PluginClientContextAliases {
-  /** Own new-workspace first messages until this registration is removed. */
-  addFirstMessageOutboxOwner(
-    contribution: PluginFirstMessageOutboxOwnerContribution,
-  ): PluginCleanup;
-  setTaskConversationRecipients(input: PluginTaskConversationRecipientsInput): void;
   /** Play a base64-encoded audio file on this client; resolves when playback ends. */
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
   addSettingsScreen(contribution: PluginSettingsScreenContribution): PluginCleanup;
@@ -225,18 +174,11 @@ export type PluginClientContribution = (client: PluginClientContext) => PluginCl
 export type PluginWorkspacePanelContribution =
   | (PluginWorkspacePanelBase & {
       context: "workspace";
-      locations?: readonly ("workspace" | "explorer")[];
       Component: ComponentType<PluginWorkspacePanelProps>;
     })
   | (PluginWorkspacePanelBase & {
       context: "agent";
-      locations?: readonly ("workspace" | "explorer")[];
       Component: ComponentType<PluginAgentPanelProps>;
-    })
-  | (PluginWorkspacePanelBase & {
-      context: "agent";
-      locations: readonly ["conversation"];
-      Component: ComponentType<PluginConversationPanelProps>;
     });
 
 export interface PluginSettingsScreenContribution {
@@ -279,7 +221,6 @@ export type PluginTimelineTransformerContribution<
       transform(input: {
         item: Extract<AgentTimelineItem, { type: ItemType }>;
         phase: "streaming" | "complete";
-        taskConversation?: { conversationId: string; ownerPluginId: string };
       }): PluginTimelineTransformResult | undefined;
     }
   : never;
@@ -328,8 +269,6 @@ export interface PluginAgentCommandContext extends PluginCommandCapabilities {
   context: "agent";
   workspace: PluginWorkspaceSnapshot;
   agent: PluginAgentSnapshot;
-  conversationId?: string;
-  anchorAgentId?: string;
   openPanel(id: string, options?: PluginOpenPanelOptions): void;
 }
 

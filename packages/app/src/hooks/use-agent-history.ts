@@ -11,7 +11,6 @@ import { getHostRuntimeStore, isHostRuntimeConnected, useHosts } from "@/runtime
 import { useSessionStore } from "@/stores/session-store";
 import { buildAgentDirectoryState } from "@/utils/agent-directory-sync";
 import { agentHistoryQueryKey, allAgentHistoryQueryKey } from "./agent-history-query-key";
-import { collapseTaskConversationDirectory } from "@/workspace-tabs/conversation-directory";
 
 const AGENT_HISTORY_PAGE_LIMIT = 200;
 const AGENT_HISTORY_SORT: NonNullable<FetchAgentHistoryOptions["sort"]> = [
@@ -102,8 +101,6 @@ export async function fetchAgentHistoryPage(input: {
       lastActivityAt: agent.lastActivityAt,
       cwd: agent.cwd,
       workspaceId: agent.workspaceId,
-      taskConversationId: agent.taskConversationId,
-      taskConversationMemberId: agent.taskConversationMemberId,
       provider: agent.provider,
       pendingPermissionCount: agent.pendingPermissions.length,
       requiresAttention: agent.requiresAttention,
@@ -345,7 +342,7 @@ export function useAgentHistory(options: {
         serverLabel: serverLabelById.get(agent.serverId) ?? agent.serverLabel,
       }),
     );
-    return collapseTaskConversationDirectory(sortByLatestActivity(labelledAgents));
+    return sortByLatestActivity(labelledAgents);
   }, [data?.pages, serverLabelById]);
   const isInitialLoad = isLoading && agents.length === 0;
   const isRevalidating = isFetching && !isFetchingNextPage && agents.length > 0;

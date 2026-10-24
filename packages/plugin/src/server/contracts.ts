@@ -4,7 +4,7 @@ import type { PluginRpcContract } from "../rpc.js";
 import type { PluginCleanup } from "../contracts.js";
 import type { ProviderRegistration } from "./provider.js";
 import type { UsageSourceRegistration } from "./usage.js";
-import type { PluginLifecycleRegistration, PluginTaskConversationHooks } from "./lifecycle.js";
+import type { PluginLifecycleRegistration } from "./lifecycle.js";
 
 export interface PluginHandlerContext {
   paseo: PaseoApi;
@@ -42,7 +42,6 @@ export interface PluginNotification {
 export interface PluginServerContext extends PluginLifecycleRegistration {
   /** The plugin's Paseo API, usable as soon as contribute() runs (no hook or RPC needed first). */
   paseo: PaseoApi;
-  registerTaskConversationHooks(hooks: PluginTaskConversationHooks): PluginCleanup;
   /**
    * Sends a push notification through the daemon's push service. With minimal payloads enabled the
    * daemon truncates the text and keeps only short string fields of data; keep content out of it.

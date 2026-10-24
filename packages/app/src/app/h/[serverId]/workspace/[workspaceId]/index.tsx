@@ -49,9 +49,6 @@ function getParamValue(value: string | string[] | undefined): string {
 }
 
 function getOpenIntentTarget(openIntent: WorkspaceOpenIntent): WorkspaceTabTarget {
-  if (openIntent.kind === "task_conversation") {
-    return { kind: "task_conversation", conversationId: openIntent.conversationId };
-  }
   if (openIntent.kind === "agent") {
     return { kind: "agent", agentId: openIntent.agentId };
   }
@@ -118,8 +115,7 @@ function HostWorkspaceRouteContent() {
   const hasHydratedWorkspaces = useHasHydratedWorkspaces(serverId);
   const workspaceExists = useWorkspaceExists(serverId, workspaceId);
   const openIntent = useMemo(() => parseWorkspaceOpenIntent(openValue), [openValue]);
-  const isAgentOpenIntent =
-    openIntent?.kind === "agent" || openIntent?.kind === "task_conversation";
+  const isAgentOpenIntent = openIntent?.kind === "agent";
   const isOpenIntentWaitingForWorkspace = Boolean(
     isAgentOpenIntent && (!hasHydratedWorkspaces || !workspaceExists),
   );

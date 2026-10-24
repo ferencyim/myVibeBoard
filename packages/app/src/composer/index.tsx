@@ -5,7 +5,6 @@ import {
 } from "./editing-session";
 import type { ComposerTextSource } from "./text-source";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { DaemonRpcError } from "@getpaseo/client/internal/daemon-client";
 import { useStore } from "zustand";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -28,7 +27,6 @@ import {
   useImperativeHandle,
   memo,
   type ReactElement,
-  type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -88,8 +86,6 @@ import {
   type AttachmentPersister,
   type QueueWriter,
   type QueuedComposerMessage,
-  type ComposerTaskConversationTransport,
-  type MessageSubmissionWriter,
 } from "@/composer/actions";
 import { useVoiceOptional } from "@/contexts/voice-context";
 import { useToast } from "@/contexts/toast-context";
@@ -206,9 +202,8 @@ function resolveIsComposerLocked(
 function resolveIsVoiceModeForAgent(
   voice: ReturnType<typeof useVoiceOptional>,
   serverId: string,
-  agentId: string | undefined,
+  agentId: string,
 ): boolean {
-  if (!agentId) return false;
   return voice?.isVoiceModeForAgent(serverId, agentId) ?? false;
 }
 
@@ -276,9 +271,9 @@ function buildRealtimeVoiceButtonStyle(
   );
 }
 
-function buildAgentStateSelector(serverId: string, agentId: string | undefined) {
+function buildAgentStateSelector(serverId: string, agentId: string) {
   return (state: ReturnType<typeof useSessionStore.getState>) => {
-    const agent = agentId ? state.sessions[serverId]?.agents?.get(agentId) : null;
+    const agent = state.sessions[serverId]?.agents?.get(agentId) ?? null;
     return {
       status: agent?.status ?? null,
       contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
@@ -291,7 +286,7 @@ function buildAgentStateSelector(serverId: string, agentId: string | undefined) 
 
 interface RenderLeftContentArgs {
   agentControls: DraftAgentControlsProps | undefined;
-  agentId: string | undefined;
+  agentId: string;
   serverId: string;
   focusInput: () => void;
   isCompactLayout: boolean;
@@ -304,7 +299,6 @@ function renderLeftContent(args: RenderLeftContentArgs): ReactElement | null {
   if (resolveAgentControlsMode(agentControls) === "draft" && agentControls) {
     return <DraftAgentControls {...agentControls} isCompactLayout={isCompactLayout} />;
   }
-  if (!agentId) return null;
   return (
     <AgentControls
       agentId={agentId}
@@ -495,13 +489,13 @@ interface AttemptStartRealtimeVoiceArgs {
   isConnected: boolean;
   hasAgent: boolean;
   serverId: string;
-  agentId: string | undefined;
+  agentId: string;
   toastErrorRef: { current: (message: string) => void };
 }
 
 function attemptStartRealtimeVoice(args: AttemptStartRealtimeVoiceArgs): void {
   const { voice, isConnected, hasAgent, serverId, agentId, toastErrorRef } = args;
-  if (!voice || !isConnected || !hasAgent || !agentId) return;
+  if (!voice || !isConnected || !hasAgent) return;
   if (voice.isVoiceSwitching) return;
   if (voice.isVoiceModeForAgent(serverId, agentId)) return;
   void voice.startVoice(serverId, agentId).catch((error) => {
@@ -913,17 +907,8 @@ function GithubPickerOption({
   );
 }
 
-export interface ComposerTaskConversationControls extends ComposerTaskConversationTransport {
-  submission: MessageSubmissionWriter;
-  isRunning: boolean;
-  isStopping: boolean;
-  canSend: boolean;
-  stop: () => Promise<void>;
-  controls: ReactNode;
-}
-
-export interface ComposerProps {
-  agentId?: string;
+interface ComposerProps {
+  agentId: string;
   serverId: string;
   workspaceId?: string | null;
   isPaneFocused: boolean;
@@ -971,7 +956,6 @@ export interface ComposerProps {
   onAttentionPromptSend?: () => void;
   /** Controlled agent controls rendered in input area (draft flows). */
   agentControls?: DraftAgentControlsProps;
-  taskConversation?: ComposerTaskConversationControls;
   /** Extra styles merged onto the message input wrapper (e.g. elevated background). */
   inputWrapperStyle?: import("react-native").ViewStyle;
   /** Optional panel/container layout breakpoint. Defaults to the screen breakpoint. */
@@ -1269,7 +1253,6 @@ function ComposerContentImpl({
   onAttentionInputFocus,
   onAttentionPromptSend,
   agentControls,
-  taskConversation,
   inputWrapperStyle,
   isCompactLayout: isCompactLayoutOverride,
   inputMode = "chat",
@@ -1301,7 +1284,7 @@ function ComposerContentImpl({
   const agentState = useSessionStore(useShallow(buildAgentStateSelector(serverId, agentId)));
 
   const queuedMessagesRaw = useSessionStore((state) =>
-    agentId ? state.sessions[serverId]?.queuedMessages?.get(agentId) : undefined,
+    state.sessions[serverId]?.queuedMessages?.get(agentId),
   );
   const queuedMessages = queuedMessagesRaw ?? EMPTY_ARRAY;
 
@@ -1400,8 +1383,6 @@ function ComposerContentImpl({
     serverId,
     workspaceId,
     agentId,
-    conversationId: taskConversation?.conversationId,
-    anchorAgentId: taskConversation ? agentId : undefined,
   });
   const isComposerLocked = resolveIsComposerLocked(submitBehavior, isSubmitLoading);
   const keyboardHandlerIdRef = useRef(
@@ -1467,11 +1448,7 @@ function ComposerContentImpl({
         args: resolved.args,
         onError(error) {
           console.error("[Composer] Failed to run plugin client slash command:", error);
-          let message = error instanceof Error ? error.message : String(error);
-          if (error instanceof DaemonRpcError)
-            message = error.serverMessage.replace(/^Request failed: /, "");
-          setSendError(message);
-          toastErrorRef.current(message);
+          toastErrorRef.current(error instanceof Error ? error.message : String(error));
         },
       });
       return true;
@@ -1484,7 +1461,7 @@ function ComposerContentImpl({
   const agentIdRef = useRef(agentId);
   const sendAgentMessageRef = useRef<
     | ((
-        agentId: string | undefined,
+        agentId: string,
         text: string,
         attachments: ComposerAttachment[],
         activeTurnBehavior: "interrupt" | "steer",
@@ -1566,7 +1543,7 @@ function ComposerContentImpl({
 
   useEffect(() => {
     sendAgentMessageRef.current = async (
-      targetAgentId: string | undefined,
+      targetAgentId: string,
       text: string,
       sendAttachments: ComposerAttachment[],
       activeTurnBehavior: "interrupt" | "steer",
@@ -1583,11 +1560,10 @@ function ComposerContentImpl({
           supportsForgeAttachments: supportsForgeSearch,
         }),
         encodeImages,
-        submission: taskConversation?.submission ?? createMessageSubmissionWriter(serverId),
-        taskConversation,
+        submission: createMessageSubmissionWriter(serverId),
         activeTurnBehavior,
         activeTurnId:
-          activeTurnBehavior === "steer" && targetAgentId
+          activeTurnBehavior === "steer"
             ? (selectAgentTurnPresentation(
                 useSessionStore.getState().sessions[serverId],
                 targetAgentId,
@@ -1596,28 +1572,19 @@ function ComposerContentImpl({
       });
       onAttentionPromptSend?.();
     };
-  }, [
-    appSettings.sendBehavior,
-    client,
-    onAttentionPromptSend,
-    serverId,
-    supportsForgeSearch,
-    t,
-    taskConversation,
-  ]);
+  }, [appSettings.sendBehavior, client, onAttentionPromptSend, serverId, supportsForgeSearch, t]);
 
   useEffect(() => {
     onSubmitMessageRef.current = onSubmitMessage;
   }, [onSubmitMessage]);
 
-  const hasActiveTurn = useSessionStore((state) =>
-    agentId ? selectAgentTurnPresentation(state.sessions[serverId], agentId).isActive : false,
+  const hasActiveTurn = useSessionStore(
+    (state) => selectAgentTurnPresentation(state.sessions[serverId], agentId).isActive,
   );
-  const isCancellingOrdinaryAgent = useSessionStore((state) =>
-    agentId ? selectAgentTurnPresentation(state.sessions[serverId], agentId).isCancelling : false,
+  const isCancellingAgent = useSessionStore(
+    (state) => selectAgentTurnPresentation(state.sessions[serverId], agentId).isCancelling,
   );
-  const isAgentRunning = taskConversation?.isRunning ?? hasActiveTurn;
-  const isCancellingAgent = taskConversation?.isStopping ?? isCancellingOrdinaryAgent;
+  const isAgentRunning = hasActiveTurn;
   // Queueing behind a permission prompt would strand the message: the turn is
   // parked until the request is answered.
   const hasPendingPermission = useSessionStore((state) => {
@@ -1628,9 +1595,10 @@ function ComposerContentImpl({
     }
     return false;
   });
-  const activeSendBehavior = taskConversation
-    ? "interrupt"
-    : resolveActiveSendBehavior(appSettings.sendBehavior, hasPendingPermission);
+  const activeSendBehavior = resolveActiveSendBehavior(
+    appSettings.sendBehavior,
+    hasPendingPermission,
+  );
   const hasAgent = agentState.status !== null;
 
   const queueWriter = useMemo<QueueWriter>(
@@ -1643,7 +1611,6 @@ function ComposerContentImpl({
 
   const queueMessage = useCallback(
     (queuedMessage: string, queuedAttachments: ComposerAttachment[]) => {
-      if (!agentId) return;
       const result = queueComposerMessage({
         agentId,
         text: queuedMessage,
@@ -1678,14 +1645,12 @@ function ComposerContentImpl({
         attachments: outgoingAttachments,
         hasExternalContent,
         allowEmptySubmit,
-        forceSend: Boolean(taskConversation) || forceSend,
+        forceSend,
         submitBehavior,
         isAgentRunning,
         // Parent-managed submits are still valid submit paths even when the
         // transport is disconnected, because the parent decides the failure mode.
-        canSubmit:
-          (taskConversation?.canSend ?? true) &&
-          Boolean(sendAgentMessageRef.current || onSubmitMessageRef.current),
+        canSubmit: Boolean(sendAgentMessageRef.current || onSubmitMessageRef.current),
         connection: { hasAgent, isConnected },
         queueMessage: ({ message: queuedText, attachments: queuedAttachments }) => {
           queueMessage(queuedText, queuedAttachments);
@@ -1727,7 +1692,6 @@ function ComposerContentImpl({
       replaceUserInput,
       submitBehavior,
       submitMessage,
-      taskConversation,
       t,
     ],
   );
@@ -1752,7 +1716,6 @@ function ComposerContentImpl({
         text: payload.text,
         hasAttachments: outgoingAttachments.length > 0,
         commands: pluginClientSlashCommands,
-        taskConversation: Boolean(taskConversation),
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
 
@@ -1771,7 +1734,6 @@ function ComposerContentImpl({
       pluginClientSlashCommands,
       runPluginClientSlashCommand,
       sendMessageWithContent,
-      taskConversation,
     ],
   );
 
@@ -1922,16 +1884,7 @@ function ComposerContentImpl({
   );
 
   const handleCancelAgent = useCallback(() => {
-    if (taskConversation) {
-      if (taskConversation.isStopping || !isConnected) return;
-      void taskConversation.stop().catch((error) => {
-        const message = resolveErrorMessage(error);
-        if (message) toastErrorRef.current(message);
-      });
-      return;
-    }
     const targetAgentId = agentIdRef.current;
-    if (!targetAgentId) return;
     const cancellation = cancelComposerAgent({
       client,
       agentId: targetAgentId,
@@ -1952,7 +1905,7 @@ function ComposerContentImpl({
         getHostRuntimeStore().settleAgentCancellation(serverId, targetAgentId, requestId);
       });
     messageInputRef.current?.focus();
-  }, [client, isAgentRunning, isCancellingAgent, isConnected, serverId, taskConversation]);
+  }, [client, isAgentRunning, isCancellingAgent, isConnected, serverId]);
 
   const focusMessageInputForKeyboardAction = useCallback(() => {
     focusMessageInputWithPlatformStrategy(messageInputRef);
@@ -1961,7 +1914,6 @@ function ComposerContentImpl({
   const isVoiceModeForAgent = resolveIsVoiceModeForAgent(voice, serverId, agentId);
 
   const handleToggleRealtimeVoice = useCallback(() => {
-    if (taskConversation) return;
     attemptStartRealtimeVoice({
       voice,
       isConnected,
@@ -1970,11 +1922,10 @@ function ComposerContentImpl({
       agentId,
       toastErrorRef,
     });
-  }, [agentId, hasAgent, isConnected, serverId, voice, taskConversation]);
+  }, [agentId, hasAgent, isConnected, serverId, voice]);
 
   const handleEditQueuedMessage = useCallback(
     (id: string) => {
-      if (!agentId) return;
       const result = editQueuedComposerMessage({
         agentId,
         messageId: id,
@@ -1989,7 +1940,6 @@ function ComposerContentImpl({
 
   const handleSendQueuedNow = useCallback(
     async (id: string) => {
-      if (!agentId) return;
       const offlineError = agentInputOfflineError(hasAgent, isConnected);
       if (offlineError) {
         setSendError(offlineError);
@@ -2015,10 +1965,6 @@ function ComposerContentImpl({
 
   const handleQueue = useCallback(
     (payload: MessagePayload) => {
-      if (taskConversation) {
-        handleSubmit({ ...payload, forceSend: true });
-        return;
-      }
       const offlineError = agentInputOfflineError(hasAgent, isConnected);
       if (offlineError) {
         setSendError(offlineError);
@@ -2045,8 +1991,6 @@ function ComposerContentImpl({
       hasAgent,
       isConnected,
       attachments,
-      taskConversation,
-      handleSubmit,
       buildOutgoingAttachments,
       pluginClientSlashCommands,
       queueMessage,
@@ -2107,7 +2051,7 @@ function ComposerContentImpl({
         isAgentRunning={isAgentRunning}
         hasSendableContent={hasSendableContent}
         isCompact={isCompactLayout}
-        showVoice={mode.showVoice && !taskConversation}
+        showVoice={mode.showVoice}
         buttonIconSize={buttonIconSize}
         handleToggleRealtimeVoice={handleToggleRealtimeVoice}
         isConnected={isConnected}
@@ -2131,14 +2075,13 @@ function ComposerContentImpl({
       realtimeVoiceButtonStyle,
       t,
       voiceToggleKeys,
-      taskConversation,
     ],
   );
 
   const contextWindowMeterGlyphSize = isCompactLayout ? ICON_SIZE.md : buttonIconSize;
   const beforeVoiceContent = useMemo(
     () =>
-      hasAgent && agentId && !taskConversation ? (
+      hasAgent ? (
         <View style={styles.contextWindowMeterSlot}>
           <ContextWindowMeter
             serverId={serverId}
@@ -2158,7 +2101,6 @@ function ComposerContentImpl({
       agentState.contextWindowUsedTokens,
       agentState.totalCostUsd,
       contextWindowMeterGlyphSize,
-      taskConversation,
     ],
   );
 
@@ -2280,7 +2222,6 @@ function ComposerContentImpl({
 
   const leftContent = useMemo(
     () =>
-      taskConversation?.controls ??
       renderLeftContent({
         agentControls,
         agentId,
@@ -2289,15 +2230,7 @@ function ComposerContentImpl({
         isCompactLayout,
         showAgentControls: mode.showAgentControls,
       }),
-    [
-      agentControls,
-      agentId,
-      focusInput,
-      isCompactLayout,
-      mode.showAgentControls,
-      serverId,
-      taskConversation,
-    ],
+    [agentControls, agentId, focusInput, isCompactLayout, mode.showAgentControls, serverId],
   );
 
   const handleAttachButtonRef = useCallback((node: View | null) => {
@@ -2450,9 +2383,7 @@ function ComposerContentImpl({
   const isSubmitLoadingVisible =
     isProcessing || isSubmitLoading || isUploadingFile || pendingNativeImagePastes > 0;
   const isSubmitDisabled =
-    isSubmitLoadingVisible ||
-    (waitForForgeAutoAttachOnSubmit && isForgeResolving) ||
-    taskConversation?.canSend === false;
+    isSubmitLoadingVisible || (waitForForgeAutoAttachOnSubmit && isForgeResolving);
 
   // Disable drops while submitting/uploading: the submit path clears and restores attachments,
   // so a drop in that window would be lost or land on a locked draft. `disabled` hides the

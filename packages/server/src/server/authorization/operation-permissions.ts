@@ -6,19 +6,6 @@ type OutboundOperation = SessionOutboundMessage["type"];
 export type PermissionRequirement = DaemonPermission | readonly DaemonPermission[] | null;
 
 const INBOUND_PERMISSION = {
-  "task.conversation.resolve.request": "workspace.read",
-  "task.conversation.get_delivery.request": "workspace.read",
-  "task.conversation.fetch.request": "workspace.read",
-  "task.conversation.subscribe.request": "workspace.read",
-  "task.conversation.unsubscribe.request": "workspace.read",
-  "task.conversation.query_source.request": "workspace.read",
-  "task.conversation.create.request": "workspace.write",
-  "task.conversation.send.request": "workspace.write",
-  "task.conversation.publish.request": "workspace.write",
-  "task.conversation.stop.request": "workspace.write",
-  "task.conversation.archive.request": "workspace.write",
-  "task.conversation.compact.request": "workspace.write",
-
   abort_request: "workspace.write",
   "agent.config.apply.request": ["workspace.write", "hub.execute"],
   "agent.detach.request": "workspace.write",
@@ -228,20 +215,6 @@ const INBOUND_PERMISSION = {
 } as const satisfies Record<InboundOperation, PermissionRequirement>;
 
 const OUTBOUND_PERMISSION = {
-  "task.conversation.update": "workspace.read",
-  "task.conversation.resolve.response": "workspace.read",
-  "task.conversation.get_delivery.response": "workspace.read",
-  "task.conversation.fetch.response": "workspace.read",
-  "task.conversation.subscribe.response": "workspace.read",
-  "task.conversation.unsubscribe.response": "workspace.read",
-  "task.conversation.query_source.response": "workspace.read",
-  "task.conversation.create.response": "workspace.write",
-  "task.conversation.send.response": "workspace.write",
-  "task.conversation.publish.response": "workspace.write",
-  "task.conversation.stop.response": "workspace.write",
-  "task.conversation.archive.response": "workspace.write",
-  "task.conversation.compact.response": "workspace.write",
-
   "agent.create.response": ["workspace.write", "hub.execute"],
   "agent.create.update": ["workspace.write", "hub.execute"],
   "workspace.create.update": "workspace.manage",

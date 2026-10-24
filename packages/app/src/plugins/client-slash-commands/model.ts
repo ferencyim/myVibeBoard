@@ -49,13 +49,9 @@ export function resolvePluginClientSlashCommand<Command extends SlashCommandDesc
   text: string;
   hasAttachments: boolean;
   commands: readonly Command[];
-  /** Only the live task composer submission may interpret standalone human approval. */
-  taskConversation?: boolean;
 }): { command: Command; args: string } | null {
   if (input.hasAttachments) return null;
-  const text = input.text.trim();
-  const commandText = input.taskConversation && text === "通过" ? "/通过" : text;
-  const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(commandText);
+  const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(input.text.trim());
   if (!match) return null;
   const command = input.commands.find((candidate) => candidate.name === match[1]);
   return command ? { command, args: (match[2] ?? "").trim() } : null;

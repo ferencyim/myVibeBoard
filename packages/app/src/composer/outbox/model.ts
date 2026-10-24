@@ -78,22 +78,17 @@ export const FirstMessageOutboxInputSchema = z
     projectId: z.string().min(1),
     source: WorkspaceCreateRequestSchema.shape.source,
     config: AgentCreateRequestSchema.shape.config,
-    owner: z.object({ pluginId: z.string().min(1), initialRole: z.string().min(1) }).optional(),
-    plannerPresetId: z.string().min(1).optional(),
     text: z.string(),
     attachments: z.array(ComposerAttachmentSchema),
   })
   .superRefine((input, ctx) => {
-    if (
-      input.owner &&
-      (input.source.kind !== "worktree" || input.source.projectId !== input.projectId)
-    ) {
+    if (input.source.kind !== "worktree" || input.source.projectId !== input.projectId) {
       ctx.addIssue({ code: "custom", message: "离线新任务必须属于所选项目的独立 worktree" });
     }
     if (!input.text.trim() && input.attachments.length === 0) {
       ctx.addIssue({ code: "custom", message: "请填写首消息或添加附件" });
     }
-    if (/^\/(制定方案|复核方案|执行|复核|验证|通过|停止任务)(?:\s|$)/u.test(input.text.trim())) {
+    if (/^\/(执行|停止任务|复核方案)(?:\s|$)/u.test(input.text.trim())) {
       ctx.addIssue({ code: "custom", message: "任务命令需要联网后在原生对话中操作" });
     }
   });
@@ -106,14 +101,7 @@ export const FirstMessageOutboxEntrySchema = FirstMessageOutboxInputSchema.safeE
   submitted: z.boolean(),
   replayBlocked: z.boolean(),
   error: z.string().nullable(),
-  result: z
-    .object({
-      workspaceId: z.string().min(1),
-      agentId: z.string().min(1),
-      conversationId: z.string().min(1).optional(),
-      memberId: z.string().min(1).optional(),
-    })
-    .nullable(),
+  result: z.object({ workspaceId: z.string().min(1), agentId: z.string().min(1) }).nullable(),
 });
 
 export const FirstMessageOutboxStorageSchema = z

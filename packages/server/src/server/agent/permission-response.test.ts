@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import type {
@@ -9,10 +9,8 @@ import type {
 } from "./agent-sdk-types.js";
 import type { AgentStreamEvent } from "../messages.js";
 import { respondToAgentPermission } from "./permission-response.js";
-import type { TaskConversationService } from "../task-conversation/service.js";
 
 class FakePermissionAgentManager {
-  taskConversations?: TaskConversationService;
   permissionResult: AgentPermissionResult | void;
   hasRunInFlight = false;
   outOfBandHandled = false;
@@ -70,31 +68,6 @@ async function* emptyAgentStream(): AsyncGenerator<AgentStreamEvent> {}
 describe("respondToAgentPermission", () => {
   const logger = createTestLogger();
 
-  test("routes task approval follow-ups to the original member through its conversation", async () => {
-    const agentManager = new FakePermissionAgentManager();
-    agentManager.permissionResult = { followUpPrompt: "批准后继续" };
-    const continuePermission = vi.fn(async () => undefined);
-    const preparePermissionResponse = vi.fn(async () => undefined);
-    agentManager.taskConversations = {
-      getByAgentId: () => ({ conversationId: "task" }),
-      preparePermissionResponse,
-      continuePermission,
-    } as unknown as TaskConversationService;
-    await respondToAgentPermission({
-      agentManager,
-      agentId: "task-member",
-      requestId: "approval",
-      response: { behavior: "allow" },
-      logger,
-    });
-    expect(continuePermission).toHaveBeenCalledWith("task-member", "批准后继续", "approval");
-    expect(preparePermissionResponse).toHaveBeenCalledWith("task-member", "approval", {
-      behavior: "allow",
-    });
-    expect(agentManager.streamRuns).toEqual([]);
-    expect(agentManager.replacementRuns).toEqual([]);
-  });
-
   test("starts a follow-up run returned by the provider permission response", async () => {
     const agentManager = new FakePermissionAgentManager();
     agentManager.permissionResult = { followUpPrompt: "implement the approved plan" };
@@ -121,29 +94,6 @@ describe("respondToAgentPermission", () => {
       },
     ]);
     expect(agentManager.replacementRuns).toEqual([]);
-  });
-
-  test("keeps a blocked task approval at the provider until delivery is reconciled", async () => {
-    const agentManager = new FakePermissionAgentManager();
-    const continuePermission = vi.fn();
-    agentManager.taskConversations = {
-      getByAgentId: () => ({ conversationId: "task" }),
-      preparePermissionResponse: vi.fn(async () => {
-        throw new Error("unknown delivery");
-      }),
-      continuePermission,
-    } as unknown as TaskConversationService;
-    await expect(
-      respondToAgentPermission({
-        agentManager,
-        agentId: "task-member",
-        requestId: "approval",
-        response: { behavior: "allow" },
-        logger,
-      }),
-    ).rejects.toThrow("unknown delivery");
-    expect(agentManager.permissionResponses).toEqual([]);
-    expect(continuePermission).not.toHaveBeenCalled();
   });
 
   test("does not start a run when the permission response has no follow-up prompt", async () => {

@@ -291,7 +291,6 @@ export function createPluginWorker(options: {
       registerSettings,
       on: hooks.on,
       before: hooks.before,
-      registerTaskConversationHooks: hooks.registerTaskConversationHooks,
     });
     if (typeof contributedCleanup !== "function") {
       throw new Error("Plugin contribution must return a cleanup function");

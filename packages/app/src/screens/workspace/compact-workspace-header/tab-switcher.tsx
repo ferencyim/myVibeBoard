@@ -94,9 +94,6 @@ function getFallbackTabOptionDescription(
   if (tab.target.kind === "agent") {
     return labels.agent;
   }
-  if (tab.target.kind === "task_conversation") {
-    return "任务会话";
-  }
   if (tab.target.kind === "terminal") {
     return labels.terminal;
   }

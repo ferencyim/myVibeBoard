@@ -132,14 +132,6 @@ function BottomOverlayInset({ height }: { height: number }) {
   return <View style={style} />;
 }
 
-function StaticTimeline({ children }: ComponentProps<typeof ChatFind>) {
-  return children;
-}
-
-function resolveTimelineFind(disableAgentTimelineActions: boolean | undefined) {
-  return disableAgentTimelineActions ? StaticTimeline : ChatFind;
-}
-
 function renderPendingPermissionsNode(input: {
   pendingPermissions: PendingPermission[];
   client: DaemonClient | null;
@@ -265,12 +257,9 @@ export interface AgentStreamViewHandle {
 
 export interface AgentStreamViewProps {
   agentId: string;
-  taskConversation?: { conversationId: string; ownerPluginId: string };
   serverId?: string;
   context: AgentScreenAgent;
   streamItems: StreamItem[];
-  /** A new request object also allows jumping to the same source again. */
-  focusedMessage?: { messageId: string };
   streamHead?: StreamItem[];
   pendingPermissions: Map<string, PendingPermission>;
   pendingMessageSubmissions?: readonly PendingMessageSubmission[];
@@ -284,8 +273,6 @@ export interface AgentStreamViewProps {
   toast?: ToastApi | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   readOnly?: boolean;
-  renderItemHeader?: (item: StreamItem) => ReactNode;
-  disableAgentTimelineActions?: boolean;
   historyPagination?: {
     hasOlder: boolean;
     isLoadingOlder: boolean;
@@ -326,11 +313,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
   function AgentStreamView(
     {
       agentId,
-      taskConversation,
       serverId,
       context,
       streamItems,
-      focusedMessage,
       streamHead: providedStreamHead,
       pendingPermissions,
       pendingMessageSubmissions = EMPTY_PENDING_MESSAGE_SUBMISSIONS,
@@ -342,8 +327,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       readOnly = false,
-      renderItemHeader,
-      disableAgentTimelineActions,
       historyPagination,
     },
     ref,
@@ -377,7 +360,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     // Get serverId (fallback to agent's serverId if not provided)
     const resolvedServerId = serverId ?? context.serverId ?? "";
-    const transformTimelineItem = useInstalledTimelineTransform(resolvedServerId, taskConversation);
+    const transformTimelineItem = useInstalledTimelineTransform(resolvedServerId);
 
     const client = useSessionStore((state) => state.sessions[resolvedServerId]?.client ?? null);
     const sessionStreamHead = useSessionStore((state) =>
@@ -391,16 +374,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     );
     const supportsChatOutline = useSessionStore(
       (state) =>
-        !disableAgentTimelineActions &&
         state.sessions[resolvedServerId]?.serverInfo?.features?.agentTimelinePromptIndex === true,
     );
     const timelineEpoch = useSessionStore(
       (state) => state.sessions[resolvedServerId]?.agentTimelineCursor.get(agentId)?.epoch ?? null,
     );
     const isTimelineDetached = useSessionStore(
-      (state) =>
-        !disableAgentTimelineActions &&
-        state.sessions[resolvedServerId]?.agentTimelineHasNewer.get(agentId) === true,
+      (state) => state.sessions[resolvedServerId]?.agentTimelineHasNewer.get(agentId) === true,
     );
 
     const workspaceRoot = context.cwd?.trim() || "";
@@ -608,13 +588,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => new Set(baseRenderModel.history.map(getStreamItemMessageId)),
       [baseRenderModel.history],
     );
-    const focusedRequest = useRef<AgentStreamViewProps["focusedMessage"]>(undefined);
-    useEffect(() => {
-      if (!focusedMessage || focusedRequest.current === focusedMessage) return;
-      if (revealLoadedHistory(focusedMessage.messageId)) return;
-      viewportRef.current?.scrollToMessage?.(focusedMessage.messageId);
-      focusedRequest.current = focusedMessage;
-    }, [focusedMessage, mountedHistoryMessageIds, revealLoadedHistory]);
     const mountedMessageIds = useMemo(() => {
       const liveHeadMessageIds = new Set(
         baseRenderModel.segments.liveHead.map(getStreamItemMessageId),
@@ -921,15 +894,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderStreamItem = useCallback(
       (layoutItem: StreamLayoutItem) => {
-        const body = renderStreamItemContent(layoutItem);
-        const content = renderItemHeader ? (
-          <>
-            {renderItemHeader(layoutItem.item)}
-            {body}
-          </>
-        ) : (
-          body
-        );
+        const content = renderStreamItemContent(layoutItem);
         return renderStreamItemWithTurnFooter({
           content,
           layoutItem,
@@ -942,7 +907,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         handleForkAssistantTurn,
         readOnly,
         renderStreamItemContent,
-        renderItemHeader,
         streamRenderStrategy,
         supportsAgentForkContextCursor,
       ],
@@ -1114,9 +1078,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => [...effectiveStreamItems, ...(effectiveStreamHead ?? [])],
       [effectiveStreamItems, effectiveStreamHead],
     );
-    const TimelineFind = resolveTimelineFind(disableAgentTimelineActions);
     return (
-      <TimelineFind
+      <ChatFind
         agentId={agentId}
         serverId={resolvedServerId}
         epoch={timelineEpoch}
@@ -1174,7 +1137,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             )}
           </AssistantSelectionCopySurface>
         </ToolCallSheetProvider>
-      </TimelineFind>
+      </ChatFind>
     );
   },
 );
@@ -1272,7 +1235,6 @@ function agentStreamViewPropsEqual(
 ): boolean {
   const reasons: string[] = [];
   if (left.agentId !== right.agentId) reasons.push("agentId");
-  if (left.taskConversation !== right.taskConversation) reasons.push("taskConversation");
   if (left.serverId !== right.serverId) reasons.push("serverId");
   reasons.push(...collectAgentScreenAgentDiffs(left.context, right.context));
   if (left.streamItems !== right.streamItems) reasons.push("streamItems");
@@ -1299,9 +1261,6 @@ function agentStreamViewPropsEqual(
   if (left.toast !== right.toast) reasons.push("toast");
   if (left.onOpenWorkspaceFile !== right.onOpenWorkspaceFile) reasons.push("onOpenWorkspaceFile");
   if (left.readOnly !== right.readOnly) reasons.push("readOnly");
-  if (left.renderItemHeader !== right.renderItemHeader) reasons.push("renderItemHeader");
-  if (left.disableAgentTimelineActions !== right.disableAgentTimelineActions)
-    reasons.push("disableAgentTimelineActions");
   if (!historyPaginationPropsEqual(left.historyPagination, right.historyPagination)) {
     reasons.push("historyPagination");
   }
@@ -1429,7 +1388,7 @@ function PermissionActionButton({
   );
 }
 
-export function PermissionRequestCard({
+function PermissionRequestCard({
   permission,
   client,
 }: {

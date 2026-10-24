@@ -7,7 +7,6 @@ import type {
   PluginThemeContribution,
 } from "@getpaseo/plugin";
 import type {
-  PluginFirstMessageOutboxOwnerContribution,
   PluginCommandCenterItemContribution,
   PluginClientSlashCommandContribution,
   PluginComposerPillContribution,
@@ -17,16 +16,18 @@ import type {
   PluginSettingsScreenContribution,
   PluginTimelineRendererContribution,
   PluginTimelineTransformerContribution,
+  PluginPanelLocation,
   PluginWorkspacePanelContribution,
 } from "@getpaseo/plugin/client";
 
 export type PluginSidebarSection = "header" | "footer";
 
-export type EvaluatedPluginWorkspacePanelContribution = PluginWorkspacePanelContribution;
+export type EvaluatedPluginWorkspacePanelContribution = PluginWorkspacePanelContribution & {
+  locations: readonly PluginPanelLocation[];
+};
 
 export interface EvaluatedPlugin {
   id: string;
-  firstMessageOutboxOwners?: PluginFirstMessageOutboxOwnerContribution[];
   cleanup: PluginCleanup;
   surfaces: PluginScreenContribution[];
   settingsScreens: PluginSettingsScreenContribution[];

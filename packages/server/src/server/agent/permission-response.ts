@@ -4,7 +4,6 @@ import type { AgentPermissionResponse, AgentPermissionResult } from "./agent-sdk
 import { startAgentRun, type AgentRunController } from "./agent-prompt.js";
 
 export interface PermissionResponseAgentManager extends AgentRunController {
-  taskConversations?: import("../task-conversation/service.js").TaskConversationService;
   respondToPermission(
     agentId: string,
     requestId: string,
@@ -29,21 +28,10 @@ export async function respondToAgentPermission(
     `Handling permission response for agent ${agentId}, request ${requestId}`,
   );
 
-  if (agentManager.taskConversations?.getByAgentId(agentId)) {
-    await agentManager.taskConversations.preparePermissionResponse(agentId, requestId, response);
-  }
   const result = await agentManager.respondToPermission(agentId, requestId, response);
   logger.debug({ agentId }, `Permission response forwarded to agent ${agentId}`);
 
   if (result?.followUpPrompt) {
-    if (agentManager.taskConversations?.getByAgentId(agentId)) {
-      await agentManager.taskConversations.continuePermission(
-        agentId,
-        result.followUpPrompt,
-        requestId,
-      );
-      return;
-    }
     logger.debug({ agentId }, "Permission response requires follow-up turn, starting agent stream");
     await startAgentRun(agentManager, agentId, result.followUpPrompt, logger, {
       replaceRunning: true,

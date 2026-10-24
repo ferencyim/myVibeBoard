@@ -40,7 +40,6 @@ interface PluginRuntimePort {
   emit?: PluginLifecycle["emit"];
   drainEvents?: PluginRuntime["drainEvents"];
   before?: PluginLifecycle["before"];
-  hasBefore?: PluginRuntime["hasBefore"];
   catalog: PluginRuntime["catalog"];
   invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
   getLogs(pluginId: string): PluginLogEntry[];
@@ -136,15 +135,10 @@ export class PluginService {
     await this.runtime.drainEvents?.();
   }
 
-  hasBefore(pluginId: string, name: Parameters<PluginRuntime["hasBefore"]>[1]): boolean {
-    return this.runtime.hasBefore?.(pluginId, name) ?? false;
-  }
-
-  readonly before: PluginLifecycle["before"] = async (name, request, options) => {
+  readonly before: PluginLifecycle["before"] = async (name, request) => {
     if (this.runtime.before) {
-      return this.runtime.before(name, request, options);
+      return this.runtime.before(name, request);
     }
-    if (options) throw new Error(`Plugin ${options.pluginId} before ${name} is unavailable`);
     return request;
   };
 

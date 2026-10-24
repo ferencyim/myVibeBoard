@@ -39,7 +39,7 @@ import { parsePluginThemeContribution } from "./themes";
 
 const CONTRIBUTION_ID = /^[a-z][a-z0-9-]*$/;
 const SLASH_COMMAND_NAME = /^[a-z\p{Script=Han}][a-z0-9\p{Script=Han}-]*$/u;
-const PANEL_LOCATIONS = ["workspace", "explorer", "conversation"] as const;
+const PANEL_LOCATIONS = ["workspace", "explorer"] as const;
 const TIMELINE_ITEM_TYPES = new Set([
   "user_message",
   "assistant_message",
@@ -108,7 +108,6 @@ export type PluginClientRuntime = Pick<
   | "openPanel"
   | "addComposerPill"
   | "addHeaderButton"
-  | "setTaskConversationRecipients"
 > & { hosts: ReturnType<typeof createPluginHosts> };
 
 export function runPluginClientBundle(
@@ -117,9 +116,7 @@ export function runPluginClientBundle(
   runtime: PluginClientRuntime,
   onChange: () => void = () => undefined,
 ): EvaluatedPlugin {
-  const firstMessageOutboxOwners: NonNullable<EvaluatedPlugin["firstMessageOutboxOwners"]> = [];
   const collector: Omit<EvaluatedPlugin, "id" | "cleanup"> = {
-    firstMessageOutboxOwners,
     surfaces: [],
     settingsScreens: [],
     sidebarItems: { header: [], footer: [] },
@@ -205,14 +202,6 @@ export function runPluginClientBundle(
   }
   const pluginContext: PluginClientContext = {
     ...runtime,
-    addFirstMessageOutboxOwner(contribution) {
-      if (firstMessageOutboxOwners.length > 0) {
-        throw new Error("Only one first-message outbox owner may be registered per plugin");
-      }
-      const initialRole = contribution.initialRole.trim();
-      if (!initialRole) throw new Error("First-message outbox owner needs an initial role");
-      return register(firstMessageOutboxOwners, { initialRole }, () => undefined);
-    },
     addSettingsScreen(contribution) {
       const screenId = requireId(contribution.id, "settings screen id");
       if (settingsScreenIds.has(screenId))
@@ -288,19 +277,17 @@ export function runPluginClientBundle(
         throw new Error(`Workspace panel ${normalizedId} is not a component`);
       }
       const locations = normalizePanelLocations(normalizedId, contribution.locations);
-      if (locations.includes("conversation") && locations.length !== 1) {
-        throw new Error(`Workspace panel ${normalizedId} conversation placement must be exclusive`);
-      }
-      if (contribution.context !== "agent" && locations.includes("conversation")) {
-        throw new Error(
-          `Workspace panel ${normalizedId} needs agent context for conversation placement`,
-        );
-      }
       workspacePanelIds.add(normalizedId);
-      const panel = { ...contribution, id: normalizedId, title, icon };
-      if (!panel.locations) panel.locations = ["workspace"];
-      return register(collector.workspacePanels, panel, () =>
-        workspacePanelIds.delete(normalizedId),
+      return register(
+        collector.workspacePanels,
+        {
+          ...contribution,
+          id: normalizedId,
+          title,
+          icon,
+          locations,
+        },
+        () => workspacePanelIds.delete(normalizedId),
       );
     },
     addCommandCenterItem(contribution: PluginCommandCenterItemContribution) {
@@ -527,7 +514,6 @@ export function runPluginClientBundle(
   return {
     id,
     cleanup,
-    firstMessageOutboxOwners: firstMessageOutboxOwners,
     surfaces: collector.surfaces,
     settingsScreens: collector.settingsScreens,
     sidebarItems: collector.sidebarItems,

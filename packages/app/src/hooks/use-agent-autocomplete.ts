@@ -34,7 +34,7 @@ interface UseAgentAutocompleteInput {
   cursorIndex: number;
   setUserInput: (nextValue: string) => void;
   serverId: string;
-  agentId?: string;
+  agentId: string;
   draft?: DraftCommandTarget;
   onAutocompleteApplied?: () => void;
   onClientSlashCommand?: (command: ClientSlashCommand) => void;
@@ -286,7 +286,7 @@ function resolveAutocompleteIsVisible(args: {
 
 function resolveCanLoadCommands(args: {
   serverId: string;
-  agentId?: string;
+  agentId: string;
   isDraftContext: boolean;
 }): boolean {
   if (!args.serverId) {
@@ -335,22 +335,13 @@ function resolveAutocompleteErrorMessage(args: {
 
 // A draft's agentId is a draft key the daemon does not know, so a draft lists
 // commands by its config only, and not at all until that config is complete.
-function resolveCommandContext(
-  input: Pick<UseAgentAutocompleteInput, "serverId" | "agentId" | "draft"> & {
-    pluginCommandCount: number;
-  },
-) {
-  const { draft } = input;
+function resolveDraftCommandContext(draft: DraftCommandTarget | undefined) {
   const queryDraftConfig = resolveDraftQueryConfig(draft);
   const isDraftContext = draft !== undefined;
-  const canLoadCommands = resolveCanLoadCommands({ ...input, isDraftContext });
   return {
     isDraftContext,
     queryDraftConfig,
-    queryAgentId: input.agentId ?? "",
-    canLoadCommands,
-    hasCommandSource: canLoadCommands || input.pluginCommandCount > 0,
-    canListCommands: canLoadCommands && (!isDraftContext || queryDraftConfig !== undefined),
+    canListCommands: !isDraftContext || queryDraftConfig !== undefined,
   };
 }
 
@@ -414,26 +405,14 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     return () => clearTimeout(timer);
   }, [fileFilterQuery]);
 
-  const {
-    isDraftContext,
-    queryDraftConfig,
-    canListCommands,
-    canLoadCommands,
-    hasCommandSource,
-    queryAgentId,
-  } = useMemo(
-    () =>
-      resolveCommandContext({
-        serverId,
-        agentId,
-        draft,
-        pluginCommandCount: pluginClientSlashCommands.length,
-      }),
-    [agentId, draft, pluginClientSlashCommands.length, serverId],
+  const { isDraftContext, queryDraftConfig, canListCommands } = useMemo(
+    () => resolveDraftCommandContext(draft),
+    [draft],
   );
+  const canLoadCommands = resolveCanLoadCommands({ serverId, agentId, isDraftContext });
 
-  const agentCwd = useSessionStore((state) =>
-    agentId ? (state.sessions[serverId]?.agents?.get(agentId)?.cwd ?? "") : "",
+  const agentCwd = useSessionStore(
+    (state) => state.sessions[serverId]?.agents?.get(agentId)?.cwd ?? "",
   );
   const autocompleteCwd = useMemo(() => {
     if (isDraftContext) {
@@ -448,14 +427,14 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
   const mode = resolveAutocompleteMode({ showFileAutocomplete, showCommandAutocomplete });
   const canShowAutocomplete = resolveAutocompleteIsVisible({
     mode,
-    canLoadCommands: hasCommandSource,
+    canLoadCommands,
     serverId,
     autocompleteCwd,
   });
 
   const commandsQuery = useAgentCommandsQuery({
     serverId,
-    agentId: queryAgentId,
+    agentId,
     enabled: mode === "command" && canLoadCommands && canListCommands,
     draftConfig: queryDraftConfig,
   });

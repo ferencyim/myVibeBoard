@@ -19,28 +19,7 @@ export class PluginRegistry {
   private snapshot: InstalledPlugin[] = [];
   private readonly disposed = new WeakSet<InstalledPlugin>();
   private readonly evaluationErrors = new Map<string, string>();
-  private readonly startupErrors = new Map<string, string>();
   private readonly installedWith = new WeakMap<InstalledPlugin, DaemonClient>();
-  private readonly loadedCatalogs = new Set<string>();
-  private readonly catalogErrors = new Map<string, string>();
-
-  markCatalogLoading(serverId: string): void {
-    this.loadedCatalogs.delete(serverId);
-    this.catalogErrors.delete(serverId);
-  }
-
-  markCatalogFailed(serverId: string, error: string): void {
-    this.loadedCatalogs.delete(serverId);
-    this.catalogErrors.set(serverId, error);
-  }
-
-  getCatalogError(serverId: string): string | undefined {
-    return this.catalogErrors.get(serverId);
-  }
-
-  hasLoadedCatalog(serverId: string): boolean {
-    return this.loadedCatalogs.has(serverId);
-  }
 
   constructor(
     private readonly dependencies: {
@@ -62,11 +41,6 @@ export class PluginRegistry {
     return this.evaluationErrors.get(`${serverId}/${pluginId}`);
   }
 
-  getPluginError(serverId: string, pluginId: string): string | undefined {
-    const key = `${serverId}/${pluginId}`;
-    return this.startupErrors.get(key) ?? this.evaluationErrors.get(key);
-  }
-
   installCatalog(
     serverId: string,
     catalog: CatalogPlugin[],
@@ -74,19 +48,8 @@ export class PluginRegistry {
       replacePluginId?: string;
       client: DaemonClient;
       audio: Pick<AudioEngine, "play">;
-      configured?: readonly { id: string; enabled: boolean; status: string }[];
     },
   ): boolean {
-    for (const key of this.startupErrors.keys()) {
-      if (key.startsWith(`${serverId}/`)) this.startupErrors.delete(key);
-    }
-    for (const plugin of options.configured ?? []) {
-      if (plugin.enabled && plugin.status !== "running") {
-        const error = `插件 ${plugin.id} 尚未运行（${plugin.status}）`;
-        this.startupErrors.set(`${serverId}/${plugin.id}`, error);
-        console.warn(`[Plugins] ${error}`);
-      }
-    }
     const previous = this.byHost.get(serverId) ?? [];
     const previousTimelineBundles = previous
       .filter((plugin) => plugin.timelineTransformers.length > 0)
@@ -176,8 +139,6 @@ export class PluginRegistry {
         this.evaluationErrors.delete(key);
       }
     }
-    this.catalogErrors.delete(serverId);
-    this.loadedCatalogs.add(serverId);
     this.byHost.set(serverId, installed);
     this.publish();
     const installedTimelineBundles = installed
@@ -209,10 +170,6 @@ export class PluginRegistry {
   }
 
   removeHost(serverId: string): void {
-    this.markCatalogLoading(serverId);
-    for (const key of this.startupErrors.keys()) {
-      if (key.startsWith(`${serverId}/`)) this.startupErrors.delete(key);
-    }
     const installed = this.byHost.get(serverId);
     if (!installed) return;
     for (const plugin of installed) this.dispose(plugin);

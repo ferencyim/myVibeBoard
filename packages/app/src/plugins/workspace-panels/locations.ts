@@ -6,6 +6,7 @@ import type { PaneHost } from "@/panels/panel-manifest";
 import { panelSupportsHost } from "@/panels/panel-manifest";
 import type { PluginWorkspaceTabTarget, WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { pluginRegistry } from "../registry";
+import { resolvePluginWorkspacePanel } from "./resolution";
 
 const DEFAULT_LOCATIONS: readonly PluginPanelLocation[] = ["workspace"];
 
@@ -40,11 +41,7 @@ function findPluginPanel(serverId: string, target: PluginWorkspaceTabTarget) {
       .getSnapshot()
       .find((candidate) => candidate.serverId === serverId && candidate.id === target.pluginId) ??
     null;
-  return (
-    plugin?.workspacePanels.find(
-      (panel) => panel.id === target.panelId && panel.context === target.context,
-    ) ?? null
-  );
+  return resolvePluginWorkspacePanel(plugin, target);
 }
 
 /** The single target-aware boundary for placement, drag, drop, and restoration. */
@@ -53,16 +50,10 @@ export function panelTargetSupportsHost(
   target: WorkspaceTabTarget,
   host: PaneHost,
 ): boolean {
-  if (target.kind !== "plugin") return panelSupportsHost(target.kind, host);
+  if (target.kind !== "plugin" || host === "sheet") return panelSupportsHost(target.kind, host);
   const panel = findPluginPanel(serverId, target);
   // Preserve a persisted unavailable panel where the user left it until its plugin loads again.
   if (!panel) return true;
-  if (host === "sheet") {
-    return (
-      pluginPanelSupportsLocation(panel, "workspace") ||
-      pluginPanelSupportsLocation(panel, "explorer")
-    );
-  }
   const location: PluginPanelLocation = host === "explorer" ? "explorer" : "workspace";
   return pluginPanelSupportsLocation(panel, location);
 }

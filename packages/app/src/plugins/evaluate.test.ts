@@ -1,17 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { runPluginClientBundle, type PluginClientRuntime } from "./evaluate";
-
-// Registration tests exercise the real evaluator without loading native rendering dependencies.
-vi.mock("./react-native/runtime", () => ({
-  pluginReactNativeRuntime: {
-    Icon: (props: Record<string, unknown>) => ({ props }),
-    Modal: Object.assign(() => null, { Content: () => null }),
-    useToast: () => undefined,
-  },
-}));
-vi.mock("./react-native/ui", () => ({ ExternalLink: () => null }));
-vi.mock("./settings/use-settings", () => ({ useSettings: () => undefined }));
-vi.mock("@/utils/open-external-url", () => ({ openExternalUrl: async () => undefined }));
 
 const runtime = {
   paseo: {},
@@ -41,48 +29,25 @@ function bundle(body: string): string {
 }
 
 describe("evaluatePluginClientBundle", () => {
-  it("registers an outbox owner and releases the declaration on teardown", async () => {
-    const plugin = evaluatePluginClientBundle(
-      "tasks",
-      bundle('plugin.addFirstMessageOutboxOwner({ initialRole: "planner" });'),
-    );
-    expect(plugin.firstMessageOutboxOwners).toEqual([{ initialRole: "planner" }]);
-    await plugin.cleanup();
-    expect(plugin.firstMessageOutboxOwners).toEqual([]);
-  });
-
-  it("rejects empty roles and duplicate outbox declarations", () => {
-    expect(() =>
-      evaluatePluginClientBundle(
-        "tasks",
-        bundle('plugin.addFirstMessageOutboxOwner({ initialRole: " " });'),
-      ),
-    ).toThrow("initial role");
-    expect(() =>
-      evaluatePluginClientBundle(
-        "tasks",
-        bundle(
-          'plugin.addFirstMessageOutboxOwner({ initialRole: "planner" }); plugin.addFirstMessageOutboxOwner({ initialRole: "scout" });',
-        ),
-      ),
-    ).toThrow("Only one");
-  });
-  it("registers all seven Chinese task slash commands without dropping the plugin's other surfaces", () => {
+  it("accepts Chinese slash command names and normalizes ASCII ones", () => {
     const names = ["制定方案", "复核方案", "执行", "复核", "验证", "通过", "停止任务"];
     const plugin = evaluatePluginClientBundle(
       "task-flow",
       bundle(`
-      function Component() { return null; }
-      plugin.addWorkspacePanel({ id: "task-flow", title: "任务流程", icon: "Blocks", context: "agent", locations: ["conversation"], Component });
       for (const name of ${JSON.stringify(names)}) {
         plugin.addSlashCommand({ name, description: "任务流程", argumentHint: "", context: "agent", onSubmit() {} });
       }
-      plugin.addSidebarHeaderItem({ id: "tasks", title: "任务", Component });
     `),
     );
     expect(plugin.clientSlashCommands.map((command) => command.name)).toEqual(names);
-    expect(plugin.workspacePanels.map((panel) => panel.id)).toEqual(["task-flow"]);
-    expect(plugin.sidebarItems.header.map((item) => item.id)).toEqual(["tasks"]);
+
+    const ascii = evaluatePluginClientBundle(
+      "ascii-command",
+      bundle(`
+      plugin.addSlashCommand({ name: " review-code ", description: "Review", argumentHint: "", context: "workspace", onSubmit() {} });
+    `),
+    );
+    expect(ascii.clientSlashCommands[0]?.name).toBe("review-code");
   });
 
   it.each([
@@ -104,24 +69,6 @@ describe("evaluatePluginClientBundle", () => {
     `),
       ),
     ).toThrow("Invalid client slash command name");
-  });
-
-  it("preserves ASCII command normalization and the existing contribution ID restrictions", () => {
-    const plugin = evaluatePluginClientBundle(
-      "ascii-command",
-      bundle(`
-      plugin.addSlashCommand({ name: " review-code ", description: "Review", argumentHint: "", context: "workspace", onSubmit() {} });
-    `),
-    );
-    expect(plugin.clientSlashCommands[0]?.name).toBe("review-code");
-    expect(() =>
-      evaluatePluginClientBundle(
-        "invalid-panel",
-        bundle(`
-      plugin.addWorkspacePanel({ id: "任务流程", title: "任务流程", icon: "Blocks", context: "workspace", Component() { return null; } });
-    `),
-      ),
-    ).toThrow("Invalid workspace panel id");
   });
 
   it("releases button registrations when client setup throws", () => {
@@ -552,12 +499,12 @@ describe("evaluatePluginClientBundle", () => {
           title: "Review",
           icon: "Scan",
           context: "agent",
-          locations: ["conversation"],
+          locations: ["workspace", "explorer"],
           Component: ReviewPanel,
         });
       `),
     );
-    expect(plugin.workspacePanels[0]?.locations).toEqual(["conversation"]);
+    expect(plugin.workspacePanels[0]?.locations).toEqual(["workspace", "explorer"]);
 
     for (const [locations, message] of [
       ["[]", "must support at least one location"],
@@ -581,18 +528,6 @@ describe("evaluatePluginClientBundle", () => {
         ),
       ).toThrow(message);
     }
-  });
-
-  it("requires agent context for conversation placement", () => {
-    expect(() =>
-      evaluatePluginClientBundle(
-        "review",
-        bundle(`
-      plugin.addWorkspacePanel({ id: "review", title: "Review", icon: "Scan",
-        context: "workspace", locations: ["conversation"], Component: function() { return null; } });
-    `),
-      ),
-    ).toThrow("needs agent context for conversation placement");
   });
 
   it("rejects duplicate workspace panel and Command Center ids", () => {

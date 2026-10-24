@@ -478,7 +478,6 @@ export interface CreateWorkspaceRequestOptions {
   callerAgentId?: string;
   idempotencyKey?: string;
   workspaceId?: string;
-  taskConversation?: WorkspaceCreateRequest["taskConversation"];
   agent?: Omit<
     CreateAgentRequestOptions,
     "workspaceId" | "onEvent" | "worktree" | "git" | "worktreeName" | "idempotencyKey" | "requestId"
@@ -988,12 +987,6 @@ type CorrelatedResponseMessage =
   | Extract<SessionOutboundMessage, { type: "terminals_changed" }>
   | GetDaemonConfigResponse
   | SetDaemonConfigResponse;
-export type TaskConversationRequestOptions<
-  T extends Extract<SessionInboundMessage["type"], `task.conversation.${string}.request`>,
-> = Omit<Extract<SessionInboundMessage, { type: T }>, "type" | "requestId"> & {
-  requestId?: string;
-};
-
 type CorrelatedResponseType = CorrelatedResponseMessage["type"];
 type CorrelatedResponsePayloads = {
   [Message in CorrelatedResponseMessage as Message["type"]]: Message["payload"];
@@ -1011,11 +1004,10 @@ export class DaemonConnectionError extends Error {
   }
 }
 
-export class DaemonRpcError extends Error {
+class DaemonRpcError extends Error {
   readonly requestId: string;
   readonly requestType?: string;
   readonly code?: string;
-  readonly serverMessage: string;
 
   constructor(params: { requestId: string; error: string; requestType?: string; code?: string }) {
     const parts = [params.error];
@@ -1023,7 +1015,6 @@ export class DaemonRpcError extends Error {
     if (params.code) parts.push(`code=${params.code}`);
     super(parts.join(" "));
     this.name = "DaemonRpcError";
-    this.serverMessage = params.error;
     this.requestId = params.requestId;
     this.requestType = params.requestType;
     this.code = params.code;
@@ -2357,161 +2348,6 @@ export class DaemonClient {
           this.scheduleReconnect({ reason: "Subscription request failed" });
         }
       },
-    );
-  }
-
-  supportsTaskConversations(): boolean {
-    return this.lastServerInfoMessage?.features?.taskConversations === true;
-  }
-
-  private requireTaskConversations(): void {
-    if (!this.supportsTaskConversations())
-      throw new Error("Update the host to use task conversations.");
-  }
-
-  createTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.create.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.create.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.create.request" },
-      responseType: "task.conversation.create.response",
-    });
-  }
-
-  resolveTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.resolve.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.resolve.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.resolve.request" },
-      responseType: "task.conversation.resolve.response",
-    });
-  }
-
-  sendTaskConversationMessage(
-    options: TaskConversationRequestOptions<"task.conversation.send.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.send.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.send.request" },
-      responseType: "task.conversation.send.response",
-    });
-  }
-
-  getTaskConversationDelivery(
-    options: TaskConversationRequestOptions<"task.conversation.get_delivery.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.get_delivery.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.get_delivery.request" },
-      responseType: "task.conversation.get_delivery.response",
-    });
-  }
-
-  fetchTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.fetch.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.fetch.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.fetch.request" },
-      responseType: "task.conversation.fetch.response",
-    });
-  }
-
-  publishTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.publish.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.publish.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.publish.request" },
-      responseType: "task.conversation.publish.response",
-    });
-  }
-
-  queryTaskConversationSource(
-    options: TaskConversationRequestOptions<"task.conversation.query_source.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.query_source.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.query_source.request" },
-      responseType: "task.conversation.query_source.response",
-    });
-  }
-
-  stopTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.stop.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.stop.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.stop.request" },
-      responseType: "task.conversation.stop.response",
-    });
-  }
-
-  archiveTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.archive.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.archive.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.archive.request" },
-      responseType: "task.conversation.archive.response",
-    });
-  }
-
-  compactTaskConversationMember(
-    options: TaskConversationRequestOptions<"task.conversation.compact.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.compact.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.compact.request" },
-      responseType: "task.conversation.compact.response",
-    });
-  }
-
-  unsubscribeTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.unsubscribe.request">,
-  ): Promise<CorrelatedResponsePayload<"task.conversation.unsubscribe.response">> {
-    this.requireTaskConversations();
-    const { requestId, ...input } = options;
-    return this.sendCorrelatedSessionRequest({
-      requestId,
-      message: { ...input, type: "task.conversation.unsubscribe.request" },
-      responseType: "task.conversation.unsubscribe.response",
-    });
-  }
-
-  observeTaskConversation(
-    options: TaskConversationRequestOptions<"task.conversation.subscribe.request"> & {
-      signal?: AbortSignal;
-    },
-  ): OwnedSubscription<CorrelatedResponsePayload<"task.conversation.subscribe.response">> {
-    this.requireTaskConversations();
-    const { requestId, signal, ...input } = options;
-    return this.observe(
-      "task.conversation.subscribe.response",
-      { ...input, type: "task.conversation.subscribe.request" },
-      { requestId, signal },
     );
   }
 
@@ -4791,7 +4627,6 @@ export class DaemonClient {
     requestId?: string,
   ): Promise<WorkspaceCreatePayload> {
     const resolvedRequestId = this.createRequestId(requestId ?? input.requestId);
-    if (input.taskConversation) this.requireTaskConversations();
     if (input.background !== undefined || input.callerAgentId) this.requireBackgroundWorkspaces();
     if (input.agent?.background !== undefined)
       throw new Error("Configure background on the workspace, not its initial agent.");

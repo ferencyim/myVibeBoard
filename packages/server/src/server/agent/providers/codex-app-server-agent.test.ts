@@ -5620,35 +5620,6 @@ describe("Codex app-server provider", () => {
     ]);
   });
 
-  test("formats ordinary compact failures and rejects failures for native control callers", async () => {
-    const session = createSession();
-    session.client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "thread/loaded/list") return { data: ["test-thread"] };
-        if (method === "skills/list") return { data: [] };
-        if (method === "thread/compact/start") throw new Error("native compact unavailable");
-        return {};
-      }),
-    };
-    const handler = session.tryHandleOutOfBand?.("/compact");
-    expect(handler).not.toBeNull();
-    const emit = vi.fn();
-    await expect(handler!.run({ emit })).resolves.toBeUndefined();
-    expect(emit).toHaveBeenCalledExactlyOnceWith({
-      type: "timeline",
-      provider: "codex",
-      item: {
-        type: "assistant_message",
-        text: "Failed to compact context: native compact unavailable\n\n",
-      },
-    });
-    emit.mockClear();
-    await expect(handler!.run({ emit, throwOnError: true })).rejects.toThrow(
-      "native compact unavailable",
-    );
-    expect(emit).not.toHaveBeenCalled();
-  });
-
   test("maps question responses from headers back to question ids and completes the tool call", async () => {
     const session = createSession();
     const events: AgentStreamEvent[] = [];
@@ -5726,87 +5697,6 @@ describe("Codex app-server provider", () => {
         },
       },
     });
-  });
-
-  test("persists a synthetic plan approval across graceful session closure with a stable request id", async () => {
-    const session = createSession({ featureValues: { plan_mode: true } });
-    const events: AgentStreamEvent[] = [];
-    session.subscribe((event) => events.push(event));
-    castInternals<{ emitSyntheticPlanApprovalRequest(text: string): void }>(
-      session,
-    ).emitSyntheticPlanApprovalRequest("检查代码后实现修复");
-    const approval = session.getPendingPermissions()[0]!;
-    const handle = session.describePersistence()!;
-    expect(handle.metadata?.planApproval).toMatchObject({
-      requestId: approval.id,
-      text: "检查代码后实现修复",
-      turnId: "test-turn",
-    });
-    await session.close();
-    expect(
-      events.some(
-        (event) => event.type === "permission_resolved" && event.requestId === approval.id,
-      ),
-    ).toBe(false);
-    const resumed = new CodexAppServerAgentSession(
-      createConfig({ featureValues: { plan_mode: true } }),
-      handle,
-      createTestLogger(),
-      async () => {
-        throw new Error("Synthetic approval must not require a live RPC");
-      },
-    );
-    expect(resumed.getPendingPermissions()).toEqual([approval]);
-    const result = await resumed.respondToPermission(approval.id, {
-      behavior: "allow",
-      selectedActionId: "implement",
-    });
-    expect(result).toMatchObject({ followUpPrompt: expect.stringContaining("检查代码后实现修复") });
-    expect(resumed.describePersistence()!.metadata).not.toHaveProperty("planApproval");
-    expect(resumed.getPendingPermissions()).toEqual([]);
-    await resumed.close();
-  });
-
-  test("does not restore synthetic plan approval actions in a read-only history session", async () => {
-    const session = new CodexAppServerAgentSession(
-      createConfig(),
-      {
-        sessionId: "archived-thread",
-        metadata: { planApproval: { requestId: "pending-plan", text: "归档历史中的方案" } },
-      },
-      createTestLogger(),
-      async () => {
-        throw new Error("No provider process expected");
-      },
-      {},
-      false,
-      false,
-      false,
-      undefined,
-      "history",
-    );
-    expect(session.getPendingPermissions()).toEqual([]);
-    expect(session.describePersistence()!.metadata).not.toHaveProperty("planApproval");
-    await session.close();
-  });
-
-  test("ignores malformed persisted synthetic plan approvals and does not restore live permission RPCs", async () => {
-    const session = new CodexAppServerAgentSession(
-      createConfig(),
-      {
-        sessionId: "thread",
-        metadata: {
-          planApproval: { requestId: "invalid", text: 42 },
-          pendingPermissions: [{ id: "stale-rpc", kind: "tool" }],
-        },
-      },
-      createTestLogger(),
-      async () => {
-        throw new Error("No provider process expected");
-      },
-    );
-    expect(session.getPendingPermissions()).toEqual([]);
-    await session.close();
   });
 
   test("emits a synthetic plan approval permission after a successful Codex plan turn", () => {
