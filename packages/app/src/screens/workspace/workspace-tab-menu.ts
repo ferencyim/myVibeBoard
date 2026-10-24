@@ -127,9 +127,6 @@ function buildCloseAfterTestIDSuffix(surface: WorkspaceTabMenuSurface): string {
 }
 
 function getCloseButtonTestId(tab: WorkspaceTabDescriptor): string {
-  if (tab.target.kind === "task_conversation") {
-    return `workspace-task-conversation-close-${tab.target.conversationId}`;
-  }
   if (tab.target.kind === "agent") {
     return `workspace-agent-close-${tab.target.agentId}`;
   }

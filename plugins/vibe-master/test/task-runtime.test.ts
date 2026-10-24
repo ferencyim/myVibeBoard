@@ -66,7 +66,21 @@ function setup(script: Script, git?: GitRunner) {
       subtasks: [],
       checks: [{ text: "测试通过", method: "单测" }],
     });
-    if (confirm) board.store.tasks.confirm(id, { rolesSnapshot: roles });
+    if (confirm) {
+      const created = board.store.tasks.get(id)!;
+      const tab =
+        created.tabs.find((item) => item.agentId === created.anchorAgentId) ??
+        board.store.tasks.allocateTab(id, {
+          agentId: created.anchorAgentId,
+          role: "main",
+          provider: "codex",
+          model: "test",
+        }).tab;
+      board.store.tasks.confirm(id, {
+        rolesSnapshot: roles,
+        planSource: { tabNumber: tab.number, agentId: tab.agentId, sourceKey: "test-" + id },
+      });
+    }
     return board.store.tasks.get(id)!;
   }
   const answers = () =>

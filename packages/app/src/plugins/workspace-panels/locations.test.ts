@@ -20,7 +20,7 @@ vi.mock("../client-runtime", () => ({
   }),
 }));
 
-function install(locations: readonly ("workspace" | "explorer" | "conversation")[]) {
+function install(locations: readonly ("workspace" | "explorer")[]) {
   const bundle = `(function() {
     return { default: function(plugin) {
       plugin.addWorkspacePanel({
@@ -70,22 +70,6 @@ describe("plugin workspace panel locations", () => {
     expect(() => resolvePluginPanelOpenLocation(workspaceOnly, "explorer")).toThrow(
       "does not support explorer location",
     );
-    pluginRegistry.removeHost("host-1");
-  });
-
-  it("keeps conversation-only panels out of standalone tab hosts", () => {
-    const panel = install(["conversation"]).workspacePanels[0]!;
-    expect(resolvePluginPanelOpenLocation(panel)).toBe("conversation");
-    const target = {
-      kind: "plugin" as const,
-      pluginId: "review",
-      panelId: "details",
-      context: "agent" as const,
-      agentId: "anchor",
-    };
-    expect(panelTargetSupportsHost("host-1", target, "main")).toBe(false);
-    expect(panelTargetSupportsHost("host-1", target, "explorer")).toBe(false);
-    expect(panelTargetSupportsHost("host-1", target, "sheet")).toBe(false);
     pluginRegistry.removeHost("host-1");
   });
 });

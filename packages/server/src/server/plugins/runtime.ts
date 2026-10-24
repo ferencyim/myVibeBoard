@@ -31,6 +31,7 @@ import { readPluginManifest } from "./manifest.js";
 import type { PluginRequirements } from "@getpaseo/protocol/messages";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
 import type {
+  PluginAgentToolMetadata,
   PluginProcessMessage,
   PluginProcessRequest,
   PluginProviderMetadata,
@@ -79,6 +80,7 @@ interface LoadedPlugin {
   hooks: { events: string[]; before: string[] };
   providers: readonly PluginProviderMetadata[];
   usageSources: readonly PluginUsageSourceMetadata[];
+  agentTools: readonly PluginAgentToolMetadata[];
   child: PluginChild | null;
   outputCapture: PluginOutputCapture | null;
   pending: Map<string, PendingInvocation>;
@@ -512,12 +514,29 @@ export class PluginRuntime {
     this.logTails.delete(pluginId);
   }
 
-  async invoke(pluginId: string, method: string, input: unknown): Promise<unknown> {
+  async invoke(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    callerAgentId?: string,
+  ): Promise<unknown> {
     const loaded = this.plugins.get(pluginId);
     if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
     if (!loaded.methods.has(method))
       throw new Error(`Plugin ${pluginId} does not contribute RPC ${method}`);
-    return this.request(loaded, { type: "invoke", requestId: randomUUID(), method, input });
+    return this.request(loaded, {
+      type: "invoke",
+      requestId: randomUUID(),
+      method,
+      input,
+      ...(callerAgentId ? { callerAgentId } : {}),
+    });
+  }
+
+  listAgentTools(): ReadonlyArray<PluginAgentToolMetadata & { pluginId: string }> {
+    return [...this.plugins.values()].flatMap((loaded) =>
+      loaded.agentTools.map((tool) => ({ ...tool, pluginId: loaded.id })),
+    );
   }
 
   emit<Name extends keyof PluginLifecycleEvents>(
@@ -552,24 +571,15 @@ export class PluginRuntime {
     await Promise.all(this.pendingEvents);
   }
 
-  hasBefore(pluginId: string, name: keyof PluginBeforeRequests): boolean {
-    return this.plugins.get(pluginId)?.hooks.before.includes(name) ?? false;
-  }
-
   async before<Name extends keyof PluginBeforeRequests>(
     name: Name,
     input: PluginBeforeRequests[Name],
-    options?: { pluginId: string },
   ): Promise<PluginBeforeRequests[Name]> {
     let request = validateBeforeRequest(name, input);
-    if (options && !this.hasBefore(options.pluginId, name)) {
-      throw new Error(`Plugin ${options.pluginId} before ${name} is unavailable`);
-    }
     const plugins = [...this.plugins.values()].sort((left, right) => {
       return left.id.localeCompare(right.id);
     });
     for (const loaded of plugins) {
-      if (options && loaded.id !== options.pluginId) continue;
       if (!loaded.hooks.before.includes(name)) {
         continue;
       }
@@ -662,6 +672,7 @@ export class PluginRuntime {
         hooks: { events: [], before: [] },
         providers: [],
         usageSources: [],
+        agentTools: [],
         child: null,
         outputCapture: null,
         pending: new Map(),
@@ -790,6 +801,7 @@ export class PluginRuntime {
       hooks: ready.hooks ?? { events: [], before: [] },
       providers: ready.providers ?? [],
       usageSources: ready.usageSources ?? [],
+      agentTools: ready.agentTools ?? [],
       child,
       outputCapture,
       pending,

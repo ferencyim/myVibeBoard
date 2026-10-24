@@ -14,7 +14,6 @@ function input(id = "draft-one", hostId = "host-one"): FirstMessageOutboxInput {
     hostId,
     projectId: "project-one",
     source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
-    owner: { pluginId: "vibe-board", initialRole: "planner" },
     config: { provider: "codex", cwd: "/repo", model: "planning-model" },
     text: "规划一个新任务，先等我确认方案。",
     attachments: [],
@@ -56,8 +55,6 @@ function snapshot(
     revision: 1,
     workspaceId: "workspace-one",
     agentId: "agent-one",
-    conversationId: "conversation-one",
-    memberId: "planner-one",
     error: null,
   };
 }
@@ -133,29 +130,19 @@ describe("手机新任务首消息 outbox", () => {
       expect(request).toMatchObject({
         idempotencyKey: "intent-1",
         requestId: "intent-1",
-        taskConversation: {
-          idempotencyKey: "intent-1",
-          ownerPluginId: "vibe-board",
-          initialRecipient: { role: "planner", config: input().config },
-          initialMessage: {
-            text: input().text,
-            clientMessageId: "intent-1:initial-message",
-          },
+        agent: {
+          initialPrompt: input().text,
+          clientMessageId: "intent-1:initial-message",
+          config: input().config,
         },
       });
-      expect(request.agent).toBeUndefined();
       return response();
     });
     await q.enqueue(input());
     await q.flushHost("host-one", native);
     expect(q.getSnapshot()[0]).toMatchObject({
       status: "sent",
-      result: {
-        workspaceId: "workspace-one",
-        agentId: "agent-one",
-        conversationId: "conversation-one",
-        memberId: "planner-one",
-      },
+      result: { workspaceId: "workspace-one", agentId: "agent-one" },
     });
     await q.flushHost("host-one", native);
     expect(native.createWorkspace).toHaveBeenCalledTimes(1);
@@ -382,119 +369,4 @@ it("目标主机缺少创建能力时保留内容并显示升级原因，不影�
     submitted: false,
   });
   expect(q.getSnapshot()[1]).toMatchObject({ status: "queued", hostId: "host-two" });
-});
-
-it("群聊创建保留规划预设、附件和首消息幂等身份", async () => {
-  const q = fixture().queue();
-  const native = port();
-  const prepared = {
-    images: [{ data: "aW1hZ2U=", mimeType: "image/png" }],
-    attachments: [{ type: "text", mimeType: "text/plain", text: "完整证据", title: "证据" }],
-  } as const;
-  vi.mocked(native.prepareAttachments).mockResolvedValue({
-    images: [...prepared.images],
-    attachments: [...prepared.attachments],
-  });
-  await q.enqueue({ ...input(), plannerPresetId: "selected-planner" });
-  await q.flushHost("host-one", native);
-  expect(native.createWorkspace).toHaveBeenCalledWith(
-    expect.objectContaining({
-      taskConversation: {
-        idempotencyKey: "intent-1",
-        ownerPluginId: "vibe-board",
-        initialRecipient: { role: "planner", presetId: "selected-planner", config: input().config },
-        initialMessage: {
-          text: input().text,
-          clientMessageId: "intent-1:initial-message",
-          ...prepared,
-        },
-      },
-    }),
-  );
-});
-
-it("旧的普通 agent 完成回执不能冒充任务群聊，也不能再次投递首消息", async () => {
-  const q = fixture().queue();
-  const native = port();
-  const legacy = { ...snapshot(), conversationId: undefined, memberId: undefined };
-  vi.mocked(native.createWorkspace).mockResolvedValue(response(legacy));
-  await q.enqueue(input());
-  await q.flushHost("host-one", native);
-  expect(q.getSnapshot()[0]).toMatchObject({
-    status: "failed",
-    replayBlocked: true,
-    result: null,
-    text: input().text,
-  });
-  expect(q.getSnapshot()[0].error).toContain("群聊");
-  await q.retry("draft-one");
-  vi.mocked(native.getCreation).mockResolvedValue(legacy);
-  await q.flushHost("host-one", native);
-  expect(native.createWorkspace).toHaveBeenCalledTimes(1);
-});
-
-it.each(["/制定方案", "/复核方案", "/执行", "/复核", "/验证", "/通过", "/停止任务"])(
-  "任务流程命令 %s 不进入离线首消息队列",
-  async (text) => {
-    const q = fixture().queue();
-    await expect(q.enqueue({ ...input(), text })).rejects.toThrow("需要联网");
-    expect(q.getSnapshot()).toHaveLength(0);
-  },
-);
-
-it("升级提示没有新待发送项时不反复落盘和唤醒发送循环", async () => {
-  const f = fixture();
-  const q = f.queue();
-  await q.enqueue(input());
-  await q.failUnsubmittedHost("host-one", "请升级主机");
-  const writes = vi.mocked(f.storage.setItem).mock.calls.length;
-  await q.failUnsubmittedHost("host-one", "请升级主机");
-  expect(f.storage.setItem).toHaveBeenCalledTimes(writes);
-});
-
-it("没有插件声明时使用普通 agent 创建并接受普通会话回执", async () => {
-  const q = fixture().queue();
-  const native = port();
-  const ordinary = { ...snapshot(), conversationId: undefined, memberId: undefined };
-  vi.mocked(native.createWorkspace).mockResolvedValue(response(ordinary));
-  const draft = {
-    ...input(),
-    owner: undefined,
-    source: { kind: "directory" as const, path: "/repo", projectId: "project-one" },
-  };
-  await q.enqueue(draft);
-  await q.flushHost("host-one", native);
-  expect(native.createWorkspace).toHaveBeenCalledWith(
-    expect.objectContaining({
-      source: draft.source,
-      agent: {
-        config: draft.config,
-        initialPrompt: draft.text,
-        clientMessageId: "intent-1:initial-message",
-      },
-    }),
-  );
-  expect(vi.mocked(native.createWorkspace).mock.calls[0][0].taskConversation).toBeUndefined();
-  expect(q.getSnapshot()[0]).toMatchObject({
-    status: "sent",
-    result: { agentId: "agent-one", workspaceId: "workspace-one" },
-  });
-});
-
-it("owner 来自插件声明，重启后继续使用同一安装身份与角色", async () => {
-  const f = fixture();
-  await f
-    .queue()
-    .enqueue({ ...input(), owner: { pluginId: "installed-custom-id", initialRole: "scout" } });
-  const q = f.queue();
-  const native = port();
-  await q.flushHost("host-one", native);
-  expect(native.createWorkspace).toHaveBeenCalledWith(
-    expect.objectContaining({
-      taskConversation: expect.objectContaining({
-        ownerPluginId: "installed-custom-id",
-        initialRecipient: expect.objectContaining({ role: "scout" }),
-      }),
-    }),
-  );
 });

@@ -7,9 +7,13 @@ import {
 } from "./plugin-process-protocol.js";
 import type { UsageSourceRegistration } from "@getpaseo/plugin/server/usage";
 import type { SettingsDefinition, PluginRpcContract } from "@getpaseo/plugin";
-import type { PluginHandlerContext, PluginServerContribution } from "@getpaseo/plugin/server";
+import type {
+  PluginAgentTool,
+  PluginHandlerContext,
+  PluginServerContribution,
+} from "@getpaseo/plugin/server";
 import { fileURLToPath } from "node:url";
-import type { ZodType } from "zod";
+import { z, type ZodType } from "zod";
 import {
   ProviderEventSchema,
   type ProviderConnection,
@@ -31,6 +35,23 @@ export interface PluginWorkerChannel {
   send(message: PluginProcessMessage, callback?: () => void): void;
   onMessage(handler: (message: PluginProcessRequest) => void): () => void;
   disconnect(): void;
+}
+
+/** Input-less agent tools still advertise a strict empty object schema. */
+export function describeAgentToolInput(tool: PluginAgentTool): {
+  input: ZodType;
+  inputSchema: Record<string, unknown>;
+} {
+  if (!tool.input) {
+    return {
+      input: z.unknown(),
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    };
+  }
+  return {
+    input: tool.input,
+    inputSchema: z.toJSONSchema(tool.input, { io: "input" }) as Record<string, unknown>,
+  };
 }
 
 export function createPluginWorker(options: {
@@ -65,6 +86,10 @@ export function createPluginWorker(options: {
   const handlers = new Map<string, RegisteredRpc>();
   const providers = new Map<string, ProviderRegistration>();
   const usageSources = new Map<string, UsageSourceRegistration>();
+  const agentTools = new Map<
+    string,
+    { description: string; inputSchema: Record<string, unknown> }
+  >();
   const providerConnections = new Map<
     string,
     { connection: ProviderConnection; unsubscribe: () => void; closing?: Promise<void> }
@@ -150,6 +175,19 @@ export function createPluginWorker(options: {
     }
     if (usageSources.has(id)) throw new Error(`Duplicate usage source: ${id}`);
     usageSources.set(id, { ...source, id });
+  }
+
+  function registerAgentTool(tool: PluginAgentTool): void {
+    const name = validateMethod(tool.name);
+    if (!tool.description.trim())
+      throw new Error(`Plugin agent tool ${name} requires a description`);
+    if (typeof tool.handler !== "function")
+      throw new Error(`Plugin agent tool ${name} must provide a handler`);
+    const { input, inputSchema } = describeAgentToolInput(tool);
+    register({ name, input, output: z.unknown() }, (parsed, context) =>
+      tool.handler(parsed, { callerAgentId: context.callerAgentId ?? null }),
+    );
+    agentTools.set(name, { description: tool.description, inputSchema });
   }
 
   function providerMetadata(provider: ProviderRegistration) {
@@ -288,10 +326,10 @@ export function createPluginWorker(options: {
         register(contract, (input, context) => handler(contract.input.parse(input), context)),
       registerProvider,
       registerUsageSource,
+      registerAgentTool,
       registerSettings,
       on: hooks.on,
       before: hooks.before,
-      registerTaskConversationHooks: hooks.registerTaskConversationHooks,
     });
     if (typeof contributedCleanup !== "function") {
       throw new Error("Plugin contribution must return a cleanup function");
@@ -311,6 +349,9 @@ export function createPluginWorker(options: {
     send({
       type: "ready",
       methods: [...handlers.keys()].sort(),
+      agentTools: [...agentTools.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, tool]) => Object.assign({ name }, tool)),
       hooks: hooks.catalog(),
       providers: [...providers.values()]
         .sort((left, right) => left.id.localeCompare(right.id))
@@ -500,7 +541,10 @@ export function createPluginWorker(options: {
       .parseAsync(message.input)
       .then((input) => {
         if (!paseo) throw new Error("Plugin Paseo API is unavailable");
-        return registered.handler(input, { paseo });
+        return registered.handler(input, {
+          paseo,
+          ...(message.callerAgentId ? { callerAgentId: message.callerAgentId } : {}),
+        });
       })
       .then((output) => registered.contract.output.parseAsync(output))
       .then(

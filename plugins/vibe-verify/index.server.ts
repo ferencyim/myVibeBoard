@@ -2,22 +2,19 @@ import { taskVerifyGetRpc, taskVerifyRerunRpc } from "./shared/task-rpc";
 import { createTaskPipeline } from "./server/task-pipeline";
 import { createTaskVerifyStore } from "./server/task-store";
 import { createTaskResources } from "./server/task-resources";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { createNodeRunner } from "./server/collectors/common";
 import { verifySettings } from "./shared/settings";
 import { createVerifyPrompts } from "./server/prompts";
 import { tuningOf, type VerifyTuning } from "./server/tuning";
-import { isEvent } from "./server/vibe/contract";
+import { isEvent, providerModelLabel, tabTitle } from "./server/vibe/contract";
 import { createVerifyRegistry, type RunConfigs } from "./server/registry";
 import { registerVerifyRpcs } from "./server/rpc";
 import { createPaseoVerifierLauncher, type VerifierLauncher } from "./server/verifier/agent";
-import {
-  decideVerifierPermission,
-  restoredVerifierPolicy,
-  type PolicyContext,
-} from "./server/verifier/policy";
 import {
   createDeviceLeases,
   createEventConsumer,
@@ -25,7 +22,6 @@ import {
   migrateOwner,
   openVibeDb,
   publishEvent,
-  createTaskRuntimeCommands,
   resolveVibeHome,
 } from "./server/vibe/db";
 
@@ -57,63 +53,56 @@ export default function contribute(server: PluginServerContext) {
     server.on(name, (_event, { paseo: api }) => remember(api));
   }
 
-  // Verifier agents -> where they may write (their output directory); read-only otherwise.
-  const taskRuntime = createTaskRuntimeCommands(db);
-  const verifierDirs = new Map<string, PolicyContext>();
-  const inner = createPaseoVerifierLauncher({
+  // The board registers every created agent from its agent.created hook; this claim overrides
+  // that default registration with the referee identity once the task row is readable.
+  const claimTab: NonNullable<
+    Parameters<typeof createPaseoVerifierLauncher>[0]["claimTab"]
+  > = async (input) => {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const task = board.tasks.get(input.workspaceId);
+      if (task) {
+        const extra = {
+          ...(input.thinking ? { thinking: input.thinking } : {}),
+          ...(input.presetId ? { presetId: input.presetId } : {}),
+        };
+        const label = paseo
+          ? await providerModelLabel(paseo, input.provider, input.model).catch(
+              () => input.model,
+            )
+          : input.model;
+        const modelLabel = label && label !== input.model ? label : undefined;
+        board.tasks.allocateTab(input.workspaceId, {
+          agentId: input.agentId,
+          role: input.role,
+          provider: input.provider,
+          model: input.model,
+          ...extra,
+          ...(modelLabel ? { modelLabel } : {}),
+        });
+        const tab = board.tasks.updateTab(input.workspaceId, input.agentId, {
+          role: input.role,
+          provider: input.provider,
+          model: input.model,
+          ...extra,
+          modelLabel: modelLabel ?? null,
+        });
+        await paseo?.agents
+          .ref(input.agentId)
+          .setTitle(tabTitle(tab))
+          .catch((error) => log("验证 tab 标题设置失败", error));
+        return;
+      }
+      if (Date.now() >= deadline)
+        throw new Error("验证 tab 未能登记到任务：等待任务登记超时");
+      await delay(200);
+    }
+  };
+  const launcher: VerifierLauncher = createPaseoVerifierLauncher({
     getPaseo: () => paseo,
     prompts,
     roundTimeoutMs: () => tuning.roundTimeoutMs,
-  });
-  const launcher: VerifierLauncher = {
-    async launch(input) {
-      const ids = new Set<string>();
-      const register = (agentId: string) => {
-        if (!agentId) return;
-        ids.add(agentId);
-        verifierDirs.set(agentId, { outputDir: input.outputDir, denyShell: !!input.task });
-      };
-      const agent = await inner.launch({
-        ...input,
-        onCreated: (selection) => {
-          register(selection.agentId);
-          input.onCreated?.(selection);
-        },
-        onReplacement: (next) => {
-          register(next.agentId);
-          input.onReplacement?.(next);
-        },
-      });
-      register(agent.agentId);
-      return {
-        ...agent,
-        get agentId() {
-          return agent.agentId;
-        },
-        get source() {
-          return agent.source;
-        },
-        run: agent.run.bind(agent),
-        close: async () => {
-          await agent.close();
-          if (!input.task) for (const id of ids) verifierDirs.delete(id);
-        },
-      };
-    },
-  };
-  server.on("agent.permission_requested", async ({ agent, request }, { paseo: api }) => {
-    remember(api);
-    let policy = verifierDirs.get(agent.id);
-    if (!policy) {
-      const session = taskRuntime.findSessionByAgent(agent.id);
-      policy = restoredVerifierPolicy(session, join(home, "verify"));
-    }
-    if (!policy) return;
-    const response = decideVerifierPermission(request, policy);
-    await api.agents
-      .ref(agent.id)
-      .respondToPermission({ requestId: request.id, response })
-      .catch((error) => log("answering a verifier permission request failed", error));
+    claimTab,
   });
 
   const taskVerify = createTaskVerifyStore(db, join(home, "verify"));
@@ -159,8 +148,24 @@ export default function contribute(server: PluginServerContext) {
         projectTypes: project.projectTypes,
       };
     },
-    // The conversation owner publishes durable taskArtifacts and replays pending indexes after restart.
-    async append() {},
+    async timeline(agentId: string) {
+      if (!paseo) throw new Error("等待原生连接后重新核对验证 tab 时间线");
+      const page = await paseo.agents
+        .ref(agentId)
+        .timeline.refetch({ direction: "tail", limit: 1_000 });
+      return page.entries ?? [];
+    },
+    // The board owns task artifacts; verification summaries append to the anchor tab timeline.
+    async append(anchorAgentId: string, text: string) {
+      if (!paseo) return;
+      await paseo.agents.ref(anchorAgentId).timeline.append({
+        type: "plugin",
+        id: randomUUID(),
+        kind: "task-status",
+        version: 1,
+        data: { text },
+      });
+    },
   });
   const startTask = (workspaceId: string) =>
     void taskPipeline.run(workspaceId).catch((error) => log("任务验证失败", error));

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createMaintenanceEngine, type EngineOptions } from "../server/engine";
 import { createGitCheck } from "../server/git/check";
 import { execGit } from "../server/git/exec";
-import type { Project, Task, TaskRoleSnapshot } from "../server/vibe/contract";
+import type { Project, Task, TaskPlan, TaskRoleSnapshot } from "../server/vibe/contract";
 import {
   createVibeStore,
   createMaintenanceCommands,
@@ -16,6 +16,30 @@ import {
 } from "../server/vibe/db";
 
 export const tempDir = (prefix = "vibe-maintain-") => mkdtempSync(join(tmpdir(), prefix));
+
+/** Confirms a maintenance task through its anchor tab, matching the round-6 plan source. */
+export function confirmTask(
+  store: ReturnType<typeof createVibeStore>,
+  workspaceId: string,
+  taskPlan: TaskPlan,
+  taskRoles: TaskRoleSnapshot,
+) {
+  const task = store.tasks.get(workspaceId);
+  if (!task) throw new Error("任务不存在：" + workspaceId);
+  const tab =
+    task.tabs.find((item) => item.agentId === task.anchorAgentId) ??
+    store.tasks.allocateTab(workspaceId, {
+      agentId: task.anchorAgentId,
+      role: "main",
+      provider: "codex",
+      model: "test",
+    }).tab;
+  return store.tasks.confirm(workspaceId, {
+    plan: taskPlan,
+    rolesSnapshot: taskRoles,
+    planSource: { tabNumber: tab.number, agentId: tab.agentId, sourceKey: "test-" + workspaceId },
+  });
+}
 
 /** Keep registered Git worktrees inside the checkout's permitted D: worktree root. */
 export function tempWorktreeDir() {
@@ -142,7 +166,7 @@ export function complete(
       model: "test",
       candidateIndex: 0,
     });
-    h.store.tasks.confirm(workspaceId, { plan, rolesSnapshot: roles });
+    confirmTask(h.store, workspaceId, plan, roles);
     for (const phase of ["executing", "verifying", "awaiting_acceptance", "completed"] as const)
       h.store.tasks.setPhase(workspaceId, phase);
   }

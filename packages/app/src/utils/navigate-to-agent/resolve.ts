@@ -13,8 +13,6 @@ export interface NavigateToAgentInput {
 
 export interface AgentNavTarget {
   agentWorkspaceId: string | null | undefined;
-  conversationId?: string;
-  isKnown?: boolean;
 }
 
 export interface NavigateToAgentDeps {
@@ -27,11 +25,12 @@ export function resolveNavigateToAgent(
   input: NavigateToAgentInput,
   deps: NavigateToAgentDeps,
 ): string {
-  const agentTarget = deps.readAgentNavTarget({ serverId: input.serverId, agentId: input.agentId });
-  const agentWorkspaceId = input.workspaceId ?? agentTarget.agentWorkspaceId;
+  const agentWorkspaceId =
+    input.workspaceId ??
+    deps.readAgentNavTarget({ serverId: input.serverId, agentId: input.agentId }).agentWorkspaceId;
   const workspaceId = normalizeWorkspaceOpaqueId(agentWorkspaceId);
 
-  if (!workspaceId || agentTarget.isKnown === false) {
+  if (!workspaceId) {
     const route = buildHostAgentDetailRoute(input.serverId, input.agentId);
     deps.navigateToHostAgent(route);
     return route;
@@ -40,9 +39,7 @@ export function resolveNavigateToAgent(
   return deps.navigateToWorkspace({
     serverId: input.serverId,
     workspaceId,
-    target: agentTarget.conversationId
-      ? { kind: "task_conversation", conversationId: agentTarget.conversationId }
-      : { kind: "agent", agentId: input.agentId },
+    target: { kind: "agent", agentId: input.agentId },
     pin: input.pin,
   });
 }

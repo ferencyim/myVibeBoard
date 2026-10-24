@@ -110,39 +110,6 @@ export function registerCompaction(server: PluginServerContext, options: Compact
     return paseo;
   };
   const host: CompactionHost = {
-    async taskMember(session) {
-      if (!session.workspaceId) return null;
-      const conversation = await handle().taskConversations.resolve({
-        workspaceId: session.workspaceId,
-      });
-      const snapshot = conversation?.current();
-      const member = snapshot?.members.find((entry) => entry.backendAgentId === session.agentId);
-      if (!conversation || !snapshot || !member) return null;
-      return {
-        conversationId: conversation.id,
-        memberId: member.memberId,
-        lastRequestAt: member.lastRequestAt,
-        idle: snapshot.status === "active" && member.status === "idle",
-        async compact() {
-          // Native compaction is out-of-band and emits no foreground turn to consume a marker.
-          const result = await conversation.compact({ memberId: member.memberId });
-          if (result.error) throw new Error(result.error);
-          const deadline = Date.now() + (config.approvalWaitMinutes ?? 10) * 60_000;
-          const agent = handle().agents.ref(session.agentId);
-          let turn = await agent.waitForFinish(30_000);
-          while (
-            (turn.status === "permission" || turn.status === "timeout") &&
-            Date.now() < deadline
-          )
-            turn = await agent.waitForFinish(30_000);
-          if (turn.status !== "idle") throw new Error(`任务成员压缩未完成：${turn.status}`);
-          return (
-            result.conversation?.members.find((entry) => entry.memberId === member.memberId)
-              ?.lastRequestAt ?? null
-          );
-        },
-      };
-    },
     async describeIdleAgent(agentId) {
       const snapshot = (await handle().agents.ref(agentId).refresh())?.agent;
       if (!snapshot || snapshot.status !== "idle" || snapshot.activeTurn || snapshot.archivedAt)

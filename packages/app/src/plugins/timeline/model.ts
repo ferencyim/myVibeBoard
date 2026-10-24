@@ -15,7 +15,6 @@ export interface TimelineItemTransformInput {
   item: AgentTimelineItem;
   phase: "streaming" | "complete";
   sourceId: string;
-  taskConversation?: { conversationId: string; ownerPluginId: string };
 }
 
 export type TimelineItemTransform = (
@@ -82,13 +81,8 @@ export function transformTimelineItem(
         const transform = transformer.transform as (input: {
           item: AgentTimelineItem;
           phase: "streaming" | "complete";
-          taskConversation?: TimelineItemTransformInput["taskConversation"];
         }) => PluginTimelineTransformResult | undefined;
-        const output = transform({
-          item: input.item,
-          phase: input.phase,
-          ...(input.taskConversation ? { taskConversation: input.taskConversation } : {}),
-        });
+        const output = transform({ item: input.item, phase: input.phase });
         if (output === undefined) continue;
         const parsed = parseTransformResult(output);
         return parsed.items.map((transformedItem, index) => ({

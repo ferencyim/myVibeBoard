@@ -21,12 +21,6 @@ function resolveChatTab(
       draftKey: buildDraftStoreKey({ serverId, agentId: tab.target.agentId }),
     };
   }
-  if (tab?.target.kind === "task_conversation") {
-    return {
-      tabId: tab.tabId,
-      draftKey: `task-conversation:${serverId}:${tab.target.conversationId}`,
-    };
-  }
   if (tab?.target.kind === "draft") {
     return {
       tabId: tab.tabId,

@@ -4,10 +4,20 @@ import type { PluginRpcContract } from "../rpc.js";
 import type { PluginCleanup } from "../contracts.js";
 import type { ProviderRegistration } from "./provider.js";
 import type { UsageSourceRegistration } from "./usage.js";
-import type { PluginLifecycleRegistration, PluginTaskConversationHooks } from "./lifecycle.js";
+import type { PluginLifecycleRegistration } from "./lifecycle.js";
 
 export interface PluginHandlerContext {
   paseo: PaseoApi;
+  /** Set when the host invoked this method on behalf of an agent-facing tool. */
+  callerAgentId?: string | null;
+}
+
+/** A tool a plugin contributes to the Paseo agent tool catalog (for example `vibe_tabs`). */
+export interface PluginAgentTool {
+  name: string;
+  description: string;
+  input?: ZodType;
+  handler(input: unknown, context: { callerAgentId: string | null }): unknown | Promise<unknown>;
 }
 
 export type PluginSettingsState<Schema extends ZodType> =
@@ -42,7 +52,6 @@ export interface PluginNotification {
 export interface PluginServerContext extends PluginLifecycleRegistration {
   /** The plugin's Paseo API, usable as soon as contribute() runs (no hook or RPC needed first). */
   paseo: PaseoApi;
-  registerTaskConversationHooks(hooks: PluginTaskConversationHooks): PluginCleanup;
   /**
    * Sends a push notification through the daemon's push service. With minimal payloads enabled the
    * daemon truncates the text and keeps only short string fields of data; keep content out of it.
@@ -60,6 +69,7 @@ export interface PluginServerContext extends PluginLifecycleRegistration {
   ): void;
   registerProvider(provider: ProviderRegistration): void;
   registerUsageSource(source: UsageSourceRegistration): void;
+  registerAgentTool(tool: PluginAgentTool): void;
 }
 
 export type PluginServerContribution = (server: PluginServerContext) => PluginCleanup;

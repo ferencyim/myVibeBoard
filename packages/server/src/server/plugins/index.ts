@@ -32,7 +32,10 @@ import {
   type ListUsageReportsOptions,
   UsageSourceRegistry,
 } from "./usage-sources/index.js";
-import type { PluginUsageSourceMetadata } from "./plugin-process-protocol.js";
+import type {
+  PluginAgentToolMetadata,
+  PluginUsageSourceMetadata,
+} from "./plugin-process-protocol.js";
 
 const BUILTIN_PROVIDER_ID_SET: ReadonlySet<string> = new Set(BUILTIN_PROVIDER_IDS);
 
@@ -40,9 +43,14 @@ interface PluginRuntimePort {
   emit?: PluginLifecycle["emit"];
   drainEvents?: PluginRuntime["drainEvents"];
   before?: PluginLifecycle["before"];
-  hasBefore?: PluginRuntime["hasBefore"];
   catalog: PluginRuntime["catalog"];
-  invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
+  invoke(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    callerAgentId?: string,
+  ): Promise<unknown>;
+  listAgentTools?(): ReadonlyArray<PluginAgentToolMetadata & { pluginId: string }>;
   getLogs(pluginId: string): PluginLogEntry[];
   clearLogs(pluginId: string): void;
   getProviderRegistrations?(pluginId: string): readonly PluginProviderMetadata[];
@@ -136,15 +144,10 @@ export class PluginService {
     await this.runtime.drainEvents?.();
   }
 
-  hasBefore(pluginId: string, name: Parameters<PluginRuntime["hasBefore"]>[1]): boolean {
-    return this.runtime.hasBefore?.(pluginId, name) ?? false;
-  }
-
-  readonly before: PluginLifecycle["before"] = async (name, request, options) => {
+  readonly before: PluginLifecycle["before"] = async (name, request) => {
     if (this.runtime.before) {
-      return this.runtime.before(name, request, options);
+      return this.runtime.before(name, request);
     }
-    if (options) throw new Error(`Plugin ${options.pluginId} before ${name} is unavailable`);
     return request;
   };
 
@@ -479,8 +482,17 @@ export class PluginService {
     });
   }
 
-  invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown> {
-    return this.runtime.invoke(pluginId, method, input);
+  invokePluginRpc(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    callerAgentId?: string,
+  ): Promise<unknown> {
+    return this.runtime.invoke(pluginId, method, input, callerAgentId);
+  }
+
+  listPluginAgentTools(): ReadonlyArray<PluginAgentToolMetadata & { pluginId: string }> {
+    return this.runtime.listAgentTools?.() ?? [];
   }
 
   async stopAllPlugins(): Promise<void> {

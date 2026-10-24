@@ -67,23 +67,6 @@ import { isSheetTabModified, resolveCompactSheetPolicy } from "@/workspace-tabs/
 import { panelResourceKey, type CompactSheetPolicy } from "@/panels/panel-manifest";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import { panelTargetSupportsHostForWorkspaceKey } from "@/plugins/workspace-panels/locations";
-import { useSessionStore } from "@/stores/session-store";
-
-function resolveMemberTabTarget(
-  workspaceKey: string | null,
-  target: WorkspaceTabTarget,
-): WorkspaceTabTarget | null {
-  const normalized = normalizeWorkspaceTabTarget(target);
-  if (normalized?.kind !== "agent" && normalized?.kind !== "provider_subagent") return normalized;
-  const agentId = normalized.kind === "agent" ? normalized.agentId : normalized.parentAgentId;
-  for (const [serverId, session] of Object.entries(useSessionStore.getState().sessions)) {
-    const agent = session.agents.get(agentId) ?? session.agentDetails.get(agentId);
-    if (agent?.taskConversationId && workspaceKey === `${serverId}:${agent.workspaceId}`) {
-      return { kind: "task_conversation", conversationId: agent.taskConversationId };
-    }
-  }
-  return normalized;
-}
 
 export {
   AMBIENT_PLACEMENT,
@@ -155,7 +138,6 @@ interface WorkspaceLayoutStore {
   explorerSidebarWidthByWorkspace: Record<string, number>;
   pinnedAgentIdsByWorkspace: Record<string, Set<string>>;
   hiddenAgentIdsByWorkspace: Record<string, Set<string>>;
-  closedTaskConversationIdsByWorkspace: Record<string, string[]>;
   focusRestorationByWorkspace: Record<string, WorkspaceFocusRestorationState>;
   explorerSidebarPaneIdByWorkspace: Record<string, string | null>;
   sidePaneIdByWorkspace: Record<string, string | null>;
@@ -966,7 +948,6 @@ const PERSISTED_SLICES = [
   "explorerSidebarPaneIdByWorkspace",
   "sidePaneIdByWorkspace",
   "pullRequestTabAutoOpenedByWorkspace",
-  "closedTaskConversationIdsByWorkspace",
 ] as const;
 
 // Zustand persist re-runs partialize after every set, including ones that return the state
@@ -1001,7 +982,6 @@ function createPersistedStateProjection() {
       explorerPaneIdByWorkspace: source.explorerSidebarPaneIdByWorkspace,
       sidePaneIdByWorkspace: source.sidePaneIdByWorkspace,
       pullRequestTabAutoOpenedByWorkspace: source.pullRequestTabAutoOpenedByWorkspace,
-      closedTaskConversationIdsByWorkspace: source.closedTaskConversationIdsByWorkspace,
     };
     previous = { source, state };
     return state;
@@ -1041,14 +1021,13 @@ export function createWorkspaceLayoutStore(
         explorerSidebarWidthByWorkspace: {},
         pinnedAgentIdsByWorkspace: {},
         hiddenAgentIdsByWorkspace: {},
-        closedTaskConversationIdsByWorkspace: {},
         focusRestorationByWorkspace: {},
         explorerSidebarPaneIdByWorkspace: {},
         sidePaneIdByWorkspace: {},
         pullRequestTabAutoOpenedByWorkspace: {},
         openTab: (input) => {
           const normalizedWorkspaceKey = trimNonEmpty(input.workspaceKey);
-          const normalizedTarget = resolveMemberTabTarget(normalizedWorkspaceKey, input.target);
+          const normalizedTarget = normalizeWorkspaceTabTarget(input.target);
           if (!normalizedWorkspaceKey || !normalizedTarget) {
             return null;
           }
@@ -1127,10 +1106,7 @@ export function createWorkspaceLayoutStore(
             placement.explorerSidebarPaneId,
             placement.layout.focusedPaneId,
           );
-          const pinAgentId =
-            input.pin === true && normalizedTarget.kind === "agent"
-              ? normalizedTarget.agentId
-              : null;
+          const shouldPinAgent = input.pin === true && normalizedTarget.kind === "agent";
           set((state) => ({
             ...withoutFocusRestoration(state, normalizedWorkspaceKey),
             // A tab brought to the front dismisses the sheet over it.
@@ -1143,20 +1119,11 @@ export function createWorkspaceLayoutStore(
                     normalizedWorkspaceKey,
                     normalizedTarget.agentId,
                   ),
-            closedTaskConversationIdsByWorkspace:
-              normalizedTarget.kind === "task_conversation"
-                ? {
-                    ...state.closedTaskConversationIdsByWorkspace,
-                    [normalizedWorkspaceKey]: (
-                      state.closedTaskConversationIdsByWorkspace[normalizedWorkspaceKey] ?? []
-                    ).filter((id) => id !== normalizedTarget.conversationId),
-                  }
-                : state.closedTaskConversationIdsByWorkspace,
-            pinnedAgentIdsByWorkspace: pinAgentId
+            pinnedAgentIdsByWorkspace: shouldPinAgent
               ? addAgentIdToWorkspaceSet(
                   state.pinnedAgentIdsByWorkspace,
                   normalizedWorkspaceKey,
-                  pinAgentId,
+                  normalizedTarget.agentId,
                 )
               : state.pinnedAgentIdsByWorkspace,
             layoutByWorkspace: {
@@ -1393,20 +1360,6 @@ export function createWorkspaceLayoutStore(
             return {
               ...withoutFocusRestoration(state, normalizedWorkspaceKey),
               ...reconcileRememberedSidePane(state, normalizedWorkspaceKey, nextLayout),
-              ...(closingTab?.target.kind === "task_conversation"
-                ? {
-                    closedTaskConversationIdsByWorkspace: {
-                      ...state.closedTaskConversationIdsByWorkspace,
-                      [normalizedWorkspaceKey]: [
-                        ...new Set([
-                          ...(state.closedTaskConversationIdsByWorkspace[normalizedWorkspaceKey] ??
-                            []),
-                          closingTab.target.conversationId,
-                        ]),
-                      ],
-                    },
-                  }
-                : {}),
               layoutByWorkspace: {
                 ...state.layoutByWorkspace,
                 [normalizedWorkspaceKey]: nextLayout,
@@ -1628,9 +1581,6 @@ export function createWorkspaceLayoutStore(
                 layout: currentLayout,
                 pinnedAgentIds: state.pinnedAgentIdsByWorkspace[normalizedWorkspaceKey] ?? null,
                 hiddenAgentIds: state.hiddenAgentIdsByWorkspace[normalizedWorkspaceKey] ?? null,
-                closedTaskConversationIds: new Set(
-                  state.closedTaskConversationIdsByWorkspace[normalizedWorkspaceKey] ?? [],
-                ),
                 explorerSidebarPaneId,
               },
               snapshot,
@@ -2167,7 +2117,6 @@ export function createWorkspaceLayoutStore(
               normalizedWorkspaceKey in state.explorerSidebarWidthByWorkspace ||
               normalizedWorkspaceKey in state.pinnedAgentIdsByWorkspace ||
               normalizedWorkspaceKey in state.hiddenAgentIdsByWorkspace ||
-              normalizedWorkspaceKey in state.closedTaskConversationIdsByWorkspace ||
               normalizedWorkspaceKey in state.focusRestorationByWorkspace ||
               normalizedWorkspaceKey in state.explorerSidebarPaneIdByWorkspace ||
               normalizedWorkspaceKey in state.sidePaneIdByWorkspace ||
@@ -2192,10 +2141,6 @@ export function createWorkspaceLayoutStore(
               state.pinnedAgentIdsByWorkspace;
             const { [normalizedWorkspaceKey]: _hidden, ...hiddenAgentIdsByWorkspace } =
               state.hiddenAgentIdsByWorkspace;
-            const {
-              [normalizedWorkspaceKey]: _closedTasks,
-              ...closedTaskConversationIdsByWorkspace
-            } = state.closedTaskConversationIdsByWorkspace;
             const { [normalizedWorkspaceKey]: _restoration, ...focusRestorationByWorkspace } =
               state.focusRestorationByWorkspace;
             const {
@@ -2212,7 +2157,6 @@ export function createWorkspaceLayoutStore(
               explorerSidebarWidthByWorkspace,
               pinnedAgentIdsByWorkspace,
               hiddenAgentIdsByWorkspace,
-              closedTaskConversationIdsByWorkspace,
               focusRestorationByWorkspace,
               explorerSidebarPaneIdByWorkspace,
               sidePaneIdByWorkspace,
@@ -2281,8 +2225,6 @@ export function createWorkspaceLayoutStore(
             sidePaneIdByWorkspace: result.data.sidePaneIdByWorkspace ?? {},
             pullRequestTabAutoOpenedByWorkspace:
               result.data.pullRequestTabAutoOpenedByWorkspace ?? {},
-            closedTaskConversationIdsByWorkspace:
-              result.data.closedTaskConversationIdsByWorkspace ?? {},
           };
         },
       },

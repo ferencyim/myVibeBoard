@@ -11,8 +11,6 @@ import { createNameId } from "mnemonic-id";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
-import { pluginRegistry, useInstalledPlugins } from "@/plugins/registry";
-import { resolveFirstMessageSubmissionOwner } from "@/plugins/first-message-outbox";
 import { FirstMessageOutboxView } from "@/composer/outbox/view";
 import { useFirstMessageOutbox } from "@/composer/outbox/hook";
 import { firstMessageOutbox, flushFirstMessageOutbox } from "@/runtime/first-message-outbox";
@@ -166,8 +164,6 @@ interface FirstWorkspaceMessageInput {
   worktreeSupport: "supported" | "unsupported" | "unknown";
   selectedItem: PickerItem | null;
   checkoutStatus: { currentBranch: string | null; upstreamRef?: string | null } | undefined;
-  owner?: Parameters<typeof firstMessageOutbox.enqueue>[0]["owner"];
-  isolation?: "local" | "worktree";
   identity: { draftId: string; worktreeSlug: string };
 }
 
@@ -213,7 +209,7 @@ function buildFirstWorkspaceMessage(
   if (!input.selectedProject || !input.selectedSourceDirectory) {
     throw new Error("请先选择项目和主机。");
   }
-  if (input.owner && input.worktreeSupport === "unsupported") {
+  if (input.worktreeSupport === "unsupported") {
     throw new Error("新任务需要独立 worktree，请选择 Git 项目；正文已保留。");
   }
   const hostProjectId = getHostProjectId(input.selectedProject, input.selectedServerId);
@@ -227,17 +223,13 @@ function buildFirstWorkspaceMessage(
     id: input.identity.draftId,
     hostId: input.selectedServerId,
     projectId: hostProjectId,
-    owner: input.owner,
-    source:
-      input.owner || input.isolation === "worktree"
-        ? {
-            kind: "worktree",
-            cwd: input.selectedSourceDirectory,
-            projectId: hostProjectId,
-            worktreeSlug: input.identity.worktreeSlug,
-            ...checkoutRequest,
-          }
-        : { kind: "directory", path: input.selectedSourceDirectory, projectId: hostProjectId },
+    source: {
+      kind: "worktree",
+      cwd: input.selectedSourceDirectory,
+      projectId: hostProjectId,
+      worktreeSlug: input.identity.worktreeSlug,
+      ...checkoutRequest,
+    },
     config,
     text: input.payload.text,
     attachments: input.payload.attachments,
@@ -246,22 +238,15 @@ function buildFirstWorkspaceMessage(
 
 function newTaskFormVisibility(input: {
   isTerminalLaunch: boolean;
-  hasTaskOwner?: boolean;
   canCreateWorktree: boolean;
   showRefPicker: boolean;
 }) {
-  if (input.isTerminalLaunch || !input.hasTaskOwner) return input;
+  if (input.isTerminalLaunch) return input;
   return { canCreateWorktree: false, showRefPicker: true };
 }
 
-function NewTaskOutboxHint({
-  isTerminalLaunch,
-  hasTaskOwner,
-}: {
-  isTerminalLaunch: boolean;
-  hasTaskOwner: boolean;
-}) {
-  if (isTerminalLaunch || !hasTaskOwner) return null;
+function NewTaskOutboxHint({ isTerminalLaunch }: { isTerminalLaunch: boolean }) {
+  if (isTerminalLaunch) return null;
   return (
     <Text style={styles.outboxHint}>
       新任务使用独立
@@ -685,47 +670,12 @@ export function NewWorkspaceScreen({
   // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
   const supportsWorkspaceMultiplicity = useHostFeature(selectedServerId, "workspaceMultiplicity");
   const supportsForgeSearch = useHostFeature(selectedServerId, "forgeSearch");
-  const supportsPlugins = useHostFeature(selectedServerId, "plugins");
-  const isConnected = useHostRuntimeIsConnected(selectedServerId);
   const [creationIdentity, setCreationIdentity] = useState(() => ({
     draftId: draftId ?? generateDraftId(),
     worktreeSlug: createNameId(),
   }));
   const submissionLock = useRef(false);
   const [submittedOutboxId, setSubmittedOutboxId] = useState<string | null>(null);
-  const installedPlugins = useInstalledPlugins();
-  const [offlineTaskOwner, setOfflineTaskOwner] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    setOfflineTaskOwner(false);
-    if (!isConnected) {
-      void resolveFirstMessageSubmissionOwner({
-        serverId: selectedServerId,
-        plugins: [],
-        connected: false,
-        catalogLoaded: false,
-        pluginsSupported: supportsPlugins,
-      })
-        .then((owner) => {
-          if (!cancelled) setOfflineTaskOwner(Boolean(owner));
-          return undefined;
-        })
-        .catch(() => undefined);
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [isConnected, selectedServerId, supportsPlugins]);
-  const hasTaskOwner = useMemo(
-    () =>
-      offlineTaskOwner ||
-      installedPlugins.some(
-        (plugin) =>
-          plugin.serverId === selectedServerId &&
-          (plugin.firstMessageOutboxOwners?.length ?? 0) > 0,
-      ),
-    [offlineTaskOwner, installedPlugins, selectedServerId],
-  );
   const outbox = useFirstMessageOutbox();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [creationResult, setCreationResult] = useState<
@@ -796,6 +746,7 @@ export function NewWorkspaceScreen({
 
   const { workspace } = creationResult;
   const client = useHostRuntimeClient(selectedServerId);
+  const isConnected = useHostRuntimeIsConnected(selectedServerId);
   const {
     selectedProject,
     selectedSourceDirectory,
@@ -1175,16 +1126,6 @@ export function NewWorkspaceScreen({
           worktreeSupport,
           selectedItem,
           checkoutStatus: checkoutStatus ?? undefined,
-          owner: await resolveFirstMessageSubmissionOwner({
-            plugins: pluginRegistry.getSnapshot(),
-            serverId: selectedServerId,
-            connected: isConnected,
-            catalogLoaded: pluginRegistry.hasLoadedCatalog(selectedServerId),
-            catalogError: pluginRegistry.getCatalogError(selectedServerId),
-            getPluginError: (pluginId) => pluginRegistry.getPluginError(selectedServerId, pluginId),
-            pluginsSupported: supportsPlugins,
-          }),
-          isolation: effectiveIsolation,
           identity: creationIdentity,
         });
         setPendingAction("chat");
@@ -1213,7 +1154,6 @@ export function NewWorkspaceScreen({
       draftContextScopeKey,
       checkoutStatus,
       ensureWorkspace,
-      effectiveIsolation,
       formPreferences,
       isConnected,
       isStillOnCreateScreen,
@@ -1223,7 +1163,6 @@ export function NewWorkspaceScreen({
       selectedProject,
       selectedServerId,
       selectedSourceDirectory,
-      supportsPlugins,
       toast,
       updateFormPreferences,
       worktreeSupport,
@@ -1244,17 +1183,11 @@ export function NewWorkspaceScreen({
     async (id: string) => {
       const entry = firstMessageOutbox.getSnapshot().find((item) => item.id === id);
       if (!entry?.result) return;
-      if (entry.owner && !entry.result.conversationId) {
-        setErrorMessage("原创建回执缺少任务群聊，请升级主机并核对原会话；本机输入已保留。");
-        return;
-      }
       leaveFullscreen();
       navigateToWorkspace({
         serverId: entry.hostId,
         workspaceId: entry.result.workspaceId,
-        target: entry.result.conversationId
-          ? { kind: "task_conversation", conversationId: entry.result.conversationId }
-          : { kind: "agent", agentId: entry.result.agentId },
+        target: { kind: "agent", agentId: entry.result.agentId },
       });
       try {
         await firstMessageOutbox.removeSent(id);
@@ -1367,7 +1300,6 @@ export function NewWorkspaceScreen({
 
   const taskFormVisibility = newTaskFormVisibility({
     isTerminalLaunch,
-    hasTaskOwner,
     canCreateWorktree,
     showRefPicker,
   });
@@ -1506,7 +1438,7 @@ export function NewWorkspaceScreen({
         formStack={formStack}
         onImportSession={importSession.open}
       >
-        <NewTaskOutboxHint isTerminalLaunch={isTerminalLaunch} hasTaskOwner={hasTaskOwner} />
+        <NewTaskOutboxHint isTerminalLaunch={isTerminalLaunch} />
         {composer}
         <FirstMessageOutboxView
           entries={outbox.entries}

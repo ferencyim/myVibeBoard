@@ -1,5 +1,4 @@
 import { projectTimelineRows } from "./timeline-projection.js";
-import type { TaskConversationService } from "../task-conversation/service.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
@@ -733,8 +732,6 @@ export interface RetiredInternalAgent {
 }
 
 export class AgentManager {
-  /** Optional host service. Ordinary agents retain their existing lifecycle and routing. */
-  taskConversations?: TaskConversationService;
   private readonly pluginLifecycle: PluginLifecycle | undefined;
   private readonly retiredInternalAgents = new Map<
     string,
@@ -1288,18 +1285,19 @@ export class AgentManager {
       const request = await this.pluginLifecycle.before("agent.create", {
         config,
         env: options.env,
+        workspaceId: options.workspaceId,
+        parentAgentId: options.labels?.[PARENT_AGENT_ID_LABEL] ?? null,
+        labels: options.labels,
       });
       config = { ...request.config, internal: config.internal };
       options = { ...options, env: request.env };
     }
-    this.taskConversations?.assertAgentCreation(resolvedAgentId, config, options);
     await this.deleteAgentState(resolvedAgentId);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       config,
       resolvedAgentId,
       { env: options?.env },
     );
-    this.taskConversations?.recordMemberConfiguration(resolvedAgentId, storedConfig);
     this.requireEnabledProvider(storedConfig.provider);
     const client = await this.requireAvailableClient({
       provider: storedConfig.provider,
@@ -1542,8 +1540,6 @@ export class AgentManager {
     overrides?: Partial<AgentSessionConfig>,
     options?: { rehydrateFromDisk?: boolean },
   ): Promise<ManagedAgent> {
-    if (overrides && Object.keys(overrides).length)
-      this.taskConversations?.assertAgentMutation(agentId, "configure");
     return this.trackAgentRegistrationOperation(
       this.runLifecycleMutation(agentId, () =>
         this.reloadAgentSessionInternal(agentId, overrides, options),
@@ -1753,12 +1749,6 @@ export class AgentManager {
   }
 
   closeAgent(agentId: string): Promise<void> {
-    try {
-      if (this.hasInFlightRun(agentId))
-        this.taskConversations?.assertAgentMutation(agentId, "close active member");
-    } catch (error) {
-      return Promise.reject(error);
-    }
     const existing = this.inFlightAgentCloses.get(agentId);
     if (existing) {
       return existing;
@@ -1836,7 +1826,6 @@ export class AgentManager {
   }
 
   async archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
-    this.taskConversations?.assertAgentMutation(agentId, "archive");
     return this.runLifecycleMutation(agentId, () => this.archiveAgentUnlocked(agentId));
   }
 
@@ -2035,7 +2024,6 @@ export class AgentManager {
   }
 
   async setAgentMode(agentId: string, modeId: string): Promise<AgentProviderNotice | null> {
-    this.taskConversations?.assertAgentMutation(agentId, "configure");
     const agent = this.requireSessionAgent(agentId);
     const notice = (await agent.session.setMode(modeId)) ?? null;
     await this.drainSessionEvents(agentId);
@@ -2052,7 +2040,6 @@ export class AgentManager {
   }
 
   async setAgentModel(agentId: string, modelId: string | null): Promise<void> {
-    this.taskConversations?.assertAgentMutation(agentId, "configure");
     const agent = this.requireSessionAgent(agentId);
     const normalizedModelId =
       typeof modelId === "string" && modelId.trim().length > 0 ? modelId : null;
@@ -2075,7 +2062,6 @@ export class AgentManager {
     agentId: string,
     thinkingOptionId: string | null,
   ): Promise<AgentProviderNotice | null> {
-    this.taskConversations?.assertAgentMutation(agentId, "configure");
     const agent = this.requireSessionAgent(agentId);
     const normalizedThinkingOptionId =
       typeof thinkingOptionId === "string" && thinkingOptionId.trim().length > 0
@@ -2107,7 +2093,6 @@ export class AgentManager {
   }
 
   async setAgentFeature(agentId: string, featureId: string, value: unknown): Promise<void> {
-    this.taskConversations?.assertAgentMutation(agentId, "configure");
     const agent = this.requireAgent(agentId);
 
     if (!agent.session.setFeature) {
@@ -2140,7 +2125,6 @@ export class AgentManager {
   }
 
   async setLabels(agentId: string, labels: Record<string, string>): Promise<void> {
-    this.taskConversations?.assertAgentLabels(agentId, labels);
     await this.runLifecycleMutation(agentId, async () => {
       const agent = this.requireAgent(agentId);
       await this.writeLabels(agent.id, labels);
@@ -2187,7 +2171,6 @@ export class AgentManager {
     live: boolean;
     previousParentAgentId: string | null;
   }> {
-    this.taskConversations?.assertAgentMutation(agentId, "detach");
     return this.runLifecycleMutation(agentId, () => this.detachAgentUnlocked(agentId));
   }
 
@@ -2291,7 +2274,6 @@ export class AgentManager {
   }
 
   async archiveSnapshot(agentId: string, archivedAt: string): Promise<StoredAgentRecord> {
-    this.taskConversations?.assertAgentMutation(agentId, "archive");
     return this.runLifecycleMutation(agentId, () =>
       this.archiveSnapshotUnlocked(agentId, archivedAt),
     );
@@ -2333,9 +2315,6 @@ export class AgentManager {
     agentId: string,
     updates?: { workspaceId?: string; labels?: AgentLabelPatch },
   ): Promise<boolean> {
-    if (updates?.workspaceId)
-      this.taskConversations?.assertAgentMutation(agentId, "move workspace");
-    if (updates?.labels) this.taskConversations?.assertAgentLabels(agentId, updates.labels);
     return this.runLifecycleMutation(agentId, () =>
       this.unarchiveSnapshotUnlocked(agentId, updates),
     );
@@ -2392,7 +2371,6 @@ export class AgentManager {
       labels?: Record<string, string>;
     },
   ): Promise<void> {
-    if (updates.labels) this.taskConversations?.assertAgentLabels(agentId, updates.labels);
     await this.runLifecycleMutation(agentId, () =>
       this.updateAgentMetadataUnlocked(agentId, updates),
     );
@@ -2484,31 +2462,6 @@ export class AgentManager {
    * broadcast like normal timeline events.
    */
   tryRunOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions): boolean {
-    const command = this.prepareOutOfBand(agentId, prompt, options);
-    if (!command) return false;
-    void command.run().catch(command.reportError);
-    return true;
-  }
-
-  /** Await native command acknowledgement and propagate failures to RPC callers. */
-  async runOutOfBand(
-    agentId: string,
-    prompt: AgentPromptInput,
-    options?: AgentRunOptions,
-  ): Promise<boolean> {
-    const command = this.prepareOutOfBand(agentId, prompt, options);
-    if (!command) return false;
-    try {
-      await command.run(true);
-    } catch (error) {
-      command.reportError(error);
-      throw error;
-    }
-    return true;
-  }
-
-  private prepareOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions) {
-    this.taskConversations?.assertAgentRun(agentId, options);
     const agent = this.requireSessionAgent(agentId);
     // Providers parse slash commands from the raw text, so a command another agent sent
     // must reach them without its sender envelope.
@@ -2517,7 +2470,7 @@ export class AgentManager {
       agentMessage?.source ? agentMessage.text : prompt,
     );
     if (!handler) {
-      return null;
+      return false;
     }
     if (options?.clientMessageId) {
       this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, "accepted");
@@ -2538,17 +2491,19 @@ export class AgentManager {
       }
       this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
     };
-    return {
-      run: async (throwOnError?: boolean) => handler.run({ emit: dispatch, throwOnError }),
-      reportError(error: unknown) {
+    void (async () => {
+      try {
+        await handler.run({ emit: dispatch });
+      } catch (error) {
         const text = error instanceof Error ? error.message : "Out-of-band command failed";
         dispatch({
           type: "timeline",
           provider: agent.provider,
           item: { type: "assistant_message", text: `[Error] ${text}` },
         });
-      },
-    };
+      }
+    })();
+    return true;
   }
 
   async appendTimelineItem(
@@ -2636,7 +2591,6 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): AsyncGenerator<AgentStreamEvent> {
-    this.taskConversations?.assertAgentRun(agentId, options);
     const existingAgent = this.requireSessionAgent(agentId);
     this.logger.trace(
       {
@@ -2834,7 +2788,6 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
-    this.taskConversations?.assertAgentRun(agentId, options);
     const snapshot = this.requireAgent(agentId);
     if (
       snapshot.lifecycle !== "running" &&
@@ -2867,7 +2820,6 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentSteerOptions,
   ): Promise<SteerResult> {
-    this.taskConversations?.assertAgentRun(agentId, options);
     const agent = this.requireSessionAgent(agentId);
     const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
     if (!expectedTurnId || !agent.session.steerActiveTurn) {
@@ -2896,7 +2848,6 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentSteerOptions,
   ): Promise<ActiveTurnSteerDispatchResult> {
-    this.taskConversations?.assertAgentRun(agentId, options);
     const agent = this.requireSessionAgent(agentId);
     const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
     if (!expectedTurnId) {
@@ -3146,7 +3097,6 @@ export class AgentManager {
     response: AgentPermissionResponse,
   ): Promise<AgentPermissionResult | void> {
     const agent = this.requireAgent(agentId);
-    this.taskConversations?.assertPermissionApproval(agentId, requestId, response);
     if (agent.inFlightPermissionResponses.has(requestId)) {
       throw new Error("A response to this permission request is already being submitted");
     }
@@ -3180,7 +3130,6 @@ export class AgentManager {
   }
 
   async cancelAgentRun(agentId: string): Promise<AgentRunCancellationResult> {
-    this.taskConversations?.assertAgentMutation(agentId, "stop");
     return this.runForegroundMutation(agentId, () => this.cancelAgentRunNow(agentId));
   }
 
@@ -3308,7 +3257,6 @@ export class AgentManager {
   }
 
   async rewind(agentId: string, messageId: string, mode: RewindMode): Promise<void> {
-    this.taskConversations?.assertAgentMutation(agentId, "rewind");
     const agent = this.requireSessionAgent(agentId);
     const submittedRow = this.timelineStore
       .getRows(agentId)

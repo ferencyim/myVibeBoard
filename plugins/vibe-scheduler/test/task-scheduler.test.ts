@@ -9,7 +9,7 @@ import {
   openVibeDb,
   publishEvent,
 } from "../server/vibe/db";
-import { resolveTaskRoles, type TaskPlan } from "../server/vibe/contract";
+import { resolveTaskRoles, type TaskPlan, type TaskRoleSnapshot } from "../server/vibe/contract";
 import { createPortAllocator } from "../server/ports";
 import {
   createTaskScheduler,
@@ -21,6 +21,21 @@ import { DEFAULT_CONFIG } from "../server/scheduler";
 import { createSchedulerRuntime, DEFAULT_SETTINGS } from "../server/runtime";
 import { fakeMachine } from "./helpers";
 
+function confirmTask(store: ReturnType<typeof createVibeStore>, id: string, roles: TaskRoleSnapshot) {
+  const task = store.tasks.get(id)!;
+  const tab =
+    task.tabs.find((item) => item.agentId === task.anchorAgentId) ??
+    store.tasks.allocateTab(id, {
+      agentId: task.anchorAgentId,
+      role: "main",
+      provider: "codex",
+      model: "first",
+    }).tab;
+  return store.tasks.confirm(id, {
+    rolesSnapshot: roles,
+    planSource: { tabNumber: tab.number, agentId: tab.agentId, sourceKey: "test-" + id },
+  });
+}
 const closers: Array<() => void> = [];
 afterEach(() => {
   for (const close of closers.splice(0)) close();
@@ -117,7 +132,7 @@ function setup(limit = 2) {
     store.tasks.savePlan(id, plan(files));
     if (confirmed) {
       time += 1000;
-      store.tasks.confirm(id, { rolesSnapshot: roles });
+      confirmTask(store, id, roles);
     }
     return store.tasks.get(id)!;
   }
@@ -282,7 +297,7 @@ describe("原生任务准入", () => {
     t.roles.worker.runtimeEnv = "android";
     // A task's frozen roles must be set before confirmation.
     t.task("device", ["device.ts"], false);
-    t.store.tasks.confirm("device", { rolesSnapshot: t.roles });
+    confirmTask(t.store, "device", t.roles);
     t.leases.registerDevice({ kind: "emulator", name: "测试设备" });
     const main = await t.request("device", { action: "acquire", role: "worker" });
     await t.bind("device", main.reservationId!);
@@ -306,7 +321,7 @@ describe("原生任务准入", () => {
     t.roles.worker.runtimeEnv = "android";
     t.roles.subagent.runtimeEnv = "android";
     t.task("a", [], false);
-    t.store.tasks.confirm("a", { rolesSnapshot: t.roles });
+    confirmTask(t.store, "a", t.roles);
     t.leases.registerDevice({ kind: "emulator", name: "设备" });
     const main = await t.request("a", { action: "acquire", role: "worker" });
     await t.bind("a", main.reservationId!, "main");
@@ -483,7 +498,7 @@ describe("原生任务准入", () => {
     t.roles.worker.runtimeEnv = "android";
     t.roles.subagent.runtimeEnv = "ios-simulator";
     t.task("a", [], false);
-    t.store.tasks.confirm("a", { rolesSnapshot: t.roles });
+    confirmTask(t.store, "a", t.roles);
     const emulator = t.leases.registerDevice({ kind: "emulator", name: "安卓" });
     const simulator = t.leases.registerDevice({ kind: "simulator", name: "模拟器" });
     const main = await t.request("a", { action: "acquire", role: "worker" });
@@ -569,7 +584,7 @@ describe("原生任务准入", () => {
       (id) => t.store.presets.get(id),
     );
     const roles = { ...t.roles, subtaskPresets: { one: selected.subagent } };
-    t.store.tasks.confirm("custom", { rolesSnapshot: roles });
+    confirmTask(t.store, "custom", roles);
     t.store.presets.update(custom.id, {
       models: [{ provider: "codex", model: "changed-model", thinking: "", permissionMode: "auto" }],
     });

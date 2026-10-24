@@ -2,17 +2,6 @@ import appPackage from "../../package.json";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { pluginRegistry as registry } from "./registry";
-import { resolveFirstMessageSubmissionOwner } from "./first-message-outbox";
-
-// Registry tests use the real evaluator and isolate native rendering/bootstrap dependencies.
-vi.mock("./react-native/runtime", () => ({ pluginReactNativeRuntime: {} }));
-vi.mock("./react-native/ui", () => ({}));
-vi.mock("./settings/use-settings", () => ({ useSettings: () => undefined }));
-vi.mock("@/utils/open-external-url", () => ({ openExternalUrl: async () => undefined }));
-vi.mock("@/runtime/host-runtime", () => ({
-  getHostRuntimeStore: () => ({ getSnapshot: () => null }),
-  isHostRuntimeConnected: () => false,
-}));
 
 const audio = { play: async () => 0 };
 
@@ -38,10 +27,7 @@ const pluginRegistry = {
   installCatalog(
     serverId: string,
     catalog: Parameters<typeof registry.installCatalog>[1],
-    options: {
-      replacePluginId?: string;
-      configured?: { id: string; enabled: boolean; status: string }[];
-    } = {},
+    options: { replacePluginId?: string } = {},
   ) {
     return registry.installCatalog(
       serverId,
@@ -90,65 +76,6 @@ afterEach(() => {
 });
 
 describe("PluginRegistry", () => {
-  it.each([false, true])(
-    "loads plugin surfaces and permits creation with unrelated startup/evaluation errors (task=%s)",
-    async (task) => {
-      pluginRegistry.installCatalog(
-        "host-a",
-        [
-          { id: "healthy", clientBundle: bundle("healthy") },
-          {
-            id: "broken-client",
-            clientBundle: `(function() { throw new Error("evaluation failed"); })`,
-          },
-          ...(task
-            ? [
-                {
-                  id: "task-owner",
-                  clientBundle: `(function() {
-                  return { default(plugin) { return plugin.addFirstMessageOutboxOwner({ initialRole: "planner" }); } };
-        })`,
-                },
-              ]
-            : []),
-        ],
-        {
-          configured: [
-            { id: "broken-server", enabled: true, status: "failed" },
-            { id: "healthy", enabled: true, status: "running" },
-          ],
-        },
-      );
-      expect(registry.hasLoadedCatalog("host-a")).toBe(true);
-      expect(registry.getPluginError("host-a", "broken-server")).toContain("failed");
-      expect(registry.getPluginError("host-a", "broken-client")).toBe("evaluation failed");
-      expect(
-        pluginRegistry.getSnapshot().find((plugin) => plugin.id === "healthy")?.surfaces,
-      ).toHaveLength(1);
-      await expect(
-        resolveFirstMessageSubmissionOwner({
-          serverId: "host-a",
-          plugins: pluginRegistry.getSnapshot(),
-          connected: true,
-          catalogLoaded: registry.hasLoadedCatalog("host-a"),
-          pluginsSupported: true,
-          getPluginError: (pluginId) => registry.getPluginError("host-a", pluginId),
-        }),
-      ).resolves.toEqual(task ? { pluginId: "task-owner", initialRole: "planner" } : undefined);
-    },
-  );
-
-  it("distinguishes an unloaded catalog from an empty successful catalog", () => {
-    expect(registry.hasLoadedCatalog("host-a")).toBe(false);
-    pluginRegistry.installCatalog("host-a", []);
-    expect(registry.hasLoadedCatalog("host-a")).toBe(true);
-    registry.markCatalogLoading("host-a");
-    expect(registry.hasLoadedCatalog("host-a")).toBe(false);
-    pluginRegistry.installCatalog("host-a", []);
-    pluginRegistry.removeHost("host-a");
-    expect(registry.hasLoadedCatalog("host-a")).toBe(false);
-  });
-
   it("publishes synchronous setup once after storing the installation", () => {
     const snapshots: string[][] = [];
     const unsubscribe = pluginRegistry.subscribe(() => {

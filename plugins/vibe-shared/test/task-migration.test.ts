@@ -37,7 +37,11 @@ describe("WP-114 legacy cutover", () => {
     const counts = maintenanceCounts(db);
     expect(before.project).toHaveLength(7);
     expect(db.prepare("SELECT COUNT(*) AS n FROM card").get()).toEqual({ n: 3 });
-    expect(migrateOwner(db, "core")).toMatchObject({ from: 10, to: 14, applied: [11, 12, 13, 14] });
+    expect(migrateOwner(db, "core")).toMatchObject({
+      from: 10,
+      to: 16,
+      applied: [11, 12, 13, 14, 15, 16],
+    });
     expect(snapshot(db)).toEqual(before);
     expect(maintenanceCounts(db)).toEqual(counts);
     expect(db.prepare("SELECT COUNT(*) AS n FROM task").get()).toEqual({ n: 0 });
@@ -176,13 +180,26 @@ describe("WP-114 legacy cutover", () => {
       "evidence_file",
     ];
     const isNewRow = (row: Record<string, unknown>) => !String(row.id ?? "").startsWith("legacy-");
+    const stripTabs =
+      (name: string) =>
+      (row: Record<string, unknown>): Record<string, unknown> =>
+        name === "task"
+          ? Object.fromEntries(
+              Object.entries(row).filter(([key]) => !["tabs_json", "next_tab_number"].includes(key)),
+            )
+          : row;
     const surviving = Object.fromEntries(
-      tables.map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all().filter(isNewRow)]),
+      tables.map((table) => [
+        table,
+        db.prepare(`SELECT * FROM ${table}`).all().filter(isNewRow).map(stripTabs(table)),
+      ]),
     );
     migrateOwner(db, "core");
     expect(snapshot(db)).toEqual(before);
     for (const table of tables)
-      expect(db.prepare(`SELECT * FROM ${table}`).all()).toEqual(surviving[table]);
+      expect(db.prepare(`SELECT * FROM ${table}`).all().map(stripTabs(table))).toEqual(
+        surviving[table],
+      );
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     expect(db.prepare("PRAGMA foreign_key_list(agent_session)").all()).toEqual([]);
     expect(db.prepare("PRAGMA foreign_key_list(verification)").all()).not.toContainEqual(

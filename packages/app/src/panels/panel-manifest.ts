@@ -66,14 +66,6 @@ const manifests = {
       facts.isWorkspaceRootAgent(target.agentId) ? null : { openAsTab: true },
     resourceKey: (target) => target.agentId,
   },
-  task_conversation: {
-    kind: "task_conversation",
-    supportedHosts: ["main"],
-    showCloseButton: true,
-    singleton: false,
-    compactSheet: null,
-    resourceKey: (target) => target.conversationId,
-  },
   provider_subagent: {
     kind: "provider_subagent",
     supportedHosts: ["main", "explorer"],

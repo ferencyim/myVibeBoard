@@ -19,7 +19,6 @@ import {
   type ManagedAgent,
 } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
-import type { TaskConversationService } from "../task-conversation/service.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
 import { toAgentPayload } from "./agent-projections.js";
 import { projectTimelineRows } from "./timeline-projection.js";
@@ -7750,6 +7749,73 @@ test("workspace ownership does not turn an ordinary agent into a disposable help
   expect(beforeHookCalls).toContain("agent.create");
 });
 
+test("agent.create hooks receive placement and labels while only config and env are applied", async () => {
+  const agentId = "00000000-0000-4000-8000-000000000117";
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const requests: unknown[] = [];
+  const sessionOpenEnvs: Array<Record<string, string>> = [];
+  const created: Array<{ labels: Record<string, string>; workspaceId: string | null }> = [];
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+    idFactory: () => agentId,
+    pluginLifecycle: {
+      emit: (name, event) => {
+        if (name === "agent.created") {
+          created.push(event.agent);
+        }
+      },
+      before: async (name, request) => {
+        if (name === "agent.session_open") {
+          sessionOpenEnvs.push(request.env);
+          return request;
+        }
+        if (name !== "agent.create") {
+          return request;
+        }
+        requests.push(request);
+        return {
+          ...request,
+          config: { ...request.config, systemPrompt: "from plugin hook" },
+          env: { ...request.env, HOOK_ENV: "1" },
+          // Read-only placement fields must not be taken from the return value.
+          labels: { "vibe.tab.role": "spoofed" },
+          workspaceId: "wks_spoofed",
+        };
+      },
+    },
+  });
+
+  const labels = {
+    [PARENT_AGENT_ID_LABEL]: "parent-1",
+    "vibe.tab.role": "scout",
+  };
+  await manager.createAgent({ provider: "codex", cwd: workdir, title: "Task tab" }, undefined, {
+    workspaceId: "wks_task",
+    labels,
+    env: { BASE: "1" },
+  });
+
+  expect(requests).toEqual([
+    expect.objectContaining({
+      workspaceId: "wks_task",
+      parentAgentId: "parent-1",
+      labels,
+      env: { BASE: "1" },
+    }),
+  ]);
+  expect(manager.getAgent(agentId)?.config.systemPrompt).toBe("from plugin hook");
+  expect(sessionOpenEnvs).toContainEqual(expect.objectContaining({ BASE: "1", HOOK_ENV: "1" }));
+  expect(manager.getAgent(agentId)?.workspaceId).toBe("wks_task");
+  expect(manager.getAgent(agentId)?.labels).toEqual(labels);
+  // agent.created fires synchronously with the caller's placement and labels.
+  expect(created).toEqual([
+    expect.objectContaining({ workspaceId: "wks_task", parentAgentId: "parent-1", labels }),
+  ]);
+});
+
 test("global subscribers receive internal agent events only when they opt in", async () => {
   const internalAgentId = "00000000-0000-4000-8000-000000000116";
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
@@ -9435,59 +9501,6 @@ test("permission request notifies once without forcing unread attention state", 
   expect(attentionReasons).toContain("permission");
 });
 
-test("respondToPermission enforces the task approval guard before invoking the provider", async () => {
-  const approval = vi.fn(async () => undefined);
-  const request = {
-    id: "task-plan",
-    provider: "codex" as const,
-    name: "ExitPlanMode",
-    kind: "plan" as const,
-  };
-  class GuardedApprovalSession extends TestAgentSession {
-    override getPendingPermissions() {
-      return [request];
-    }
-    override async respondToPermission() {
-      await approval();
-    }
-  }
-  const client = new (class extends TestAgentClient {
-    override async createSession(config: AgentSessionConfig) {
-      return new GuardedApprovalSession(config);
-    }
-  })();
-  const manager = new AgentManager({ clients: { codex: client }, logger });
-  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
-    workspaceId: undefined,
-  });
-  const guard = vi.fn(() => {
-    throw new Error("只读角色不能退出规划");
-  });
-  manager.taskConversations = {
-    assertPermissionApproval: guard,
-  } as unknown as TaskConversationService;
-  try {
-    await expect(
-      manager.respondToPermission(agent.id, request.id, {
-        behavior: "allow",
-        selectedActionId: "implement_resume",
-      }),
-    ).rejects.toThrow("只读角色");
-    expect(guard).toHaveBeenCalledWith(agent.id, request.id, {
-      behavior: "allow",
-      selectedActionId: "implement_resume",
-    });
-    expect(approval).not.toHaveBeenCalled();
-    expect(manager.getAgent(agent.id)!.pendingPermissions.has(request.id)).toBe(true);
-    manager.taskConversations = undefined;
-    await manager.respondToPermission(agent.id, request.id, { behavior: "allow" });
-    expect(approval).toHaveBeenCalledOnce();
-  } finally {
-    manager.taskConversations = undefined;
-    await manager.closeAgent(agent.id);
-  }
-});
-
 test("respondToPermission updates currentModeId after plan approval", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storagePath = join(workdir, "agents");
@@ -10493,53 +10506,6 @@ test("close captures the latest provider persistence before session teardown cle
   }
 });
 
-test("task member close guard returns a rejected promise", async () => {
-  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
-  const activeRun = vi.spyOn(manager, "hasInFlightRun").mockReturnValue(true);
-  manager.taskConversations = {
-    assertAgentMutation: () => {
-      throw new Error("task_conversation_control_required");
-    },
-  } as unknown as TaskConversationService;
-  try {
-    let close!: Promise<void>;
-    expect(() => {
-      close = manager.closeAgent("task-member");
-    }).not.toThrow();
-    await expect(close).rejects.toThrow("task_conversation_control_required");
-  } finally {
-    activeRun.mockRestore();
-  }
-});
-
-test("provider retirement catches task member close guard rejection", async () => {
-  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
-  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
-    workspaceId: undefined,
-  });
-  const activeRun = vi.spyOn(manager, "hasInFlightRun").mockReturnValue(true);
-  const guard = vi.fn(() => {
-    throw new Error("task_conversation_control_required");
-  });
-  manager.taskConversations = { assertAgentMutation: guard } as unknown as TaskConversationService;
-  try {
-    expect(() =>
-      manager.updateProviderRegistry({
-        providerDefinitions: {},
-        clients: {},
-        retiredProviders: ["codex"],
-      }),
-    ).not.toThrow();
-    await Promise.resolve();
-    expect(guard).toHaveBeenCalledWith(agent.id, "close active member");
-    expect(manager.getAgent(agent.id)).not.toBeNull();
-  } finally {
-    manager.taskConversations = undefined;
-    activeRun.mockRestore();
-    await manager.closeAgent(agent.id);
-  }
-});
-
 test("concurrent explicit closes tear down the runtime once", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-concurrent-close-"));
   const closeStarted = deferred<void>();
@@ -11098,61 +11064,6 @@ test("tryRunOutOfBand gives providers the command another agent sent, not its en
   } finally {
     await manager.closeAgent(agent.id);
     rmSync(workdir, { recursive: true, force: true });
-  }
-});
-
-test("runOutOfBand awaits native compact, propagates failure, and never starts a prompt turn", async () => {
-  const completed = deferred<void>();
-  const seen: AgentPromptInput[] = [];
-  const errorModes: Array<boolean | undefined> = [];
-  const startTurn = vi.fn();
-  let failure: Error | null = null;
-  class NativeCompactSession extends TestAgentSession {
-    override async startTurn(prompt: AgentPromptInput) {
-      startTurn(prompt);
-      return { turnId: "unexpected-turn" };
-    }
-    override tryHandleOutOfBand(prompt: AgentPromptInput) {
-      seen.push(prompt);
-      if (prompt !== "/compact") return null;
-      return {
-        run: async ({ throwOnError }: { throwOnError?: boolean }) => {
-          errorModes.push(throwOnError);
-          await completed.promise;
-          if (failure) throw failure;
-        },
-      };
-    }
-  }
-  const client = new (class extends TestAgentClient {
-    override async createSession(config: AgentSessionConfig) {
-      return new NativeCompactSession(config);
-    }
-  })();
-  const manager = new AgentManager({ clients: { codex: client }, logger });
-  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {
-    workspaceId: undefined,
-  });
-  try {
-    let acknowledged = false;
-    const compact = manager.runOutOfBand(agent.id, "/compact").then((handled) => {
-      acknowledged = true;
-      return handled;
-    });
-    await Promise.resolve();
-    expect(acknowledged).toBe(false);
-    completed.resolve();
-    await expect(compact).resolves.toBe(true);
-    await expect(manager.runOutOfBand(agent.id, "/unsupported")).resolves.toBe(false);
-    failure = new Error("native failure");
-    await expect(manager.runOutOfBand(agent.id, "/compact")).rejects.toThrow("native failure");
-    failure = null;
-    expect(manager.tryRunOutOfBand(agent.id, "/compact")).toBe(true);
-    expect(errorModes).toEqual([true, true, undefined]);
-    expect(seen).toEqual(["/compact", "/unsupported", "/compact", "/compact"]);
-    expect(startTurn).not.toHaveBeenCalled();
-  } finally {
-    await manager.closeAgent(agent.id);
   }
 });
 

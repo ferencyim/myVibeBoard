@@ -133,8 +133,6 @@ import type { LocalSpeechProviderConfig } from "./speech/providers/local/config.
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { createSpeechService } from "./speech/speech-runtime.js";
 import { AgentManager } from "./agent/agent-manager.js";
-import { TaskConversationService } from "./task-conversation/service.js";
-import { TaskConversationStore } from "./task-conversation/store.js";
 import { AgentStorage } from "./agent/agent-storage.js";
 import { attachAgentStoragePersistence } from "./persistence-hooks.js";
 import { createAgentMcpServer } from "./agent/mcp-server.js";
@@ -992,18 +990,6 @@ export async function createPaseoDaemon(
       providerSnapshotManager.replacePluginProviders(pluginRuntime.getProviderRegistrations()),
     );
   };
-  const taskConversations = new TaskConversationService({
-    store: new TaskConversationStore({
-      filePath: path.join(config.paseoHome, "task-conversations.sqlite"),
-      onCorruptRecord: (error, conversationId) =>
-        logger.warn({ err: error, conversationId }, "Task conversation record was skipped"),
-    }),
-    agentManager,
-    agentStorage,
-    workspaceRegistry,
-    plugins: pluginRuntime,
-    logger,
-  });
   const unsubscribePluginProviders =
     pluginRuntime.subscribeProviderRegistrations(syncPluginProviders);
 
@@ -1489,6 +1475,9 @@ export async function createPaseoDaemon(
     callerAgentId: runtime.callerAgentId,
     enableVoiceTools: runtime.enableVoiceTools,
     voiceOnly: runtime.voiceOnly,
+    listPluginAgentTools: () => pluginRuntime.listPluginAgentTools(),
+    invokePluginAgentTool: (pluginId, name, input, callerAgentId) =>
+      pluginRuntime.invokePluginRpc(pluginId, name, input, callerAgentId),
     resolveSpeakHandler: (agentId) => wsServer?.resolveVoiceSpeakHandler(agentId) ?? null,
     resolveCallerContext: (agentId) => wsServer?.resolveVoiceCallerContext(agentId) ?? null,
     logger,
@@ -1877,7 +1866,6 @@ export async function createPaseoDaemon(
       label: "drain plugin lifecycle events",
     }).catch((error) => logger.warn({ err: error }, "Plugin lifecycle events did not finish"));
     await agentManager.flushForShutdown().catch(() => undefined);
-    await taskConversations.close();
     detachAgentStoragePersistence();
     await agentStorage.flush().catch(() => undefined);
     await agentProviderRuntime.shutdown();
@@ -1930,15 +1918,13 @@ export async function createPaseoDaemon(
  */
 const AGENT_CLOSE_TIMEOUT_MS = 5_000;
 
-export async function closeAllAgents(logger: Logger, agentManager: AgentManager): Promise<void> {
+async function closeAllAgents(logger: Logger, agentManager: AgentManager): Promise<void> {
   const agents = agentManager.listAgents({ includeInternal: true });
   await Promise.all(
     agents.map(async (agent) => {
       try {
         await withTimeout({
-          promise: agentManager.taskConversations
-            ? agentManager.taskConversations.runWithControl(() => agentManager.closeAgent(agent.id))
-            : agentManager.closeAgent(agent.id),
+          promise: agentManager.closeAgent(agent.id),
           timeoutMs: AGENT_CLOSE_TIMEOUT_MS,
           label: `close agent ${agent.id}`,
         });

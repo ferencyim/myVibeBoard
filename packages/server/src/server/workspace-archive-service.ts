@@ -33,10 +33,7 @@ export interface ArchiveDependencies {
   paseoWorktreesBaseRoot?: string;
   github: ForgeService;
   workspaceGitService: Pick<WorkspaceGitService, "getSnapshot" | "invalidateWorktrees">;
-  agentManager: Pick<
-    AgentManager,
-    "listAgents" | "getAgent" | "archiveAgent" | "archiveSnapshot" | "taskConversations"
-  >;
+  agentManager: Pick<AgentManager, "listAgents" | "getAgent" | "archiveAgent" | "archiveSnapshot">;
   agentStorage: Pick<AgentStorage, "listByWorkspace">;
   // Resolves the worktree at a path to its workspaceId for archive-by-path. The
   // path uniquely identifies a worktree workspace; this is a directory lookup for
@@ -136,20 +133,6 @@ async function archiveByScopeWithPriority(
 ): Promise<ArchiveResult> {
   const target = await resolveArchiveTarget(dependencies, request.scope);
   const targetWorkspaceIds = target.workspaceIds;
-  const archivedTaskAgents = new Set<string>();
-  for (const workspaceId of targetWorkspaceIds) {
-    try {
-      for (const agentId of await archiveTaskConversations(dependencies, workspaceId)) {
-        archivedTaskAgents.add(agentId);
-      }
-    } catch (error) {
-      dependencies.sessionLogger?.warn(
-        { err: error, workspaceId, requestId: request.requestId },
-        "archiveByScope workspace teardown failed",
-      );
-      throw error;
-    }
-  }
 
   await stopWorkspaceSetups(dependencies, target.setupWorkspaceIds, request.requestId);
 
@@ -168,7 +151,6 @@ async function archiveByScopeWithPriority(
       dependencies,
       targetWorkspaceIds,
       request.requestId,
-      archivedTaskAgents,
     );
 
     if (target.backing?.mainRepoRoot) {
@@ -336,13 +318,13 @@ async function archiveTargetRecords(
   dependencies: ArchiveDependencies,
   targetWorkspaceIds: string[],
   requestId: string,
-  archivedAgents: Set<string>,
 ): Promise<{ archivedAgents: Set<string>; archivedWorkspaceIds: string[] }> {
+  const archivedAgents = new Set<string>();
   const archivedWorkspaceIds: string[] = [];
 
   const results = await Promise.allSettled(
     targetWorkspaceIds.map(async (workspaceId) => {
-      const agents = await archiveOrdinaryWorkspaceContents(dependencies, workspaceId);
+      const agents = await archiveWorkspaceContents(dependencies, workspaceId);
       await dependencies.archiveWorkspaceRecord(workspaceId);
       return { workspaceId, agents };
     }),
@@ -357,10 +339,11 @@ async function archiveTargetRecords(
     } else {
       dependencies.sessionLogger?.warn(
         { err: result.reason, requestId },
-        "archiveByScope workspace teardown failed",
+        "archiveByScope workspace teardown failed; continuing",
       );
     }
   }
+
   return { archivedAgents, archivedWorkspaceIds };
 }
 
@@ -481,34 +464,8 @@ export async function archiveWorkspaceContents(
   dependencies: ArchiveWorkspaceContentsDependencies,
   workspaceId: string,
 ): Promise<Set<string>> {
-  const archivedAgents = await archiveTaskConversations(dependencies, workspaceId);
-  for (const agentId of await archiveOrdinaryWorkspaceContents(dependencies, workspaceId)) {
-    archivedAgents.add(agentId);
-  }
-  return archivedAgents;
-}
-
-async function archiveTaskConversations(
-  dependencies: ArchiveWorkspaceContentsDependencies,
-  workspaceId: string,
-): Promise<Set<string>> {
   const archivedAgents = new Set<string>();
-  const taskConversations = dependencies.agentManager.taskConversations;
-  for (const conversation of taskConversations?.listByWorkspace(workspaceId) ?? []) {
-    if (conversation.status === "archived") continue;
-    // Stop must settle before any workspace teardown can release its resources.
-    await taskConversations!.archive({ conversationId: conversation.conversationId });
-    for (const member of conversation.members) archivedAgents.add(member.backendAgentId);
-  }
-  return archivedAgents;
-}
 
-async function archiveOrdinaryWorkspaceContents(
-  dependencies: ArchiveWorkspaceContentsDependencies,
-  workspaceId: string,
-): Promise<Set<string>> {
-  const archivedAgents = new Set<string>();
-  const taskConversations = dependencies.agentManager.taskConversations;
   const liveAgents = dependencies.agentManager
     .listAgents({ includeInternal: true })
     .filter((agent) => agent.workspaceId === workspaceId);
@@ -532,12 +489,8 @@ async function archiveOrdinaryWorkspaceContents(
 
   const archivedAt = new Date().toISOString();
   const agentIdsToArchive = new Set([
-    ...liveAgents
-      .filter((agent) => !taskConversations?.getByAgentId(agent.id))
-      .map((agent) => agent.id),
-    ...matchingStoredRecords
-      .filter((record) => !record.archivedAt && !taskConversations?.getByAgentId(record.id))
-      .map((record) => record.id),
+    ...liveAgents.map((agent) => agent.id),
+    ...matchingStoredRecords.filter((record) => !record.archivedAt).map((record) => record.id),
   ]);
   const archiveResults = await Promise.allSettled([
     ...[...agentIdsToArchive].map((agentId) =>
@@ -556,6 +509,7 @@ async function archiveOrdinaryWorkspaceContents(
       );
     }
   }
+
   return archivedAgents;
 }
 

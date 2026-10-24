@@ -127,12 +127,12 @@ export function createTaskRuntimeCommands(db: VibeDb, options: { now?: () => Dat
         )
           throw new Error("仅可恢复同一任务、原生 agent 和角色的正常完成会话");
         const task = db
-          .prepare<{ conversation_id: string | null; confirmed_at: string | null }>(
-            "SELECT conversation_id,confirmed_at FROM task WHERE workspace_id = ?",
+          .prepare<{ confirmed_at: string | null }>(
+            "SELECT confirmed_at FROM task WHERE workspace_id = ?",
           )
           .get(parsed.workspaceId);
-        if (!task?.conversation_id || task.confirmed_at !== parsed.confirmedAt)
-          throw new Error("任务会话绑定或确认已变化，拒绝恢复旧运行");
+        if (!task || task.confirmed_at !== parsed.confirmedAt)
+          throw new Error("任务确认已变化，拒绝恢复旧运行");
         if (db.prepare("SELECT id FROM agent_session WHERE previous_session_id = ?").get(sessionId))
           throw new Error("会话已有接续替代者，不能恢复旧运行");
         const ended = db

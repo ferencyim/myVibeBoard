@@ -17,7 +17,6 @@ const WorkspaceTabTargetStorageSchema = z.discriminatedUnion("kind", [
     setup: WorkspaceDraftTabSetupStorageSchema.optional(),
   }),
   z.object({ kind: z.literal("agent"), agentId: z.string() }),
-  z.object({ kind: z.literal("task_conversation"), conversationId: z.string() }),
   z.object({
     kind: z.literal("provider_subagent"),
     parentAgentId: z.string(),
@@ -97,7 +96,6 @@ const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.object({
 });
 export const WorkspaceLayoutPersistedStateSchema = z.object({
   pinnedAgentIdsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
-  closedTaskConversationIdsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
   layoutByWorkspace: z.record(z.string(), WorkspaceLayoutStorageSchema),
   splitSizesByWorkspace: z.record(z.string(), z.record(z.string(), z.array(z.number()))).optional(),
   explorerSidebarWidthByWorkspace: z.record(z.string(), z.number()).optional(),
@@ -105,8 +103,8 @@ export const WorkspaceLayoutPersistedStateSchema = z.object({
   explorerSidebarRatioByWorkspace: z.record(z.string(), z.number()).optional(),
   // COMPAT(explorerSidebarNaming): accepted from builds that called this dock the Side panel.
   sidePanelRatioByWorkspace: z.record(z.string(), z.number()).optional(),
-  // Keep legacy persisted keys readable when upgrading. Unknown fields at every
-  // object boundary are ignored so additive fields do not discard the layout.
+  // The persisted keys keep their pre-rename spelling: the schema is strict, so a
+  // rename here would fail every existing blob and wipe the layout it describes.
   explorerPaneIdByWorkspace: z.record(z.string(), z.string().nullable()).optional(),
   explorerSidebarPaneIdByWorkspace: z.record(z.string(), z.string().nullable()).optional(),
   sidePaneIdByWorkspace: z.record(z.string(), z.string().nullable()).optional(),

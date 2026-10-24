@@ -5,8 +5,6 @@ import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store"
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { buildPluginSurfaceRoute } from "./routes";
 import type { PluginNavigation } from "./actions";
-import { useTaskConversationStore, taskConversationKey } from "@/task-conversations/store";
-import { useConversationPanelStore } from "./workspace-panels/conversation-state";
 
 export function createPluginNavigation(input: {
   serverId: string;
@@ -31,7 +29,6 @@ export function createPluginNavigation(input: {
       );
     },
     openWorkspacePanel(pluginId, panelId, location) {
-      if (location === "conversation") throw new Error("Conversation panels require agent context");
       if (!workspaceId) throw new Error("No active workspace");
       navigateToWorkspace({
         serverId,
@@ -41,7 +38,6 @@ export function createPluginNavigation(input: {
       });
     },
     openAgentPanel(pluginId, panelId, agentId, location) {
-      if (location === "conversation") throw new Error("Conversation identity is required");
       if (!workspaceId) throw new Error("No active workspace");
       navigateToWorkspace({
         serverId,
@@ -49,14 +45,6 @@ export function createPluginNavigation(input: {
         target: { kind: "plugin", pluginId, panelId, context: "agent", agentId },
         placement: placement(location),
       });
-    },
-    openConversationPanel(pluginId, panelId, conversationId) {
-      const key = taskConversationKey(serverId, conversationId);
-      const conversation = useTaskConversationStore.getState().conversations.get(key);
-      if (!conversation || conversation.workspaceId !== workspaceId) {
-        throw new Error("Conversation panel context is unavailable");
-      }
-      useConversationPanelStore.getState().open(key, { pluginId, panelId });
     },
   };
 }

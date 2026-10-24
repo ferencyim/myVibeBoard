@@ -7,6 +7,7 @@ export * from "./hlc";
 export * from "./ids";
 export * from "./model";
 export * from "./model-roles";
+export * from "./model-label";
 export * from "./overlap";
 export * from "./paths";
 export * from "./preset-models";

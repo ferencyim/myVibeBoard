@@ -9,7 +9,6 @@ import { getHostRuntimeStore, useHostRuntimeSnapshot, useHosts } from "@/runtime
 import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
 import { toErrorMessage } from "@/utils/error-messages";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
-import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 
 export default function HostAgentReadyRoute() {
   return (
@@ -55,12 +54,6 @@ function HostAgentReadyRouteContent() {
         throw new Error("Target host client is unavailable");
       }
       const result = await client.fetchAgent({ agentId });
-      if (result?.agent) {
-        const agent = normalizeAgentSnapshot(result.agent, serverId);
-        useSessionStore
-          .getState()
-          .setAgentDetails(serverId, (previous) => new Map(previous).set(agent.id, agent));
-      }
       return result?.agent?.workspaceId ?? null;
     },
     enabled: shouldLookupAgent,

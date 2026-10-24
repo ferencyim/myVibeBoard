@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createPerfSlowCheck } from "../server/checks/perf-slow";
 import { createBackendCollector } from "../../vibe-verify/server/collectors/backend";
 import { createNodeRunner, loadVerifyConfig } from "../../vibe-verify/server/collectors/common";
-import { setup, tempDir, plan, roles } from "./helpers";
+import { setup, tempDir, plan, roles, confirmTask } from "./helpers";
 
 const RULE =
   "rules:\n  - name: perf-slow\n    trigger: { kind: time, cron: '0 4 * * *' }\n    check:\n      type: perf-slow\n      sources:\n        - { name: api, kind: jsonl, path: slow.jsonl, threshold_ms: 200 }\n      repro: { command: node, args: [bench.js, '{site}'], runs: 2, threshold_ms: 600 }\n    output: fix\n    daily_cap: 5\n";
@@ -61,7 +61,7 @@ describe("性能维护先确认与前后对比证据", () => {
     await h.engine.syncRules();
     await h.engine.runNow(h.project.id + ":perf-slow");
     const task = h.maintenanceTasks()[0]!;
-    h.store.tasks.confirm(task.workspaceId, { plan, rolesSnapshot: roles });
+    confirmTask(h.store, task.workspaceId, plan, roles);
     h.store.tasks.setPhase(task.workspaceId, "executing");
     h.store.tasks.setPhase(task.workspaceId, "verifying");
     const configJson = /~~~json\n([\s\S]*?)~~~/.exec(

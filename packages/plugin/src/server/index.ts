@@ -6,6 +6,7 @@ export type {
   UsageDetail,
 } from "./usage.js";
 export type {
+  PluginAgentTool,
   PluginHandlerContext,
   PluginNotification,
   PluginServerContext,
@@ -22,10 +23,6 @@ export type {
   PluginLifecycleEvents,
   PluginBeforeRequests,
   PluginLifecycleRegistration,
-  PluginTaskConversationPrepareRequest,
-  PluginTaskConversationAdmitRequest,
-  PluginTaskConversationControlRequest,
-  PluginTaskConversationHooks,
 } from "./lifecycle.js";
 
 export { spawnProcess, execCommand, terminateProcess } from "./process.js";

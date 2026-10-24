@@ -4,7 +4,6 @@ import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeature } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
-import { saveFirstMessageOutboxOwner } from "./first-message-outbox";
 import { pluginRegistry } from "./registry";
 
 export function PluginCatalogSync({
@@ -22,41 +21,27 @@ export function PluginCatalogSync({
   useEffect(() => {
     let cancelled = false;
     let refreshQueue = Promise.resolve();
-    pluginRegistry.markCatalogLoading(serverId);
     if (!audio || (client && connected && !supported)) {
       pluginRegistry.removeHost(serverId);
       return;
     }
     if (!client || !connected) return;
-    const getPluginError = (pluginId: string) => pluginRegistry.getPluginError(serverId, pluginId);
     const refresh = (replacePluginId?: string) => {
-      pluginRegistry.markCatalogLoading(serverId);
       refreshQueue = refreshQueue.then(() =>
-        Promise.all([client.getPluginCatalog(), client.listPlugins()])
-          .then(async ([catalog, configured]) => {
+        client
+          .getPluginCatalog()
+          .then((catalog) => {
             if (!cancelled) {
               pluginRegistry.installCatalog(serverId, catalog, {
                 replacePluginId,
                 client,
                 audio,
-                configured,
               });
-              if (pluginRegistry.hasLoadedCatalog(serverId)) {
-                await saveFirstMessageOutboxOwner(
-                  serverId,
-                  pluginRegistry.getSnapshot(),
-                  getPluginError,
-                );
-              }
             }
             return undefined;
           })
           .catch((error) => {
             if (!cancelled) {
-              pluginRegistry.markCatalogFailed(
-                serverId,
-                error instanceof Error ? error.message : String(error),
-              );
               console.warn(`[Plugins] Failed to load catalog for ${serverId}`, error);
             }
             return undefined;
@@ -91,7 +76,6 @@ export function PluginCatalogSync({
     });
     return () => {
       cancelled = true;
-      pluginRegistry.markCatalogLoading(serverId);
       void observation
         .release()
         .catch((error) => console.warn("[Plugins] Failed to release catalog", error));

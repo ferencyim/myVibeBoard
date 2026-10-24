@@ -1,9 +1,8 @@
-// The verifier is a read-only auxiliary member in the task conversation.
-// `VerifierLauncher` is the injection seam;
-// unit tests use a scripted fake, the plugin wires `createPaseoVerifierLauncher`.
+// The verifier/reviewer is an ordinary task tab; its read-only requirement lives in the role
+// prompt. `VerifierLauncher` is the injection seam; unit tests use a scripted fake, the plugin
+// wires `createPaseoVerifierLauncher`.
 
-import { randomUUID } from "node:crypto";
-import type { PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
+import type { PaseoApi } from "@getpaseo/client";
 import { z } from "zod";
 import { defaultPrompts, type PromptResolver } from "../prompts";
 import {
@@ -45,8 +44,6 @@ export interface VerifierAgent {
 export interface LaunchInput {
   task: {
     workspaceId: string;
-    anchorAgentId: string;
-    conversationId: string;
     confirmedAt?: string;
     commitHash?: string;
   };
@@ -57,7 +54,7 @@ export interface LaunchInput {
   preset?: Preset;
   snapshot?: TaskPresetSnapshot;
   candidateIndex?: number;
-  /** A known failed member from an older confirmation cannot be resumed or linked into this round. */
+  /** A known failed member from an older confirmation cannot be reused in this round. */
   forceNewMember?: boolean;
   acquire?: (
     provider: string,
@@ -76,7 +73,9 @@ export interface LaunchInput {
   cwd: string;
   workspaceId: string | null;
   outputDir: string;
-  /** reviewer = model code review (same read-only guards, different prompt); default verifier. */
+  /** Provenance for plugin prompts: the task anchor (#1), never the verifier itself. */
+  sourceAgentId?: string;
+  /** reviewer = model code review (same read-only prompt requirement, different prompt); default verifier. */
   role?: "verifier" | "reviewer";
 }
 
@@ -126,10 +125,7 @@ export function parseJsonLoose(text: string): unknown {
 // --- Paseo-backed launcher -------------------------------------------------------------------
 
 export type VerifierPaseo = Pick<PaseoApi, "workspaces" | "agents"> &
-  Partial<{
-    providers: Pick<PaseoApi["providers"], "listModels">;
-    taskConversations: PaseoApi["taskConversations"];
-  }>;
+  Partial<{ providers: Pick<PaseoApi["providers"], "listModels"> }>;
 
 /** Presets saved before the model became mandatory may have none: use the provider's default model. */
 export async function defaultModelOf(
@@ -147,12 +143,21 @@ export async function defaultModelOf(
 
 export interface PaseoLauncherOptions {
   getPaseo: () => VerifierPaseo | null;
-  newAgentId?: () => string;
   /** Milliseconds, or a getter so a settings change applies to the next round (default 20 minutes). */
   roundTimeoutMs?: number | (() => number);
   prompts?: PromptResolver;
   /** Max wait for a stuck permission prompt to be answered by the policy hook. */
   pollMs?: number;
+  /** Claims the new native agent as the task's referee tab (role, model and title). */
+  claimTab?: (input: {
+    workspaceId: string;
+    agentId: string;
+    role: "verifier" | "reviewer";
+    provider: string;
+    model: string;
+    thinking?: string;
+    presetId?: string;
+  }) => Promise<void>;
 }
 
 async function resolveNativeModel(paseo: VerifierPaseo, input: LaunchInput) {
@@ -188,178 +193,150 @@ function taskEvidenceEnv(task: LaunchInput["task"]): Record<string, string> {
   return task.commitHash ? { VIBE_VERIFICATION_COMMIT: task.commitHash } : {};
 }
 
-function nativeRequest(input: LaunchInput, agentId: string, spec: string, prompts: PromptResolver) {
+export function nativeConfig(input: LaunchInput, prompt: string) {
+  // Read-only roles rely on their role prompt; the agent runs under its own preset permissions.
+  // Only Claude and Codex have a known writable mode we can name; other providers receive no
+  // modeId (an unknown mode would break agent creation).
+  const provider = input.provider.toLowerCase();
+  const modeId = provider === "claude" || provider === "codex" ? "auto" : undefined;
   return {
-    agentId,
-    title: `${input.task.workspaceId} ${input.role === "reviewer" ? "代码复核" : "证据验证"}`,
-    parent: input.task.anchorAgentId,
-    labels: {
-      workspaceId: input.task.workspaceId,
-      role: input.role ?? "verifier",
-    },
+    ...(modeId ? { modeId } : {}),
+    ...(input.thinking && input.thinking !== "default"
+      ? { thinkingOptionId: input.thinking }
+      : {}),
+    systemPrompt: prompt,
+  };
+}
+
+async function tabVerifier(
+  options: PaseoLauncherOptions,
+  paseo: VerifierPaseo,
+  input: LaunchInput,
+  model: string,
+  note?: string,
+): Promise<VerifierAgent> {
+  if (input.workspaceId !== input.task.workspaceId)
+    throw new Error("验证 tab 必须使用任务原生 workspace");
+  const role = input.role ?? "verifier";
+  const prompts = options.prompts ?? defaultPrompts;
+  const prompt =
+    prompts.resolve(role === "reviewer" ? "verify.reviewer_system" : "verify.verifier_system", {
+      projectId: input.project.id,
+    }) +
+    taskEvidenceScope(input, prompts) +
+    (input.snapshot?.instructions ? "\n\n" + input.snapshot.instructions : "");
+  const spec = model.startsWith(`${input.provider}/`) ? model : `${input.provider}/${model}`;
+  const handle = await paseo.workspaces.ref(input.task.workspaceId).agents.create({
+    config: { provider: spec as never, ...nativeConfig(input, prompt) } as never,
     env: {
       VIBE_ROLE: "verifier",
       VIBE_WORKSPACE_ID: input.task.workspaceId,
       ...(input.snapshot?.runtimeEnv ? { VIBE_RUNTIME_ENV: input.snapshot.runtimeEnv } : {}),
       ...taskEvidenceEnv(input.task),
     },
-    config: {
-      provider: spec,
-      ...(input.provider === "claude" ? { modeId: "plan" } : {}),
-      ...(input.provider === "codex"
-        ? { options: { sandbox_mode: "read-only", approval_policy: "never" } }
-        : {}),
-      ...(input.thinking && input.thinking !== "default"
-        ? { thinkingOptionId: input.thinking }
-        : {}),
-      systemPrompt:
-        prompts.resolve(
-          input.role === "reviewer" ? "verify.reviewer_system" : "verify.verifier_system",
-          { projectId: input.project.id },
-        ) +
-        taskEvidenceScope(input, prompts) +
-        (input.snapshot?.instructions ? "\n\n" + input.snapshot.instructions : ""),
+    labels: {
+      "vibe.tab.role": role,
+      ...(input.snapshot?.presetId ? { "vibe.tab.preset": input.snapshot.presetId } : {}),
     },
-  };
-}
-
-async function recordActualModel(handle: PaseoAgentHandle, input: LaunchInput, agentId: string) {
+    title: role === "reviewer" ? "代码复核" : "证据验证",
+  });
   await handle.refresh();
   const actual = handle.current();
-  if (!actual?.model) throw new Error("无法核对验证会话实际模型，保留租约等待核对");
+  if (!actual?.model) throw new Error("无法核对验证 tab 的实际模型，保留资源等待核对");
+  const lease = input.acquire
+    ? await input.acquire(actual.provider, input.candidateIndex ?? 0)
+    : undefined;
+  try {
+    await lease?.bind(handle.id);
+  } catch (error) {
+    await lease?.release().catch(() => {});
+    throw error;
+  }
+  await options.claimTab?.({
+    workspaceId: input.task.workspaceId,
+    agentId: handle.id,
+    role,
+    provider: actual.provider,
+    model: actual.model,
+    thinking: actual.thinkingOptionId ?? undefined,
+    ...(input.snapshot?.presetId ? { presetId: input.snapshot.presetId } : {}),
+  });
   input.onCreated?.({
-    agentId,
+    agentId: handle.id,
     provider: actual.provider,
     model: actual.model,
     thinking: actual.thinkingOptionId ?? undefined,
     candidateIndex: input.candidateIndex ?? 0,
   });
-}
-
-async function taskConversationVerifier(
-  options: PaseoLauncherOptions,
-  paseo: VerifierPaseo,
-  input: LaunchInput,
-  create: ReturnType<typeof nativeRequest>,
-  model: string,
-  note?: string,
-): Promise<VerifierAgent> {
-  if (!paseo.taskConversations) throw new Error("宿主不支持任务群聊验证");
-  const conversation = paseo.taskConversations.ref(input.task.conversationId);
-  const snapshot = await conversation.refresh();
-  const anchor = snapshot?.members.find(
-    (member) => member.backendAgentId === input.task.anchorAgentId,
-  );
-  if (!snapshot || snapshot.workspaceId !== input.workspaceId || !anchor)
-    throw new Error("验证任务群聊或规划成员不存在");
-  const parentMemberId = anchor.memberId;
-  let handle: PaseoAgentHandle | undefined;
-  let memberId: string | undefined =
-    input.forceNewMember || input.previousSessionId?.() ? randomUUID() : undefined;
-  let source: VerifierAgent["source"];
-  let failed = false;
-  let closed = false;
   const configured = options.roundTimeoutMs;
   const roundTimeout =
     (typeof configured === "function" ? configured() : configured) ?? 20 * 60_000;
-  const modeId = input.provider === "codex" ? "read-only" : create.config.modeId;
-  async function sendPrompt(prompt: string) {
-    const clientMessageId = randomUUID();
-    const previousSessionId = !handle ? input.previousSessionId?.() : undefined;
-    const uncertain = (cause?: unknown) =>
-      new Error("验证请求回执不明，保留成员等待核对，禁止自动重发", { cause });
-    let result = await conversation
-      .send({
-        clientMessageId,
-        text: prompt,
-        recipient: {
-          role: input.role ?? "verifier",
-          presetId: input.snapshot?.presetId,
-          config: {
-            provider: input.provider,
-            model,
-            cwd: input.cwd,
-            thinkingOptionId: create.config.thinkingOptionId,
-            modeId,
-            providerOptions: create.config.options,
-            systemPrompt: create.config.systemPrompt,
-          },
-          env: {
-            ...create.env,
-            VIBE_CANDIDATE_INDEX: String(input.candidateIndex ?? 0),
-            ...(previousSessionId ? { VIBE_PREVIOUS_SESSION_ID: previousSessionId } : {}),
-          },
-          parentMemberId,
-          ...(memberId ? { memberId } : {}),
-        },
-      })
-      .catch((error: unknown) => {
-        throw uncertain(error);
-      });
-    const deadline = Date.now() + roundTimeout;
-    while (
-      result.delivery &&
-      ["prepared", "dispatching"].includes(result.delivery.status) &&
-      Date.now() < deadline
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 500));
-      result = await conversation.getDelivery({ clientMessageId }).catch((error: unknown) => {
-        throw uncertain(error);
-      });
-    }
-    const delivery = result.delivery;
-    if (delivery?.status === "rejected")
-      throw new Error(result.error || delivery.error || "宿主拒绝验证请求");
-    if (result.error || !delivery || delivery.status !== "accepted")
-      throw uncertain(result.error || delivery?.error);
-    return { delivery, deadline };
+  let failed = false;
+  let closed = false;
+  let source: VerifierAgent["source"];
+  let lastAssistantSeq = Number.NEGATIVE_INFINITY;
+  async function captureSource() {
+    const page = await handle.timeline.refetch({ direction: "tail", limit: 60 });
+    const entries = page.entries as readonly {
+      item: { type: string; messageId?: string };
+      turnId?: string | null;
+      seqEnd: number;
+    }[];
+    const entry = [...entries]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.item.type === "assistant_message" && candidate.seqEnd > lastAssistantSeq,
+      );
+    if (!entry) return undefined;
+    lastAssistantSeq = entry.seqEnd;
+    return {
+      memberId: handle.id,
+      backendAgentId: handle.id,
+      epoch: page.epoch,
+      seq: entry.seqEnd,
+      ...(entry.turnId ? { sourceTurnId: entry.turnId } : {}),
+      ...(entry.item.messageId ? { messageId: entry.item.messageId } : {}),
+    };
   }
   return {
-    get agentId() {
-      return handle?.id ?? "";
-    },
-    provider: input.provider,
-    model,
+    agentId: handle.id,
+    provider: actual.provider,
+    model: actual.model,
     note,
     get source() {
       return source;
     },
-    async run(prompt) {
-      if (closed) throw new Error("验证成员已收口");
-      const { delivery, deadline } = await sendPrompt(prompt);
-      memberId = delivery.memberId;
-      const next = paseo.agents.ref(delivery.backendAgentId);
-      if (handle?.id !== next.id) {
-        handle = next;
-        await recordActualModel(handle, input, next.id);
-      }
-      let finished = await next.waitForFinish(Math.max(1_000, deadline - Date.now()));
+    async run(text) {
+      if (closed) throw new Error("验证 tab 已收口");
+      const deadline = Date.now() + roundTimeout;
+      await handle.send(text, { sourceAgentId: input.sourceAgentId ?? handle.id });
+      let finished = await handle.waitForFinish(Math.max(1_000, deadline - Date.now()));
       while (finished.status === "permission" && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 500));
-        finished = await next.waitForFinish(Math.max(1_000, deadline - Date.now()));
+        finished = await handle.waitForFinish(Math.max(1_000, deadline - Date.now()));
       }
       const status = verifierStatus(finished.status);
       failed = status !== "idle";
-      if (status === "idle") {
-        const located = await conversation.querySource({ memberId, completed: true });
-        if (located.error || !located.row?.source)
-          throw new Error(located.error || "无法定位验证成员完整源输出");
-        source = { ...located.row.source, sourceKey: located.row.sourceKey };
-      }
-      return { status, text: finished.lastMessage ?? "", error: finished.error ?? undefined };
+      if (status === "idle") source = (await captureSource()) ?? source;
+      return {
+        status,
+        text: finished.lastMessage ?? "",
+        error: finished.error ?? undefined,
+      };
     },
     async close() {
       if (closed) return;
-      if (handle) {
-        await handle.refresh();
-        if (
-          !handle.current() ||
-          handle.activeTurn ||
-          (handle.status !== "idle" && handle.status !== "error")
-        )
-          throw new Error("验证 agent 尚未停止，保留资源租约");
-        input.onStopped?.(handle.id, failed ? "failed" : "completed");
-      }
+      await handle.refresh();
+      const current = handle.current();
+      if (
+        !current ||
+        handle.activeTurn ||
+        (handle.status !== "idle" && handle.status !== "error")
+      )
+        throw new Error("验证 tab 尚未停止，保留资源租约");
+      await lease?.release();
+      input.onStopped?.(handle.id, failed ? "failed" : "completed");
       closed = true;
     },
   };
@@ -368,16 +345,12 @@ async function taskConversationVerifier(
 function createSingleVerifierLauncher(options: PaseoLauncherOptions): VerifierLauncher {
   return {
     async launch(input) {
-      if (!input.task) throw new Error("验证缺少任务群聊定位");
       if (input.workspaceId !== input.task.workspaceId)
-        throw new Error("验证会话必须使用任务原生 workspace");
+        throw new Error("验证 tab 必须使用任务原生 workspace");
       const paseo = options.getPaseo();
       if (!paseo) throw new Error("验证需要可用的 Paseo 原生连接");
-      const agentId = (options.newAgentId ?? randomUUID)();
       const { model, note } = await resolveNativeModel(paseo, input);
-      const spec = model.startsWith(`${input.provider}/`) ? model : `${input.provider}/${model}`;
-      const create = nativeRequest(input, agentId, spec, options.prompts ?? defaultPrompts);
-      return taskConversationVerifier(options, paseo, input, create, model, note);
+      return tabVerifier(options, paseo, input, model, note);
     },
   };
 }

@@ -629,4 +629,23 @@ DROP TABLE sync_field;
 DROP TABLE sync_tomb;
 `,
   },
+  {
+    version: 15,
+    name: "task_tabs",
+    sql: `
+ALTER TABLE task ADD COLUMN tabs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tabs_json));
+ALTER TABLE task ADD COLUMN next_tab_number INTEGER NOT NULL DEFAULT 1 CHECK (next_tab_number >= 1);
+`,
+  },
+  {
+    // Only user-created task workspaces get tab numbering; other worktrees must stay untouched.
+    version: 16,
+    name: "task_workspace_marker",
+    sql: `
+CREATE TABLE task_workspace (
+  workspace_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+`,
+  },
 ];

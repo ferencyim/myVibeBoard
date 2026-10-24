@@ -1,20 +1,8 @@
 import { createPluginHosts } from "./hosts";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { PaseoApi } from "@getpaseo/client";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { PluginRegistry } from "./registry";
-
-// Registry tests use the real evaluator and isolate native rendering/bootstrap dependencies.
-vi.mock("./react-native/runtime", () => ({ pluginReactNativeRuntime: {} }));
-vi.mock("./react-native/ui", () => ({}));
-vi.mock("./settings/use-settings", () => ({ useSettings: () => undefined }));
-vi.mock("@/utils/open-external-url", () => ({ openExternalUrl: async () => undefined }));
-vi.mock("@/runtime/host-runtime", () => ({
-  getHostRuntimeStore: () => ({ getSnapshot: () => null }),
-  isHostRuntimeConnected: () => false,
-}));
-
-vi.mock("./client-runtime", () => ({ createPluginClientRuntime: () => ({}) }));
 
 const audio = { play: async () => 0 };
 
@@ -63,7 +51,6 @@ function registry() {
         openSettings: () => {},
         playAudio: async () => {},
         openPanel: () => {},
-        setTaskConversationRecipients: () => {},
         addComposerPill: () => ({ update() {}, remove() {} }),
         addHeaderButton: () => ({ update() {}, remove() {} }),
       };

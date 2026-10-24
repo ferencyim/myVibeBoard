@@ -1,7 +1,5 @@
 export const CLIENT_CAPS = {
   helloRejection: "hello_rejection",
-  // COMPAT(taskConversations): added in v0.12.0, remove legacy gates after 2027-04-23 once the client floor supports task conversations; retain the wire capability.
-  taskConversations: "task_conversations",
   // COMPAT(ownedSubscriptions): added in v0.8.0, remove legacy ownership after 2027-03-09.
   ownedSubscriptions: "owned_subscriptions",
   // Clients outside the Paseo app version series can explicitly accept provider IDs.

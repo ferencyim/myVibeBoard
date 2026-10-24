@@ -6,23 +6,10 @@ import { normalizeWorkspaceOpaqueId } from "@/utils/workspace-identity";
 export interface WorkspaceAgentVisibility {
   activeAgentIds: Set<string>;
   autoOpenAgentIds: Set<string>;
-  conversationByAgentId?: ReadonlyMap<string, string>;
 }
 
 function agentBelongsToWorkspace(agent: Agent, workspaceId: string): boolean {
   return normalizeWorkspaceOpaqueId(agent.workspaceId) === workspaceId;
-}
-
-function taskConversationBindings(workspaceId: string, maps: (Map<string, Agent> | undefined)[]) {
-  const bindings = new Map<string, string>();
-  for (const agents of maps) {
-    for (const agent of agents?.values() ?? []) {
-      if (agentBelongsToWorkspace(agent, workspaceId) && agent.taskConversationId) {
-        bindings.set(agent.id, agent.taskConversationId);
-      }
-    }
-  }
-  return bindings;
 }
 
 export function deriveWorkspaceAgentVisibility(input: {
@@ -41,10 +28,6 @@ export function deriveWorkspaceAgentVisibility(input: {
 
   const activeAgentIds = new Set<string>();
   const autoOpenAgentIds = new Set<string>();
-  const conversationByAgentId = taskConversationBindings(workspaceId, [
-    agentDetails,
-    sessionAgents,
-  ]);
   for (const agent of sessionAgents?.values() ?? []) {
     if (!agentBelongsToWorkspace(agent, workspaceId)) {
       continue;
@@ -54,18 +37,12 @@ export function deriveWorkspaceAgentVisibility(input: {
       const parentAgent = agent.parentAgentId
         ? (sessionAgents?.get(agent.parentAgentId) ?? agentDetails?.get(agent.parentAgentId))
         : undefined;
-      // Reconciliation maps every task member to one conversation tab, including when
-      // a member arrives before its anchor on another client.
-      if (agent.taskConversationId || isWorkspaceRootAgent(agent, parentAgent)) {
+      if (isWorkspaceRootAgent(agent, parentAgent)) {
         autoOpenAgentIds.add(agent.id);
       }
     }
   }
-  return {
-    activeAgentIds,
-    autoOpenAgentIds,
-    ...(conversationByAgentId.size ? { conversationByAgentId } : {}),
-  };
+  return { activeAgentIds, autoOpenAgentIds };
 }
 
 interface AgentMapsSnapshot {
@@ -122,9 +99,6 @@ export function buildWorkspaceTabSnapshot(input: {
     terminalsHydrated: input.terminalsHydrated,
     activeAgentIds: input.agentVisibility.activeAgentIds,
     autoOpenAgentIds: input.agentVisibility.autoOpenAgentIds,
-    ...(input.agentVisibility.conversationByAgentId
-      ? { conversationByAgentId: input.agentVisibility.conversationByAgentId }
-      : {}),
     knownTerminalIds: input.knownTerminalIds,
     standaloneTerminalIds: input.standaloneTerminalIds,
     hasActivePendingTerminalCreate: input.hasActivePendingTerminalCreate,
@@ -139,21 +113,8 @@ export function workspaceAgentVisibilityEqual(
   return (
     a === b ||
     (setsEqual(a.activeAgentIds, b.activeAgentIds) &&
-      setsEqual(a.autoOpenAgentIds, b.autoOpenAgentIds) &&
-      conversationMapsEqual(a.conversationByAgentId, b.conversationByAgentId))
+      setsEqual(a.autoOpenAgentIds, b.autoOpenAgentIds))
   );
-}
-
-function conversationMapsEqual(
-  a: ReadonlyMap<string, string> | undefined,
-  b: ReadonlyMap<string, string> | undefined,
-): boolean {
-  if (a === b) return true;
-  if ((a?.size ?? 0) !== (b?.size ?? 0)) return false;
-  for (const [agentId, conversationId] of a ?? []) {
-    if (b?.get(agentId) !== conversationId) return false;
-  }
-  return true;
 }
 
 function setsEqual(a: Set<string>, b: Set<string>): boolean {

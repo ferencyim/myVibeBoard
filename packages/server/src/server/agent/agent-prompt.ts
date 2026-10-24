@@ -313,7 +313,6 @@ async function resolvePromptSource(
 export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
-  params.agentManager.taskConversations?.assertAgentRun(params.agentId);
   const unarchive = params.unarchive ?? true;
 
   const record = await params.agentStorage.get(params.agentId);
@@ -372,7 +371,6 @@ export async function startCreatedAgentInitialPrompt(
   if (params.prompt === null) {
     return currentSnapshot;
   }
-  params.agentManager.taskConversations?.assertAgentRun(params.agentId);
 
   const delivery = prepareAgentMessage(
     params.prompt,

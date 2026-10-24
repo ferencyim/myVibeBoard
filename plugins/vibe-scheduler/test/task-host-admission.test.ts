@@ -6,11 +6,26 @@ import {
   migrateOwner,
   openVibeDb,
 } from "../server/vibe/db";
-import { resolveTaskRoles, TaskPresetSnapshotSchema } from "../server/vibe/contract";
+import { resolveTaskRoles, TaskPresetSnapshotSchema, type TaskRoleSnapshot } from "../server/vibe/contract";
 import { createTaskScheduler, type NativeAgentState } from "../server/task-scheduler";
 import { createPortAllocator } from "../server/ports";
 import { DEFAULT_CONFIG } from "../server/scheduler";
 
+function confirmTask(store: ReturnType<typeof createVibeStore>, id: string, roles: TaskRoleSnapshot) {
+  const task = store.tasks.get(id)!;
+  const tab =
+    task.tabs.find((item) => item.agentId === task.anchorAgentId) ??
+    store.tasks.allocateTab(id, {
+      agentId: task.anchorAgentId,
+      role: "main",
+      provider: "codex",
+      model: "cheap",
+    }).tab;
+  return store.tasks.confirm(id, {
+    rolesSnapshot: roles,
+    planSource: { tabNumber: tab.number, agentId: tab.agentId, sourceKey: "test-" + id },
+  });
+}
 const closes: Array<() => void> = [];
 afterEach(() => {
   for (const close of closes.splice(0)) close();
@@ -35,7 +50,7 @@ function setup() {
     subtasks: [],
     checks: [{ text: "检查", method: "单测" }],
   });
-  store.tasks.confirm("workspace", { rolesSnapshot: roles });
+  confirmTask(store, "workspace", roles);
   const runtime = createTaskRuntimeCommands(db);
   const agents: NativeAgentState[] = [];
   const scheduler = createTaskScheduler({
