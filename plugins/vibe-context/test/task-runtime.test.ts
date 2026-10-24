@@ -51,6 +51,12 @@ function setup(role: SessionRole = "worker") {
   const store = createVibeStore(db);
   const runtime = createTaskRuntimeCommands(db);
   const task = store.tasks.create({ workspaceId: "workspace", anchorAgentId: "anchor" });
+  const anchorTab = store.tasks.allocateTab(task.workspaceId, {
+    agentId: "anchor",
+    role: "main",
+    provider: "codex",
+    model: "first",
+  }).tab;
   const roles = {
     scout: preset,
     planner: preset,
@@ -62,6 +68,11 @@ function setup(role: SessionRole = "worker") {
   };
   store.tasks.confirm(task.workspaceId, {
     rolesSnapshot: roles,
+    planSource: {
+      tabNumber: anchorTab.number,
+      agentId: anchorTab.agentId,
+      sourceKey: "test-source",
+    },
     plan: {
       goal: "目标",
       approach: "做法",
@@ -444,89 +455,6 @@ describe("workspace runtime wiring", () => {
     scheduler.onTurnEnded({ id: "agent", provider: "codex", cwd });
     s.store.sessions.touch(s.session.id, { cacheExpiresAt: new Date(2000).toISOString() });
     expect((await scheduler.tick())[0]).toMatchObject({ action: "skipped", reason: "failed" });
-    expect(readEvents(s.db, 0, { types: ["session.compacted"] })).toEqual([]);
-  });
-  it("compacts a managed member by its request time and preserves deduplication on restart", async () => {
-    const s = setup();
-    s.store.sessions.setState(s.session.id, "idle");
-    let requestAt = new Date(0).toISOString();
-    let now = 250_000;
-    const compact = vi.fn(async () => {
-      requestAt = new Date(now).toISOString();
-      return requestAt;
-    });
-    const run = vi.fn();
-    const handoff = vi.fn();
-    const config = { enabled: true, ttlSeconds: {} };
-    const create = () =>
-      createCompactionScheduler({
-        store: s.store,
-        usageDb: s.db,
-        now: () => now,
-        config: () => config,
-        buildContext: () => null,
-        host: {
-          describeIdleAgent: async () => ({ id: "agent", provider: "codex", cwd: "." }),
-          taskMember: async () => ({
-            conversationId: "conversation",
-            memberId: "member",
-            lastRequestAt: requestAt,
-            idle: true,
-            compact,
-          }),
-          run,
-          handoff,
-          archive: vi.fn(),
-        },
-      });
-    // The legacy session timestamp disagrees: the member request is authoritative.
-    s.store.sessions.touch(s.session.id, { cacheExpiresAt: new Date(9_999_999).toISOString() });
-    expect((await create().tick())[0]?.action).toBe("compact");
-    now += 250_000;
-    expect((await create().tick())[0]).toMatchObject({ reason: "already-compacted" });
-    // An actual subsequent request reopens the compaction window.
-    requestAt = new Date(now - 249_000).toISOString();
-    expect((await create().tick())[0]?.action).toBe("compact");
-    config.enabled = false;
-    expect(await create().tick()).toEqual([]);
-    expect(compact).toHaveBeenCalledTimes(2);
-    expect(run).not.toHaveBeenCalled();
-    expect(handoff).not.toHaveBeenCalled();
-  });
-  it("reconciles an interrupted managed compact request without replaying it", async () => {
-    const s = setup();
-    s.store.sessions.setState(s.session.id, "idle");
-    let requestAt = new Date(0).toISOString();
-    let now = 250_000;
-    const compact = vi.fn(async () => {
-      requestAt = new Date(now).toISOString();
-      throw new Error("投递结果未知");
-    });
-    const create = () =>
-      createCompactionScheduler({
-        store: s.store,
-        usageDb: s.db,
-        now: () => now,
-        config: () => ({ enabled: true, ttlSeconds: {} }),
-        buildContext: () => null,
-        host: {
-          describeIdleAgent: async () => ({ id: "agent", provider: "codex", cwd: "." }),
-          taskMember: async () => ({
-            conversationId: "conversation",
-            memberId: "member",
-            lastRequestAt: requestAt,
-            idle: true,
-            compact,
-          }),
-          run: vi.fn(),
-          handoff: vi.fn(),
-          archive: vi.fn(),
-        },
-      });
-    expect((await create().tick())[0]).toMatchObject({ reason: "failed" });
-    now += 250_000;
-    expect((await create().tick())[0]).toMatchObject({ reason: "already-compacted" });
-    expect(compact).toHaveBeenCalledTimes(1);
     expect(readEvents(s.db, 0, { types: ["session.compacted"] })).toEqual([]);
   });
   it("publishes the existing compaction settings as a read-only task-panel policy", () => {

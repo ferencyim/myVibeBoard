@@ -116,6 +116,35 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       .append(task.anchorAgentId, text, verificationId)
       .catch((error) => log("原生验证摘要追加失败", error));
   }
+  function artifactSource(
+    task: Task,
+    agentId: string | undefined,
+    sourceKey: string,
+    detail: {
+      sourceKey?: string;
+      epoch?: string;
+      seq?: number;
+      messageId?: string;
+      sourceTurnId?: string;
+    } = {},
+  ) {
+    const current = board.tasks.get(task.workspaceId);
+    const tab =
+      (agentId && current?.tabs.find((item) => item.agentId === agentId)) ||
+      current?.tabs.find((item) => item.agentId === task.anchorAgentId) ||
+      current?.tabs[0];
+    if (!tab) throw new Error("验证来源找不到任务 tab，拒绝写入沉淀");
+    return {
+      tabNumber: tab.number,
+      agentId: tab.agentId,
+      ...(agentId ? { memberId: agentId, backendAgentId: agentId } : {}),
+      ...(detail.epoch ? { epoch: detail.epoch } : {}),
+      ...(detail.seq !== undefined ? { seq: detail.seq } : {}),
+      ...(detail.messageId ? { messageId: detail.messageId } : {}),
+      ...(detail.sourceTurnId ? { sourceTurnId: detail.sourceTurnId } : {}),
+      sourceKey: detail.sourceKey ?? sourceKey,
+    };
+  }
   async function run(workspaceId: string) {
     const task = board.tasks.get(workspaceId);
     if (
@@ -149,7 +178,6 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     }
   }
   async function execute(task: Task) {
-    if (!task.conversationId) throw new Error("任务尚未绑定原生群聊");
     const workspace = await deps.workspace(task.workspaceId);
     const initial = await taskTree(runner, workspace.worktreePath);
     if (initial.status) throw new Error("工作树有未提交改动，须先收口提交再验证");
@@ -189,9 +217,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     };
     const sameConfirmation = () => {
       const current = board.tasks.get(task.workspaceId);
-      return (
-        current?.confirmedAt === task.confirmedAt && current.conversationId === task.conversationId
-      );
+      return current?.confirmedAt === task.confirmedAt;
     };
     const ensureStable = async () => {
       if (!sameRound()) throw new Error("任务已停止或本轮确认已变化");
@@ -282,8 +308,6 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       const agent = await deps.launcher.launch({
         task: {
           workspaceId: task.workspaceId,
-          anchorAgentId: task.anchorAgentId,
-          conversationId: task.conversationId!,
           confirmedAt: task.confirmedAt!,
           commitHash: initial.head,
         },
@@ -737,7 +761,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
             kind: "review",
             sourceKey,
             confirmedAt: task.confirmedAt,
-            source: { conversationId: task.conversationId!, sourceKey, ...agent.source },
+            source: artifactSource(task, agent.agentId, sourceKey, agent.source),
             summary: notes.at(-1)!,
             data: { verificationId: vid, commitHash: initial.head, review: { ...review, issues } },
           });
@@ -803,7 +827,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         kind: "verification",
         sourceKey,
         confirmedAt: task.confirmedAt,
-        source: { conversationId: task.conversationId!, sourceKey, ...verifierSource },
+        source: artifactSource(task, verifierSource?.backendAgentId, sourceKey, verifierSource),
         summary: verificationLine(conclusion, items, initial.head, false),
         data: {
           verificationId: vid,

@@ -2,6 +2,7 @@ import { taskVerifyGetRpc, taskVerifyRerunRpc } from "./shared/task-rpc";
 import { createTaskPipeline } from "./server/task-pipeline";
 import { createTaskVerifyStore } from "./server/task-store";
 import { createTaskResources } from "./server/task-resources";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -159,8 +160,17 @@ export default function contribute(server: PluginServerContext) {
         projectTypes: project.projectTypes,
       };
     },
-    // The conversation owner publishes durable taskArtifacts and replays pending indexes after restart.
-    async append() {},
+    // The board owns task artifacts; verification summaries append to the anchor tab timeline.
+    async append(anchorAgentId: string, text: string) {
+      if (!paseo) return;
+      await paseo.agents.ref(anchorAgentId).timeline.append({
+        type: "plugin",
+        id: randomUUID(),
+        kind: "task-status",
+        version: 1,
+        data: { text },
+      });
+    },
   });
   const startTask = (workspaceId: string) =>
     void taskPipeline.run(workspaceId).catch((error) => log("任务验证失败", error));

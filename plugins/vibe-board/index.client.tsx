@@ -1,61 +1,34 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { BehaviourScreen } from "./client/behaviour/BehaviourScreen";
 import { BehaviourSidebarItem, BoardSettingsScreen } from "./client/sidebar";
-import { TaskConversationPanel } from "./client/task-conversation/TaskConversationPanel";
-import { newCommandRequestId, TASK_ACTIONS } from "./client/task-conversation/logic";
-import { taskConversationCommandRpc } from "./shared/task-conversation";
-import { registerTaskRecipients } from "./client/task-conversation/recipients";
-import { ReportSummary } from "./client/task-conversation/ReportSummary";
-import {
-  reportSummarySchema,
-  summarizeTaskReport,
-} from "./client/task-conversation/report-summary";
+import { taskTabCommandRpc, type TaskTabCommand } from "./shared/task-tabs";
+
+let requestCounter = 0;
+const requestId = () => `task-tab-${Date.now()}-${++requestCounter}`;
+
+const COMMANDS: readonly { command: string; action: TaskTabCommand["action"]; label: string; hint: string }[] =
+  [
+    { command: "执行", action: "execute", label: "确认最新方案并打开执行 tab", hint: "可附修改要求" },
+    { command: "通过", action: "accept", label: "验收本轮验证结果并完成 Git 收尾", hint: "可附说明" },
+    { command: "状态", action: "status", label: "把任务阶段、tab 状态和最新结论追加到当前 tab", hint: "无" },
+  ];
 
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
-    client.addTimelineTransformer({
-      id: "task-report-summary",
-      query: { itemType: "assistant_message" },
-      transform(input) {
-        const report = summarizeTaskReport(input);
-        if (!report) return;
-        return {
-          items: [{ type: "plugin", kind: "task-report-summary", version: 1, data: report }],
-        };
-      },
-    }),
-    client.addTimelineRenderer({
-      kind: "task-report-summary",
-      version: 1,
-      schema: reportSummarySchema,
-      Component: ReportSummary,
-    }),
-    client.addFirstMessageOutboxOwner({ initialRole: "planner" }),
-    registerTaskRecipients(client),
-    client.addWorkspacePanel({
-      id: "task-flow",
-      title: "任务流程",
-      icon: "ListChecks",
-      context: "agent",
-      locations: ["conversation"],
-      Component: TaskConversationPanel,
-    }),
-    ...TASK_ACTIONS.map(({ command, label, action }) =>
+    ...COMMANDS.map(({ command, action, label, hint }) =>
       client.addSlashCommand({
         name: command,
         description: `任务流程：${label}`,
-        argumentHint: "[原因或修改要求]",
+        argumentHint: hint,
         context: "agent",
-        async onSubmit({ workspace, conversationId, args, rpc, openPanel }) {
-          if (!conversationId) throw new Error("请在任务会话中使用此命令");
-          await rpc(taskConversationCommandRpc, {
+        async onSubmit({ workspace, agent, args, rpc }) {
+          await rpc(taskTabCommandRpc, {
             workspaceId: workspace.id,
-            conversationId,
+            agentId: agent.id,
             action,
-            requestId: newCommandRequestId(),
+            requestId: requestId(),
             ...(args ? { reason: args } : {}),
           });
-          openPanel("task-flow", { location: "conversation" });
         },
       }),
     ),

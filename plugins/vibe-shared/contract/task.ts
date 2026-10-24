@@ -117,10 +117,51 @@ export const TaskSubtaskRunSchema = z
     }
   });
 export type TaskSubtaskRun = z.infer<typeof TaskSubtaskRunSchema>;
-/** Public conversation locator. Message contents remain in the host's durable history. */
+
+/** A task tab is an ordinary Paseo agent; the number never changes and is never reused. */
+export const TASK_TAB_ROLES = [
+  "main",
+  "scout",
+  "plan_reviewer",
+  "worker",
+  "reviewer",
+  "verifier",
+  "session",
+] as const;
+export const TaskTabRoleSchema = z.enum(TASK_TAB_ROLES);
+export type TaskTabRole = z.infer<typeof TaskTabRoleSchema>;
+export const TASK_TAB_ROLE_LABELS: Record<TaskTabRole, string> = {
+  main: "主会话",
+  scout: "探路",
+  plan_reviewer: "方案复核",
+  worker: "执行",
+  reviewer: "复核",
+  verifier: "验证",
+  session: "会话",
+};
+/** Native agent labels used to recognize plugin-opened task tabs. */
+export const TASK_TAB_ROLE_LABEL = "vibe.tab.role";
+export const TASK_TAB_PRESET_LABEL = "vibe.tab.preset";
+export const TaskTabSchema = z
+  .object({
+    number: z.number().int().positive(),
+    agentId: Text,
+    role: TaskTabRoleSchema,
+    provider: Text,
+    model: Text,
+    thinking: z.string().optional(),
+    presetId: Text.optional(),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+export type TaskTab = z.infer<typeof TaskTabSchema>;
+
+/** Public timeline locator. Message contents remain in the host's durable history. */
 export const TaskPlanSourceSchema = z
   .object({
-    conversationId: Text,
+    conversationId: Text.optional(),
+    tabNumber: z.number().int().positive().optional(),
+    agentId: Text.optional(),
     sourceKey: Text,
     memberId: Text.optional(),
     backendAgentId: Text.optional(),
@@ -149,7 +190,9 @@ export type TaskAction = z.infer<typeof TaskActionSchema>;
 export const TaskActionInputSchema = z
   .object({
     workspaceId: Text,
-    conversationId: Text,
+    /** The agent tab that issued the command; only user slash commands may authorize. */
+    agentId: Text.optional(),
+    conversationId: Text.optional(),
     requestId: Text,
     action: TaskActionSchema,
     source: TaskPlanSourceSchema.optional(),
@@ -194,6 +237,8 @@ export const TaskSchema = z.object({
   subtaskRuns: z.array(TaskSubtaskRunSchema),
   summary: z.string(),
   conversationId: Text.nullable().optional(),
+  tabs: z.array(TaskTabSchema),
+  nextTabNumber: z.number().int().min(1),
   planSource: TaskPlanSourceSchema.nullable().optional(),
   roleSelections: TaskRoleSelectionsSchema.nullable().optional(),
   control: TaskControlSchema.nullable().optional(),

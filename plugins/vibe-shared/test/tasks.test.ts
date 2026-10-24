@@ -65,6 +65,7 @@ const roles = (): TaskRoleSnapshot => {
     verifier: preset,
   });
 };
+const planSource = () => ({ tabNumber: 1, agentId: "anchor-1", sourceKey: "test-source" });
 const output = (value: unknown) =>
   [
     "中文说明",
@@ -76,6 +77,12 @@ function tasks() {
   const s = setup();
   const commands = createTaskCommands(s.db, { now: () => new Date(s.clock.ms) });
   commands.create({ workspaceId: "workspace-1", anchorAgentId: "anchor-1" });
+  commands.allocateTab("workspace-1", {
+    agentId: "anchor-1",
+    role: "main",
+    provider: "codex",
+    model: "test-model",
+  });
   return { ...s, tasks: commands };
 }
 
@@ -143,6 +150,17 @@ describe("workspace task commands", () => {
       subtaskRuns: [],
       summary: "",
       conversationId: null,
+      tabs: [
+        {
+          number: 1,
+          agentId: "anchor-1",
+          role: "main",
+          provider: "codex",
+          model: "test-model",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      nextTabNumber: 2,
       planSource: null,
       roleSelections: null,
       control: null,
@@ -160,7 +178,7 @@ describe("workspace task commands", () => {
     const s = tasks();
     s.tasks.savePlanOutput("workspace-1", output(plan()));
     s.tasks.saveRolesSnapshot("workspace-1", roles());
-    const queued = s.tasks.confirm("workspace-1");
+    const queued = s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles(), planSource: planSource() });
     expect(queued).toMatchObject({
       phase: "queued",
       confirmedAt: "2026-01-01T00:00:00.000Z",
@@ -168,22 +186,64 @@ describe("workspace task commands", () => {
       rolesSnapshot: roles(),
     });
     s.tick();
-    expect(() => s.tasks.confirm("workspace-1")).toThrow(/重复确认/);
+    expect(() => s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles(), planSource: planSource() })).toThrow(/重复确认/);
     expect(s.tasks.get("workspace-1")?.confirmedAt).toBe(queued.confirmedAt);
-    expect(readEvents(s.db, 0).filter((event) => event.type === "task.updated")).toHaveLength(4);
+    expect(readEvents(s.db, 0).filter((event) => event.type === "task.updated")).toHaveLength(5);
     expect(TaskSchema.parse(JSON.parse(JSON.stringify(queued)))).toEqual(queued);
+    s.db.close();
+  });
+  it("allocates immutable tab numbers once per agent and never reuses a closed number", () => {
+    const s = tasks();
+    const first = s.tasks.allocateTab("workspace-1", {
+      agentId: "anchor-1",
+      role: "main",
+      provider: "codex",
+      model: "test-model",
+    });
+    expect(first.tab.number).toBe(1);
+    const second = s.tasks.allocateTab("workspace-1", {
+      agentId: "agent-2",
+      role: "session",
+      provider: "claude",
+      model: "other-model",
+    });
+    expect(second.tab.number).toBe(2);
+    expect(
+      s.tasks.allocateTab("workspace-1", {
+        agentId: "agent-2",
+        role: "worker",
+        provider: "claude",
+        model: "other-model",
+      }).tab,
+    ).toEqual(second.tab);
+    s.tick();
+    const third = s.tasks.allocateTab("workspace-1", {
+      agentId: "agent-3",
+      role: "scout",
+      provider: "codex",
+      model: "test-model",
+    });
+    expect(third.tab.number).toBe(3);
+    expect(s.tasks.get("workspace-1")).toMatchObject({
+      nextTabNumber: 4,
+      tabs: [
+        { number: 1, agentId: "anchor-1" },
+        { number: 2, agentId: "agent-2" },
+        { number: 3, agentId: "agent-3" },
+      ],
+    });
     s.db.close();
   });
   it("only confirms once across independent database connections", () => {
     const s = tasks();
     const otherDb = openVibeDb({ path: s.path });
     const other = createTaskCommands(otherDb, { now: () => new Date(s.clock.ms + 1000) });
-    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles() });
-    expect(() => other.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles() })).toThrow(
+    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles(), planSource: planSource() });
+    expect(() => other.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles(), planSource: planSource() })).toThrow(
       /重复确认/,
     );
     expect(other.get("workspace-1")?.confirmedAt).toBe("2026-01-01T00:00:00.000Z");
-    expect(readEvents(s.db, 0).filter((event) => event.type === "task.updated")).toHaveLength(2);
+    expect(readEvents(s.db, 0).filter((event) => event.type === "task.updated")).toHaveLength(3);
     otherDb.close();
     s.db.close();
   });
@@ -194,7 +254,7 @@ describe("workspace task commands", () => {
     s.tasks.savePlan("workspace-1", plan());
     const incomplete = { ...roles(), verifier: null };
     expect(() =>
-      s.tasks.confirm("workspace-1", { rolesSnapshot: incomplete as unknown as TaskRoleSnapshot }),
+      s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: incomplete as unknown as TaskRoleSnapshot, planSource: planSource() }),
     ).toThrow(/verifier/);
     expect(s.tasks.get("workspace-1")).toMatchObject({
       phase: "awaiting_confirmation",
@@ -207,7 +267,7 @@ describe("workspace task commands", () => {
   it("confirms the latest supplied plan and roles in a single command", () => {
     const s = tasks();
     const frozen = roles();
-    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: frozen });
+    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: frozen, planSource: planSource() });
     frozen.worker.instructions = "后来改动";
     expect(s.tasks.get("workspace-1")?.rolesSnapshot?.worker.instructions).toBe("中文指令");
     expect(s.tasks.list({ phase: "queued" })).toHaveLength(1);
@@ -215,7 +275,7 @@ describe("workspace task commands", () => {
   });
   it("requires a pause before replacement and clears confirmation and old runs", () => {
     const s = tasks();
-    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles() });
+    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles(), planSource: planSource() });
     expect(() => s.tasks.savePlan("workspace-1", plan())).toThrow(/先停止/);
     s.tasks.setPhase("workspace-1", "executing");
     s.tasks.setSubtaskRun("workspace-1", {
@@ -256,7 +316,7 @@ describe("workspace task commands", () => {
     expect(() =>
       s.tasks.setSubtaskRun("workspace-1", { subtaskId: "s1", state: "running" }),
     ).toThrow();
-    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles() });
+    s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles(), planSource: planSource() });
     s.tasks.setPhase("workspace-1", "executing");
     expect(() =>
       s.tasks.setSubtaskRun("workspace-1", { subtaskId: "s1", state: "running" }),
@@ -294,7 +354,7 @@ describe("workspace task commands", () => {
   });
   it("preserves confirmed snapshots over reads and phase changes and records a conclusion", () => {
     const s = tasks();
-    const queued = s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles() });
+    const queued = s.tasks.confirm("workspace-1", { plan: plan(), rolesSnapshot: roles(), planSource: planSource() });
     for (const phase of [
       "executing",
       "reviewing",

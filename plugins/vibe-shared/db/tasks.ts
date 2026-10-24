@@ -12,6 +12,8 @@ import {
   TaskSubtaskRunSchema,
   TaskPlanSourceSchema,
   TaskControlSchema,
+  TaskTabRoleSchema,
+  TaskTabSchema,
   parseTaskPlan,
   type Task,
   type TaskPhase,
@@ -19,6 +21,8 @@ import {
   type TaskSubtaskRun,
   type TaskPlanSource,
   type TaskControl,
+  type TaskTab,
+  type TaskTabRole,
 } from "../contract/task";
 import { publishEvent } from "./events";
 import { decodeRow } from "./rows";
@@ -38,6 +42,14 @@ export interface ConfirmTaskInput {
   rolesSnapshot?: TaskRoleSnapshot;
   planSource?: TaskPlanSource;
   requestId?: string;
+}
+export interface AllocateTaskTabInput {
+  agentId: string;
+  role: TaskTabRole;
+  provider: string;
+  model: string;
+  thinking?: string;
+  presetId?: string;
 }
 export interface SetTaskSubtaskRunInput {
   subtaskId: string;
@@ -76,16 +88,22 @@ const EDITABLE_PHASES = new Set<TaskPhase>([
   "completed",
 ]);
 
+function assertTabSource(task: Task, source: TaskPlanSource): void {
+  if (source.tabNumber) {
+    const tab = task.tabs.find((item) => item.number === source.tabNumber);
+    if (!tab || (source.agentId && tab.agentId !== source.agentId))
+      throw new TaskCommandError("invalid", "方案来源不是当前任务的有效 tab");
+    return;
+  }
+  if (source.conversationId && task.conversationId === source.conversationId) return;
+  if (task.conversationId)
+    throw new TaskCommandError("invalid", "方案来源与任务会话不一致");
+}
 function assertConfirmationSource(task: Task, source: TaskPlanSource | null): void {
-  if (
-    task.conversationId &&
-    (!source ||
-      source.conversationId !== task.conversationId ||
-      !source.memberId ||
-      !source.backendAgentId)
-  )
-    throw new TaskCommandError("invalid", "执行确认需要当前任务规划成员的完整方案来源");
-  if (source && task.planSource && JSON.stringify(task.planSource) !== JSON.stringify(source))
+  if (!source?.sourceKey)
+    throw new TaskCommandError("invalid", "执行确认需要最新完整方案来源");
+  assertTabSource(task, source);
+  if (task.planSource && JSON.stringify(task.planSource) !== JSON.stringify(source))
     throw new TaskCommandError("conflict", "方案来源已变化，请重新读取最新方案");
 }
 
@@ -208,13 +226,48 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
       return db.immediate(() => {
         const task = requireTask(workspaceId);
         assertEditable(task);
-        if (task.conversationId !== source.conversationId)
-          throw new TaskCommandError("conflict", "方案来源与任务会话不一致");
+        assertTabSource(task, source);
         db.prepare("UPDATE task SET plan_source_json = ? WHERE workspace_id = ?").run(
           JSON.stringify(source),
           workspaceId,
         );
         return changed(workspaceId, ["planSource"]);
+      });
+    },
+    /** Allocates the next immutable tab number; re-registering the same agent is idempotent. */
+    allocateTab(
+      workspaceId: string,
+      input: AllocateTaskTabInput,
+    ): { task: Task; tab: TaskTab } {
+      const parsed = z
+        .object({
+          agentId: z.string().trim().min(1),
+          role: TaskTabRoleSchema,
+          provider: z.string().trim().min(1),
+          model: z.string().trim().min(1),
+          thinking: z.string().trim().min(1).optional(),
+          presetId: z.string().trim().min(1).optional(),
+        })
+        .strict()
+        .parse(input);
+      return db.immediate(() => {
+        const task = requireTask(workspaceId);
+        const existing = task.tabs.find((tab) => tab.agentId === parsed.agentId);
+        if (existing) return { task, tab: existing };
+        const tab = TaskTabSchema.parse({
+          number: task.nextTabNumber,
+          agentId: parsed.agentId,
+          role: parsed.role,
+          provider: parsed.provider,
+          model: parsed.model,
+          thinking: parsed.thinking,
+          presetId: parsed.presetId,
+          createdAt: now().toISOString(),
+        });
+        db.prepare(
+          "UPDATE task SET tabs_json = ?, next_tab_number = ? WHERE workspace_id = ?",
+        ).run(JSON.stringify([...task.tabs, tab]), tab.number + 1, workspaceId);
+        return { task: changed(workspaceId, ["tabs"]), tab };
       });
     },
     setRoleSelections(workspaceId: string, input: TaskRoleSelections): Task {

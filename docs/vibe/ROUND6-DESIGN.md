@@ -13,13 +13,13 @@
 
 复用 Paseo 现有 agent MCP 工具，不做消息路由、不做群聊容器：
 
-| 需要                                    | 用什么                                                             |
-| --------------------------------------- | ------------------------------------------------------------------ |
-| 看同任务有哪些 tab、#编号对应哪个 agent | 插件 MCP 工具 `vibe_tabs`（返回 `#n → agentId、角色、模型、状态`） |
-| 读另一个 tab 的记录                     | Paseo `get_agent_activity`（按 agentId）                           |
-| 给另一个 tab 发消息 / 交代任务          | Paseo `send_agent_prompt`                                          |
-| 等另一个 tab 做完                       | Paseo `wait_for_agent`                                             |
-| 开新 tab（如主会话派探路）              | Paseo `create_agent`（同 workspace、不设 parent，作为顶部 tab）    |
+| 需要                                    | 用什么                                                                                        |
+| --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| 看同任务有哪些 tab、#编号对应哪个 agent | 插件 MCP 工具 `vibe_tabs`（返回 `#n → agentId、角色、模型、状态`）                            |
+| 读另一个 tab 的记录                     | Paseo `get_agent_activity`（按 agentId）                                                      |
+| 给另一个 tab 发消息 / 交代任务          | Paseo `send_agent_prompt`                                                                     |
+| 等另一个 tab 做完                       | `send_agent_prompt` 默认完成通知，或 `get_agent_activity` 查询（本 fork 无 `wait_for_agent`） |
+| 开新 tab（如主会话派探路）              | Paseo `create_agent`（同 workspace、不设 parent，作为顶部 tab）                               |
 
 插件在每个任务 tab 创建时（lifecycle `agent.create`）注入一段固定的中文交流说明和当前 tab 清单；清单变化时 agent 随时可用 `vibe_tabs` 刷新。agent 发给别的 tab 的消息以 agent 身份出现（sourceAgentId），不能冒充用户；因此 `/执行`、`/通过` 等授权只认用户在原生 composer 里的操作。
 
@@ -49,3 +49,14 @@
 | WP-122        | 提示词精简                                                                                 | 121  |
 
 每包由 qoder CLI 实现，Claude 复核后合入。验收都要有单测与隔离 daemon 实测：两个不同模型的 tab 用 #编号 互相读记录、发消息，用户开新 tab「继续 #n 的工作」能接上。
+
+## 7. WP-121 实现记录
+
+- **编号与标题**：`vibe-shared` core 迁移 v15 给 task 增加 `tabs_json`、`next_tab_number`；`tasks.allocateTab` 同一 agent 幂等、编号只增不复用。`agent.created` 生命周期调用同一登记函数，标签 `vibe.tab.role` 决定角色，否则首个 agent 为 `main`、后续手动 tab 为 `session`；标题用现有 `agent.setTitle` 写成 `#n 角色 · 模型`。子代理（带 `parentAgentId` 标签）和归档 agent 不登记。
+- **交流说明**：`agent.create` before 变换按 workspace 注入 `board.tabs.guide`（当前清单 `{{tabs}}`）、对应角色规则和主会话方案格式；子代理与非任务 workspace 原样放行。清单实时渲染，agent 随时可用 `vibe_tabs` 刷新。
+- **`vibe_tabs`**：通过 `registerAgentTool` 注册，要求 `callerAgentId`；返回当前任务阶段、方案目标、自身编号和每个 tab 的编号、agentId、角色、模型、状态。
+- **流程改为开 tab**：`/执行` 从当前 tab（找不到则 #1）读取最新 `vibe-plan` 并确认；`scheduler.task_admitted` 到达后由插件在任务 workspace 用 `workspaces.ref().agents.create` 打开带 `vibe.tab.role=worker` 的执行 tab，绑定资源并发送执行提示词；执行 tab 输出 `vibe-delivery` 后进入 reviewing/verifying，vibe-verify 继续以只读普通 tab 打开复核/验证。`/通过` 复用原 Git 收尾安全规则；`/状态` 只向时间线 append 摘要。
+- **授权**：`vibe.task.tabs.command` RPC 在 `context.callerAgentId` 非空时拒绝；agent 消息在时间线中是 `tool_call`，`standaloneAccept` 只匹配 `user_message` 的「通过」。
+- **删除**：会话内任务面板、客户端群聊 outbox/recipients、`taskConversations` 调用、vibe-context 的群聊成员压缩路径均已移除；首消息 outbox 交回宿主普通路径。
+- **偏差**：本 fork 的 Paseo 工具集没有 `wait_for_agent`，等待完成改用 `send_agent_prompt` 的 `notifyOnFinish` 通知及 `get_agent_activity`/`get_agent_status` 查询；设计表已同步修正。
+- **[core]**：为让插件完成上述能力，仅新增插件 agent 工具注册/调用（含 `callerAgentId`）、`agent.create` before 请求的 `workspaceId`/`parentAgentId`/`labels`、以及 `create_agent` 的 `asTab`（映射为顶层 `detached`）。详细文件清单见 WP-121 验收报告。

@@ -102,8 +102,23 @@ export function createTaskArtifactCommands(db: VibeDb, options: { now?: () => Da
       return db.immediate(() => {
         const task = tasks.get(parsed.workspaceId);
         if (!task) throw new TaskCommandError("not_found", "任务不存在");
-        if (!task.conversationId || task.conversationId !== parsed.source.conversationId)
+        if (
+          task.conversationId &&
+          parsed.source.conversationId &&
+          task.conversationId !== parsed.source.conversationId
+        )
           throw new TaskCommandError("conflict", "沉淀来源与任务会话不一致");
+        if (
+          parsed.source.tabNumber &&
+          !task.tabs.some(
+            (tab) =>
+              tab.number === parsed.source.tabNumber &&
+              (!parsed.source.agentId || tab.agentId === parsed.source.agentId),
+          )
+        )
+          throw new TaskCommandError("conflict", "沉淀来源不是当前任务的有效 tab");
+        if (!parsed.source.tabNumber && !parsed.source.conversationId)
+          throw new TaskCommandError("invalid", "沉淀需要任务 tab 或会话来源");
         const previous = get(parsed.workspaceId, parsed.kind, parsed.sourceKey);
         if (previous) {
           if (

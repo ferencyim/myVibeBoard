@@ -35,6 +35,7 @@ export interface NativeAgentState {
   status: string;
   activeTurn?: unknown;
   archivedAt?: string | null;
+  labels?: Record<string, string>;
 }
 export interface NativeTaskWorkspace {
   workspaceId: string;
@@ -158,6 +159,14 @@ export async function normalizeTaskFiles(
 }
 export const nativeStopped = (agent: NativeAgentState) =>
   ["idle", "closed", "error"].includes(agent.status) && !agent.activeTurn;
+
+const PARENT_AGENT_LABEL = "paseo.parent-agent-id";
+/** Numbered task tabs are ordinary agents; their user/agent turns stay advisory, while
+ * flow-owned worker/reviewer/verifier turns still bind an explicit lease. */
+function advisoryTab(task: Task, agent: NativeAgentState) {
+  if (agent.labels?.[PARENT_AGENT_LABEL]) return true;
+  return task.tabs.some((tab) => tab.agentId === agent.id);
+}
 
 export function createTaskScheduler(deps: TaskSchedulerDeps) {
   const held = new Map<string, TaskResourceLease>();
@@ -526,7 +535,15 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
       const registered = new Set(
         [...held.values()].filter((row) => row.slot).map((row) => row.agentId),
       );
-      if (workspace.agents.some((agent) => !nativeStopped(agent) && !registered.has(agent.id))) {
+      const task = deps.store.tasks.get(request.workspaceId);
+      if (
+        workspace.agents.some(
+          (agent) =>
+            !nativeStopped(agent) &&
+            !registered.has(agent.id) &&
+            (!task || !advisoryTab(task, agent)),
+        )
+      ) {
         await freeze(
           request.workspaceId,
           "发现未经资源准入的原生回合，已暂停派发；先停止并核对该会话",
@@ -717,6 +734,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     }
     if (row && (await boundMatches(row, agent, task))) return true;
     if (nativeStopped(agent)) return false;
+    if (!row && advisoryTab(task, agent)) return true;
     if (row) {
       row.slot = true;
       row.frozen = true;

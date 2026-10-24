@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createMaintenanceEngine } from "../server/engine";
 import { createMaintenanceCommands, createUsageCommands } from "../server/vibe/db";
 import type { CheckOutput } from "../server/types";
-import { DAY, setup, tempDir, plan, roles } from "./helpers";
+import { DAY, setup, tempDir, plan, roles, confirmTask } from "./helpers";
 
 const finding = (subject = "新发现") => ({ category: "test", subject, detail: "需要处理" });
 const output = (subject = "新发现"): CheckOutput => ({
@@ -73,7 +73,7 @@ describe("维护规则接入原生任务", () => {
     await h.engine.syncRules();
     await h.engine.runNow(ruleId(h));
     const task = h.maintenanceTasks()[0]!;
-    h.store.tasks.confirm(task.workspaceId, { plan, rolesSnapshot: roles });
+    confirmTask(h.store, task.workspaceId, plan, roles);
     const engine = createMaintenanceEngine({
       db: h.db,
       store: h.store,
@@ -110,7 +110,7 @@ describe("维护规则接入原生任务", () => {
     await h.engine.syncRules();
     await h.engine.runNow(ruleId(h));
     const task = h.maintenanceTasks()[0]!;
-    h.store.tasks.confirm(task.workspaceId, { plan, rolesSnapshot: roles });
+    confirmTask(h.store, task.workspaceId, plan, roles);
     let stopped = false;
     const engine = createMaintenanceEngine({
       db: h.db,
@@ -194,7 +194,7 @@ describe("维护规则接入原生任务", () => {
       const link = createMaintenanceCommands(h.db)
         .links()
         .find((item) => !item.rejectedAt)!;
-      h.store.tasks.confirm(link.workspaceId, { plan, rolesSnapshot: roles });
+      confirmTask(h.store, link.workspaceId, plan, roles);
       await h.engine.consumer.poll();
       h.engine.rejectWorkspace(link.workspaceId);
       h.store.tasks.setSummary(link.workspaceId, "用户驳回后的说明");
@@ -214,7 +214,7 @@ describe("维护规则接入原生任务", () => {
     const completed = h.store.tasks.list({ phase: "completed" })[0]!;
     h.clock.advance(1000);
     h.store.tasks.setPhase(completed.workspaceId, "planning");
-    h.store.tasks.confirm(completed.workspaceId, { plan, rolesSnapshot: roles });
+    confirmTask(h.store, completed.workspaceId, plan, roles);
     for (const phase of ["executing", "verifying", "awaiting_acceptance", "completed"] as const)
       h.store.tasks.setPhase(completed.workspaceId, phase);
     await h.engine.consumer.poll();

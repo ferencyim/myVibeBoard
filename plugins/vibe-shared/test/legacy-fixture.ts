@@ -153,6 +153,7 @@ export function snapshot(db: VibeDb) {
     usage_event: ["project_id", "workspace_id", "role", "agent_id"],
     device_lease: ["workspace_id"],
     maintenance_run: ["workspace_ids_json"],
+    task: ["tabs_json", "next_tab_number"],
   };
   return Object.fromEntries(
     retained.map((table) => [

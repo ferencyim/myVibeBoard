@@ -629,4 +629,12 @@ DROP TABLE sync_field;
 DROP TABLE sync_tomb;
 `,
   },
+  {
+    version: 15,
+    name: "task_tabs",
+    sql: `
+ALTER TABLE task ADD COLUMN tabs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tabs_json));
+ALTER TABLE task ADD COLUMN next_tab_number INTEGER NOT NULL DEFAULT 1 CHECK (next_tab_number >= 1);
+`,
+  },
 ];

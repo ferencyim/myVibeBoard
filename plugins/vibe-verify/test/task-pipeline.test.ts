@@ -3,8 +3,6 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PaseoApi } from "@getpaseo/client";
-import { createTaskHost } from "../../vibe-board/server/task-host";
 import { createTaskPipeline, taskTree, verificationBaselineRoot } from "../server/task-pipeline";
 import { createTaskVerifyStore } from "../server/task-store";
 import { writeArtifact } from "../server/collectors/common";
@@ -45,7 +43,6 @@ function setup(
     stop?: boolean;
     reconfirm?: boolean;
     perf?: boolean;
-    hostAdmission?: boolean;
     startVerifying?: boolean;
     agentFails?: "reviewer" | "verifier";
     actualModel?: string;
@@ -80,7 +77,12 @@ function setup(
   board.tasks.create({
     workspaceId: "ws-task",
     anchorAgentId: "anchor",
-    conversationId: "conversation",
+  });
+  board.tasks.allocateTab("ws-task", {
+    agentId: "anchor",
+    role: "main",
+    provider: "codex",
+    model: "model-one",
   });
   board.tasks.savePlan("ws-task", {
     goal: "验证原生任务",
@@ -92,10 +94,9 @@ function setup(
   board.tasks.confirm("ws-task", {
     rolesSnapshot: roles,
     planSource: {
-      conversationId: "conversation",
+      tabNumber: 1,
+      agentId: "anchor",
       sourceKey: "plan",
-      memberId: "planner",
-      backendAgentId: "anchor",
     },
   });
   board.tasks.setPhase("ws-task", "executing");
@@ -176,58 +177,9 @@ function setup(
         "native-" +
         input.role +
         (input.previousSessionId?.() || input.forceNewMember ? "-retry" : "");
-      if (options.hostAdmission) {
-        const paseo = {
-          workspaces: {
-            ref: () => ({
-              directory: worktree,
-              projectId: project.id,
-              refresh: async () => ({
-                workspaceKind: "worktree",
-                projectKind: "git",
-                workspaceDirectory: worktree,
-                projectRootPath: join(root, "main"),
-              }),
-            }),
-          },
-          taskConversations: {
-            ref: () => ({
-              refresh: async () => ({
-                members: [{ backendAgentId: "anchor", memberId: "planner", role: "planner" }],
-              }),
-            }),
-          },
-        } as unknown as PaseoApi;
-        const host = createTaskHost({ db, store: board, paseo: () => paseo });
-        host.registerPrompts();
-        const recipient = await host.resolveRecipient(board.tasks.get("ws-task")!, input.role!);
-        const prepared = await host.hooks.prepare(
-          {
-            request: {
-              conversationId: "conversation",
-              workspaceId: "ws-task",
-              ownerPluginId: "vibe-board",
-              anchorAgentId: "anchor",
-              memberId: "member-" + input.role,
-              backendAgentId: "native-" + input.role,
-              clientMessageId: "verify-" + input.role,
-              text: "验证",
-              throughSeq: 0,
-              publicContext: [],
-              ready: false,
-              recipient,
-            },
-          },
-          { paseo, signal: new AbortController().signal },
-        );
-        expect(prepared?.ready, prepared?.reason).toBe(true);
-        calls.push("prepare:" + input.role + ":" + board.tasks.get("ws-task")!.phase);
-      }
-      calls.push("launch:" + input.role);
+      calls.push("launch:" + input.role + ":" + board.tasks.get("ws-task")!.phase);
       expect(input.task).toEqual({
         workspaceId: "ws-task",
-        anchorAgentId: "anchor",
-        conversationId: "conversation",
         confirmedAt: board.tasks.get("ws-task")!.confirmedAt,
         commitHash: "abc123",
       });
@@ -492,7 +444,7 @@ describe("原生 workspace 验证", () => {
       kind: "verification",
       sourceKey: "verification:" + interrupted,
       confirmedAt: h.board.tasks.get("ws-task")!.confirmedAt,
-      source: { conversationId: "conversation", sourceKey: "verification:" + interrupted },
+      source: { tabNumber: 1, agentId: "anchor", sourceKey: "verification:" + interrupted },
       summary: "OLD_MAJOR_FROM_INTERRUPTED_REPORT",
       data: { verificationId: interrupted, commitHash: "abc123", voided: true },
     });
@@ -744,7 +696,8 @@ describe("原生 workspace 验证", () => {
         sourceKey,
         confirmedAt,
         source: {
-          conversationId: "conversation",
+          tabNumber: 1,
+          agentId: "anchor",
           sourceKey,
           memberId: "s1",
           backendAgentId: "subagent",
@@ -760,7 +713,8 @@ describe("原生 workspace 验证", () => {
         sourceKey: "delivery-" + commitHash,
         confirmedAt,
         source: {
-          conversationId: "conversation",
+          tabNumber: 1,
+          agentId: "anchor",
           sourceKey: "delivery-" + commitHash,
           memberId: "member-" + commitHash,
         },
@@ -785,16 +739,16 @@ describe("原生 workspace 验证", () => {
     expect(text).toContain("真实严重问题仍为 severe");
     expect(text).toContain('"issues"');
   });
-  it("从验证阶段重跑时先恢复必需复核，实际宿主prepare按reviewing/verifying依次准入", async () => {
-    const h = setup({ review: "pass", startVerifying: true, hostAdmission: true });
+  it("从验证阶段重跑时先恢复必需复核，按 reviewing/verifying 依次准入", async () => {
+    const h = setup({ review: "pass", startVerifying: true });
     const result = await h.pipeline.run("ws-task");
     expect(
       result,
       JSON.stringify(result && h.verify.detail(result.verificationId)?.notes),
     ).toMatchObject({ conclusion: "pass" });
-    expect(h.calls.filter((call) => call.startsWith("prepare:"))).toEqual([
-      "prepare:reviewer:reviewing",
-      "prepare:verifier:verifying",
+    expect(h.calls.filter((call) => call.startsWith("launch:"))).toEqual([
+      "launch:reviewer:reviewing",
+      "launch:verifier:verifying",
     ]);
     expect(h.board.tasks.get("ws-task")!.phase).toBe("awaiting_acceptance");
   });
@@ -828,9 +782,11 @@ describe("原生 workspace 验证", () => {
       {
         sourceKey: "verification:" + result!.verificationId,
         source: {
+          tabNumber: 1,
+          agentId: "anchor",
+          memberId: "native-verifier",
+          backendAgentId: "native-verifier",
           sourceKey: "model-output-verifier",
-          conversationId: "conversation",
-          memberId: "member-verifier",
           sourceTurnId: "turn",
         },
         data: { commitHash: "abc123", conclusion: "pass", verificationId: result!.verificationId },
@@ -871,7 +827,7 @@ describe("原生 workspace 验证", () => {
     expect(h.calls).toContain("acquire:reviewer");
     expect(h.calls).not.toContain("acquire:verifier");
     expect(h.board.taskArtifacts.list("ws-task", { kind: "review" })).toMatchObject([
-      { source: { memberId: "member-reviewer" }, data: { review: { verdict: "severe" } } },
+      { source: { memberId: "native-reviewer" }, data: { review: { verdict: "severe" } } },
     ]);
   });
   it("未确认任务拒绝运行", async () => {
