@@ -1,7 +1,7 @@
 // One master, one conversation: wake jobs run strictly one at a time. A job that cannot run now
 // (no daemon handle yet, quota exhausted) is parked as "blocked" and re-queued by `resume()`
 // (new daemon handle, subscription switch) instead of being dropped, which is what lets a switch
-// carry on with the same batch of cards.
+// carry on with the same batch of tasks.
 
 import { jobKey, type WakeJob } from "../types";
 
@@ -14,7 +14,7 @@ export interface WakeQueueOptions {
 }
 
 export interface WakeQueue {
-  /** Add a job; a job with the same kind+card that is still pending is merged. */
+  /** Add a job; a job with the same kind+workspace that is still pending is merged. */
   enqueue(job: WakeJob): void;
   /** Run `fn` between jobs (never while one is running), e.g. a subscription switch. */
   exclusive<T>(fn: () => Promise<T>): Promise<T>;

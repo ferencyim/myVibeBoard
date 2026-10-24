@@ -76,28 +76,48 @@ export function migrateOwner(
   owner: Owner,
   now: () => Date = () => new Date(),
 ): MigrateResult {
-  for (const dep of OWNER_DEPENDS[owner]) migrateOwner(db, dep, now);
+  return migrateSchema(db, owner, now, true);
+}
+
+function migrateSchema(
+  db: VibeDb,
+  owner: Owner,
+  now: () => Date,
+  dependencies: boolean,
+  targetVersion?: number,
+): MigrateResult {
+  if (dependencies) for (const dep of OWNER_DEPENDS[owner]) migrateOwner(db, dep, now);
 
   const list = MIGRATIONS[owner];
   validate(owner, list);
-  const latest = latestVersion(owner);
+  const latest = targetVersion ?? latestVersion(owner);
   const from = getSchemaVersion(db, owner);
-  if (from > latest) throw new SchemaTooNewError(owner, from, latest);
-  if (from === latest) return { owner, from, to: latest, applied: [] };
+  if (from > latestVersion(owner)) throw new SchemaTooNewError(owner, from, latestVersion(owner));
+  if (from >= latest) return { owner, from, to: from, applied: [] };
 
-  // Existing taskless databases are backed up before any upgrade writes. Fresh databases
+  // Existing databases are backed up before any upgrade writes or legacy deletion. Fresh databases
   // have no retained data; an explicit db path defines its own isolated VIBE_HOME.
-  if (owner === "core" && from > 0 && from < 11 && db.path !== ":memory:")
+  if (owner === "core" && from > 0 && from < 14 && db.path !== ":memory:")
     backupVibeDb(db, { vibeHome: dirname(db.path), now });
 
   db.exec(CREATE_VERSION_TABLE);
   const applied: number[] = [];
   for (const migration of list) {
+    if (migration.version > latest) break;
+    if (getSchemaVersion(db, owner) >= migration.version) continue;
+    // The last legacy readers first materialize retained project attribution and task
+    // evidence. They depend only on core, which has reached v13 at this point.
+    if (owner === "core" && migration.version === 14)
+      for (const retainedOwner of OWNERS.filter((candidate) => candidate !== "core"))
+        migrateSchema(db, retainedOwner, now, false, retainedOwner === "verify" ? 3 : undefined);
     if (migration.foreignKeysOff) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.immediate(() => {
         // Re-check under the write lock: another process may have applied it meanwhile.
         if (getSchemaVersion(db, owner) >= migration.version) return;
+        // Card evidence and the card tables disappear atomically. A failed cutover leaves
+        // all legacy data available, including verification attachments.
+        if (owner === "core" && migration.version === 14) migrateSchema(db, "verify", now, false);
         db.exec(migration.sql);
         if (migration.foreignKeysOff && db.prepare("PRAGMA foreign_key_check").all().length > 0)
           throw new Error(`Migration ${owner}/${migration.version} left foreign key violations`);

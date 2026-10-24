@@ -130,10 +130,8 @@ function setup(
     migrateOwner(db, "stats"); // normally vibe-stats creates usage_event
   }
   const store = shared?.store ?? createVibeStore(db, { now: () => new Date(time.t) });
-  const project = shared
-    ? null
-    : store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: "" });
-  const card = shared?.card ?? store.cards.create({ projectId: project!.id, title: "Work" });
+  const project =
+    shared?.project ?? store.projects.create({ name: "Demo", prefix: "DEMO", repoPath: "" });
   const agent: AgentInfo = shared?.agent ?? {
     id: "agent-1",
     provider,
@@ -141,7 +139,7 @@ function setup(
   };
   const session =
     shared?.session ??
-    store.sessions.start({ cardId: card.id, agentId: agent.id, role: "worker", provider });
+    store.sessions.start({ projectId: project.id, agentId: agent.id, role: "worker", provider });
   if (!shared) {
     store.sessions.setState(session.id, "working");
     store.sessions.setState(session.id, "idle");
@@ -171,7 +169,6 @@ function setup(
     },
   };
   const scheduler = createCompactionScheduler({
-    includeLegacyCards: true,
     store,
     host,
     config: () => config,
@@ -216,17 +213,17 @@ function setup(
     for (let i = 0; i < count; i++) turn(calls, over);
   };
   const events = () =>
-    store.events
-      .list(card.id)
-      .filter((e) => e.type === "compaction")
-      .map((e) => e.body);
+    readEvents(db, 0, { types: ["session.compacted"] }).map((e) => {
+      const payload = e.payload as { sessionId: string; strategy: string };
+      return { sessionId: payload.sessionId, strategy: payload.strategy };
+    });
   const ctx = {
     time,
     clock,
     store,
     db,
     session,
-    card,
+    project,
     agent,
     scheduler,
     prompts,
@@ -383,7 +380,7 @@ describe("complexity policy in the scheduler", () => {
 
     // The new session inherits "multi" (from long), the early-compaction count and a fresh count.
     const next = s.store.sessions.getByAgent("agent-1-next")!;
-    expect(next.cardId).toBe(s.card.id);
+    expect(next.projectId).toBe(s.project.id);
     expect(next.complexity).toBe("multi");
     expect(readState(s.db, next.id)).toMatchObject({
       windows: [],
@@ -427,7 +424,7 @@ describe("complexity policy in the scheduler", () => {
 });
 
 describe("agent.create injection budget", () => {
-  it("uses the per-directory budget hint for multi/long cards", async () => {
+  it("uses the per-directory budget hint for multi/long sessions", async () => {
     const base = mkdtempSync(join(tmpdir(), "vibe-cxinj-"));
     const repo = join(base, "repo");
     const home = join(base, "home");

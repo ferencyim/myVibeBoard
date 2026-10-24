@@ -1,9 +1,9 @@
 // The long-lived master Paseo session: create/reuse the agent, ask it questions, switch the
 // subscription. The agent is a normal Paseo agent (role=master, VIBE_ROLE=master) recorded in
-// agent_session (cardId = null), so the board, the push mechanism and the stats see it like any
-// other session. Everything the master must not lose lives on the board and in the memory files,
+// agent_session, so the push mechanism and the stats see it like any
+// other session. Everything the master must not lose lives in task snapshots and in the memory files,
 // which is why a switch simply starts a fresh agent and the queue carries on. A replaced agent is
-// NOT archived (the owner can still open its conversation); the new one gets a board-derived
+// NOT archived (the owner can still open its conversation); the new one gets a task-derived
 // hand-off summary with its first message.
 
 import { mkdirSync } from "node:fs";
@@ -196,7 +196,7 @@ export function createMasterSession(deps: MasterSessionDeps): MasterSession {
   }
 
   /**
-   * The old agent keeps its conversation and stays openable; only the board session ends. It is
+   * The old agent keeps its conversation and stays openable; only the persisted session ends. It is
    * renamed so the owner can tell it from the live master (skipped on hosts without `setTitle`).
    */
   async function retire(session: AgentSession | undefined, outcome: string): Promise<void> {

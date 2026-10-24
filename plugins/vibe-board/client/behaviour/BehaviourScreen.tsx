@@ -9,7 +9,7 @@ import { ScrollView, Text, View } from "react-native";
 import * as rpc from "../../shared/rpc";
 import { PromptGroup } from "../vibe/prompts/prompt-editor";
 import { useRpc } from "@getpaseo/plugin/client";
-import { errorMessage } from "../board/logic";
+import { errorMessage } from "../common/logic";
 import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Chip, Muted } from "../common/ui";
 import { AUTOMATION_LINKS, MAINTAIN_LINK, groupByRole, type BehaviourPrompt } from "./logic";
@@ -31,7 +31,7 @@ export function BehaviourScreen(props: PluginScreenProps) {
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
+function BehaviourSection({ children }: { children: React.ReactNode }) {
   const { theme } = useHost();
   return (
     <View
@@ -76,12 +76,12 @@ function BehaviourContent({ nav }: { nav?: CrossNav }) {
         Agent 行为
       </Text>
       <Muted>
-        规划会话、执行 agent、探路兵、交接、看门狗等提示词在这里编辑；总 agent 设置和提示词集中在总
-        agent 面板。 按「默认 → 全局覆盖 → 项目覆盖」生效，项目覆盖优先。 占位符 {"{{name}}"}{" "}
+        任务规划、执行、探路和接续等提示词在这里编辑；总 agent 设置和提示词集中在总 agent 面板。
+        按「默认 → 全局覆盖 → 项目覆盖」生效，项目覆盖优先。 占位符 {"{{name}}"}{" "}
         在发送时替换；灰色的「固定格式段」由程序追加，保证回复能被解析，不能修改。
       </Muted>
 
-      <Card>
+      <BehaviourSection>
         <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>自动化设置入口</Text>
         {nav?.openPluginScreen ? (
           <Btn small label="打开总 agent 面板" onPress={link("vibe-master", "main", false)} />
@@ -113,7 +113,7 @@ function BehaviourContent({ nav }: { nav?: CrossNav }) {
         ) : (
           <Muted>（侧栏 → 自动维护）</Muted>
         )}
-      </Card>
+      </BehaviourSection>
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <Muted>编辑范围：</Muted>

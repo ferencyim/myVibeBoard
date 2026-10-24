@@ -38,7 +38,7 @@ describe("性能维护先确认与前后对比证据", () => {
     expect(h.prompts[0]).toContain("等待用户 /执行");
     expect(h.prompts[0]).toContain("perf-compare.json");
     expect(h.prompts[0]).toContain('"command": "node"');
-    expect(h.maintenanceCards()).toEqual([]);
+    expect(h.legacyCardTables()).toEqual([]);
   });
 
   it("同规则新调用点补充已有任务，日志游标不重复发送", async () => {

@@ -1,4 +1,4 @@
-// Permission mode of the master and planning agents. The setting "auto" (default) means "the
+// Permission mode of the master. The setting "auto" (default) means "the
 // provider's own automatic-approval mode"; any other value is a concrete Paseo modeId of the
 // provider. The catalog (providers.listModes) is the source of truth for what a provider offers.
 
@@ -39,7 +39,9 @@ export interface PermissionResolver {
 
 type ModesApi = Pick<MasterPaseo["providers"], "listModes">;
 
-export function createPermissionResolver(getPaseo: () => { providers: ModesApi } | null): PermissionResolver {
+export function createPermissionResolver(
+  getPaseo: () => { providers: ModesApi } | null,
+): PermissionResolver {
   const cache = new Map<string, ModeOption[]>();
 
   async function modesOf(provider: string): Promise<ModeOption[] | null> {
@@ -74,31 +76,17 @@ export function createPermissionResolver(getPaseo: () => { providers: ModesApi }
         codex: { "accept-edits": "auto", full: "full-access" },
       };
       const wanted = semantic[provider]?.[requested] ?? (requested || AUTO).trim();
-      if (semantic[provider]?.[requested] && (!catalog || catalog.some((m) => m.id === wanted))) return done(wanted, false);
+      if (semantic[provider]?.[requested] && (!catalog || catalog.some((m) => m.id === wanted)))
+        return done(wanted, false);
       if (wanted && wanted !== AUTO && (!catalog || catalog.some((m) => m.id === wanted))) {
         return done(wanted, false);
       }
       const candidates = AUTO_CANDIDATES[provider] ?? [AUTO];
       // Without a catalog (provider not ready) the first candidate is used and the daemon validates it.
-      const pick = catalog ? candidates.find((c) => catalog.some((m) => m.id === c)) : candidates[0];
+      const pick = catalog
+        ? candidates.find((c) => catalog.some((m) => m.id === c))
+        : candidates[0];
       return done(pick ?? null, true);
     },
   };
-}
-
-interface RequestLike {
-  kind: string;
-  name?: string;
-  metadata?: unknown;
-}
-
-/**
- * A call of a tool of the vibe-board MCP server. Codex asks via "CodexMcpElicitation" (server name
- * in metadata), Claude names the permission after the tool. Nothing else is ever approved here.
- */
-export function isBoardMcpCall(request: RequestLike): boolean {
-  if (request.kind !== "tool") return false;
-  if (request.name?.startsWith("mcp__vibe-board__")) return true;
-  const meta = request.metadata && typeof request.metadata === "object" ? (request.metadata as Record<string, unknown>) : {};
-  return request.name === "CodexMcpElicitation" && meta.serverName === "vibe-board";
 }

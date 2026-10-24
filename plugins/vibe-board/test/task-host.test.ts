@@ -4,6 +4,8 @@ import type { PluginTaskConversationPrepareRequest } from "@getpaseo/plugin/serv
 import { openBoardRuntime } from "../server/service";
 import { createTaskHost, recipientFromPreset } from "../server/task-host";
 import { createTaskResources } from "../server/task-host/resources";
+import { TASK_HOST_PROMPTS } from "../server/task-host/prompts";
+import { TASK_FLOW_PROMPTS } from "../server/task-conversation/prompts";
 import { createTaskRuntimeCommands, publishEvent } from "../server/vibe/db";
 
 const closers: Array<() => void> = [];
@@ -127,6 +129,50 @@ function barrier() {
 }
 
 describe("task conversation host", () => {
+  it("prunes retired board prompts while retaining both live groups and other plugins", () => {
+    const ctx = setup();
+    const retired = [
+      "board.brief",
+      "board.brief_contract",
+      "board.port_hint",
+      "board.instructions",
+      "board.orchestrate",
+      "board.subtask_brief",
+      "board.subtask_notify",
+      "board.takeover",
+      "board.takeover_nudge",
+      "board.watchdog_continue",
+      "board.switch_model",
+    ];
+    const live = [...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS];
+    ctx.store.prompts.register([
+      ...retired.map((key) => ({ ...live[0]!, key })),
+      { ...live[0]!, key: "other.prompt", plugin: "other-plugin" },
+    ]);
+    ctx.store.prompts.setOverride("board.brief", "旧覆盖");
+    ctx.store.prompts.setOverride("task.role.planner", "保留角色覆盖");
+    ctx.store.prompts.setOverride("board.task.plan", "保留流程覆盖");
+    ctx.store.prompts.setOverride("other.prompt", "保留其它插件覆盖");
+
+    ctx.host.registerPrompts();
+    ctx.host.registerPrompts();
+
+    const prompts = ctx.store.prompts.list();
+    expect(
+      prompts
+        .filter((prompt) => prompt.plugin === "vibe-board")
+        .map((prompt) => prompt.key)
+        .sort(),
+    ).toEqual(live.map((prompt) => prompt.key).sort());
+    for (const key of retired) expect(prompts.some((prompt) => prompt.key === key)).toBe(false);
+    expect(ctx.store.prompts.body("task.role.planner").text).toBe("保留角色覆盖");
+    expect(ctx.store.prompts.body("board.task.plan").text).toBe("保留流程覆盖");
+    expect(ctx.store.prompts.body("other.prompt").text).toBe("保留其它插件覆盖");
+    // The registry intentionally keeps orphan overrides; without a template they are not listed.
+    expect(
+      ctx.db.prepare("SELECT text FROM prompt_override WHERE key = ?").get("board.brief"),
+    ).toEqual({ text: "旧覆盖" });
+  });
   it.each(["checkout", "local_checkout", "directory"])(
     "rejects %s workspaces before binding a task or freezing its model",
     async (kind) => {

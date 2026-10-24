@@ -3,15 +3,7 @@
 // The event type list is fixed here; add types only by changing this file (and the docs).
 
 import { z } from "zod";
-import {
-  CardColumnSchema,
-  CardOriginSchema,
-  JudgementSchema,
-  ReviewVerdictSchema,
-  SessionComplexitySchema,
-  SessionRoleSchema,
-} from "./enums";
-import { MOVE_ACTORS } from "./state-machine";
+import { JudgementSchema, SessionComplexitySchema, SessionRoleSchema } from "./enums";
 
 const SessionRef = z.object({ sessionId: z.string(), agentId: z.string().optional() });
 
@@ -111,29 +103,6 @@ export const EVENT_PAYLOADS = {
   }),
 
   "task.updated": z.object({ workspaceId: z.string().min(1), fields: z.array(z.string()) }),
-  "card.created": z.object({
-    key: z.string(),
-    title: z.string(),
-    column: CardColumnSchema,
-    origin: CardOriginSchema,
-  }),
-  "card.updated": z.object({ fields: z.array(z.string()) }),
-  "card.deleted": z.object({ key: z.string() }),
-  "card.moved": z.object({
-    from: CardColumnSchema,
-    to: CardColumnSchema,
-    actor: z.enum(MOVE_ACTORS),
-    reason: z.string().optional(),
-  }),
-  // The board asks the master to review the card now (user pressed "ask master to review").
-  "card.review_requested": z.object({ cardId: z.string(), requestedBy: z.string() }),
-  "card.assessed": z.object({ cardEventId: z.string() }),
-  "card.dispatched": z.object({
-    sessionId: z.string(),
-    agentId: z.string(),
-    worktree: z.string().nullable(),
-    presetId: z.string().nullable(),
-  }),
   "session.started": SessionRef.extend({ role: z.string(), provider: z.string() }),
   "session.waiting": SessionRef.extend({ question: z.unknown().optional() }),
   "session.answered": SessionRef,
@@ -161,36 +130,6 @@ export const EVENT_PAYLOADS = {
     from: SessionComplexitySchema.nullable(),
     to: SessionComplexitySchema.nullable(),
   }),
-  // Model review of a card's result (after the worker finishes). Published by the reviewer plugin.
-  "review.started": z.object({
-    reviewerPresetId: z.string().nullable().optional(),
-    provider: z.string().optional(),
-    model: z.string().optional(),
-    sessionId: z.string().optional(),
-    commitHash: z.string().optional(),
-  }),
-  "review.finished": z.object({
-    verdict: ReviewVerdictSchema,
-    /** Short issue summaries; empty when verdict=pass. */
-    issues: z.array(z.string()).default([]),
-    summary: z.string().optional(),
-    reviewerPresetId: z.string().nullable().optional(),
-    sessionId: z.string().optional(),
-    verificationId: z.string().optional(),
-  }),
-  // Cheap-model scouting before dispatch (complexity / files / plan hints).
-  "scout.started": z.object({
-    scoutPresetId: z.string().nullable().optional(),
-    sessionId: z.string().optional(),
-  }),
-  "scout.finished": z.object({
-    scoutPresetId: z.string().nullable().optional(),
-    sessionId: z.string().optional(),
-    outcome: z.enum(["ok", "failed"]),
-    complexity: SessionComplexitySchema.nullable().optional(),
-    files: z.array(z.string()).optional(),
-    summary: z.string().optional(),
-  }),
   "verification.started": z.object({
     verificationId: z.string(),
     workspaceId: z.string().optional(),
@@ -202,12 +141,6 @@ export const EVENT_PAYLOADS = {
     confirmedAt: z.string().optional(),
     conclusion: JudgementSchema,
   }),
-  // The UI (vibe-board, which cannot call another plugin's RPC) asks vibe-verify to act on a
-  // card in `verifying`: send the user's rejection to the worker, or start a new verification.
-  "verification.decision_requested": z.object({
-    action: z.enum(["reject", "rerun"]),
-    comment: z.string().optional(),
-  }),
   "maintenance.triggered": z.object({ ruleId: z.string(), runId: z.string() }),
   // vibe-maintain (WP-36): a rule was paused after consecutive rejections; the master/UI should tell the user.
   "maintenance.paused": z.object({
@@ -216,34 +149,6 @@ export const EVENT_PAYLOADS = {
     reason: z.enum(["rejections"]),
     rejections: z.number().int(),
   }),
-  "plan.updated": z.object({ version: z.number().int() }),
-  // vibe-scheduler (WP-34). `scheduler.admitted` asks vibe-board to dispatch the card now;
-  // vibe-board answers a failed dispatch with `scheduler.dispatch_failed`.
-  "scheduler.admitted": z.object({
-    cardId: z.string(),
-    presetId: z.string().nullable().optional(),
-    provider: z.string().optional(),
-    /** Dev-server port reserved for this card. */
-    port: z.number().int().optional(),
-    deviceIds: z.array(z.string()).optional(),
-  }),
-  "scheduler.dispatch_failed": z.object({ cardId: z.string(), message: z.string() }),
-  // WP-109 master dispatch: the scheduler has free slots and these cards could start; the master
-  // picks (in order) the ones to admit, or says why it cannot. Answers carry the same requestId.
-  "scheduler.dispatch_wanted": z.object({
-    requestId: z.string(),
-    /** Free global slots right now. */
-    slots: z.number().int().min(0),
-    /** Cards that pass every scheduler check, in the scheduler's own order. */
-    cardIds: z.array(z.string()),
-  }),
-  "master.dispatch_chosen": z.object({
-    requestId: z.string(),
-    /** Chosen cards, dispatch order first. Never more than the slots and only requested cards. */
-    cardIds: z.array(z.string()),
-    reason: z.string(),
-  }),
-  "master.dispatch_failed": z.object({ requestId: z.string(), reason: z.string() }),
   "scheduler.quota_low": z.object({
     provider: z.string(),
     level: z.enum(["tight", "exhausted"]),
@@ -317,7 +222,7 @@ export function parseEvent(raw: {
   return { ...raw, type: raw.type, payload } as VibeEvent;
 }
 
-/** Narrowing helper: `if (isEvent(e, "card.moved")) e.payload.to` */
+/** Narrow a durable event to its typed payload. */
 export function isEvent<T extends EventType>(event: VibeEvent, type: T): event is VibeEvent<T> {
   return event.type === type;
 }

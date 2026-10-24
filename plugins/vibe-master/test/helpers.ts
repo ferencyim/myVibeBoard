@@ -1,8 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MasterSettings } from "../shared/rpc";
-import { masterSettings } from "../shared/rpc";
 import type { Clock } from "../server/clock";
 import type {
   CreateAgentOptions,
@@ -13,9 +10,11 @@ import type {
   UsageProviderLike,
 } from "../server/types";
 import { createVibeStore, migrateOwner, openVibeDb } from "../server/vibe/db";
+import type { MasterSettings } from "../shared/rpc";
+import { masterSettings } from "../shared/rpc";
 
 export function tempDir(prefix = "vibe-master-"): string {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return mkdtempSync(join(process.env.TEMP ?? "D:/devRepoCaches/r5-114-home", prefix));
 }
 
 /** Manual clock: timers only fire when the test advances time. */
@@ -75,19 +74,12 @@ export function setupBoard() {
     model: "kimi-k2",
     thinking: "default",
   });
-  const draft = (title: string, extra: Partial<Parameters<typeof store.cards.create>[0]> = {}) =>
-    store.cards.create({
-      projectId: project.id,
-      title,
-      description: `${title} description`,
-      ...extra,
-    });
   const eventTypes = () =>
     db
       .prepare<{ type: string }>("SELECT type FROM vibe_event ORDER BY seq")
       .all()
       .map((r) => r.type);
-  return { db, store, project, repoPath, presets: { claude, codex, kimi }, draft, eventTypes };
+  return { db, store, project, repoPath, presets: { claude, codex, kimi }, eventTypes };
 }
 export type Board = ReturnType<typeof setupBoard>;
 

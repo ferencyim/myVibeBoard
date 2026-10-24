@@ -7,7 +7,7 @@ import type { VibeStore } from "../vibe/db";
 import { masterPromptDefs, type MasterDefOptions, type MasterPromptKey } from "./defs";
 
 export interface ResolveOptions {
-  /** Project of the card the text is for; undefined = global scope only. */
+  /** Project of the task the text is for; undefined = global scope only. */
   projectId?: string | null;
   vars?: Record<string, string>;
 }

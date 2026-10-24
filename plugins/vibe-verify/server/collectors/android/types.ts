@@ -14,7 +14,6 @@ import type {
 
 export interface DeviceLeaseRequest {
   platform: "android";
-  cardId: string | null;
   verificationId: string;
   /** Lease a specific device (adb serial / device id) when set; otherwise any free emulator. */
   preferredDeviceId?: string;
@@ -66,7 +65,7 @@ export type AndroidAppConfig = z.infer<typeof AndroidAppConfigSchema>;
 export interface AndroidCollectorOptions {
   /** App to verify. Default: `android.app` of `<worktree>/.vibe/verify.json`. */
   app?: AndroidAppConfig | ((ctx: CollectorContext) => AndroidAppConfig);
-  /** Flow for a check (or card-wide). Default: `android.flow` of verify.json; none = launch + screenshot. */
+  /** Flow for a check (or task-wide). Default: `android.flow` of verify.json; none = launch + screenshot. */
   flow?: AndroidFlow | ((ctx: CollectorContext) => AndroidFlow | undefined);
   /** Used when `ctx.deviceId` is absent (the caller then does not hold a lease). */
   leases?: DeviceLeaseProvider;

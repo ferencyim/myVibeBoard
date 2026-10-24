@@ -1,45 +1,9 @@
 // GENERATED FROM plugins/vibe-shared — DO NOT EDIT (run: node scripts/vibe/sync-shared.mjs)
-// Subtasks of a card's plan and their sub-agents (WP-106). Pure rules shared by the daemon (which
-// starts sub-agents on the main agent's request), the board UI and the scheduler: is a subtask list
-// valid, may a subtask start now, is the card's execution still busy with sub-agents.
-
 import { z } from "zod";
-import type { SubtaskStatus } from "./enums";
-import type { CardView, Subtask, SubtaskRun } from "./model";
-import { findOverlap } from "./overlap";
 
-export const SUBTASK_STATUS_LABELS: Record<SubtaskStatus, string> = {
-  pending: "待开始",
-  running: "进行中",
-  waiting: "提问中",
-  done: "完成",
-  failed: "失败",
-};
-
-/** Statuses in which a sub-agent is working on the subtask. */
-export const ACTIVE_SUBTASK_STATUSES: readonly SubtaskStatus[] = ["running", "waiting"];
-
-export const emptyRun = (): SubtaskRun => ({
-  status: "pending",
-  sessionId: null,
-  agentId: null,
-  presetId: null,
-  summary: "",
-  error: "",
-  attempts: 0,
-  notified: true,
-  startedAt: null,
-  finishedAt: null,
-});
-
-export function runOf(card: Pick<CardView, "subtaskRuns">, subtaskId: string): SubtaskRun {
-  return card.subtaskRuns[subtaskId] ?? emptyRun();
-}
-
-export const subtasksOf = (card: Pick<CardView, "plan">): Subtask[] => card.plan?.subtasks ?? [];
-
-/** Why a subtask list cannot be stored (unique ids, known dependencies, no cycles), or null. */
-export function subtaskListError(subtasks: readonly Pick<Subtask, "id" | "dependsOn">[]): string | null {
+export function subtaskListError(
+  subtasks: readonly { id: string; dependsOn: readonly string[] }[],
+): string | null {
   const ids = new Set<string>();
   for (const s of subtasks) {
     if (ids.has(s.id)) return `子任务编号重复：${s.id}`;
@@ -71,38 +35,6 @@ export function subtaskListError(subtasks: readonly Pick<Subtask, "id" | "depend
   return null;
 }
 
-/**
- * Why the subtask may not start now, or null. Refused: unknown subtask, already running, an
- * unfinished dependency, or files overlapping a subtask whose sub-agent is running.
- */
-export function subtaskStartBlock(card: Pick<CardView, "plan" | "subtaskRuns">, subtaskId: string): string | null {
-  const subtasks = subtasksOf(card);
-  const subtask = subtasks.find((s) => s.id === subtaskId);
-  if (!subtask) return `方案里没有子任务 ${subtaskId}（现有：${subtasks.map((s) => s.id).join(", ") || "无"}）`;
-  const run = runOf(card, subtaskId);
-  if (ACTIVE_SUBTASK_STATUSES.includes(run.status)) return `子任务 ${subtaskId} 的子代理已在运行，用 vibe_subtask_message 和它沟通`;
-  const unfinished = subtask.dependsOn.filter((dep) => runOf(card, dep).status !== "done");
-  if (unfinished.length) return `子任务 ${subtaskId} 依赖的 ${unfinished.join(", ")} 还没有完成`;
-  for (const other of subtasks) {
-    if (other.id === subtaskId || !ACTIVE_SUBTASK_STATUSES.includes(runOf(card, other.id).status)) continue;
-    const overlap = findOverlap(subtask.files, other.files);
-    if (overlap) {
-      return `子任务 ${subtaskId} 与正在运行的 ${other.id} 涉及相同的文件（${overlap[0]} / ${overlap[1]}），等它结束再启动`;
-    }
-  }
-  return null;
-}
-
-/**
- * The card's execution still waits for sub-agents: one is running or asking, or a status change has
- * not reached the main agent yet. While true, the main agent ending a round does not finish the card.
- */
-export function subtasksBusy(card: Pick<CardView, "subtaskRuns">): boolean {
-  return Object.values(card.subtaskRuns).some(
-    (run) => ACTIVE_SUBTASK_STATUSES.includes(run.status) || !run.notified,
-  );
-}
-
 // --- concurrency (the scheduler's limits, published for the board) ---------------------------
 
 /** vibe_meta key under which vibe-scheduler publishes its limits (JSON, SchedulerLimits). */
@@ -132,12 +64,19 @@ export function concurrencyBlock(input: {
   projectLimit: number | null;
 }): string | null {
   const { limits, active, provider, projectId, projectLimit } = input;
-  if (active.length >= limits.globalLimit) return `已达全局并发上限 ${limits.globalLimit}，等其它代理结束`;
+  if (active.length >= limits.globalLimit)
+    return `已达全局并发上限 ${limits.globalLimit}，等其它代理结束`;
   const providerLimit = limits.providerLimits[provider];
-  if (providerLimit !== undefined && active.filter((a) => a.provider === provider).length >= providerLimit) {
+  if (
+    providerLimit !== undefined &&
+    active.filter((a) => a.provider === provider).length >= providerLimit
+  ) {
     return `${provider} 已达并发上限 ${providerLimit}，等其它代理结束`;
   }
-  if (projectLimit != null && active.filter((a) => a.projectId === projectId).length >= projectLimit) {
+  if (
+    projectLimit != null &&
+    active.filter((a) => a.projectId === projectId).length >= projectLimit
+  ) {
     return `项目已达并发上限 ${projectLimit}，等其它代理结束`;
   }
   return null;
@@ -148,7 +87,9 @@ export function concurrencyBlock(input: {
  * continued at any time); a sub-agent only while it works or asks (idle = its subtask is finished).
  */
 export function takesSlot(session: { role: string; state: string }): boolean {
-  if (session.role === "worker") return ["starting", "working", "waiting", "idle"].includes(session.state);
-  if (session.role === "subagent") return ["starting", "working", "waiting"].includes(session.state);
+  if (session.role === "worker")
+    return ["starting", "working", "waiting", "idle"].includes(session.state);
+  if (session.role === "subagent")
+    return ["starting", "working", "waiting"].includes(session.state);
   return false;
 }

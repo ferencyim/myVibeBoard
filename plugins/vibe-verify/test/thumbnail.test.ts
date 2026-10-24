@@ -1,9 +1,16 @@
-import { mkdtempSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
 import { afterAll, describe, expect, it } from "vitest";
-import { createVerifyStore } from "../server/store";
+import { createTaskVerifyStore } from "../server/task-store";
 import { createVibeStore, migrateOwner, openVibeDb } from "../server/vibe/db";
 import { THUMB_MAX_WIDTH, thumbnailPng, writeThumbnail } from "../server/thumbnail";
 import { solidPng } from "./helpers";
@@ -46,19 +53,46 @@ describe("thumbnails", () => {
     const db = openVibeDb({ path: path.join(dir, "vibe.db") });
     migrateOwner(db, "verify");
     const board = createVibeStore(db);
-    const verify = createVerifyStore(db, { root: dir });
-    const project = board.projects.create({ name: "P", prefix: "THU", repoPath: dir, projectType: "web" });
-    const card = board.cards.create({ projectId: project.id, title: "t", column: "todo" });
-    const { verification } = verify.create({ cardId: card.id, projectId: project.id, commitHash: "abc", mode: "evidence", checks: [] });
+    const verify = createTaskVerifyStore(db, dir);
+    const project = board.projects.create({
+      name: "P",
+      prefix: "THU",
+      repoPath: dir,
+      projectType: "web",
+    });
+    board.tasks.create({ workspaceId: "ws-thumb", anchorAgentId: "anchor" });
+    db.prepare("UPDATE task SET confirmed_at = ? WHERE workspace_id = ?").run(
+      "2026-10-23T00:00:00.000Z",
+      "ws-thumb",
+    );
+    const { verification } = verify.create({
+      workspaceId: "ws-thumb",
+      confirmedAt: "2026-10-23T00:00:00.000Z",
+      projectId: project.id,
+      commitHash: "abc",
+      checks: [],
+    });
     const file = path.join(dir, "ins.png");
     writeFileSync(file, solidPng(800, 600, [5, 6, 7]));
-    const artifact = { kind: "screenshot" as const, path: file, capturedAt: "2026-10-19T00:00:00.000Z", commitHash: "abc", simulated: false };
+    const artifact = {
+      kind: "screenshot" as const,
+      path: file,
+      capturedAt: "2026-10-19T00:00:00.000Z",
+      commitHash: "abc",
+      simulated: false,
+    };
     const added = verify.addEvidence(verification.id, null, artifact);
     expect(added.thumbPath).toBe(path.join(dir, "ins.thumb.png"));
-    const plain = verify.addEvidence(verification.id, null, { ...artifact, kind: "log", path: path.join(dir, "x.log") });
+    const plain = verify.addEvidence(verification.id, null, {
+      ...artifact,
+      kind: "log",
+      path: path.join(dir, "x.log"),
+    });
     expect(plain.thumbPath).toBeNull();
     db.prepare("UPDATE evidence_file SET thumb_path = NULL WHERE id = ?").run(added.id);
-    expect(verify.ensureThumb(verify.evidenceById(added.id)!)).toBe(path.join(dir, "ins.thumb.png"));
+    expect(verify.ensureThumb(verify.evidenceById(added.id)!)).toBe(
+      path.join(dir, "ins.thumb.png"),
+    );
     expect(verify.evidenceById(added.id)!.thumbPath).toBe(path.join(dir, "ins.thumb.png"));
     db.close();
   });

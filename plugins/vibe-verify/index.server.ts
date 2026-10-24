@@ -12,7 +12,6 @@ import { tuningOf, type VerifyTuning } from "./server/tuning";
 import { isEvent } from "./server/vibe/contract";
 import { createVerifyRegistry, type RunConfigs } from "./server/registry";
 import { registerVerifyRpcs } from "./server/rpc";
-import { createVerifyStore } from "./server/store";
 import { createPaseoVerifierLauncher, type VerifierLauncher } from "./server/verifier/agent";
 import {
   decideVerifierPermission,
@@ -38,7 +37,6 @@ export default function contribute(server: PluginServerContext) {
   const home = resolveVibeHome();
   const prompts = createVerifyPrompts(board);
   prompts.register();
-  const verify = createVerifyStore(db, { root: join(home, "verify") });
   const configs: RunConfigs = new Map();
   const log = (message: string, error?: unknown) =>
     console.error(`[vibe-verify] ${message}`, error ?? "");
@@ -248,8 +246,7 @@ export default function contribute(server: PluginServerContext) {
   consumer.start();
 
   registerVerifyRpcs(server, {
-    board,
-    verify,
+    verify: taskVerify,
     evidenceRoot: join(home, "verify"),
   });
 

@@ -27,8 +27,7 @@ memory; the task brief follows in the prompt) into agents whose cwd contains `.v
 | kimi, deepseek | marked block in `AGENTS.md`; tracked file: `skip-worktree`, only in a linked worktree; untracked: git-excluded |
 
 Unlisted providers and non-`.vibe` directories are left alone; failures never block agent start.
-The dispatch brief (vibe-board `server/dispatch/brief.ts`) only points at `.vibe/` files and
-declares them authoritative and read-only. Hook order between plugins is not guaranteed, so the
+Task role instructions point at `.vibe/` files and declare them authoritative and read-only. Hook order between plugins is not guaranteed, so the
 block is prepended to `systemPrompt` to stay the stable prefix.
 
 ## server/compaction (WP-35)
@@ -36,11 +35,11 @@ block is prepended to `systemPrompt` to stay the stable prefix.
 Compacts idle sessions shortly before their prompt cache expires. Time only: a session that is
 `idle` (never `waiting` on an approval) and whose `agent_session.cache_expires_at` is less than the
 margin away (3 min for a 1 h TTL, 1 min for 5 min) is handled once per idle period. The agent first
-writes its progress to `.vibe/sessions/<card id>.md`; then `/compact` is sent (claude, codex) and the
+writes its progress to `.vibe/sessions/<session id>.md`; then `/compact` is sent (claude, codex) and the
 project context block (`server/inject`) is re-injected. CLIs without `/compact` get a handoff: a new
-agent cold-starts from the session .md and memory files, the old session ends. A card
-`compaction` event is recorded (lifecycle of vibe-board records completed compactions found in the
-turn timeline; this module adds one only when that did not happen, strategy `handoff` for handoffs).
+agent cold-starts from the session .md and memory files, the old session ends. A durable
+`session.compacted` event is recorded once; the native lifecycle and scheduler share its counter.
+Workspace handoffs go through their owner, preserving admission and cancellation rules.
 
 - Expiry is `last turn end + TTL`. TTL per provider comes from the `compaction` plugin settings
   (`ttlSeconds`, e.g. `{"claude": 3600}` for a subscription, `300` for an API key); defaults claude
@@ -55,8 +54,8 @@ turn timeline; this module adds one only when that did not happen, strategy `han
 Conversation complexity -> context strategy. `classifyComplexity` (pure, `classify.ts`) maps
 `{turns, cacheRead, turnPeaks}` to `short` / `multi` / `long`; the scheduler stores the result with
 `sessions.setComplexity` after each turn and on every tick. The change event
-`session.complexity_changed` comes from the command layer; the card timeline reads it (or the
-session's `complexity`), this module writes no extra note.
+`session.complexity_changed` comes from the command layer; consumers read it (or the session's
+`complexity`), this module writes no extra note.
 
 - **Turns are Paseo agent turns**, not model calls: the scheduler records a window
   (turn_started .. turn_ended) per effective turn, so a turn with 30 model calls is one turn.
@@ -96,8 +95,8 @@ WP-111 消费请求后必须核对 confirmedAt、当前阶段和旧 session，�
 
 通用 createTaskContinuation 控制器覆盖七角色和 master；冷交接保持当前候选，provider 失败才按冻结候选顺序前进，候选耗尽报告。recordContinuation 重放时读取已有替代 session，不再次创建 agent 或复制 usage_event；用量由统计插件按独立原生 CLI session 和日志去重键采集。复杂度状态及记忆派生索引写入统一走 vibe-shared/db/context-state 命令，历史键和值不变。
 
-压缩只对核实空闲且未归档的原生 agent 发起；重启后先刷新状态，不自动恢复已关闭会话。压缩命令超时/权限未解决不会被记作成功。旧卡片压缩适配暂留给 WP-114 清理，新路径不依赖它。
+压缩只对核实空闲且未归档的原生 agent 发起；重启后先刷新状态，不自动恢复已关闭会话。压缩命令超时/权限未解决不会被记作成功。WP-114 已删除旧卡片压缩、卡片事件和子卡交接适配。
 
 压缩的笔记、压缩命令和恢复回合也会走 acquire → bind（当前原生 agent）→ run → idle 后 yield。已有主代理计算名额尚未让出时延后压缩，不占第二份名额，也不释放主代理已有租约。调度回执不明或确认变化时冻结并保留资源；候选失败、冷交接及实际模型记录仍交各自 owner。
 
-生产压缩调度默认排除 cardId 非空的旧卡会话，不会为旧卡自动发压缩回合或创建交接 writer；历史读取仍保留。历史压缩流程测试通过 includeLegacyCards 显式注入，不用于生产注册。旧卡会话也可能携带 workspaceId，交接路由、笔记路径和压缩计数须先按 cardId 区分旧卡与新任务，不能只看 workspaceId。内部压缩消息始终携带 sourceAgentId，保持原生 agent-message 身份。
+WP-114 最终切换后不再读取旧卡片或卡片事件，压缩只依赖原生 agent_session、workspace 与 session.compacted 事件。新任务成员通过宿主群聊压缩入口操作；普通会话保留笔记、压缩和记忆注入。内部压缩消息始终携带 sourceAgentId，保持原生 agent-message 身份。

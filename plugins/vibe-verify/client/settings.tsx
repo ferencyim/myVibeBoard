@@ -63,7 +63,7 @@ export const ADVANCED_FIELDS: readonly Field[] = [
   {
     kind: "text",
     key: "worktreeRoot",
-    label: "基线工作树目录（留空沿用环境变量 VIBE_WORKTREE_ROOT，没有则 <VIBE_HOME>/worktrees）",
+    label: "基线工作树目录（留空沿用环境变量 VIBE_WORKTREE_ROOT 或平台默认目录）",
   },
 ];
 

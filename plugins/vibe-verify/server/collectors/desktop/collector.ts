@@ -104,7 +104,7 @@ export function createDesktopCollector(options: DesktopCollectorOptions = {}): E
     const state: RunState = {};
     states.set(ctx.verificationId, state);
     mkdirSync(ctx.outputDir, { recursive: true });
-    const prefix = ctx.check ? slug(ctx.check.id) : "card";
+    const prefix = ctx.check ? slug(ctx.check.id) : "task";
 
     // 1. start (Electron automation first when asked, else a plain process)
     if (app.automation === "electron") {

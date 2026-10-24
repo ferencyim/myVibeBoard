@@ -1,4 +1,12 @@
-import { DEFAULT_TAGS } from "../../contract/enums";
+const DEFAULT_TAGS = [
+  { id: "tag_bug", name: "bug", evidence: false },
+  { id: "tag_feature", name: "feature", evidence: true },
+  { id: "tag_change", name: "change", evidence: true },
+  { id: "tag_refactor", name: "refactor", evidence: false },
+  { id: "tag_test", name: "test", evidence: false },
+  { id: "tag_doc", name: "doc", evidence: false },
+  { id: "tag_research", name: "research", evidence: false },
+];
 import type { Migration } from "../migrate";
 
 // Owner "core": project, card, card_event, preset, tag, card_tag, attachment, agent_session,
@@ -566,6 +574,59 @@ CREATE TABLE task_artifact (
   PRIMARY KEY (workspace_id, kind, source_key)
 );
 CREATE INDEX idx_task_artifact_history ON task_artifact(workspace_id, created_at);
+`,
+  },
+  {
+    version: 14,
+    name: "retire_legacy_board",
+    foreignKeysOff: true,
+    sql: `
+CREATE TABLE agent_session_new (
+  id TEXT PRIMARY KEY,
+  card_id TEXT CHECK (card_id IS NULL),
+  agent_id TEXT NOT NULL,
+  workspace_id TEXT,
+  role TEXT NOT NULL CHECK (role IN ('master','scout','planner','plan_reviewer','worker','subagent','reviewer','verifier')),
+  current_provider TEXT NOT NULL,
+  switch_history_json TEXT NOT NULL DEFAULT '[]',
+  state TEXT NOT NULL DEFAULT 'starting' CHECK (state IN ('starting','working','waiting','idle','ended','error')),
+  waiting_since TEXT,
+  pending_question_json TEXT,
+  cache_expires_at TEXT,
+  last_activity_at TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  error_message TEXT,
+  updated_hlc TEXT NOT NULL DEFAULT '',
+  stalled_since TEXT,
+  complexity TEXT CHECK (complexity IS NULL OR complexity IN ('short','multi','long')),
+  reassigned_from_session_id TEXT,
+  project_id TEXT,
+  model TEXT,
+  thinking TEXT,
+  candidate_index INTEGER CHECK (candidate_index IS NULL OR candidate_index >= 0),
+  previous_session_id TEXT,
+  confirmed_at TEXT
+);
+INSERT INTO agent_session_new SELECT * FROM agent_session WHERE card_id IS NULL;
+DROP TABLE agent_session;
+ALTER TABLE agent_session_new RENAME TO agent_session;
+CREATE UNIQUE INDEX idx_agent_session_agent ON agent_session(agent_id);
+CREATE INDEX idx_agent_session_workspace ON agent_session(workspace_id,role);
+CREATE UNIQUE INDEX idx_agent_session_continuation ON agent_session(previous_session_id) WHERE previous_session_id IS NOT NULL;
+DELETE FROM vibe_event_dead WHERE seq IN (SELECT seq FROM vibe_event WHERE card_id IS NOT NULL OR type IN ('card.created','card.updated','card.deleted','card.moved','card.review_requested','card.assessed','card.dispatched','plan.updated','review.started','review.finished','scout.started','scout.finished','verification.decision_requested','scheduler.admitted','scheduler.dispatch_failed','scheduler.dispatch_wanted','master.dispatch_chosen','master.dispatch_failed'));
+DELETE FROM vibe_event WHERE card_id IS NOT NULL OR type IN ('card.created','card.updated','card.deleted','card.moved','card.review_requested','card.assessed','card.dispatched','plan.updated','review.started','review.finished','scout.started','scout.finished','verification.decision_requested','scheduler.admitted','scheduler.dispatch_failed','scheduler.dispatch_wanted','master.dispatch_chosen','master.dispatch_failed');
+DROP TABLE git_snapshot;
+DROP TABLE card_tag;
+DROP TABLE attachment;
+DROP TABLE plan_version;
+DROP TABLE card_event;
+DROP TABLE card;
+DROP TABLE tag;
+DROP TABLE sync_meta;
+DROP TABLE sync_tombstone;
+DROP TABLE sync_field;
+DROP TABLE sync_tomb;
 `,
   },
 ];

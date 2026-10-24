@@ -86,6 +86,35 @@ CREATE INDEX idx_verification_workspace ON verification(workspace_id,confirmed_a
   },
 ];
 
+// The cutover invokes this owner migration inside the same transaction as core v14.
+VERIFY_MIGRATIONS.push({
+  version: 4,
+  name: "retire_card_evidence",
+  foreignKeysOff: true,
+  sql: `
+DELETE FROM evidence_file WHERE verification_id IN (SELECT id FROM verification WHERE card_id IS NOT NULL);
+DELETE FROM verification_item WHERE verification_id IN (SELECT id FROM verification WHERE card_id IS NOT NULL);
+CREATE TABLE verification_new (
+  id TEXT PRIMARY KEY,
+  card_id TEXT CHECK (card_id IS NULL),
+  commit_hash TEXT NOT NULL,
+  conclusion TEXT CHECK (conclusion IS NULL OR conclusion IN ('pass','doubt','fail')),
+  verifier_agent_id TEXT,
+  mode TEXT NOT NULL CHECK (mode IN ('evidence','tests_only')),
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  kind TEXT NOT NULL DEFAULT 'check' CHECK (kind IN ('check','review')),
+  workspace_id TEXT REFERENCES task(workspace_id),
+  confirmed_at TEXT,
+  project_id TEXT
+);
+INSERT INTO verification_new SELECT * FROM verification WHERE card_id IS NULL;
+DROP TABLE verification;
+ALTER TABLE verification_new RENAME TO verification;
+CREATE INDEX idx_verification_workspace ON verification(workspace_id,confirmed_at,started_at);
+`,
+});
+
 export const CONTEXT_MIGRATIONS: Migration[] = [
   {
     version: 1,

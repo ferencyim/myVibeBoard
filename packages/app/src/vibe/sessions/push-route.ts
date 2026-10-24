@@ -9,7 +9,9 @@ const str = (data: PushData, key: string): string | null => {
 
 /** Legacy card notifications have no native task identity and cannot be mapped to a task. */
 export function isRetiredVibePush(data: PushData): boolean {
-  return str(data, "event")?.startsWith("card.") ?? false;
+  return Boolean(
+    str(data, "cardKey") || str(data, "cardId") || str(data, "event")?.startsWith("card."),
+  );
 }
 
 /** Route only the exact host and workspace named by the notification. */

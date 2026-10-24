@@ -172,7 +172,7 @@ export function registerCompaction(server: PluginServerContext, options: Compact
         return result;
       };
       const session = store.sessions.getByAgent(agentId);
-      if (session && !session.cardId) {
+      if (session) {
         if (!options.runTaskTurn || (snapshot.model && snapshot.model !== session.model))
           return { status: "permission" };
         return options.runTaskTurn(session, snapshot.workspaceId ?? null, execute);

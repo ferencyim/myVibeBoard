@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TAGS } from "../contract/enums";
-import { SYNC_TABLES } from "../contract/sync-spec";
 import {
   MIGRATIONS,
   OWNERS,
@@ -17,25 +15,15 @@ import { openTestDb, runWorker } from "./helpers";
 
 const EXPECTED_TABLES = [
   "task",
+  "task_artifact",
   "project",
   "prompt_override",
   "prompt_template",
-  "card",
-  "card_event",
   "preset",
-  "tag",
-  "card_tag",
-  "attachment",
   "agent_session",
-  "plan_version",
-  "git_snapshot",
   "vibe_event",
   "vibe_cursor",
   "vibe_event_dead",
-  "sync_meta",
-  "sync_tombstone",
-  "sync_field",
-  "sync_tomb",
   "vibe_meta",
   "verification",
   "verification_item",
@@ -83,27 +71,14 @@ describe("migrations", () => {
     db.close();
   });
 
-  it("migrating a dependent owner brings core along, and only that owner", () => {
+  it("migrating any owner completes the cutover prerequisites before legacy tables disappear", () => {
     const { db } = openTestDb();
     const result = migrateOwner(db, "verify");
     expect(getSchemaVersion(db, "core")).toBe(latestVersion("core"));
     expect(getSchemaVersion(db, "verify")).toBe(latestVersion("verify"));
-    expect(getSchemaVersion(db, "stats")).toBe(0);
-    expect(result.applied).toEqual(MIGRATIONS.verify.map((m) => m.version));
-    expect(tableNames(db)).not.toContain("usage_event");
-    db.close();
-  });
-
-  it("seeds the default tag vocabulary once", () => {
-    const { db } = openTestDb();
-    migrateAll(db);
-    migrateAll(db);
-    const tags = db
-      .prepare<{ name: string; evidence: number }>("SELECT name, evidence FROM tag ORDER BY rowid")
-      .all();
-    expect(tags.map((t) => t.name)).toEqual(DEFAULT_TAGS.map((t) => t.name));
-    expect(tags.find((t) => t.name === "feature")?.evidence).toBe(1);
-    expect(tags.find((t) => t.name === "bug")?.evidence).toBe(0);
+    expect(getSchemaVersion(db, "stats")).toBe(latestVersion("stats"));
+    expect(result.applied).toEqual([]);
+    expect(tableNames(db)).toContain("usage_event");
     db.close();
   });
 
@@ -135,8 +110,7 @@ describe("migrations", () => {
     expect(() =>
       db
         .prepare(
-          `INSERT INTO card (id, project_id, number, key, title, sort_key, created_at, updated_at)
-           VALUES ('c1', 'missing', 1, 'X-1', 't', 'a', 'now', 'now')`,
+          `INSERT INTO memory_entry (id,project_id,file,created_at,touched_at) VALUES ('m','missing','memory.md','now','now')`,
         )
         .run(),
     ).toThrow(/FOREIGN KEY/);
@@ -148,21 +122,6 @@ describe("migrations", () => {
         )
         .run(),
     ).toThrow(/CHECK/);
-    db.close();
-  });
-
-  it("every synced 'both' table has updated_hlc and every listed field is a real column", () => {
-    const { db } = openTestDb();
-    migrateAll(db);
-    for (const spec of SYNC_TABLES.filter((s) => s.direction === "both")) {
-      const cols = db
-        .prepare<{ name: string }>(`PRAGMA table_info(${spec.table})`)
-        .all()
-        .map((c) => c.name);
-      expect(cols, spec.table).toContain("updated_hlc");
-      for (const f of spec.fields) expect(cols, `${spec.table}.${f}`).toContain(f);
-      for (const k of spec.pk) expect(cols, `${spec.table}.${k}`).toContain(k);
-    }
     db.close();
   });
 
@@ -187,9 +146,6 @@ describe("migrations", () => {
     // no duplicated version rows
     const rows = check.prepare<{ n: number }>("SELECT COUNT(*) AS n FROM schema_version").get();
     expect(rows?.n).toBe(OWNERS.reduce((sum, o) => sum + MIGRATIONS[o].length, 0));
-    expect(check.prepare<{ n: number }>("SELECT COUNT(*) AS n FROM tag").get()?.n).toBe(
-      DEFAULT_TAGS.length,
-    );
     check.close();
   });
 });

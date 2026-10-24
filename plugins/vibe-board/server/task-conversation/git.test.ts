@@ -386,11 +386,14 @@ describe("任务 Git 收尾", () => {
 });
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 describe("真实隔离仓库 Git 收尾", () => {
   function repository() {
-    const home = resolve(import.meta.dirname, "../../../../.dev/git-finalizer-tests");
+    const home = resolve(
+      process.env.TMPDIR ?? "D:/devRepoCaches/r5-114-home",
+      "git-finalizer-tests",
+    );
     mkdirSync(home, { recursive: true });
     const root = mkdtempSync(join(home, "finalizer-"));
     const main = join(root, "main");
@@ -411,13 +414,19 @@ describe("真实隔离仓库 Git 收尾", () => {
     command(main, "commit", "-m", "初始测试提交");
     command(main, "remote", "add", "origin", origin);
     command(main, "push", "origin", "main");
-    const first = join(root, "first");
+    const worktrees = resolve(
+      process.env.VIBE_WORKTREE_ROOT ??
+        resolve(import.meta.dirname, "../../../../.dev/wp114-git-test-worktrees"),
+      basename(root),
+    );
+    mkdirSync(worktrees, { recursive: true });
+    const first = join(worktrees, "first");
     command(main, "worktree", "add", "-b", "first", first);
     writeFileSync(join(first, "first.txt"), "first\n");
     command(first, "add", "first.txt");
     command(first, "commit", "-m", "第一个任务");
     const firstCommit = command(first, "rev-parse", "HEAD");
-    return { root, main, origin, first, firstCommit, command };
+    return { root, main, origin, first, firstCommit, command, worktrees };
   }
 
   it("真实主检出作为任务目录时拒绝，不修改 main 或 origin", async () => {
@@ -435,7 +444,7 @@ describe("真实隔离仓库 Git 收尾", () => {
 
   it("两个 finalizer 实例按 common-dir 串行完成两个任务的合并与 push", async () => {
     const r = repository();
-    const second = join(r.root, "second");
+    const second = join(r.worktrees, "second");
     r.command(r.main, "worktree", "add", "-b", "second", second, r.firstCommit);
     writeFileSync(join(second, "second.txt"), "second\n");
     r.command(second, "add", "second.txt");

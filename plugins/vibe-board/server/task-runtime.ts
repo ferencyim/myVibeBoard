@@ -12,7 +12,7 @@ import { createTaskHost } from "./task-host";
 import { createTaskConversationService } from "./task-conversation/service";
 import { createTaskPanelReader } from "./task-panel";
 
-/** The business owner for native task conversations. Legacy cards keep their own registrations. */
+/** The business owner for native task conversations. */
 export function registerTaskRuntime(
   server: PluginServerContext,
   options: {
@@ -62,7 +62,6 @@ export function registerTaskRuntime(
     server.on("agent.turn_started", ({ agent, turnId }, context) => {
       if (!host.isCompacting(agent.id)) host.noteTurnStarted(agent.id, turnId);
       onPaseo(context.paseo);
-      // Register before the legacy lifecycle consumes the context plugin's marker.
       try {
         const marker = JSON.parse(
           readFileSync(

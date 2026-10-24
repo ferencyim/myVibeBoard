@@ -175,6 +175,21 @@ function isTerminalEvent(event: AgentManagerEvent): boolean {
       event.event.type === "turn_canceled")
   );
 }
+function completeRecovery(
+  record: StoredTaskConversation,
+  delivery: StoredTaskConversationDelivery | undefined,
+): void {
+  if (!delivery) return;
+  const agentId = delivery.backendAgentId;
+  const latest = Object.values(record.deliveries).findLast(
+    (candidate) => candidate.backendAgentId === agentId,
+  );
+  // Clear only in the final FULL projection, never for a delayed older end.
+  if (delivery === latest)
+    record.recoveryMembers = (record.recoveryMembers ?? []).filter(
+      (candidate) => candidate !== agentId,
+    );
+}
 function isProjectionEvent(event: AgentManagerEvent): boolean {
   return (
     event.type === "agent_state" ||
@@ -960,6 +975,9 @@ export class TaskConversationService {
           accepted.status = "accepted";
           accepted.sourceTurnId =
             first.value.type === "turn_started" ? first.value.turnId : undefined;
+          current.recoveryMembers = [
+            ...new Set([...(current.recoveryMembers ?? []), backendAgentId]),
+          ];
           const target = current.snapshot.members.find((entry) => entry.memberId === memberId)!;
           target.seenConversationSeq = throughSeq;
           if (summary) target.summary = summary;
@@ -1176,6 +1194,7 @@ export class TaskConversationService {
           record.deliveries[clientMessageId].status = "accepted";
           record.deliveries[clientMessageId].sourceTurnId =
             first.value.type === "turn_started" ? first.value.turnId : undefined;
+          record.recoveryMembers = [...new Set([...(record.recoveryMembers ?? []), agentId])];
         });
         void this.drain(iterator, conversation.conversationId, agentId).catch((error) =>
           this.dependencies.logger.warn({ err: error }, "Task permission follow-up failed"),
@@ -1694,6 +1713,7 @@ export class TaskConversationService {
               });
               if (existing)
                 row = this.dependencies.store.replaceRow(record, existing, { completed: true });
+              completeRecovery(record, delivery);
             }
           }
           if (row) rows.set(row.id, row);

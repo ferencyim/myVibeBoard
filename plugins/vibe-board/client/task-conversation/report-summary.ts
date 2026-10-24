@@ -1,7 +1,7 @@
 import type { PaseoApi } from "@getpaseo/client";
 import { z } from "zod";
 import type { TaskArtifact } from "../../shared/vibe/contract";
-import { aggregate, fileName, JUDGEMENT_LABELS, SEVERITY_LABELS } from "../verification/logic";
+import { aggregate, fileName, JUDGEMENT_LABELS, SEVERITY_LABELS } from "./evidence";
 
 const judgement = z.enum(["pass", "doubt", "fail"]);
 const verification = z.object({

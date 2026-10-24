@@ -9,8 +9,8 @@
 //       # trigger: { kind: time, cron: "0 3 * * *" }
 //       # trigger: { kind: event, path: logs/crash.log, pattern: "Exception" }
 //       check: { type: git, stale_days: 14 }
-//       agent: null                 # null = deterministic only; "claude/sonnet" = read-only sub agent
-//       output: suggest             # suggest = draft card | fix = worktree + in_progress card
+//       agent: null                 # null = default planning preset; or explicit provider/model
+//       output: suggest             # suggest/fix both plan first, waiting for explicit /执行
 //       priority: low
 //       dedupe_key: git-health
 //       daily_cap: 1
@@ -55,7 +55,10 @@ export async function loadConfig(repoPath: string): Promise<LoadedConfig> {
   let text = "";
   try {
     // A CRLF checkout must not look like an edit (the signature) nor leak "\r" into rule values.
-    text = (await readFile(join(repoPath, ".vibe", "maintenance.yml"), "utf8")).replace(/\r\n/g, "\n");
+    text = (await readFile(join(repoPath, ".vibe", "maintenance.yml"), "utf8")).replace(
+      /\r\n/g,
+      "\n",
+    );
   } catch {
     // No file: the lower layers only.
   }

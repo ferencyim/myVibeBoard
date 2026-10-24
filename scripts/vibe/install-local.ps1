@@ -36,11 +36,32 @@ $vibeHome = Join-Path $dataDir "vibe"
 $electronData = Join-Path $dataDir "electron"
 $tokenTarget = Join-Path $dataDir "push-gateway.token"
 
-function Copy-Tree($from, $to) {
+function Get-TargetOnlyFiles($from, $to) {
+  $pending = [Collections.Generic.Stack[string]]::new()
+  $pending.Push(".")
+  while ($pending.Count -gt 0) {
+    $relative = $pending.Pop()
+    foreach ($item in Get-ChildItem -LiteralPath (Join-Path $to $relative) -Force) {
+      # Inspect neither side through a junction/symlink (e.g. a source SDK checkout).
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+      $child = Join-Path $relative $item.Name
+      $source = Get-Item -LiteralPath (Join-Path $from $child) -Force -ErrorAction SilentlyContinue
+      if ($source -and ($source.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+      if ($item.PSIsContainer) { $pending.Push($child) }
+      elseif (-not $source -or $source.PSIsContainer) { $item.FullName }
+    }
+  }
+}
+
+function Copy-Tree($from, $to, $exclude = @()) {
   # robocopy /E copies and overwrites; it never deletes anything in the target.
-  robocopy $from $to /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2 /XD .git test __tests__ | Out-Null
+  robocopy $from $to /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2 /XD .git test __tests__ @exclude | Out-Null
   if ($LASTEXITCODE -ge 8) { throw "robocopy $from -> $to failed ($LASTEXITCODE)" }
   $global:LASTEXITCODE = 0
+  Write-Host "目标目录中源码已不存在的文件（仅列出，不删除）：$to"
+  $extra = @(Get-TargetOnlyFiles $from $to | Sort-Object)
+  if ($extra.Count -eq 0) { Write-Host "  （无）" }
+  else { foreach ($file in $extra) { Write-Host "  $file" } }
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir, $pluginsDir, $paseoHome, $vibeHome, $electronData, $WorktreesRoot | Out-Null
@@ -57,7 +78,18 @@ if (-not $SkipCopy) {
   foreach ($p in $Plugins) {
     $src = Join-Path $repo "plugins\$p"
     if (-not (Test-Path (Join-Path $src "node_modules"))) { throw "Run npm ci in plugins\$p first" }
-    Copy-Tree $src (Join-Path $pluginsDir $p)
+    $pluginTarget = Join-Path $pluginsDir $p
+    # npm ci links the SDK for source types/tools. The host supplies @getpaseo/plugin*
+    # at runtime (external during compilation), so deploy neither the link nor SDK copies.
+    $sdkTarget = Join-Path $pluginTarget "node_modules\@getpaseo\plugin"
+    if (Test-Path -LiteralPath $sdkTarget) {
+      $sdkItem = Get-Item -LiteralPath $sdkTarget -Force
+      if ($sdkItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        # Delete only the junction itself. Never traverse or recursively delete its target.
+        [IO.Directory]::Delete($sdkTarget, $false)
+      }
+    }
+    Copy-Tree $src $pluginTarget @((Join-Path $src "node_modules\@getpaseo\plugin"))
   }
 }
 
@@ -125,5 +157,7 @@ $s.WorkingDirectory = $InstallDir
 $s.Save()
 
 Write-Host "Installed to $InstallDir (PASEO_HOME=$paseoHome, port $Port)."
+Write-Host "WP-114: on first database open, the daemon verifies a consistent vibe.db backup before dropping retired card tables. Backup failure stops migration."
+Write-Host "Old cards and phone backlog are not imported. Save ongoing work in its Git worktree before starting the upgraded daemon."
 Write-Host "Next: start the daemon (Start-ScheduledTask 'myVibeBoard Daemon'), then install plugins:"
 foreach ($p in $Plugins) { Write-Host "  & '$InstallDir\paseo.ps1' plugin install '$(Join-Path $pluginsDir $p)'" }

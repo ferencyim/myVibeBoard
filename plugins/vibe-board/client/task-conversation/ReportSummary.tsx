@@ -3,9 +3,9 @@ import { Modal } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Image, Pressable, ScrollView, Text, View, type TextStyle } from "react-native";
-import { verifyEvidenceRpc } from "../../shared/rpc/verify";
+import { verifyEvidenceRpc } from "../../shared/evidence";
 import { taskConversationPanelRpc } from "../../shared/task-conversation";
-import { dataUri, textExcerpt } from "../verification/logic";
+import { dataUri, textExcerpt } from "./evidence";
 import { findReportEvidence, type ReportSummary as ReportSummaryData } from "./report-summary";
 
 export function ReportSummary({

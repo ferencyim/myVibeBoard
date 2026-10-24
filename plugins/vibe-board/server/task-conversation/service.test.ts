@@ -30,6 +30,7 @@ function fixture() {
   databases.push(db);
   migrateAll(db);
   const store = createVibeStore(db, { deviceId: "wp115-test" });
+  store.prompts.register([...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS], { pruneMissing: true });
   store.projects.create({
     name: "任务测试",
     prefix: "TEST",
@@ -337,7 +338,6 @@ describe("统一任务动作与编排", () => {
     expect(f.store.prompts.resolve("board.task.work")).toBe(
       "请在已确认范围内完成任务。\n\n" + fixed,
     );
-    f.store.prompts.register(TASK_HOST_PROMPTS);
     const rolePrompt = f.store.prompts.resolve("task.role.worker");
     expect(rolePrompt).toContain(fixed);
     expect(rolePrompt).not.toContain("委派工具");
@@ -1119,6 +1119,8 @@ describe("统一任务动作与编排", () => {
     f.store.tasks.setPhase("workspace", "awaiting_acceptance");
     await expect(f.action("accept")).rejects.toThrow("最新验证");
     expect(f.finalize).not.toHaveBeenCalled();
+    expect(f.store.taskArtifacts.get("workspace", "git", "accept-request:accept")).toBeDefined();
+    await expect(f.action("accept")).rejects.toThrow("本次通过请求已经处理");
   });
   it("历史普通通过发言不能触发Git，只有显式任务命令授权", async () => {
     const f = fixture();
@@ -1166,7 +1168,7 @@ describe("统一任务动作与编排", () => {
     expect(f.store.tasks.get("workspace")!.control!.git).toMatchObject({ status: "pending_push" });
     expect(f.store.tasks.get("workspace")!.control!.completedRequestIds).toContain("stop");
   });
-  it("同requestId部分失败后重试保留两次Git沉淀且不抛不可改写", async () => {
+  it("同requestId部分失败后禁止重放，新授权才重试并保留尝试记录", async () => {
     const f = fixture();
     await f.confirm();
     f.verified();
@@ -1177,12 +1179,47 @@ describe("统一任务动作与编排", () => {
       message: "push失败",
     });
     await f.action("accept");
-    await f.action("accept");
+    await expect(f.action("accept")).rejects.toThrow("本次通过请求已经处理");
+    expect(f.finalize).toHaveBeenCalledTimes(1);
+    await f.action("accept", "accept-new");
     expect(f.finalize).toHaveBeenCalledTimes(2);
     expect(
       f.store.taskArtifacts.list("workspace").filter((item) => item.kind === "git"),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
     expect(f.store.tasks.get("workspace")!.phase).toBe("completed");
+  });
+  it("收尾忙碌时的新通过尝试也落盘，原收尾失败后不能重放该请求", async () => {
+    const f = fixture();
+    await f.confirm();
+    f.verified();
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.finalize.mockImplementationOnce(async (input) => {
+      entered();
+      await hold;
+      return {
+        status: "pending_push",
+        localMerged: true,
+        verifiedCommit: input.verifiedCommit,
+        message: "push失败",
+      };
+    });
+    const original = f.action("accept", "accept-first");
+    await started;
+    await expect(f.action("accept", "accept-busy")).rejects.toThrow("Git 收尾正在进行");
+    expect(
+      f.store.taskArtifacts.get("workspace", "git", "accept-request:accept-busy"),
+    ).toBeDefined();
+    release();
+    await original;
+    await expect(f.action("accept", "accept-busy")).rejects.toThrow("本次通过请求已经处理");
+    expect(f.finalize).toHaveBeenCalledTimes(1);
   });
   it("旧Stop请求的重试不能取消后来的Git收尾", async () => {
     const f = fixture();
@@ -1215,17 +1252,17 @@ describe("统一任务动作与编排", () => {
     await acceptance;
     expect(f.store.tasks.get("workspace")!.phase).toBe("completed");
   });
-  it("Git完成后群聊发布失败，同请求重试只补发布，不重复Git", async () => {
+  it("Git完成后群聊发布失败，同请求补发布后拒绝再次授权，不重复Git", async () => {
     const f = fixture();
     await f.confirm();
     f.verified();
     f.publish.mockRejectedValueOnce(new Error("群聊暂不可用"));
     await expect(f.action("accept")).rejects.toThrow("群聊暂不可用");
     expect(f.store.tasks.get("workspace")!.phase).toBe("completed");
-    await f.action("accept");
+    await expect(f.action("accept")).rejects.toThrow("本次通过请求已经处理");
     expect(f.finalize).toHaveBeenCalledTimes(1);
     expect(f.store.taskArtifacts.pendingPublish("workspace")).toHaveLength(0);
-    expect(f.store.tasks.get("workspace")!.control!.completedRequestIds).toContain("accept");
+    expect(f.store.taskArtifacts.get("workspace", "git", "accept-request:accept")).toBeDefined();
   });
   it("control处理记录裁剪且保留最近请求", async () => {
     const f = fixture();

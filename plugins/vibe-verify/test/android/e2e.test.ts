@@ -44,7 +44,9 @@ describe.skipIf(!enabled)("android collector on a real emulator", () => {
     });
     const dir = mkdtempSync(path.join(tmpdir(), "vibe-android-e2e-"));
     const ctx: CollectorContext = {
-      cardId: "e2e-card",
+      cardId: null,
+      workspaceId: "ws-android",
+      confirmedAt: "2026-10-23T00:00:00.000Z",
       verificationId: "e2e-ver",
       projectType: "android",
       projectPath: dir,

@@ -1,15 +1,15 @@
 // GENERATED FROM plugins/vibe-shared — DO NOT EDIT (run: node scripts/vibe/sync-shared.mjs)
 // Task evidence writes use the shared transaction boundary; no legacy card is created.
 import {
-  TaskVerificationSchema,
-  VerificationItemSchema,
   EvidenceFileSchema,
   newId,
+  TaskVerificationSchema,
+  VerificationItemSchema,
   type EvidenceArtifact,
   type Judgement,
 } from "../contract";
-import { decodeRow, decodeRows } from "./rows";
 import { publishEvent } from "./events";
+import { decodeRow, decodeRows } from "./rows";
 import type { VibeDb } from "./sqlite";
 
 export function createTaskVerificationCommands(db: VibeDb, options: { now?: () => Date } = {}) {
@@ -145,6 +145,13 @@ export function createTaskVerificationCommands(db: VibeDb, options: { now?: () =
           artifact.simulated ? 1 : 0,
         );
         return commands.evidenceById(fileId)!;
+      });
+    },
+    setThumb(id: string, path: string) {
+      return db.immediate(() => {
+        if (!commands.evidenceById(id)) throw new Error("任务证据不存在");
+        db.prepare("UPDATE evidence_file SET thumb_path = ? WHERE id = ?").run(path, id);
+        return commands.evidenceById(id)!;
       });
     },
     finish(id: string, conclusion: Judgement) {

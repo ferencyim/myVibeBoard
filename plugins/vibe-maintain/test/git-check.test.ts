@@ -4,9 +4,13 @@ import { describe, expect, it } from "vitest";
 import { createGitCheck } from "../server/git/check";
 import { execGit } from "../server/git/exec";
 import type { CheckContext } from "../server/types";
-import { commit, makeRepo, sh, tempDir, write } from "./helpers";
+import { commit, makeRepo, sh, tempDir, tempWorktreeDir, write } from "./helpers";
 
-function ctxFor(repo: string, options: Record<string, unknown> = {}, now = new Date()): CheckContext {
+function ctxFor(
+  repo: string,
+  options: Record<string, unknown> = {},
+  now = new Date(),
+): CheckContext {
   return {
     project: { name: "Demo", repoPath: repo } as CheckContext["project"],
     rule: { name: "git-health" } as CheckContext["rule"],
@@ -28,7 +32,7 @@ describe("git health check (real repositories)", () => {
 
   it("finds every problem class and groups them in one output", async () => {
     const repo = makeRepo();
-    const worktrees = tempDir("vibe-maintain-wt-");
+    const worktrees = tempWorktreeDir();
 
     // stale, unmerged branch (30 days old)
     sh(repo, ["checkout", "-b", "feat/old"]);
@@ -93,7 +97,7 @@ describe("git health check (real repositories)", () => {
 
   it("flags uncommitted changes in the main checkout and in worktrees", async () => {
     const repo = makeRepo();
-    const wt = join(tempDir("vibe-maintain-wt-"), "w");
+    const wt = join(tempWorktreeDir(), "w");
     sh(repo, ["worktree", "add", "-b", "wt/live", wt, "main"]);
     commit(wt, "live.txt", "x\n", "live work"); // unmerged, so it is not "leftover"
     write(wt, "scratch.txt", "dirty\n");

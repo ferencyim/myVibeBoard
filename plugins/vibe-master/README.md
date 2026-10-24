@@ -10,6 +10,6 @@
 
 提示词统一注册：`master.task_dispatch`、`master.wake.task_done`、系统规则、JSON 修复与交接提示均支持既有全局/项目覆盖。规则单一来源为 `skills/vibe-master/SKILL.md`，修改后运行 `npm run gen:rules`。
 
-RPC 保留状态、权限和会话历史入口；新手动整理入口为 `master.task.wake {workspaceId,force=false}`。旧卡片 UI、合同和历史组件保留到 WP-114，旧卡片 wake 返回入口停用，旧卡片事件不再自动触发运行，旧规划运行器不随总 agent 启动。
+RPC 保留状态、权限和会话历史入口；新手动整理入口为 `master.task.wake {workspaceId,force=false}`。旧卡片 UI、合同、手动 wake RPC、规划会话及卡片派发链已在 WP-114 删除；只消费原生任务与保留的总 agent、维护、额度事件。
 
 相关验证：在插件目录运行 `npm run typecheck`、`npm test -- test/task-runtime.test.ts test/master-resources.test.ts`。原生 anchor 的完整 timeline 展示、执行到验收和 Git 收尾由 WP-111 接入，隔离 daemon 联调需同时加载调度器与共享合同最新副本。

@@ -1,17 +1,6 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
-const PriorityEnum = z.enum(["urgent", "high", "medium", "low", "none"]);
-
-export const AgentProfileSchema = z.object({
-  id: z.string(),
-  provider: z.string(),
-  tier: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-  strengths: z.array(z.string()).default([]),
-  platforms: z.array(z.string()).optional(),
-  presetId: z.string().nullable().optional(),
-});
-
 export const schedulerSettings = defineSettings({
   id: "preferences",
   scope: "host",
@@ -26,46 +15,17 @@ export const schedulerSettings = defineSettings({
     /** Remaining quota (%) at or below which a provider counts as tight / exhausted. */
     quotaTightPct: z.number().min(0).max(100).default(25),
     quotaExhaustedPct: z.number().min(0).max(100).default(5),
-    /** While a provider is tight only cards at this priority or higher may use it. */
-    tightMinPriority: PriorityEnum.default("high"),
     devPortBase: z.number().int().min(1024).max(65000).default(3100),
     devPortSpan: z.number().int().min(10).max(5000).default(900),
-    deviceLeaseMinutes: z.number().int().min(1).default(240),
     tickSeconds: z.number().int().min(1).max(600).default(5),
     sampleSeconds: z.number().int().min(5).max(3600).default(15),
     sampleRetentionDays: z.number().int().min(1).max(365).default(7),
-    /** Hold back a todo card whose plan's files overlap a running card of the same project. */
-    conflictAvoidance: z.boolean().default(true),
-    /** Capability table entries; same id replaces the built-in entry. */
-    agentProfiles: z.array(AgentProfileSchema).default([]),
-
-    // ---- advanced (WP-99); the defaults are the values that used to be hard-coded ----
-    /** An admitted card nobody dispatched within this many minutes is released and backed off. */
-    pendingTimeoutMinutes: z.number().min(1).max(240).default(5),
-    /** After a failed dispatch a card waits this long before it is admitted again, up to maxAdmitAttempts times. */
-    retryCooldownSeconds: z.number().int().min(0).max(86_400).default(120),
-    maxAdmitAttempts: z.number().int().min(1).max(20).default(3),
   }),
 });
 
 export const statusRpc = defineRpc({
   name: "scheduler.status",
   input: z.object({}),
-  output: z.record(z.string(), z.unknown()),
-});
-
-export const selectAgentRpc = defineRpc({
-  name: "scheduler.select_agent",
-  input: z.object({
-    tags: z.array(z.string()).default([]),
-    size: z.enum(["S", "M", "L", "XL"]).optional(),
-    platform: z.string().optional(),
-    priority: PriorityEnum.default("medium"),
-    device: z.string().nullable().optional(),
-    preselected: z.string().nullable().optional(),
-    /** Project directories whose .vibe/workers/<agent>/MEMORY.md feed the track record. */
-    repoPath: z.string().optional(),
-  }),
   output: z.record(z.string(), z.unknown()),
 });
 
@@ -94,7 +54,7 @@ export const removeDeviceRpc = defineRpc({
   output: z.object({ ok: z.boolean() }),
 });
 
-// Native task orchestration uses this interface; legacy card RPCs are not admission inputs.
+// Native task orchestration uses the same resource admission service as the event bus.
 export const taskResourceRpc = defineRpc({
   name: "scheduler.task_resource",
   input: z.object({

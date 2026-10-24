@@ -35,142 +35,14 @@ function fakePaseo(models: Array<{ id: string; isDefault?: boolean }> | "throw")
 
 const input = (extra: Record<string, unknown> = {}) =>
   ({
-    card: { id: "c1", key: "DEMO-1" },
-    project: {},
+    task: { workspaceId: "ws", anchorAgentId: "anchor", conversationId: "conversation" },
+    project: { id: "project" },
     provider: "codex",
     cwd: "/x",
-    workspaceId: null,
+    workspaceId: "ws",
     outputDir: "/o",
     ...extra,
   }) as any;
-
-describe("verifier launcher model handling", () => {
-  it("skips unavailable models during creation and reports exhausted candidates", async () => {
-    const f = fakePaseo([]);
-    f.paseo.agents.create = async (options: any) => {
-      f.created.push(options);
-      throw new Error("provider not installed");
-    };
-    await expect(
-      createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
-        input({
-          preset: {
-            models: [
-              { provider: "codex", model: "first" },
-              { provider: "claude", model: "second" },
-            ],
-          },
-        }),
-      ),
-    ).rejects.toThrow("预设中的模型均不可用");
-    expect(f.created.map((c) => c.config.provider)).toEqual(["codex/first", "claude/second"]);
-  });
-  it("continues on the next preset model after authentication fails, retaining previous rounds", async () => {
-    const runs: Array<{ spec: string; prompt: string }> = [];
-    const replaced: string[] = [];
-    let round = 0;
-    const paseo = fakePaseo([]).paseo;
-    paseo.agents.create = async (options: any) => ({
-      run: async (prompt: string) => {
-        runs.push({ spec: options.config.provider, prompt });
-        return options.config.provider === "codex/first" && ++round > 1
-          ? {
-              status: "error",
-              error: "authentication required",
-              lastMessage: "",
-            }
-          : { status: "idle", lastMessage: "previous conclusion" };
-      },
-      archive: async () => {},
-    });
-    const agent = await createPaseoVerifierLauncher({
-      getPaseo: () => paseo,
-    }).launch(
-      input({
-        preset: {
-          models: [
-            {
-              provider: "codex",
-              model: "first",
-              thinking: "",
-              permissionMode: "auto",
-            },
-            {
-              provider: "claude",
-              model: "second",
-              thinking: "",
-              permissionMode: "auto",
-            },
-          ],
-        },
-        onReplacement: (next: { provider: string }) => replaced.push(next.provider),
-      }),
-    );
-    await agent.run("prepare evidence");
-    expect(await agent.run("judge evidence")).toMatchObject({ status: "idle" });
-    expect(runs.map((r) => r.spec)).toEqual(["codex/first", "codex/first", "claude/second"]);
-    expect(runs[2].prompt).toContain("prepare evidence");
-    expect(runs[2].prompt).toContain("previous conclusion");
-    expect(runs[2].prompt).toContain("judge evidence");
-    expect(replaced).toEqual(["claude"]);
-    expect(agent.provider).toBe("claude");
-  });
-
-  it("does not switch models for ordinary task failures", async () => {
-    const f = fakePaseo([]);
-    f.paseo.agents.create = async (options: any) => {
-      f.created.push(options);
-      return {
-        run: async () => ({ status: "error", error: "test assertion failed" }),
-        archive: async () => {},
-      };
-    };
-    const agent = await createPaseoVerifierLauncher({
-      getPaseo: () => f.paseo,
-    }).launch(
-      input({
-        preset: {
-          models: [
-            { provider: "codex", model: "first" },
-            { provider: "claude", model: "second" },
-          ],
-        },
-      }),
-    );
-    expect(await agent.run("review")).toMatchObject({
-      status: "error",
-      error: "test assertion failed",
-    });
-    expect(f.created).toHaveLength(1);
-  });
-  it("uses the preset model as is", async () => {
-    const f = fakePaseo([]);
-    const agent = await createPaseoVerifierLauncher({
-      getPaseo: () => f.paseo,
-    }).launch(input({ model: "gpt-5" }));
-    expect(f.created[0].config.provider).toBe("codex/gpt-5");
-    expect(agent.note).toBeUndefined();
-  });
-
-  it("fills a missing model with the provider default and reports it", async () => {
-    const f = fakePaseo([{ id: "a" }, { id: "gpt-5-codex", isDefault: true }]);
-    const agent = await createPaseoVerifierLauncher({
-      getPaseo: () => f.paseo,
-    }).launch(input({ role: "reviewer" }));
-    expect(f.created[0].config.provider).toBe("codex/gpt-5-codex");
-    expect(agent.note).toContain("gpt-5-codex");
-  });
-
-  it("refuses with a clear message when there is no default model", async () => {
-    for (const models of [[], "throw"] as const) {
-      const f = fakePaseo(models);
-      await expect(
-        createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(input()),
-      ).rejects.toThrow(/没有默认模型/);
-      expect(f.created).toHaveLength(0);
-    }
-  });
-});
 
 describe("原生任务群聊辅助成员", () => {
   function conversationPaseo(status = "accepted", firstUnavailable = false) {
@@ -226,13 +98,146 @@ describe("原生任务群聊辅助成员", () => {
   }
   const taskInput = (extra = {}) =>
     input({
-      card: undefined,
       task: { workspaceId: "ws", anchorAgentId: "anchor", conversationId: "conversation" },
       workspaceId: "ws",
       model: "first",
       ...extra,
     });
 
+  it("拒绝缺少任务定位或使用其他 workspace 的请求", async () => {
+    const f = conversationPaseo();
+    const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo });
+    await expect(launcher.launch(taskInput({ task: undefined }))).rejects.toThrow(
+      "缺少任务群聊定位",
+    );
+    await expect(launcher.launch(taskInput({ workspaceId: "other" }))).rejects.toThrow(
+      "必须使用任务原生 workspace",
+    );
+    expect(f.created).toHaveLength(0);
+    expect(f.sends).toHaveLength(0);
+  });
+  it("按候选顺序跳过创建时不可用的 provider，全部不可用时明确报错", async () => {
+    const f = conversationPaseo();
+    const providers: string[] = [];
+    f.paseo.taskConversations.ref = () => ({
+      refresh: async () => {
+        throw new Error("provider not installed");
+      },
+    });
+    f.paseo.providers.listModels = async (provider: string) => {
+      providers.push(provider);
+      return { models: [{ id: "default", isDefault: true }] };
+    };
+    await expect(
+      createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+        taskInput({
+          model: undefined,
+          snapshot: { models: [{ provider: "codex" }, { provider: "claude" }] },
+        }),
+      ),
+    ).rejects.toThrow("预设中的模型均不可用");
+    expect(providers).toEqual(["codex", "claude"]);
+    expect(f.created).toHaveLength(0);
+  });
+  it("使用预设模型，并为缺失模型解析 provider 默认模型", async () => {
+    const f = conversationPaseo();
+    f.paseo.providers.listModels = async () => ({ models: [{ id: "default", isDefault: true }] });
+    const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo });
+    const explicit = await launcher.launch(taskInput({ model: "explicit" }));
+    await explicit.run("复核");
+    expect(explicit.note).toBeUndefined();
+    const fallback = await launcher.launch(taskInput({ model: undefined }));
+    await fallback.run("复核");
+    expect(f.sends.map((send) => send.recipient.config.model)).toEqual(["explicit", "default"]);
+    expect(fallback.note).toContain("默认模型 default");
+  });
+  it("无可用默认模型时明确拒绝", async () => {
+    const f = conversationPaseo();
+    for (const models of [[], "throw"] as const) {
+      f.paseo.providers = fakePaseo(models).paseo.providers;
+      await expect(
+        createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+          taskInput({ model: undefined }),
+        ),
+      ).rejects.toThrow("没有默认模型");
+    }
+    expect(f.sends).toHaveLength(0);
+  });
+  it("普通任务失败不轮换候选模型", async () => {
+    const f = conversationPaseo();
+    const ref = f.paseo.agents.ref;
+    f.paseo.agents.ref = (id: string) => ({
+      ...ref(id),
+      waitForFinish: async () => ({ status: "error", error: "test assertion failed" }),
+    });
+    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+      taskInput({
+        snapshot: {
+          models: [
+            { provider: "codex", model: "first" },
+            { provider: "claude", model: "second" },
+          ],
+        },
+      }),
+    );
+    expect(await agent.run("复核")).toMatchObject({
+      status: "error",
+      error: "test assertion failed",
+    });
+    expect(f.sends).toHaveLength(1);
+  });
+  it("后续轮次模型登录失败时保留此前对话并按预设换模", async () => {
+    const f = conversationPaseo();
+    const ref = f.paseo.agents.ref;
+    f.paseo.agents.ref = (id: string) => ({
+      ...ref(id),
+      waitForFinish: async () =>
+        f.sends.length === 2
+          ? { status: "error", error: "authentication required" }
+          : { status: "idle", lastMessage: "此前结论" },
+    });
+    const replacements: string[] = [];
+    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+      taskInput({
+        onReplacement: (next: { model: string }) => replacements.push(next.model),
+        snapshot: {
+          models: [
+            { provider: "codex", model: "first" },
+            { provider: "codex", model: "second" },
+          ],
+        },
+      }),
+    );
+    await agent.run("准备证据");
+    expect(await agent.run("判断证据")).toMatchObject({ status: "idle" });
+    expect(f.sends.map((send) => send.recipient.config.model)).toEqual([
+      "first",
+      "first",
+      "second",
+    ]);
+    expect(f.sends[2].text).toContain("准备证据");
+    expect(f.sends[2].text).toContain("此前结论");
+    expect(f.sends[2].text).toContain("判断证据");
+    expect(replacements).toEqual(["second"]);
+  });
+  it("Claude 辅助成员使用只读 plan 模式", async () => {
+    const f = conversationPaseo();
+    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+      taskInput({ provider: "claude" }),
+    );
+    await agent.run("复核");
+    expect(f.sends[0].recipient.config.modeId).toBe("plan");
+  });
+  it("实际模型无法核对时保留成员，不自动换模", async () => {
+    const f = conversationPaseo();
+    const ref = f.paseo.agents.ref;
+    f.paseo.agents.ref = (id: string) => ({ ...ref(id), current: () => ({ provider: "codex" }) });
+    const agent = await createPaseoVerifierLauncher({ getPaseo: () => f.paseo }).launch(
+      taskInput(),
+    );
+    await expect(agent.run("复核")).rejects.toThrow("无法核对验证会话实际模型");
+    expect(f.sends).toHaveLength(1);
+  });
   it("经宿主准入的群聊send启动，角色挂anchor并保留完整源定位，不创建独立tab或重复申请租约", async () => {
     const f = conversationPaseo();
     const selections: unknown[] = [];

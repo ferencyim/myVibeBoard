@@ -19,9 +19,8 @@ import {
   type VibeStore,
 } from "./vibe/db";
 import { loadVerifyConfig, VerifyConfigSchema, writeArtifact } from "./collectors/common";
-import { taskCollectors } from "./collectors/context";
 import { runAutoChecks } from "./pipeline/checks";
-import { changeDiff, prepareBaseline, removeWorktree, type Baseline } from "./pipeline/git";
+import { changeDiff, prepareBaseline, type Baseline } from "./pipeline/git";
 import { textExcerpt, verificationLine } from "./pipeline";
 import { aggregate } from "./store";
 import type { TaskVerifyStore } from "./task-store";
@@ -424,9 +423,9 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       let backendRan = false;
       const collectors = new Map(
         workspace.projectTypes.flatMap((type) =>
-          taskCollectors(deps.registry, type).map(
-            (collector) => [collector.id, { collector, type }] as const,
-          ),
+          deps.registry
+            .forProjectType(type)
+            .map((collector) => [collector.id, { collector, type }] as const),
         ),
       );
       for (const { collector, type } of collectors.values()) {
@@ -475,6 +474,67 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       }
       for (const check of await runAutoChecks(ctx, runner, { skipTests: backendRan }))
         add(check.text, check.method, check.judgement, check.note, check.artifacts);
+    }
+    async function collectGitEvidence() {
+      const commands: Array<{
+        args: string[];
+        result: Awaited<ReturnType<Runner["run"]>>;
+      }> = [];
+      let error: string | null = null;
+      const read = async (args: string[]) => {
+        const result = await runner.run("git", args, {
+          cwd: workspace.worktreePath,
+          timeoutMs: 60_000,
+        });
+        commands.push({ args, result });
+        if (result.exitCode !== 0 || result.timedOut)
+          throw new Error(
+            `git ${args.join(" ")} 采集失败：${result.stderr || result.stdout || "未成功结束"}`,
+          );
+        return result.stdout;
+      };
+      try {
+        await ensureStable();
+        const head = (await read(["rev-parse", "HEAD"])).trim();
+        const status = await read(["status", "--porcelain=v1", "--untracked-files=all"]);
+        if (head !== initial.head || status.trim()) throw new Error("Git 证据不匹配本轮干净提交");
+        const latest = await read(["log", "-1", "--format=%H%n%s", "--name-status", initial.head]);
+        if (!latest.startsWith(initial.head + "\n"))
+          throw new Error("Git 最新提交原文缺失或不匹配");
+        await read(["ls-files"]);
+        const base = (await read(["merge-base", initial.head, "main"])).trim();
+        if (!base) throw new Error("无法取得任务相对 main 的共同基线");
+        await read(["diff", "--stat", base, initial.head, "--"]);
+        await read(["diff", base, initial.head, "--"]);
+        await ensureStable();
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : String(cause);
+      }
+      const artifact = writeArtifact(
+        ctx,
+        "report",
+        "git-evidence.json",
+        JSON.stringify(
+          {
+            workspaceId: task.workspaceId,
+            confirmedAt: task.confirmedAt,
+            commitHash: initial.head,
+            status: error ? "incomplete" : "collected",
+            error,
+            commands,
+          },
+          null,
+          2,
+        ),
+        "本轮提交、干净工作树、文件清单与 main 差异的 Git 原文",
+      );
+      add(
+        "Git 原始证据",
+        "collector",
+        error ? "doubt" : "pass",
+        error ?? "已核对本轮提交与干净状态，保存原始 Git 输出",
+        [artifact],
+      );
     }
     async function judgeEvidence(agent: VerifierAgent) {
       const files = verify.evidence(vid);
@@ -690,6 +750,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
           const config = await configureEvidence(agent);
           deps.configs.set(vid, config);
           await collectEvidence(config);
+          await collectGitEvidence();
           await judgeEvidence(agent);
           verifierSource = agent.source;
         });
@@ -699,10 +760,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       add("验证运行完整性", "runtime", "doubt", notes.at(-1)!);
     } finally {
       deps.configs.delete(vid);
-      if (baseline) {
-        const problem = await removeWorktree(runner, workspace.worktreePath, baseline.path);
-        if (problem) notes.push("保留基线worktree：" + problem);
-      }
+      if (baseline) notes.push("保留验证基线 worktree：" + baseline.path);
     }
     try {
       await ensureStable();

@@ -48,7 +48,9 @@ describe("任务用量归因", () => {
         agentId: "agent",
       },
     ]);
-    db.exec("ALTER TABLE card RENAME TO retired_card");
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'card'").get(),
+    ).toBeUndefined();
     const overview = computeOverview(db, "all");
     expect(overview.totals).toMatchObject({ events: 2, unpricedTokens: 220, cost: 0 });
     expect(overview.byProject).toEqual([

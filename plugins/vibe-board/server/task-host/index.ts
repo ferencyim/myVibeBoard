@@ -12,8 +12,9 @@ import {
   type TaskPresetSnapshot,
 } from "../vibe/contract";
 import { createTaskRuntimeCommands, type VibeDb, type VibeStore } from "../vibe/db";
-import { modeIdFor } from "../dispatch/brief";
+import { modeIdFor } from "./permission";
 import { TASK_HOST_PROMPTS } from "./prompts";
+import { TASK_FLOW_PROMPTS } from "../task-conversation/prompts";
 import { createTaskResources } from "./resources";
 import { snapshotPreset, nativeModelSnapshot, bootstrapPlannerSnapshot } from "./presets";
 import { assertTaskWorkspace } from "./workspace";
@@ -280,7 +281,8 @@ export function createTaskHost(options: {
     return recipient;
   }
   function registerPrompts() {
-    store.prompts.register(TASK_HOST_PROMPTS);
+    // Prune once with every live vibe-board prompt; separate registrations would prune each other.
+    store.prompts.register([...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS], { pruneMissing: true });
   }
   function taskFor(workspaceId: string, conversationId: string) {
     const task = store.tasks.get(workspaceId);

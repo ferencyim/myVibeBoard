@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createMasterRuntime } from "../server/runtime";
-import { createPermissionResolver, isBoardMcpCall } from "../server/subscription/permission";
+import { createPermissionResolver } from "../server/subscription/permission";
 import {
   askMaster,
-  ManualClock,
-  MODES,
   defaultSettings,
   fakePaseo,
+  ManualClock,
+  MODES,
   setupBoard,
   tempDir,
 } from "./helpers";
@@ -153,15 +153,6 @@ describe("master permission mode", () => {
 
 describe("permission requests of the master", () => {
   const board = (name: string, metadata?: unknown) => ({ id: "r1", kind: "tool", name, metadata });
-
-  it("recognises only vibe-board MCP tool calls", () => {
-    expect(isBoardMcpCall(board("mcp__vibe-board__vibe_card_comment"))).toBe(true);
-    expect(isBoardMcpCall(board("CodexMcpElicitation", { serverName: "vibe-board" }))).toBe(true);
-    expect(isBoardMcpCall(board("CodexMcpElicitation", { serverName: "other" }))).toBe(false);
-    expect(isBoardMcpCall(board("mcp__other__vibe_card_comment"))).toBe(false);
-    expect(isBoardMcpCall(board("Bash"))).toBe(false);
-    expect(isBoardMcpCall({ id: "r", kind: "question", name: "mcp__vibe-board__x" })).toBe(false);
-  });
 
   it("does not auto-approve legacy board writes from the task master and ignores other agents", async () => {
     const t = build();

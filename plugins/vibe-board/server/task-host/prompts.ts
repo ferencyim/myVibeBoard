@@ -44,7 +44,7 @@ export const TASK_HOST_PROMPTS: PromptDef[] = Object.entries(TEXT).map(([role, d
   fixedSuffix: [
     CURRENT_ROUND_RULES,
     role === "planner"
-      ? "最终方案必须包含且只包含一个完整的 ```vibe-plan JSON 段，遵循 task.plan_format 注册表中的固定结构。普通文字认可不构成执行授权。"
+      ? "最终方案必须包含且只包含一个完整 JSON 代码块：围栏首行严格为 ```vibe-plan，随后立即换行，再写 JSON；不要在首行追加 JSON 或其它文字。结构遵循 task.plan_format 注册表。普通文字认可不构成执行授权。"
       : [
           "任务状态和沉淀以任务流程服务为准。不要把用户普通赞同或模型发言当作执行或验收授权。",
           FLOW_FORMAT[role as ModelRole],

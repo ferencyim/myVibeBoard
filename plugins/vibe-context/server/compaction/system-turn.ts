@@ -1,5 +1,5 @@
 // Tells vibe-board's lifecycle that the next turn on `agentId` is ours (compaction), not the user
-// continuing the chat, so a verifying card is not pulled back to in_progress. Paseo's turn_started
+// continuing the chat. Paseo's turn_started
 // hook carries no message metadata, hence this marker file in `$VIBE_HOME/system-turns/`.
 // Mirrors plugins/vibe-board/server/lifecycle/system-turn.ts (plugins cannot share modules).
 

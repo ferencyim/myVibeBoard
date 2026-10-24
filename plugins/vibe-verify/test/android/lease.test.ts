@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryLeaseProvider } from "../../server/collectors/android/lease";
 
-const req = { platform: "android", cardId: "c", verificationId: "v", ttlMs: 1000 } as const;
+const req = { platform: "android", verificationId: "v", ttlMs: 1000 } as const;
 
 describe("in-memory device lease", () => {
   it("grants exclusively and hands the device to the next waiter on release", async () => {
@@ -25,7 +25,9 @@ describe("in-memory device lease", () => {
 
   it("rejects unknown devices and aborted waits", async () => {
     const leases = createInMemoryLeaseProvider([{ deviceId: "d1" }]);
-    await expect(leases.acquire({ ...req, preferredDeviceId: "nope" })).rejects.toThrow("No matching");
+    await expect(leases.acquire({ ...req, preferredDeviceId: "nope" })).rejects.toThrow(
+      "No matching",
+    );
     await leases.acquire(req);
     const ac = new AbortController();
     const waiting = leases.acquire({ ...req, signal: ac.signal });

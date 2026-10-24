@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { publishEvent } from "../server/vibe/db";
 import { MASTER_RULES } from "../server/master/rules.generated";
 import { createMasterRuntime } from "../server/runtime";
 import { pickModel, resolveTarget } from "../server/subscription/target";
+import { publishEvent } from "../server/vibe/db";
 import {
+  MODELS,
   ManualClock,
   askMaster,
   choosePreset,
-  MODELS,
   defaultSettings,
   fakePaseo,
   setupBoard,
@@ -44,26 +44,6 @@ function build(
   });
   return { board, clock, fake, runtime, dataDir, settings };
 }
-
-/** A finished card: waking the master for it asks for a memory consolidation. */
-function doneCard(board: ReturnType<typeof setupBoard>, title: string) {
-  const card = board.store.cards.create({ projectId: board.project.id, title }, "user");
-  board.store.cards.move(card.id, { to: "todo", actor: "user" });
-  board.store.cards.dispatch({
-    cardId: card.id,
-    agentId: "w1",
-    provider: "claude",
-    worktree: null,
-  });
-  board.store.cards.move(card.id, { to: "verifying", actor: "lifecycle" });
-  board.store.cards.move(card.id, { to: "done", actor: "user" });
-  return card;
-}
-const memoryUpdated = (board: ReturnType<typeof setupBoard>, cardId: string) =>
-  board.store.events
-    .list(cardId)
-    .some((e) => (e.body as { kind?: string } | null)?.kind === "memory_update");
-const CONSOLIDATED = JSON.stringify({ summary: "Recorded." });
 
 const alerts = (board: ReturnType<typeof setupBoard>) =>
   board.db
@@ -311,47 +291,6 @@ describe("quota", () => {
     await t.runtime.checkQuota();
     expect(t.fake.agents.map((a) => a.provider)).toEqual(["claude", "codex"]);
     expect((await t.runtime.status()).target?.provider).toBe("codex");
-    await t.runtime.dispose();
-  });
-
-  it("stops after the sole candidate exhausts quota and resumes after a preset change", async () => {
-    let limited = true;
-    const t = build(({ provider }) =>
-      provider === "claude" && limited
-        ? {
-            status: "error",
-            lastMessage: null,
-            error: "Claude usage limit reached. Your limit resets at 5pm.",
-          }
-        : CONSOLIDATED,
-    );
-    const card = doneCard(t.board, "Hits the limit");
-    t.runtime.queue.enqueue({ kind: "card_done", cardId: card.id, force: true });
-    await t.runtime.queue.idle();
-
-    expect(t.fake.agents).toHaveLength(1); // no automatic switch
-    expect(memoryUpdated(t.board, card.id)).toBe(false);
-    expect(alerts(t.board).some((m) => m.startsWith("[master:quota_error] claude:"))).toBe(true);
-    expect(t.board.store.sessions.list({ role: "master" })[0]!.state).toBe("error");
-    const status = await t.runtime.status();
-    expect(status.queue.blocked).toBe(1);
-    expect(status.lastAlert?.kind).toBe("provider_error");
-
-    limited = false;
-    await choosePreset(t, t.board.presets.codex.id);
-    await t.runtime.queue.idle();
-    expect(memoryUpdated(t.board, card.id)).toBe(true);
-    expect((await t.runtime.status()).queue.blocked).toBe(0);
-    await t.runtime.dispose();
-  });
-
-  it("does not block on non-provider failures and raises no reminder", async () => {
-    const t = build(() => ({ status: "error", lastMessage: null, error: "network down" }));
-    const card = doneCard(t.board, "Plain failure");
-    t.runtime.queue.enqueue({ kind: "card_done", cardId: card.id, force: true });
-    await t.runtime.queue.idle();
-    expect(alerts(t.board)).toEqual([]);
-    expect((await t.runtime.status()).queue.blocked).toBe(0);
     await t.runtime.dispose();
   });
 

@@ -43,13 +43,20 @@ export const REMOVED_SETTING_KEYS = [
   "proposalWindowSeconds",
   "templateAssessDraft",
   "templateSessionHelp",
+  "templateCardDone",
+  "planTurnTimeoutMinutes",
+  "scoutTimeoutMinutes",
+  "maxResearchRounds",
+  "maxPlanLoops",
+  "sweepDoneWindowHours",
+  "projectBlockCardLimit",
 ] as const;
 
 export const masterSettings = defineSettings({
   id: "preferences",
   scope: "host",
-  version: 2,
-  /** v1 -> v2 (WP-105): drop the card-flow trigger settings. */
+  version: 3,
+  /** WP-105 / WP-114: remove retired card automation settings. */
   migrate: (values) => {
     if (!values || typeof values !== "object") return values;
     const next: Record<string, unknown> = { ...(values as Record<string, unknown>) };
@@ -70,7 +77,7 @@ export const masterSettings = defineSettings({
     model: z.string().default(""),
     thinking: z.string().default(""),
     /**
-     * Master dispatch (WP-109): when a slot is free the master decides which waiting todo card
+     * Master dispatch (WP-109): when a slot is free the master decides which confirmed queued task
      * starts first. Off = the scheduler's own rules. The master being unavailable also falls back to them.
      */
     dispatch: z.boolean().default(true),
@@ -86,13 +93,13 @@ export const masterSettings = defineSettings({
     /** Alert when the master's provider has at most this much quota left (percent). */
     quotaLowPct: z.number().min(1).max(90).default(20),
     quotaCheckSeconds: z.number().int().min(30).max(3600).default(300),
-    /** On start, consolidate recently finished cards that have no memory update yet. */
+    /** On start, consolidate recently finished tasks that have no memory update yet. */
     sweepOnStart: z.boolean().default(true),
 
     // ---- triggers (WP-93; WP-105 removed the draft review and worker-question wakes) ----
-    /** A card reached done: the master consolidates project memory. */
+    /** A task reached completed: the master consolidates project memory. */
     consolidateOnDone: z.boolean().default(true),
-    /** At card done the master may also return an update of the project's requirements document. */
+    /** At task completion the master may also return an update of the project's requirements document. */
     maintainRequirements: z.boolean().default(true),
 
     // ---- prompts (WP-93, moved to the prompt registry by WP-98) ----
@@ -101,7 +108,6 @@ export const masterSettings = defineSettings({
     // on the first start after the upgrade, and copied into global overrides (server/prompts/migrate.ts);
     // after that the "Agent behaviour" page is the only place to edit them.
     rulesSupplement: z.string().default(""),
-    templateCardDone: z.string().default(""),
 
     // ---- project context (WP-93) ----
     /** Max characters of the requirements document handed to the master in the project block. */
@@ -110,24 +116,12 @@ export const masterSettings = defineSettings({
     // ---- advanced automation parameters (WP-98) ----
     /** How long one question to the master may take (memory consolidation). */
     askTimeoutMinutes: z.number().int().min(1).max(120).default(5),
-    /** How long one planning-session turn may take. */
-    planTurnTimeoutMinutes: z.number().int().min(1).max(120).default(10),
-    /** How long a planning scout may take. */
-    scoutTimeoutMinutes: z.number().int().min(1).max(120).default(5),
-    /** Scout rounds a planning session may request per owner message. */
-    maxResearchRounds: z.number().int().min(0).max(10).default(2),
-    /** Turns one planning pass may run back to back. */
-    maxPlanLoops: z.number().int().min(1).max(100).default(10),
     /** Extra asks after a reply failed validation (0 = take the first reply as it is). */
     jsonRepairRetries: z.number().int().min(0).max(5).default(1),
-    /** The start-up sweep consolidates cards that finished within this many hours. */
-    sweepDoneWindowHours: z.number().int().min(1).max(720).default(48),
     /** Quiet period between two alerts of the same kind and subject. */
     alertCooldownQuotaLowMinutes: z.number().int().min(1).max(1440).default(360),
     alertCooldownUrgentMinutes: z.number().int().min(1).max(1440).default(10),
     alertCooldownRoutineMinutes: z.number().int().min(1).max(1440).default(60),
-    /** Other open cards listed in the project block of every wake message. */
-    projectBlockCardLimit: z.number().int().min(0).max(200).default(40),
     /** Size cap of the hand-off summary for a new master, and how many days "recent" covers. */
     handoffMaxChars: z.number().int().min(500).max(30_000).default(3500),
     handoffRecentDays: z.number().int().min(1).max(60).default(7),
@@ -196,11 +190,11 @@ export const MasterStatusSchema = z.object({
     })
     .nullable(),
   queue: z.object({
-    running: z.object({ kind: z.string(), cardKey: z.string().nullable() }).nullable(),
+    running: z.object({ kind: z.string(), workspaceId: z.string().nullable() }).nullable(),
     pending: z.array(
       z.object({
         kind: z.string(),
-        cardKey: z.string().nullable(),
+        workspaceId: z.string().nullable(),
         /** Seconds until a debounced job becomes due; 0 = due/queued. */
         dueInSeconds: z.number(),
       }),
@@ -221,18 +215,6 @@ export const statusRpc = defineRpc({
   name: "master.status",
   input: z.object({}),
   output: MasterStatusSchema,
-});
-
-export const wakeRpc = defineRpc({
-  name: "master.wake",
-  input: z.object({
-    /** Card key (PROD-12) or id. */
-    card: z.string().min(1),
-    reason: z.enum(["card_done"]).default("card_done"),
-    /** Skip the "already consolidated" check. */
-    force: z.boolean().default(true),
-  }),
-  output: z.object({ queued: z.boolean(), message: z.string() }),
 });
 
 export const taskWakeRpc = defineRpc({

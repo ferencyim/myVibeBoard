@@ -65,7 +65,9 @@ export interface CheckItemRef {
 }
 
 export interface CollectorContext {
-  cardId: string;
+  cardId: null;
+  workspaceId: string;
+  confirmedAt: string;
   verificationId: string;
   projectType: ProjectType;
   /** Project repo root. */
@@ -158,8 +160,4 @@ export function createScriptedRunner(
 }
 
 /** Evidence capture for a confirmed workspace task. */
-export type TaskCollectorContext = Omit<CollectorContext, "cardId"> & {
-  cardId: null;
-  workspaceId: string;
-  confirmedAt: string;
-};
+export type TaskCollectorContext = CollectorContext;

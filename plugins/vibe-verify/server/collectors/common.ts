@@ -80,7 +80,7 @@ export const RequestSampleSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   body: z.unknown().optional(),
   expectStatus: z.number().optional(),
-  /** Only run for this check item; omitted = card-wide. */
+  /** Only run for this check item; omitted = task-wide. */
   checkId: z.string().optional(),
 });
 export type RequestSample = z.infer<typeof RequestSampleSchema>;

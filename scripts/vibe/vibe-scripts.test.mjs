@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { checkPlugins } from "./check-plugins.mjs";
-import { paseoRangeFor } from "./lib.mjs";
+import { defaultRepoRoot, paseoRangeFor } from "./lib.mjs";
 import { createPlugin } from "./new-plugin.mjs";
 import { syncShared } from "./sync-shared.mjs";
 
@@ -14,8 +14,14 @@ function put(root, relative, content) {
   writeFileSync(file, content);
 }
 
+function tempRoot() {
+  const base = path.join(defaultRepoRoot(), ".dev/vibe-scripts-tests");
+  mkdirSync(base, { recursive: true });
+  return mkdtempSync(path.join(base, "fixture-"));
+}
+
 function fixtureRoot() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "vibe-scripts-test-"));
+  const root = tempRoot();
   put(root, "package.json", JSON.stringify({ version: "0.12.3" }));
   put(root, "plugins/vibe-shared/contract/model.ts", "export const A = 1;\r\n");
   put(root, "plugins/vibe-shared/contract/model.test.ts", "test only\n");
@@ -101,7 +107,8 @@ test("sync-shared --check reports changed, missing and extra files; write mode r
   assert.ok(drift.some((d) => d.startsWith("extra: plugins/vibe-demo/shared/vibe/stray/file.ts")));
   syncShared({ root });
   assert.deepEqual(syncShared({ root, check: true }).drift, []);
-  assert.ok(!existsSync(path.join(target, "stray")));
+  assert.ok(!existsSync(path.join(target, "stray/file.ts")));
+  assert.ok(existsSync(path.join(target, "stray"))); // Only unlink individual files; retain directories.
 });
 
 test("sync-shared tolerates CRLF checkouts of generated copies", () => {
@@ -112,16 +119,15 @@ test("sync-shared tolerates CRLF checkouts of generated copies", () => {
   assert.deepEqual(syncShared({ root, check: true }).drift, []);
 });
 
-test("sync-shared fills packages/app generated dir once packages/app/src/vibe exists", () => {
+test("sync-shared never recreates the removed App replica generated directory", () => {
   const root = fixtureRoot();
   put(root, "packages/app/src/vibe/README.md", "x\n");
   syncShared({ root });
-  assert.ok(existsSync(path.join(root, "packages/app/src/vibe/generated/sync/hlc.ts")));
-  assert.ok(!existsSync(path.join(root, "packages/app/src/vibe/generated/db")));
+  assert.ok(!existsSync(path.join(root, "packages/app/src/vibe/generated")));
 });
 
 test("sync-shared is a no-op without consumers and errors on a missing source dir", () => {
-  const empty = mkdtempSync(path.join(os.tmpdir(), "vibe-scripts-test-"));
+  const empty = tempRoot();
   assert.deepEqual(syncShared({ root: empty, check: true }), { targets: 0, drift: [] });
   const root = fixtureRoot();
   put(
@@ -178,3 +184,60 @@ test("check-plugins flags a client bundle that reaches server/", () => {
     /vibe-demo: client bundle imports server-only module server.policy\.ts/,
   );
 });
+
+test(
+  "Windows install copy reports stale files without deleting or following junctions",
+  {
+    skip: process.platform !== "win32",
+  },
+  () => {
+    const root = tempRoot();
+    put(root, "source/current.ts", "new\n");
+    put(root, "target/current.ts", "old\n");
+    put(root, "target/legacy/deleted.ts", "retained\n");
+    put(root, "outside/sentinel.ts", "untouched\n");
+    put(root, "target/source-linked/not-in-source.ts", "retained\n");
+    const result = spawnSync(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-Command",
+        `
+    $ErrorActionPreference = 'Stop'
+    $tokens = $null
+    $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($env:WP_INSTALLER, [ref]$tokens, [ref]$errors)
+    if ($errors.Count) { throw ($errors | Out-String) }
+    $functions = $ast.FindAll({ param($node)
+      $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @('Get-TargetOnlyFiles', 'Copy-Tree')
+    }, $false)
+    if ($functions.Count -ne 2) { throw 'Expected only the two copy helper definitions' }
+    foreach ($function in $functions) { . ([scriptblock]::Create($function.Extent.Text)) }
+    $source = Join-Path $env:WP_FIXTURE 'source'
+    $target = Join-Path $env:WP_FIXTURE 'target'
+    $outside = Join-Path $env:WP_FIXTURE 'outside'
+    New-Item -ItemType Junction -Path (Join-Path $source 'source-linked') -Target $outside | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $target 'target-linked') -Target $outside | Out-Null
+    Copy-Tree $source $target @((Join-Path $source 'source-linked'))
+  `,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          WP_FIXTURE: root,
+          WP_INSTALLER: path.join(defaultRepoRoot(), "scripts/vibe/install-local.ps1"),
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /目标目录中源码已不存在的文件/);
+    assert.ok(result.stdout.includes(path.join(root, "target/legacy/deleted.ts")));
+    assert.ok(!result.stdout.includes("sentinel.ts"));
+    assert.ok(!result.stdout.includes("not-in-source.ts"));
+    assert.equal(readFileSync(path.join(root, "target/current.ts"), "utf8"), "new\n");
+    assert.equal(readFileSync(path.join(root, "target/legacy/deleted.ts"), "utf8"), "retained\n");
+    assert.equal(readFileSync(path.join(root, "outside/sentinel.ts"), "utf8"), "untouched\n");
+  },
+);

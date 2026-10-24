@@ -34,10 +34,10 @@ const store = () => {
 };
 
 // The default (Chinese) texts.
-const ORIGINAL_NOTES = (mdPath: string, cardRef?: string) =>
-  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、关键文件与决策、未解决的问题。请将笔记写到 `{{mdPath}}`（创建或覆盖）；若当前原生任务提供支持该路径的会话笔记工具，可使用它。会话定位信息：{{keyClause}}。除此之外什么都不要做。完成后回复“saved”。"
+const ORIGINAL_NOTES = (mdPath: string) =>
+  "你的上下文即将被压缩。压缩之前，请先保存进度笔记：目标、已完成的、进行中的、下一步、关键文件与决策、未解决的问题。请将笔记写到 `{{mdPath}}`（创建或覆盖）；若当前原生任务提供支持该路径的会话笔记工具，可使用它。除此之外什么都不要做。完成后回复“saved”。"
     .replace("{{mdPath}}", mdPath)
-    .replace("{{keyClause}}", cardRef ? '，key 为 "' + cardRef + '"' : "");
+    .replace("{{keyClause}}", "");
 const ORIGINAL_RESTORE = (block: string | null) =>
   "上下文已压缩。下面的项目上下文是权威依据；请根据你的会话笔记继续。" +
   `只回复“ok”。\n\n${block ?? "（无项目上下文）"}`;
@@ -76,10 +76,10 @@ describe("prompt registry", () => {
     const registry = createContextPrompts(board);
     registry.register();
     for (const prompts of [registry, defaultPrompts]) {
-      expect(notesPrompt("/wt/.vibe/sessions/c1.md", "DEMO-3", prompts)).toBe(
-        ORIGINAL_NOTES("/wt/.vibe/sessions/c1.md", "DEMO-3"),
+      expect(notesPrompt("/wt/.vibe/sessions/c1.md", prompts)).toBe(
+        ORIGINAL_NOTES("/wt/.vibe/sessions/c1.md"),
       );
-      expect(notesPrompt("/wt/x.md", null, prompts)).toBe(ORIGINAL_NOTES("/wt/x.md"));
+      expect(notesPrompt("/wt/x.md", prompts)).toBe(ORIGINAL_NOTES("/wt/x.md"));
       expect(restorePrompt("BLOCK", prompts)).toBe(ORIGINAL_RESTORE("BLOCK"));
       expect(restorePrompt(null, prompts)).toBe(ORIGINAL_RESTORE(null));
       expect(coldStartPrompt("s1", "/wt/x.md", "BLOCK", prompts)).toBe(
@@ -109,7 +109,7 @@ describe("prompt registry", () => {
     expect(block).not.toContain("由 `.vibe/` 下的文件生成");
     expect(block.startsWith("<!-- vibe:context:start -->")).toBe(true); // the markers stay code
     expect(block.endsWith("<!-- vibe:context:end -->")).toBe(true);
-    expect(notesPrompt("/m.md", "DEMO-1", prompts)).toBe(`Save notes to /m.md，key 为 "DEMO-1".`);
+    expect(notesPrompt("/m.md", prompts)).toBe(`Save notes to /m.md.`);
     // the default block is unchanged without overrides
     const plain = buildContextBlock(
       createMemoryStore({ projectRoot: root, userHome: root, contextWindowTokens: 100_000 }),

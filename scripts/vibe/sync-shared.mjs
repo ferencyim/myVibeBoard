@@ -7,15 +7,14 @@
 // ({ "shared": ["contract","sync"], "server": ["db"] }) get plugins/<p>/shared/vibe/<sub>
 // and plugins/<p>/server/vibe/<sub>. Client modules declared as client: ["prompts"] come from
 // vibe-shared/client/<sub> and stay under plugins/<p>/client/vibe/<sub>.
-// packages/app/src/vibe/generated/<sub> (contract+sync)
-// is synced once packages/app/src/vibe exists. Target roots are generated-only: any file
+// The App uses native task conversations and its independent first-message outbox;
+// it has no copy of the old card contracts or sync engine. Target roots are generated-only: any file
 // in them that is not a copy is drift (and is removed in write mode).
 import {
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
-  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -32,7 +31,6 @@ const COMMENT_PREFIX = new Map([
   [".cjs", "//"],
   [".sql", "--"],
 ]);
-const APP_SUBDIRS = ["contract", "sync"];
 
 const normalizeEol = (text) => text.replaceAll("\r\n", "\n");
 
@@ -86,9 +84,6 @@ function planTargets(root) {
     if (server?.length) add(path.join(plugin.dir, "server/vibe"), server);
     if (client?.length) add(path.join(plugin.dir, "client/vibe"), client, "client");
   }
-  if (existsSync(path.join(root, "packages/app/src/vibe"))) {
-    add(path.join(root, "packages/app/src/vibe/generated"), APP_SUBDIRS);
-  }
   return targets;
 }
 
@@ -115,26 +110,10 @@ export function syncShared({ root = defaultRepoRoot(), check = false } = {}) {
     for (const file of present) {
       if (target.files.has(file)) continue;
       drift.push(`extra: ${rel(file)}`);
-      if (!check) removeFileAndEmptyParents(target.dir, file);
+      if (!check) unlinkSync(path.join(target.dir, ...file.split("/")));
     }
   }
   return { targets: targets.length, drift };
-}
-
-function removeFileAndEmptyParents(base, file) {
-  unlinkSync(path.join(base, ...file.split("/")));
-  // rmdirSync only removes empty directories; stop at the first non-empty one.
-  for (
-    let dir = path.dirname(path.join(base, ...file.split("/")));
-    dir !== base;
-    dir = path.dirname(dir)
-  ) {
-    try {
-      rmdirSync(dir);
-    } catch {
-      return;
-    }
-  }
 }
 
 if (isMainModule(import.meta.url)) {

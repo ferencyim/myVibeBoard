@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createMaintenanceEngine, type EngineOptions } from "../server/engine";
 import { createGitCheck } from "../server/git/check";
 import { execGit } from "../server/git/exec";
-import type { CardView, Project, Task, TaskRoleSnapshot } from "../server/vibe/contract";
+import type { Project, Task, TaskRoleSnapshot } from "../server/vibe/contract";
 import {
   createVibeStore,
   createMaintenanceCommands,
@@ -16,6 +16,17 @@ import {
 } from "../server/vibe/db";
 
 export const tempDir = (prefix = "vibe-maintain-") => mkdtempSync(join(tmpdir(), prefix));
+
+/** Keep registered Git worktrees inside the checkout's permitted D: worktree root. */
+export function tempWorktreeDir() {
+  const root =
+    process.env.VIBE_WORKTREE_ROOT?.trim() ||
+    (process.platform === "win32"
+      ? "D:/devRepoCaches/worktrees"
+      : join(tmpdir(), "vibe-worktrees"));
+  mkdirSync(root, { recursive: true });
+  return mkdtempSync(join(root, "maintain-"));
+}
 
 /** Runs git with a fixed identity; `date` pins author and committer date. */
 export function sh(cwd: string, args: string[], date?: string): string {
@@ -57,12 +68,8 @@ export function commit(repo: string, file: string, text: string, message: string
 /** A real repository with one commit on `main`. */
 export function makeRepo(prefix = "vibe-maintain-repo-"): string {
   const repo = tempDir(prefix);
-  // Reuse existing objects instead of creating fixture commits.
-  sh(repo, ["clone", "--shared", "--no-checkout", join(import.meta.dirname, "../../.."), "."]);
-  sh(repo, ["sparse-checkout", "init", "--no-cone"]);
-  sh(repo, ["sparse-checkout", "set", "--no-cone", "/README.md"]);
-  sh(repo, ["branch", "-M", "main"]);
-  sh(repo, ["read-tree", "-mu", "HEAD"]);
+  sh(repo, ["init", "-b", "main"]);
+  commit(repo, "README.md", "fixture\n", "初始化测试仓库");
   return repo;
 }
 
@@ -84,12 +91,12 @@ export interface Harness {
   engine: ReturnType<typeof createMaintenanceEngine>;
   complete(count?: number): void;
   events(type?: string): ReturnType<typeof readEvents>;
-  maintenanceCards(): CardView[];
+  legacyCardTables(): string[];
   maintenanceTasks(): Task[];
   prompts: string[];
 }
 
-/** Completes `count` cards of a project (todo -> in progress -> verifying -> done). */
+/** A confirmed native task plan used by the completion fixtures. */
 export const plan = {
   goal: "测试任务",
   approach: "最小修改",
@@ -229,9 +236,12 @@ export function setup(
         .links()
         .map((link) => store.tasks.get(link.workspaceId)!)
         .filter(Boolean),
-    maintenanceCards: () =>
-      store.cards
-        .list({ projectId: project.id, includeArchived: true })
-        .filter((c) => c.origin === "maintenance"),
+    legacyCardTables: () =>
+      db
+        .prepare<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('card', 'card_event', 'card_tag')",
+        )
+        .all()
+        .map((row) => row.name),
   };
 }
