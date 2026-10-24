@@ -162,6 +162,19 @@ export interface PaseoToolHostDependencies {
   resolveCallerContext?: (callerAgentId: string) => VoiceCallerContext | null;
   enableVoiceTools?: boolean;
   voiceOnly?: boolean;
+  /** Agent-facing tools contributed by running plugins. */
+  listPluginAgentTools?: () => ReadonlyArray<{
+    pluginId: string;
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+  }>;
+  invokePluginAgentTool?: (
+    pluginId: string,
+    name: string,
+    input: unknown,
+    callerAgentId: string,
+  ) => Promise<unknown>;
   logger: Logger;
 }
 
@@ -1147,6 +1160,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .describe(
         "Get notified when the created agent finishes, errors, or needs permission. Set false only for truly fire-and-forget agents.",
       ),
+    asTab: z
+      .boolean()
+      .optional()
+      .describe(
+        "Create a top-level workspace tab instead of a subagent under you. Use this when the work needs its own tab other agents can address.",
+      ),
   };
   const canonicalTopLevelInputSchema = {
     ...canonicalCreateAgentFields,
@@ -1657,7 +1676,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return {
         kind: "agent-scoped",
         parsedArgs: parsed,
-        detached: false,
+        detached: parsed.asTab === true,
         cwd,
         workspaceId,
         worktree: undefined,
@@ -3284,6 +3303,44 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       };
     },
   );
+
+  if (callerAgentId && options.listPluginAgentTools && options.invokePluginAgentTool) {
+    for (const tool of options.listPluginAgentTools()) {
+      if (tools.has(tool.name)) continue;
+      let inputSchema: z.ZodType;
+      try {
+        inputSchema = z.fromJSONSchema(tool.inputSchema);
+      } catch (error) {
+        childLogger.warn(
+          { err: error, pluginId: tool.pluginId, tool: tool.name },
+          "Skipping plugin agent tool with an invalid input schema",
+        );
+        continue;
+      }
+      registerTool(
+        tool.name,
+        {
+          description: tool.description,
+          inputSchema,
+        },
+        async (input: unknown) => {
+          const output = await options.invokePluginAgentTool!(
+            tool.pluginId,
+            tool.name,
+            input,
+            callerAgentId,
+          );
+          const text = typeof output === "string" ? output : JSON.stringify(output, null, 2);
+          return {
+            content: [{ type: "text", text: text || "(no output)" }],
+            ...(output !== null && typeof output === "object"
+              ? { structuredContent: ensureValidJson(output) }
+              : {}),
+          };
+        },
+      );
+    }
+  }
 
   return toCatalog();
 }

@@ -27,6 +27,7 @@ export interface PluginHookAgent {
   provider: string;
   cwd: string;
   title: string | null;
+  labels: Record<string, string>;
 }
 
 export interface PluginSessionOpenRequest {
@@ -66,7 +67,14 @@ export interface PluginLifecycleEvents {
 }
 
 export interface PluginBeforeRequests {
-  "agent.create": { config: AgentSessionConfig; env?: Record<string, string> };
+  "agent.create": {
+    config: AgentSessionConfig;
+    env?: Record<string, string>;
+    /** Native placement, so transforms can scope themselves to a task workspace. */
+    workspaceId?: string;
+    parentAgentId?: string | null;
+    labels?: Record<string, string>;
+  };
   "agent.session_open": PluginSessionOpenRequest;
   "workspace.create": Omit<WorkspaceCreateRequest, "type" | "requestId">;
 }

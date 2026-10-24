@@ -31,6 +31,13 @@ export interface PluginUsageSourceMetadata {
   icon?: string;
 }
 
+/** An agent-facing tool a plugin contributes; inputSchema is JSON Schema. */
+export interface PluginAgentToolMetadata {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 export type PluginProcessRequest =
   | {
       type: "provider.status";
@@ -56,7 +63,14 @@ export type PluginProcessRequest =
   | { type: "hook.cancel"; requestId: string }
   | { type: "usage.fetch"; requestId: string; sourceId: string; input: unknown }
   | { type: "usage.discover"; requestId: string; sourceId: string; scope: UsageScope }
-  | { type: "invoke"; requestId: string; method: string; input: unknown }
+  | {
+      type: "invoke";
+      requestId: string;
+      method: string;
+      input: unknown;
+      /** Present when the host invoked an agent-facing tool. */
+      callerAgentId?: string;
+    }
   | {
       type: "provider.connect";
       providerId: string;
@@ -83,6 +97,7 @@ export type PluginProcessMessage =
       methods: string[];
       providers: PluginProviderMetadata[];
       usageSources?: PluginUsageSourceMetadata[];
+      agentTools?: PluginAgentToolMetadata[];
       hooks?: { events: string[]; before: string[] };
     }
   | { type: "result"; requestId: string; output: unknown }
@@ -124,6 +139,13 @@ const pluginNotificationSchema = z
 
 const hooksSchema = z.object({ events: z.array(z.string()), before: z.array(z.string()) }).strict();
 
+const agentToolMetadataSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().min(1),
+    inputSchema: z.record(z.string(), z.unknown()),
+  })
+  .strict();
 const providerMetadataSchema = z
   .object({
     id: z.string().min(1),
@@ -232,6 +254,7 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
         requestId: z.string().min(1),
         method: z.string().min(1),
         input: z.unknown(),
+        callerAgentId: z.string().min(1).optional(),
       })
       .strict(),
     z
@@ -268,6 +291,7 @@ export const PluginProcessMessageSchema: z.ZodType<PluginProcessMessage> = z.dis
         methods: z.array(z.string()),
         providers: z.array(providerMetadataSchema),
         usageSources: z.array(usageSourceMetadataSchema).optional(),
+        agentTools: z.array(agentToolMetadataSchema).optional(),
         hooks: hooksSchema.optional(),
       })
       .strict(),

@@ -32,7 +32,10 @@ import {
   type ListUsageReportsOptions,
   UsageSourceRegistry,
 } from "./usage-sources/index.js";
-import type { PluginUsageSourceMetadata } from "./plugin-process-protocol.js";
+import type {
+  PluginAgentToolMetadata,
+  PluginUsageSourceMetadata,
+} from "./plugin-process-protocol.js";
 
 const BUILTIN_PROVIDER_ID_SET: ReadonlySet<string> = new Set(BUILTIN_PROVIDER_IDS);
 
@@ -41,7 +44,13 @@ interface PluginRuntimePort {
   drainEvents?: PluginRuntime["drainEvents"];
   before?: PluginLifecycle["before"];
   catalog: PluginRuntime["catalog"];
-  invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
+  invoke(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    callerAgentId?: string,
+  ): Promise<unknown>;
+  listAgentTools?(): ReadonlyArray<PluginAgentToolMetadata & { pluginId: string }>;
   getLogs(pluginId: string): PluginLogEntry[];
   clearLogs(pluginId: string): void;
   getProviderRegistrations?(pluginId: string): readonly PluginProviderMetadata[];
@@ -473,8 +482,17 @@ export class PluginService {
     });
   }
 
-  invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown> {
-    return this.runtime.invoke(pluginId, method, input);
+  invokePluginRpc(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    callerAgentId?: string,
+  ): Promise<unknown> {
+    return this.runtime.invoke(pluginId, method, input, callerAgentId);
+  }
+
+  listPluginAgentTools(): ReadonlyArray<PluginAgentToolMetadata & { pluginId: string }> {
+    return this.runtime.listAgentTools?.() ?? [];
   }
 
   async stopAllPlugins(): Promise<void> {

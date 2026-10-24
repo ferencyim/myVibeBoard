@@ -8,6 +8,16 @@ import type { PluginLifecycleRegistration } from "./lifecycle.js";
 
 export interface PluginHandlerContext {
   paseo: PaseoApi;
+  /** Set when the host invoked this method on behalf of an agent-facing tool. */
+  callerAgentId?: string | null;
+}
+
+/** A tool a plugin contributes to the Paseo agent tool catalog (for example `vibe_tabs`). */
+export interface PluginAgentTool {
+  name: string;
+  description: string;
+  input?: ZodType;
+  handler(input: unknown, context: { callerAgentId: string | null }): unknown | Promise<unknown>;
 }
 
 export type PluginSettingsState<Schema extends ZodType> =
@@ -59,6 +69,7 @@ export interface PluginServerContext extends PluginLifecycleRegistration {
   ): void;
   registerProvider(provider: ProviderRegistration): void;
   registerUsageSource(source: UsageSourceRegistration): void;
+  registerAgentTool(tool: PluginAgentTool): void;
 }
 
 export type PluginServerContribution = (server: PluginServerContext) => PluginCleanup;

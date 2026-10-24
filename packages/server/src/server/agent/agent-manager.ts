@@ -1285,6 +1285,9 @@ export class AgentManager {
       const request = await this.pluginLifecycle.before("agent.create", {
         config,
         env: options.env,
+        workspaceId: options.workspaceId,
+        parentAgentId: options.labels?.[PARENT_AGENT_ID_LABEL] ?? null,
+        labels: options.labels,
       });
       config = { ...request.config, internal: config.internal };
       options = { ...options, env: request.env };
