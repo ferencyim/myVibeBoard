@@ -7,6 +7,17 @@ export interface Finding {
   subject: string;
   detail: string;
   data?: unknown;
+  /**
+   * Stable identity for dedupe/append (e.g. "branch:feat/x"). Without it the whole finding is the
+   * key, so a changing detail string would look like a new finding on the next run.
+   */
+  key?: string;
+}
+
+/** Dedupe key of a finding: the object key when the check provides one, else the full JSON. */
+export function findingKey(finding: unknown): string {
+  const key = (finding as { key?: unknown } | null | undefined)?.key;
+  return typeof key === "string" && key ? "key:" + key : JSON.stringify(finding);
 }
 
 export interface CheckOutput {

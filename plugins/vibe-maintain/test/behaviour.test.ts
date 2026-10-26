@@ -1,7 +1,6 @@
 // WP-99: the former hard-coded automation parameters are settings with unchanged defaults.
 
 import { describe, expect, it, vi } from "vitest";
-import { READ_ONLY_MODE } from "../server/launch";
 import { maintainSettings } from "../shared/rpc";
 
 describe("maintenance settings", () => {
@@ -15,9 +14,7 @@ describe("maintenance settings", () => {
       subAgentTimeoutMinutes: 10,
       commitPollSeconds: 60,
       unattendedModes: { claude: "acceptEdits", codex: "auto-review" },
-      readOnlyModes: { claude: "plan", codex: "read-only" },
     });
-    expect(s.readOnlyModes).toEqual(READ_ONLY_MODE);
   });
 });
 

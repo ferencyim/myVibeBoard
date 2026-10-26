@@ -22,6 +22,7 @@ import { MAINTENANCE_PROMPTS, buildPrompt, type PromptVars } from "../shared/pro
 import { trunkOf } from "./git/check";
 import type { GitRunner } from "./git/exec";
 import type { CheckOutput, CheckRegistry, Finding, MaintenanceTaskLauncher } from "./types";
+import { findingKey } from "./types";
 import {
   MaintenanceRuleSchema,
   MaintenanceRunSchema,
@@ -443,20 +444,30 @@ export function createMaintenanceEngine(options: EngineOptions) {
     const launcher = options.taskLauncher;
     if (!launcher) throw new Error("维护任务需要已连接的原生规划入口");
     const existing = openTaskFor(rule);
-    const keys = new Set(existing?.findings.map((finding) => JSON.stringify(finding)) ?? []);
-    const findings = out.findings.filter((finding) => !keys.has(JSON.stringify(finding)));
+    const keys = new Set(existing?.findings.map((finding) => findingKey(finding)) ?? []);
+    const findings = out.findings.filter((finding) => {
+      const key = findingKey(finding);
+      if (keys.has(key)) return false;
+      keys.add(key);
+      return true;
+    });
     if (existing && findings.length === 0) return [existing.workspaceId];
     const kind = rule.outputMode === "fix" ? "fix" : "review";
     const template =
       layeredOf(rule)?.def.prompts[kind] ??
       store.prompts.body("maintenance." + kind, { projectId: project.id }).text;
+    const newFindings = findings
+      .map((finding) => `- ${finding.subject}：${finding.detail}`)
+      .join("\n");
     const prompt = buildPrompt(
       kind,
       template,
       promptVars(rule, project, trigger, {
         ...out,
         findings,
-        body: existing ? "维护检查补充新发现，请据此更新方案。原有发现仍保留在会话中。" : out.body,
+        body: existing
+          ? `维护检查补充新发现，请据此更新方案。原有发现仍保留在会话中。\n\n新增发现：\n${newFindings}`
+          : out.body,
       }),
       out.instructions,
     );

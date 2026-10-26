@@ -1,4 +1,5 @@
-// Maintenance planning model selection; permissions belong to the read-only task launcher.
+// Maintenance planning model selection. Planning starts in the provider's default mode; the prompt
+// requires read-only investigation (no file or git state changes) during planning.
 
 import {
   selectAgent,

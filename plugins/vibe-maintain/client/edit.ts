@@ -14,7 +14,15 @@ import {
 
 export const CHECK_TYPES = ["git", "perf-slow"] as const;
 export const PRIORITIES = ["urgent", "high", "medium", "low", "none"] as const;
-const GIT_PARAMS = ["stale_days", "staleDays", "large_file_mb", "largeFileMb", "outdated"];
+const GIT_PARAMS = [
+  "cleanup_after_days",
+  "cleanupAfterDays",
+  "stale_days",
+  "staleDays",
+  "large_file_mb",
+  "largeFileMb",
+  "outdated",
+];
 
 export interface RuleDraft {
   enabled: boolean;
@@ -26,7 +34,7 @@ export interface RuleDraft {
   eventPath: string;
   eventPattern: string;
   checkType: string;
-  staleDays: string;
+  cleanupAfterDays: string;
   largeFileMb: string;
   outdated: boolean;
   /** Remaining check parameters as a JSON object (perf-slow sources, ...). */
@@ -67,7 +75,7 @@ export function draftFromDef(def: RuleDef): RuleDraft {
     eventPath: t.kind === "event" ? t.path : "",
     eventPattern: t.kind === "event" ? (t.pattern ?? "") : "",
     checkType: def.check.type,
-    staleDays: text(check.stale_days ?? check.staleDays),
+    cleanupAfterDays: text(check.cleanup_after_days ?? check.cleanupAfterDays),
     largeFileMb: text(check.large_file_mb ?? check.largeFileMb),
     outdated: check.outdated !== false,
     checkExtra: Object.keys(extra).length ? JSON.stringify(extra, null, 2) : "",
@@ -140,7 +148,7 @@ export function draftToFields(draft: RuleDraft): DraftResult {
       if (Number.isFinite(n) && n > 0) check[key] = n;
       else errors.push(`${label}要填大于 0 的数字`);
     };
-    numeric("多少天算长期未合并", "stale_days", draft.staleDays);
+    numeric("超过多少天无活动可清理", "cleanup_after_days", draft.cleanupAfterDays);
     numeric("大文件阈值（MB）", "large_file_mb", draft.largeFileMb);
     if (!draft.outdated) check.outdated = false;
   }

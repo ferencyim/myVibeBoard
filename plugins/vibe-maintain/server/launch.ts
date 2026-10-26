@@ -12,12 +12,6 @@ type Api = Pick<PaseoApi, "agents" | "projects" | "workspaces">;
 
 const normalizePath = (p: string) => p.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
 
-/** Planning never inherits a worker preset's write permission. */
-export const READ_ONLY_MODE: Record<string, string> = {
-  claude: "plan",
-  codex: "read-only",
-};
-
 export function createMaintenanceTaskLauncher(
   deps: AgentResolveDeps & {
     getPaseo: () => Api | null;
@@ -33,17 +27,10 @@ export function createMaintenanceTaskLauncher(
       agentId?: string;
       presetId?: string;
     }) => Promise<{ ok: boolean; reason: string; reservationId?: string; retryable?: boolean }>;
-    readOnlyModes?: () => Record<string, string>;
     signal?: AbortSignal;
     isTaskRejected?: (workspaceId: string) => boolean;
   },
 ): MaintenanceTaskLauncher & { release(agentId: string): Promise<void> } {
-  const planningMode = (provider: string): string => {
-    const mode = (deps.readOnlyModes?.() ?? READ_ONLY_MODE)[provider];
-    if (!mode || (READ_ONLY_MODE[provider] && mode !== READ_ONLY_MODE[provider]))
-      throw new Error("维护规划必须配置只读模式：" + provider);
-    return mode;
-  };
   const held = new Map<string, { workspaceId: string; reservationId: string }>();
   const reserve = async (
     workspaceId: string,
@@ -90,7 +77,6 @@ export function createMaintenanceTaskLauncher(
     async launch({ rule, project, prompt, onCreated }) {
       const paseo = api();
       const candidates = resolveAgentCandidates(rule, project, deps);
-      for (const candidate of candidates) planningMode(candidate.provider);
       const { projects } = await paseo.projects.list();
       const matches = projects.filter((entry) =>
         project.paseoProjectId
@@ -127,9 +113,6 @@ export function createMaintenanceTaskLauncher(
             env: { VIBE_ROLE: "planner", VIBE_WORKSPACE_ID: workspace.id },
             config: {
               provider: candidate.spec,
-              ...(candidate.provider === "codex"
-                ? { options: { sandbox_mode: "read-only", approval_policy: "never" } }
-                : { modeId: planningMode(candidate.provider) }),
               ...(candidate.thinkingOptionId
                 ? { thinkingOptionId: candidate.thinkingOptionId }
                 : {}),

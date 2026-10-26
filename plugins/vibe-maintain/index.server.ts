@@ -110,7 +110,6 @@ export default function contribute(server: PluginServerContext) {
       }
       return { ok: false, reason: "等待调度器资源响应超时" };
     },
-    readOnlyModes: () => current.readOnlyModes,
   };
 
   const taskLauncher = createMaintenanceTaskLauncher(agentPorts);

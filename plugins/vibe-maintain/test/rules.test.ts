@@ -2,8 +2,11 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUILTIN_RULES } from "../server/config";
-import { renderGitOutput } from "../server/git/check";
-import type { Finding } from "../server/types";
+import {
+  renderGitOutput,
+  type GitLedgerRow,
+  type GitReport,
+} from "../server/git/check";
 import {
   DEFAULT_FIX_TEMPLATE,
   DEFAULT_REVIEW_TEMPLATE,
@@ -61,7 +64,7 @@ describe("rule layers: built-in < global UI rule < project maintenance.yml", () 
       "git-health": {
         daily_cap: 3,
         priority: "medium",
-        check: { type: "git", stale_days: 30 },
+        check: { type: "git", cleanup_after_days: 30 },
         prompts: { review: "UI review" },
       },
     });
@@ -73,7 +76,7 @@ describe("rule layers: built-in < global UI rule < project maintenance.yml", () 
     expect(rule.def).toMatchObject({
       daily_cap: 3,
       priority: "high",
-      check: { type: "git", stale_days: 30 },
+      check: { type: "git", cleanup_after_days: 30 },
       prompts: { review: "UI review", fix: "yml fix" },
       dedupe_key: "git-health",
     });
@@ -290,11 +293,14 @@ describe("trigger text and progress", () => {
   });
 
   it("describes checks with their parameters", () => {
-    expect(describeCheck({ type: "git", stale_days: 30, outdated: false })).toContain("超过 30 天");
-    expect(describeCheck({ type: "git", stale_days: 30, outdated: false })).not.toContain(
+    expect(describeCheck({ type: "git", cleanup_after_days: 30, outdated: false })).toContain(
+      "超过 30 天",
+    );
+    expect(describeCheck({ type: "git", cleanup_after_days: 30, outdated: false })).not.toContain(
       "过期的 npm",
     );
     expect(describeCheck({ type: "git" })).toContain("大于 5 MB");
+    expect(describeCheck({ type: "git" })).toContain("按分支/worktree");
   });
 });
 
@@ -338,37 +344,115 @@ describe("prompt templates", () => {
 });
 
 describe("default maintenance planning text", () => {
-  const findings: Finding[] = [
-    {
-      category: "stale_branch",
-      subject: "feat/old",
-      detail: "领先 main 1 个提交，最后提交于 30 天前",
-    },
-    { category: "merged_branch", subject: "feat/finished", detail: "已合并进 main，可以删除" },
-    { category: "uncommitted", subject: "主工作区", detail: "1 个文件有未提交改动：dirty.txt" },
-  ];
+  const row = (overrides: Partial<GitLedgerRow>): GitLedgerRow => ({
+    branch: null,
+    worktreePath: null,
+    directoryExists: false,
+    prunable: false,
+    locked: false,
+    isMain: false,
+    lastCommitUnix: null,
+    ageDays: null,
+    ahead: null,
+    behind: null,
+    merged: null,
+    upstream: null,
+    upstreamGone: false,
+    unpushed: null,
+    containedInRemote: null,
+    trackedChanges: 0,
+    untrackedFiles: 0,
+    changedSample: [],
+    conflictFiles: null,
+    verdict: "decide",
+    reasons: [],
+    ...overrides,
+  });
+  const older = Date.UTC(2026, 8, 21) / 1000;
+  const report: GitReport = {
+    trunk: "main",
+    originTrunk: { ahead: 0, behind: 0, fetchHeadAt: new Date(2026, 9, 21, 3, 0) },
+    hasRemote: true,
+    mainPath: "D:/repo",
+    mainClean: false,
+    branchCount: 3,
+    worktreeCount: 2,
+    cleanupAfterDays: 7,
+    rows: [
+      row({
+        branch: "feat/old",
+        lastCommitUnix: older,
+        ageDays: 30,
+        ahead: 1,
+        behind: 0,
+        merged: false,
+        unpushed: 0,
+        containedInRemote: true,
+        conflictFiles: [],
+        verdict: "merge",
+        reasons: [
+          "未合并，领先 main 1 个提交、落后 0 个",
+          "预检无冲突",
+          "没有 worktree",
+          "最近提交在 30 天前（超过 7 天）",
+        ],
+      }),
+      row({
+        branch: "feat/finished",
+        worktreePath: "D:/repo-wt",
+        directoryExists: true,
+        lastCommitUnix: older,
+        ageDays: 30,
+        ahead: 0,
+        behind: 0,
+        merged: true,
+        upstream: "origin/feat/finished",
+        unpushed: 0,
+        containedInRemote: true,
+        verdict: "cleanup",
+        reasons: [
+          "已合并进 main",
+          "worktree 干净",
+          "没有未推送或未被远端包含的独有提交",
+          "最近提交在 30 天前（超过 7 天）",
+        ],
+      }),
+      row({
+        branch: "main",
+        worktreePath: "D:/repo",
+        directoryExists: true,
+        isMain: true,
+        merged: true,
+        ahead: 0,
+        behind: 0,
+        trackedChanges: 1,
+        changedSample: ["dirty.txt"],
+        verdict: "decide",
+        reasons: ["主工作区有未提交改动（1 个已跟踪改动：dirty.txt）"],
+      }),
+    ],
+    largeFiles: [],
+    largeFileMb: 5,
+    outdated: null,
+    notes: ["未检查过期依赖。"],
+  };
   const ctx = (reason: string) => ({
     rule: { name: "git-health" } as never,
     project: { name: "Demo" } as never,
     trigger: { reason },
   });
 
-  it("explains which rule fired, why, what was found, impact, advice and verification (snapshot)", () => {
-    const out = renderGitOutput(
-      ctx("已完成任务 10 个，达到阈值 10"),
-      findings,
-      ["未检查过期依赖。"],
-      {
-        maxPerCategory: 15,
-      },
-    );
-    expect(out.title).toBe("Git 体检：发现 3 项待整理");
+  it("orders the plan from current state to ledger, advice and safe cleanup (snapshot)", () => {
+    const out = renderGitOutput(ctx("已完成任务 10 个，达到阈值 10"), report);
+    expect(out.title).toBe("Git 体检：1 可清理、1 建议合并、1 需决定");
     for (const heading of [
-      "为什么出现此维护任务",
-      "发现了什么",
-      "影响",
-      "建议怎么做",
-      "怎么验证",
+      "当前 git 状况",
+      "分支与 worktree 台账（全部 3 个对象）",
+      "建议合并（1）",
+      "建议清理（1）",
+      "需你决定（1）",
+      "保留（0）",
+      "执行步骤与安全清理要求",
     ]) {
       expect(out.body).toContain(`## ${heading}`);
     }
@@ -377,7 +461,7 @@ describe("default maintenance planning text", () => {
   });
 
   it("words a manual run differently", () => {
-    const out = renderGitOutput(ctx("手动触发"), findings, [], { maxPerCategory: 15 });
+    const out = renderGitOutput(ctx("手动触发"), report);
     expect(out.body).toContain("你在维护页点击了「立即运行」");
     expect(out.body).not.toContain("触发原因：手动触发");
   });

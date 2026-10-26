@@ -175,7 +175,7 @@ describe("rule editor logic", () => {
     expect(errs({ triggerKind: "event", eventPath: "a.log", eventPattern: "(" })).toContain("正则");
     expect(errs({ dailyCap: "-1" })).toContain("每日上限");
     expect(errs({ checkExtra: "[1]" })).toContain("JSON");
-    expect(errs({ staleDays: "0" })).toContain("大于 0");
+    expect(errs({ cleanupAfterDays: "0" })).toContain("大于 0");
   });
 
   it("warns about unknown placeholders without blocking the save", () => {
@@ -188,7 +188,7 @@ describe("rule editor logic", () => {
     const draft = {
       ...draftFromDef(builtin),
       cardsDone: "3",
-      staleDays: "30",
+      cleanupAfterDays: "30",
       agent: "claude/sonnet",
       reviewPrompt: "自定义 {{rule}}",
     };
@@ -196,7 +196,7 @@ describe("rule editor logic", () => {
     const config = applyRuleEdit(empty, target, fields!, "all");
     expect(config.rules["git-health"]).toEqual({
       trigger: { kind: "workload", cards_done: 3, commits_merged: 30 },
-      check: { type: "git", stale_days: 30 },
+      check: { type: "git", cleanup_after_days: 30 },
       agent: "claude/sonnet",
       prompts: { review: "自定义 {{rule}}" },
       projects: "all",

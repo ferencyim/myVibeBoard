@@ -453,8 +453,9 @@ export function describeCheck(check: { type: string } & Record<string, unknown>)
   };
   if (check.type === "git") {
     return (
-      `Git 体检（不调用模型）：超过 ${num("stale_days", "staleDays", 14)} 天未合并的分支、已合并但未删除的分支、` +
-      `遗留的 worktree、未提交或未推送的改动、会与主干冲突的分支、大于 ${num("large_file_mb", "largeFileMb", 5)} MB 的文件` +
+      `Git 体检（不调用模型）：按分支/worktree 列出目录、最近提交、领先/落后主干、已合并、上游/未推送、未提交与冲突，` +
+      `并给出可清理、建议合并、需你决定、保留的建议（超过 ${num("cleanup_after_days", "cleanupAfterDays", 7)} 天无活动的已合并干净对象才建议清理）、` +
+      `大于 ${num("large_file_mb", "largeFileMb", 5)} MB 的文件` +
       `${check.outdated === false ? "" : "、过期的 npm 依赖"}。`
     );
   }

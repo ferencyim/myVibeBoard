@@ -1,47 +1,68 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`default maintenance planning text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > acceptance 1`] = `
-"- 上面每一项都已处理，或确认是有意保留的
-- 长期未合并的分支：\`git branch --no-merged\` 里不再出现这些分支，或确认它们是有意保留的。
-- 已合并但未删除的分支：\`git branch --merged\` 里不再出现这些分支。
-- 未提交的改动：对应目录里 \`git status\` 显示干净。"
+exports[`default maintenance planning text > orders the plan from current state to ledger, advice and safe cleanup (snapshot) > acceptance 1`] = `
+"- 只处理确认时同意的对象；用户改过清单的以修改后为准。
+- 合并项验证通过，主干与 origin 对齐，全程未使用 force。
+- 清理项只用 \`git worktree remove\`（不加 \`--force\`）与 \`git branch -d\`（不用 \`-D\`）。
+- 有未提交改动或独有提交的对象没有被清理。
+- 结束时 \`git worktree list\` 和 \`git branch\` 只剩保留或需决定的对象。"
 `;
 
-exports[`default maintenance planning text > explains which rule fired, why, what was found, impact, advice and verification (snapshot) > body 1`] = `
-"## 为什么出现此维护任务
-自动维护规则「git-health」检查了项目「Demo」的 git 状态。触发原因：已完成任务 10 个，达到阈值 10。这是自动生成的维护建议，不是你提出的需求。
+exports[`default maintenance planning text > orders the plan from current state to ledger, advice and safe cleanup (snapshot) > body 1`] = `
+"## 当前 git 状况
+- 主干：\`main\`；本地与 \`origin/main\` 相比：领先 0 个提交，落后 0 个提交（基于上次 fetch，未现场 fetch；FETCH_HEAD 时间：2026-10-21 03:00）。
+- 主工作区：有未提交改动。
+- 共 3 个本地分支、2 个 worktree（含主工作区）；按建议：需你决定 1，建议合并 1，可清理 1，保留 0。
 
-## 发现了什么
-共 3 项：长期未合并的分支 1，已合并但未删除的分支 1，未提交的改动 1。
+## 分支与 worktree 台账（全部 3 个对象）
+同一分支的 worktree 并入一行；detached worktree 与主工作区单独一行。「未提交」为已跟踪改动数 / 未跟踪文件数，「—」表示没有；worktree 目录存在且未锁定时不加标注。
 
-### 长期未合并的分支（1）
-- \`feat/old\`：领先 main 1 个提交，最后提交于 30 天前
+### 需你决定（1）
+| 对象 | worktree | 最近提交 | 与主干 | 上游/未推送 | 未提交（已跟踪/未跟踪） | 冲突 | 原因/建议 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| \`main\`（主工作区） | \`D:/repo\` | — | 已合并 | — | 1 / 0（dirty.txt） | — | 【有未提交改动】 |
 
-### 已合并但未删除的分支（1）
-- \`feat/finished\`：已合并进 main，可以删除
+### 建议合并（1）
+| 对象 | worktree | 最近提交 | 与主干 | 上游/未推送 | 未提交（已跟踪/未跟踪） | 冲突 | 原因/建议 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| \`feat/old\` | — | 2026-09-20（30 天前） | 未合并，领先 1 / 落后 0 | 无上游，未推送 0（远端已包含） | — | 无 | 未合并，预检无冲突，干净 |
 
-### 未提交的改动（1）
-- \`主工作区\`：1 个文件有未提交改动：dirty.txt
+### 可清理（1）
+| 对象 | worktree | 最近提交 | 与主干 | 上游/未推送 | 未提交（已跟踪/未跟踪） | 冲突 | 原因/建议 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| \`feat/finished\` | \`D:/repo-wt\` | 2026-09-20（30 天前） | 已合并 | 已推送 | — | — | 已合并，干净，无独有提交 |
 
-## 影响
-- 长期未合并的分支：分支越放越久，和主干的差距越大，以后合并更容易冲突，也容易忘记它在做什么。
-- 已合并但未删除的分支：分支内容已经在主干里，留着只会让分支列表变乱，不会造成数据损失。
-- 未提交的改动：改动只存在本地工作区，换分支、清理或重装系统时可能丢失。
+## 建议合并（1）
+未合并、有独有提交、预检无冲突、干净且超过 7 天无活动。建议逐个确认后按仓库规则合并（本地主干 \`--ff-only\` 对齐远端、验证、再 push）。各对象状态见台账。
+\`feat/old\`
 
-## 建议怎么做
-- 长期未合并的分支：逐个确认：还要用就合并或 rebase 到主干；不要了就删除分支。
-- 已合并但未删除的分支：可以放心删除（\`git branch -d <分支>\`，已合并时 git 会允许）。
-- 未提交的改动：确认是有用的改动就提交；是临时文件就删除或加入 .gitignore。
+## 建议清理（1）
+已合并且干净、无独有提交、超过 7 天无活动；或 worktree 目录已不存在（\`git worktree prune\`）。建议按第六节的安全要求逐个清理。各对象状态见台账。
+\`feat/finished\`
 
-## 怎么验证
-- 长期未合并的分支：\`git branch --no-merged\` 里不再出现这些分支，或确认它们是有意保留的。
-- 已合并但未删除的分支：\`git branch --merged\` 里不再出现这些分支。
-- 未提交的改动：对应目录里 \`git status\` 显示干净。
+## 需你决定（1）
 
-## 说明
+### 有未提交改动（1）
+逐个看改动（文件见台账）：要的先提交或保存，不要的由你确认丢弃；处理前不要清理或合并。
+\`main\`
+
+## 保留（0）
+（无）
+
+## 执行步骤与安全清理要求
+1. 只处理用户在确认时同意的对象；用户改过清单的，以修改后的为准。
+2. worktree 只用 \`git worktree remove <path>\`，不加 \`--force\`；分支只用 \`git branch -d\`，不用 \`-D\`；远程分支只删确实存在且已合并的。
+3. 禁止 \`git reset --hard\`、\`git clean\`、\`git checkout --\` / \`git restore\`、\`push --force\`；禁止任何递归删除目录（\`rm -rf\`、\`Remove-Item -Recurse\`、\`rmdir /s\`、\`\\\\?\\\` 前缀等），也不要用 robocopy /MIR 清空目录（目录里有 junction 会清空外部目录）。
+4. \`git worktree remove\` 失败（如 Windows 长路径 Filename too long、目录不干净）就停下，如实报告「已注销/未注销、物理目录残留」，列出残留路径；物理目录是否删除、怎么删留给用户单独决定。
+5. 有未提交内容或独有提交的对象不清理，列入需你决定。
+6. 合并按仓库自己的 git 规则：在本地主干 \`--ff-only\` 对齐远端后合并，验证后再 push，不 force。
+7. 结束时汇报 git 树状态（主干与 origin 对齐情况、剩余分支/worktree）。
+
+## 检查限制
 - 未检查过期依赖。
 
 ---
+自动维护规则「git-health」检查了项目「Demo」的 git 状态。触发原因：已完成任务 10 个，达到阈值 10。这是自动生成的维护建议，不是你提出的需求。
 此任务先在新的原生 workspace 中规划，等待用户显式 /执行。同规则同项目未完成任务只补充新发现，方案变化后需重新确认。不想再收到：在维护页停用或调整规则「git-health」。"
 `;
 
@@ -54,9 +75,6 @@ exports[`prompt templates > renders the default templates (snapshot) > fix 1`] =
 任务发现：
 SUMMARY {{project}}
 
-发现明细（JSON，共 1 条）：
-[{"a":1}]
-
 【系统约束，不可更改】
 - 当前仅规划：不得修改文件、提交、合并或 push，不得自行执行修复；必须等待用户显式 /执行。
 - 只处理上面列出的问题，不做无关的重构或改动。
@@ -67,16 +85,13 @@ exports[`prompt templates > renders the default templates (snapshot) > review 1`
 "你是项目「Demo」的维护复核员。自动维护规则「git-health」刚刚触发，原因：已完成任务 10 个，达到阈值 10。
 规则检查的内容：Git 体检
 
-下面是检查产出的任务发现和发现明细。请用中文写一份简短的整理方案，按优先级排序。每一项说明：
+下面是检查产出的任务发现（共 1 条）。请用中文写一份简短的整理方案，按优先级排序。每一项说明：
 1. 问题是什么、影响是什么；
 2. 建议怎么处理（哪些可以放心处理，哪些需要负责人决定）；
 3. 处理完后怎么验证。
 
 任务发现：
 SUMMARY {{project}}
-
-发现明细（JSON，共 1 条）：
-[{"a":1}]
 
 【系统约束，不可更改】
 - 你是只读复核员：不得修改任何文件、分支或 worktree，不得提交，不得执行会改变仓库状态的命令。

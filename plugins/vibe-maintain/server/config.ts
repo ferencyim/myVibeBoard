@@ -8,7 +8,7 @@
 //       trigger: { kind: workload, cards_done: 10, commits_merged: 30 }   # any reached threshold
 //       # trigger: { kind: time, cron: "0 3 * * *" }
 //       # trigger: { kind: event, path: logs/crash.log, pattern: "Exception" }
-//       check: { type: git, stale_days: 14 }
+//       check: { type: git, cleanup_after_days: 7 }
 //       agent: null                 # null = default planning preset; or explicit provider/model
 //       output: suggest             # suggest/fix both plan first, waiting for explicit /执行
 //       priority: low

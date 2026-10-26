@@ -98,21 +98,20 @@ function harness(
 }
 
 describe("维护原生规划启动器", () => {
-  it("新建独立worktree，只读规划，资源准入与绑定后才发首消息", async () => {
+  it("新建独立worktree，按默认模式规划，资源准入与绑定后才发首消息", async () => {
     const s = harness();
     const result = await s.launcher.launch(s.input);
     expect(s.sources[0]).toMatchObject({
       source: { kind: "worktree", action: "branch-off", projectId: "native-project" },
     });
     expect(s.created[0]).toMatchObject({
-      config: {
-        provider: "codex/test",
-        options: { sandbox_mode: "read-only", approval_policy: "never" },
-      },
+      config: { provider: "codex/test" },
       labels: { role: "planner" },
     });
     expect(s.created[0]!.prompt).toBeUndefined();
-    expect((s.created[0]!.config as { modeId?: string }).modeId).toBeUndefined();
+    const config = s.created[0]!.config as { modeId?: string; options?: unknown };
+    expect(config.modeId).toBeUndefined();
+    expect(config.options).toBeUndefined();
     expect(s.resources.map((r) => r.action)).toEqual(["acquire", "bind"]);
     expect(s.sent[0]!.sourceAgentId).toBe(result.anchorAgentId);
     expect(s.sent[0]!.prompt).toContain("vibe-plan");

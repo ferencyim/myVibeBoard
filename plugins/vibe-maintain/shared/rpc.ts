@@ -26,10 +26,6 @@ export const maintainSettings = defineSettings({
     unattendedModes: z
       .record(z.string(), z.string().min(1))
       .default({ claude: "acceptEdits", codex: "auto-review" }),
-    /** Permission mode of read-only sub agents, per provider. */
-    readOnlyModes: z
-      .record(z.string(), z.string().min(1))
-      .default({ claude: "plan", codex: "read-only" }),
   }),
 });
 export type MaintainSettings = z.output<typeof maintainSettings.schema>;

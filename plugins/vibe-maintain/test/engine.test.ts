@@ -67,6 +67,38 @@ describe("维护规则接入原生任务", () => {
     expect(h.engine.listRuns(ruleId(h))).toHaveLength(3);
   });
 
+  it("发现按对象键去重，同一对象的状态明细变化不重复追加", async () => {
+    const keyed = (detail: string): CheckOutput => ({
+      ...output(),
+      findings: [{ category: "decide", subject: "feat/x", detail, key: "branch:feat/x" }],
+    });
+    const h = fixture("suggest", async () => keyed("最近 2 天有活动"));
+    await h.engine.syncRules();
+    await h.engine.runNow(ruleId(h));
+    const engineFindings = async (detail: string) => {
+      const replay = createMaintenanceEngine({
+        db: h.db,
+        store: h.store,
+        now: h.clock.now,
+        git,
+        taskLauncher: {
+          launch: async () => {
+            throw new Error("不应新建第二个任务");
+          },
+          append: async () => {
+            throw new Error("不应重新发送补充消息");
+          },
+        },
+        checks: { test: async () => keyed(detail) },
+      });
+      return replay.runNow(ruleId(h));
+    };
+    await engineFindings("仍有未提交改动");
+    expect(h.maintenanceTasks()).toHaveLength(1);
+    expect(h.prompts).toHaveLength(1);
+    expect(createMaintenanceCommands(h.db).links()[0]!.findings).toHaveLength(1);
+  });
+
   it("方案变化先等待真正停止，再清除确认并重新规划", async () => {
     let out = output("旧发现");
     const h = fixture("fix", async () => out);

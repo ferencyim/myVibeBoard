@@ -462,12 +462,6 @@ export const ADVANCED_FIELDS: readonly SettingField[] = [
     min: 5,
     max: 3600,
   },
-  {
-    kind: "map",
-    key: "readOnlyModes",
-    valueType: "string",
-    label: "只读分析 agent 的权限模式，按 provider，如 claude=plan, codex=read-only",
-  },
 ];
 
 export function MaintainSettingsScreen({ theme }: PluginSurfaceProps) {

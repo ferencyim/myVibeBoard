@@ -26,16 +26,13 @@ export const DEFAULT_REVIEW_TEMPLATE = [
   "你是项目「{{project}}」的维护复核员。自动维护规则「{{rule}}」刚刚触发，原因：{{trigger_reason}}。",
   "规则检查的内容：{{check_description}}",
   "",
-  "下面是检查产出的任务发现和发现明细。请用中文写一份简短的整理方案，按优先级排序。每一项说明：",
+  "下面是检查产出的任务发现（共 {{findings_count}} 条）。请用中文写一份简短的整理方案，按优先级排序。每一项说明：",
   "1. 问题是什么、影响是什么；",
   "2. 建议怎么处理（哪些可以放心处理，哪些需要负责人决定）；",
   "3. 处理完后怎么验证。",
   "",
   "任务发现：",
   "{{summary}}",
-  "",
-  "发现明细（JSON，共 {{findings_count}} 条）：",
-  "{{findings_json}}",
 ].join("\n");
 
 export const DEFAULT_FIX_TEMPLATE = [
@@ -46,9 +43,6 @@ export const DEFAULT_FIX_TEMPLATE = [
   "",
   "任务发现：",
   "{{summary}}",
-  "",
-  "发现明细（JSON，共 {{findings_count}} 条）：",
-  "{{findings_json}}",
 ].join("\n");
 
 export const DEFAULT_TEMPLATES: Record<PromptKind, string> = {

@@ -441,9 +441,9 @@ export function RuleEditor({
             <>
               <Input
                 theme={theme}
-                value={d.staleDays}
-                onChangeText={(v) => set("staleDays", v)}
-                placeholder="多少天未合并算长期（默认 14）"
+                value={d.cleanupAfterDays}
+                onChangeText={(v) => set("cleanupAfterDays", v)}
+                placeholder="超过多少天无活动可清理（默认 7）"
               />
               <Input
                 theme={theme}
