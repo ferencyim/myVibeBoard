@@ -31,7 +31,15 @@ import { createTaskRuntimeCommands, publishEvent, type VibeDb, type VibeStore } 
 import { createTaskResources, type TaskTurnToken } from "../task-host/resources";
 import { createTaskGitFinalizer, type GitState } from "../task-conversation/git";
 import { TASK_FLOW_PROMPTS } from "../task-conversation/prompts";
-import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
+import { HISTORY_NOTICE_PROMPT, TASK_TAB_GUIDE_PROMPT } from "./prompts";
+import {
+  HandoffPacketSchema,
+  buildPacket,
+  captureCheckpoint,
+  checkpointDrift,
+  renderHandoff,
+  type HandoffPacket,
+} from "./handoff";
 import { TASK_HOST_PROMPTS } from "../task-host/prompts";
 import {
   HANDOFF_PATTERN,
@@ -942,6 +950,45 @@ export function createTaskFlow(options: {
       return { task: requireTask(task.workspaceId), message: text };
     });
   }
+  function makePacket(
+    task: Task,
+    tab: TaskTab,
+    output: string,
+    checkpoint: HandoffPacket["checkpoint"],
+  ): HandoffPacket {
+    return buildPacket({
+      fromTab: {
+        number: tab.number,
+        agentId: tab.agentId,
+        role: TASK_TAB_ROLE_LABELS[tab.role],
+        model: tab.model,
+      },
+      phase: TASK_PHASE_LABELS[task.phase],
+      planGoal: task.plan?.goal ?? "",
+      checkpoint,
+      output,
+      now: new Date(),
+    });
+  }
+  /** Old tasks and corrupt rows have no usable packet; callers then build one from the timeline. */
+  function loadHandoff(workspaceId: string, tabNumber: number): HandoffPacket | undefined {
+    const parsed = HandoffPacketSchema.safeParse(
+      store.taskHandoffs.get(workspaceId, tabNumber)?.packet,
+    );
+    return parsed.success ? parsed.data : undefined;
+  }
+  /** Every finished turn leaves the tab's latest packet in vibe.db for a later takeover. */
+  async function refreshHandoff(task: Task, tab: TaskTab, page: TimelinePage, turnId: string | null) {
+    const entry = lastAssistant(page, turnId);
+    if (entry?.item.type !== "assistant_message" || !entry.item.text.trim()) return;
+    try {
+      const { directory } = await projectFor(task.workspaceId);
+      const packet = makePacket(task, tab, entry.item.text, await captureCheckpoint(directory));
+      store.taskHandoffs.save(task.workspaceId, tab.number, tab.agentId, packet);
+    } catch (error) {
+      log("刷新交接包失败", error);
+    }
+  }
   type HandoffInput = {
     workspaceId: string;
     agentId: string;
@@ -984,18 +1031,30 @@ export function createTaskFlow(options: {
           );
         worker = { presetId: preset.presetId, index };
       }
-      let progress = "";
-      try {
-        const page = await timeline(from.agentId, 40);
-        const entry = lastAssistant(page, null);
-        if (entry?.item.type === "assistant_message") progress = entry.item.text.trim();
-      } catch (error) {
-        log("读取接手来源进度失败", error);
-      }
-      if (progress.length > 6000) progress = progress.slice(-6000);
       const fromHandle = paseo().agents.ref(from.agentId);
       await fromHandle.refresh();
-      if (fromHandle.current()?.activeTurn) {
+      const fromRunning = !!fromHandle.current()?.activeTurn;
+      // The stored packet is the state at the end of #n's last turn; a running tab has moved on.
+      const stored = fromRunning ? undefined : loadHandoff(task.workspaceId, from.number);
+      const directory = (await projectFor(task.workspaceId)).directory;
+      const checkpoint = await captureCheckpoint(directory);
+      let packet = stored;
+      if (!packet) {
+        try {
+          const page = await timeline(from.agentId, 40);
+          const entry = lastAssistant(page, null);
+          packet = makePacket(
+            task,
+            from,
+            entry?.item.type === "assistant_message" ? entry.item.text : "",
+            checkpoint,
+          );
+        } catch (error) {
+          log("读取接手来源进度失败", error);
+        }
+      }
+      const drift = stored ? checkpointDrift(stored.checkpoint, checkpoint) : undefined;
+      if (fromRunning) {
         await fromHandle.cancelRun();
         await waitStopped(fromHandle);
       }
@@ -1072,8 +1131,12 @@ export function createTaskFlow(options: {
             summary: [
               `#${from.number} ${TASK_TAB_ROLE_LABELS[from.role]} 已停止，由 #${updatedTo.number} 接手。`,
               `任务阶段：${TASK_PHASE_LABELS[task.phase]}`,
-              task.plan ? `确认方案目标：${task.plan.goal}` : "",
-              progress ? `#${from.number} 最近输出：\n${progress}` : "",
+              packet
+                ? renderHandoff(packet, {
+                    notice: store.prompts.resolve(HISTORY_NOTICE_PROMPT.key, { projectId }),
+                    ...(drift ? { drift } : {}),
+                  })
+                : "",
             ]
               .filter(Boolean)
               .join("\n"),
@@ -1682,6 +1745,7 @@ export function createTaskFlow(options: {
     }
     const turn = tab.role === "worker" ? resources.takeTurn(tab.agentId, event.turnId) : undefined;
     const page = await timeline(tab.agentId);
+    await refreshHandoff(task, tab, page, event.turnId);
     if (event.outcome.kind === "completed") {
       if (await naturalHandoff(task, tab, page, event.turnId)) return;
       if (["main", "session"].includes(tab.role)) await savePlanFromTurn(task, tab, page);
@@ -1782,7 +1846,7 @@ export function createTaskFlow(options: {
   }
   function registerPrompts() {
     store.prompts.register(
-      [TASK_PLAN_PROMPT, ...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS, TASK_TAB_GUIDE_PROMPT],
+      [TASK_PLAN_PROMPT, ...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS, TASK_TAB_GUIDE_PROMPT, HISTORY_NOTICE_PROMPT],
       {
         pruneMissing: true,
         // WP-122 merges these scenario templates into their replacement keys.

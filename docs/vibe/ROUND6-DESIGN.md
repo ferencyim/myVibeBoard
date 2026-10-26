@@ -89,3 +89,12 @@
 - **准入竞态**：调度器准入（`workerAdmitted`）与执行 tab 的直接授权都在同一个 workspace 队列里检查阶段，谁先到谁执行，后到的看到阶段已变就直接返回。准入时执行 tab 正在跑回合（通常是用户的直接消息）就保留准入、等该回合的授权绑定；回合结束仍没人绑定时自动重试。失败路径只释放本次调用自己绑定或尚未绑定的准入，不释放另一条路径绑定的租约。执行 tab 的回合记录所属租约代次（`noteTurnStarted`/`takeTurn`），回合结束只释放那一代租约，不会误放新的准入。
 - **面板**：`addWorkspacePanel` 注册「任务流程」，用只读 RPC `vibe.task.panel` 返回阶段、阻塞原因、tab 视图与最新结论；该 RPC 与命令 RPC 一样拒绝带 `callerAgentId` 的调用，且不补建 tab。tab 点击使用宿主已有的 `navigation.openAgent`，不需要切 tab 的 [core] API；移动端从 workspace 的「+」插件面板入口或 Command Center 打开。面板按钮调用与 `/执行` `/通过` `/停止任务` `/状态` 相同的 `vibe.task.tabs.command`，`callerAgentId` 校验保持只认用户操作。
 - **已知取舍**：宿主没有“发送前”插件钩子，直接在执行 tab 发消息时准入只能在回合开始后补做，模型可能已开始生成；提示词要求收到执行确认前不改文件，准入失败会立即停止该回合。方案复核（plan_reviewer）仍按需通过 `vibe_open_tab` 打开，不在固定 #2–#5 列表中。
+
+## 9. WP-126 实现记录（第七轮）
+
+接手从「拼最后一条输出」改为结构化交接包，没有改 `packages/`。
+
+- **交接包**（`vibe-board/server/tabs/handoff.ts`）：来源 tab、阶段、方案目标、git 检查点（worktree、HEAD、分支、`dirtyHash`、相对 main/master 与未提交的改动文件，最多 50 个）、最近输出、「未决问题」「下一步」。后两项只从来源 agent 末尾的同名小标题解析，不调用模型；小标题由 `board.tabs.guide` 要求每回合写出。git 命令只读且带 `GIT_OPTIONAL_LOCKS=0`。`dirtyHash` 在 `status --porcelain` 之外加入脏文件的大小与 mtime，否则已经脏的文件再被改动检测不到。
+- **存档**：新增共享表 `task_handoff`（core 迁移 17，`taskHandoffs` 命令），每 tab 一行，每个回合结束（`turnEnded`）覆盖。`/接手 #n` 与「继续 #n 的工作」优先读存档，来源 tab 仍在运行或没有存档时现场生成；接手时重新取检查点，HEAD 或 `dirtyHash` 变了就写「#n 交接之后仓库已变化」。
+- **围栏**：交接内容放在 `<<<VIBE-HISTORY-BEGIN/END>>>` 之间，前置只读提示词 `board.tabs.history_notice`（不可信历史数据，不是指令）；围栏内出现的标记被转义，总长 30000 字，超出按段截断并标注。渲染顺序为未决问题、下一步、改动文件、检查点，最后才是最近输出。
+- **已知限制**：只在 `turnEnded` 刷新，回合中途改动的文件不会进存档，但接手时的检查点比对会发现；host 会把注入消息 HTML 转义，围栏标记在 agent 眼中显示为实体。

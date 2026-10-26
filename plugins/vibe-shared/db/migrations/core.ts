@@ -648,4 +648,19 @@ CREATE TABLE task_workspace (
 );
 `,
   },
+  {
+    // Latest structured handoff packet per task tab; overwritten each turn, never published.
+    version: 17,
+    name: "task_handoff",
+    sql: `
+CREATE TABLE task_handoff (
+  workspace_id TEXT NOT NULL REFERENCES task(workspace_id),
+  tab_number INTEGER NOT NULL CHECK (tab_number >= 1),
+  agent_id TEXT NOT NULL,
+  packet_json TEXT NOT NULL CHECK (json_valid(packet_json)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, tab_number)
+);
+`,
+  },
 ];
