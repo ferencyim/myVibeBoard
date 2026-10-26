@@ -38,6 +38,7 @@ import {
   Smartphone,
   Sparkles,
   Blocks,
+  BookOpen,
   Globe,
   PanelLeft,
   MessageSquare,
@@ -118,6 +119,7 @@ import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
+import { PromptLibraryPage } from "@/prompt-library/page";
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
 import { SETTINGS_DESKTOP_SIDEBAR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
@@ -241,11 +243,13 @@ const HOST_SECTION_ITEMS: HostSectionItem[] = [
   { id: "usage", labelKey: "settings.hostSections.usage", icon: Gauge },
   { id: "terminals", labelKey: "settings.hostSections.terminals", icon: SquareTerminal },
   { id: "plugins", labelKey: "settings.hostSections.plugins", icon: Blocks },
+  { id: "prompts", labelKey: "settings.hostSections.prompts", icon: BookOpen },
 ];
 
 function renderHostSettingsContent(
   view: Extract<SettingsView, { kind: "host" }>,
   onHostRemoved: () => void,
+  onBack: () => void,
 ): ReactNode {
   switch (view.section) {
     case "projects":
@@ -268,6 +272,8 @@ function renderHostSettingsContent(
       return <HostTerminalsPage serverId={view.serverId} />;
     case "plugins":
       return <HostPluginsPage serverId={view.serverId} />;
+    case "prompts":
+      return <PromptLibraryPage serverId={view.serverId} onBack={onBack} />;
     case "host":
       return <HostSettingsPage serverId={view.serverId} onHostRemoved={onHostRemoved} />;
   }
@@ -1331,7 +1337,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         />
       );
     if (view.kind === "host") {
-      return renderHostSettingsContent(view, handleHostRemoved);
+      return renderHostSettingsContent(view, handleHostRemoved, handleBackFromDetail);
     }
     if (view.kind === "project") {
       return (
@@ -1440,12 +1446,19 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     );
   }
 
+  // The prompt library lays out its own columns and scrolling, so it skips the centered page column.
+  const fullBleed = view.kind === "host" && view.section === "prompts";
+
   if (isCompactLayout) {
     return (
       <View style={styles.container}>
-        <PageLayout title={detailTitle} onBack={handleBackFromDetail}>
-          {content}
-        </PageLayout>
+        {fullBleed ? (
+          content
+        ) : (
+          <PageLayout title={detailTitle} onBack={handleBackFromDetail}>
+            {content}
+          </PageLayout>
+        )}
         {addHostModals}
       </View>
     );
@@ -1471,9 +1484,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         </WindowChromeRegion>
         <WindowChromeRegion corners="top-right">
           <View style={desktopStyles.contentPane} testID="settings-detail-pane">
-            <PageLayout title={detailTitle} titleTestID="settings-detail-header-title">
-              {content}
-            </PageLayout>
+            {fullBleed ? (
+              content
+            ) : (
+              <PageLayout title={detailTitle} titleTestID="settings-detail-header-title">
+                {content}
+              </PageLayout>
+            )}
           </View>
         </WindowChromeRegion>
       </View>

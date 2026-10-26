@@ -5,21 +5,26 @@ import { PressHighlight } from "@/components/ui/press-highlight";
 
 export function PromptTagChip({
   tag,
+  value,
+  count,
   selected = false,
   onSelect,
   testID,
 }: {
   tag: string;
+  /** What `onSelect` receives; defaults to the label. */
+  value?: string;
+  count?: number;
   selected?: boolean;
-  onSelect?: (tag: string) => void;
+  onSelect?: (value: string) => void;
   testID?: string;
 }): ReactElement {
-  const select = useCallback(() => onSelect?.(tag), [onSelect, tag]);
+  const select = useCallback(() => onSelect?.(value ?? tag), [onSelect, tag, value]);
   const accessibilityState = useMemo(() => ({ selected }), [selected]);
   const content = (
     <View style={[styles.chip, selected && styles.chipSelected]}>
       <Text style={[styles.label, selected && styles.labelSelected]} numberOfLines={1}>
-        {tag}
+        {count === undefined ? tag : `${tag} · ${count}`}
       </Text>
     </View>
   );

@@ -23,27 +23,41 @@ async function createPrompt(
   page: Page,
   input: { title: string; body: string; tags: string[] },
 ): Promise<void> {
-  const manager = page.getByTestId("prompt-library-manager");
+  const library = page.getByTestId("prompt-library-page");
   await page.getByTestId("prompt-library-manager-new").click();
   await page.getByTestId("prompt-library-manager-title").fill(input.title);
   await page.getByTestId("prompt-library-manager-body").fill(input.body);
   for (const tag of input.tags) {
     await page.getByTestId("prompt-library-manager-tag-input").fill(tag);
     await page.getByTestId("prompt-library-manager-add-tag").click();
-    await expect(manager.getByText(tag, { exact: true })).toBeVisible();
+    await expect(page.getByTestId(`prompt-library-manager-remove-tag-${tag}`)).toBeVisible();
   }
   await page.getByTestId("prompt-library-manager-save").click();
-  await expect(page.getByTestId("prompt-library-manager-title")).toHaveCount(0);
+  await expect(library.getByText(input.title, { exact: true }).first()).toBeVisible();
 }
 
 async function openManager(page: Page): Promise<void> {
   await page.getByTestId("composer-prompt-library-button").click();
   await page.getByTestId("prompt-library-picker-manage").click();
-  await expect(page.getByTestId("prompt-library-manager")).toBeVisible();
+  await expect(page.getByTestId("prompt-library-page")).toBeVisible();
+}
+
+async function closeManager(page: Page): Promise<void> {
+  await page.goBack();
+  await expectComposerVisible(page);
 }
 
 async function closeSheet(page: Page): Promise<void> {
   await page.keyboard.press("Escape");
+}
+
+async function rowIdFor(page: Page, title: string): Promise<string> {
+  const row = page
+    .locator('[data-testid^="prompt-library-manager-row-"]')
+    .filter({ hasText: title })
+    .first();
+  const testId = await row.getAttribute("data-testid");
+  return (testId ?? "").replace("prompt-library-manager-row-", "");
 }
 
 function daemonLibraryFile(): string {
@@ -82,8 +96,9 @@ test("prompt library: create, insert at cursor, filter, rename tags, and sync of
     await button.click();
     await expect(page.getByTestId("prompt-library-picker")).toBeVisible();
     await page.getByTestId("prompt-library-picker-manage").click();
-    await expect(page.getByTestId("prompt-library-manager")).toBeVisible();
+    await expect(page.getByTestId("prompt-library-page")).toBeVisible();
     await expect(page.getByTestId("prompt-library-manager-empty")).toBeVisible();
+    await capture(page, "prompt-library-page-empty-wide");
 
     await createPrompt(page, {
       title: "代码审查",
@@ -95,13 +110,25 @@ test("prompt library: create, insert at cursor, filter, rename tags, and sync of
       body: "请生成本次发布的说明。",
       tags: ["docs"],
     });
-    await expect(
-      page.getByTestId("prompt-library-manager").getByText("代码审查", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId("prompt-library-manager").getByText("发布说明", { exact: true }),
-    ).toBeVisible();
-    await closeSheet(page);
+    const library = page.getByTestId("prompt-library-page");
+    await expect(library.getByText("代码审查", { exact: true }).first()).toBeVisible();
+    await expect(library.getByText("发布说明", { exact: true }).first()).toBeVisible();
+
+    // The left rail filters the list.
+    await page.getByTestId("prompt-library-rail-tag-docs").click();
+    await expect(library.getByText("代码审查", { exact: true })).toHaveCount(0);
+    await page.getByTestId("prompt-library-rail-all").click();
+    await expect(library.getByText("代码审查", { exact: true }).first()).toBeVisible();
+
+    // Unsaved changes are confirmed before switching entries.
+    const reviewId = await rowIdFor(page, "代码审查");
+    await page.getByTestId(`prompt-library-manager-row-${reviewId}`).click();
+    await page.getByTestId("prompt-library-manager-title").fill("代码审查（改）");
+    page.once("dialog", (dialog) => void dialog.dismiss());
+    await library.getByText("发布说明", { exact: true }).first().click();
+    await expect(page.getByTestId("prompt-library-manager-title")).toHaveValue("代码审查（改）");
+    await page.getByTestId("prompt-library-manager-title").fill("代码审查");
+    await closeManager(page);
 
     // Insert at the caret, preserving existing content.
     await fillComposerDraft(page, "已有内容");
@@ -117,24 +144,28 @@ test("prompt library: create, insert at cursor, filter, rename tags, and sync of
     // Tag filter.
     await button.click();
     await page.getByTestId("prompt-library-picker-search").fill("");
-    await page.getByTestId("prompt-library-picker-tag-code").click();
+    await page.getByTestId("prompt-library-picker-tags-code").click();
     await expect(picker.getByText("代码审查", { exact: true })).toBeVisible();
     await expect(picker.getByText("发布说明", { exact: true })).toHaveCount(0);
+    // A second tag intersects: no prompt carries both, and one tap clears the filter.
+    await page.getByTestId("prompt-library-picker-tags-docs").click();
+    await expect(picker.getByText("代码审查", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("prompt-library-picker-empty")).toBeVisible();
+    await page.getByTestId("prompt-library-picker-filter-clear").click();
+    await expect(picker.getByText("发布说明", { exact: true })).toBeVisible();
     await closeSheet(page);
 
     // Rename a tag; the entry follows.
     await openManager(page);
-    await page.getByTestId("prompt-library-manager-tags").click();
     await page.getByTestId("prompt-library-tag-rename-code").click();
     await page.getByTestId("prompt-library-manager-tag-rename-input").fill("engineering");
     await page.getByTestId("prompt-library-manager-tag-rename-save").click();
     await expect(page.getByTestId("prompt-library-tag-engineering")).toBeVisible();
     await expect(page.getByTestId("prompt-library-tag-code")).toHaveCount(0);
-    await page.getByTestId("prompt-library-manager").getByTestId("sheet-header-back").click();
-    await closeSheet(page);
+    await closeManager(page);
 
     await button.click();
-    await page.getByTestId("prompt-library-picker-tag-engineering").click();
+    await page.getByTestId("prompt-library-picker-tags-engineering").click();
     await expect(picker.getByText("代码审查", { exact: true })).toBeVisible();
     await expect(picker.getByText("发布说明", { exact: true })).toHaveCount(0);
     await picker.getByText("代码审查", { exact: true }).click();
@@ -156,21 +187,20 @@ test("prompt library: create, insert at cursor, filter, rename tags, and sync of
       body: "离线时新增的提示词。",
       tags: ["offline"],
     });
-    await expect(
-      page.getByTestId("prompt-library-manager").getByText("离线新增", { exact: true }),
-    ).toBeVisible();
+    await expect(library.getByText("离线新增", { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId("prompt-library-manager-pending")).toBeVisible();
     await page.waitForTimeout(3_000);
     expect(daemonLibraryText()).not.toContain("离线新增");
-    await closeSheet(page);
+    await closeManager(page);
 
     // Reconnect: the queued prompt reaches the daemon.
     await page.context().setOffline(false);
     await expect.poll(() => daemonLibraryText(), { timeout: 60_000 }).toContain("离线新增");
     await openManager(page);
-    await expect(
-      page.getByTestId("prompt-library-manager").getByText("离线新增", { exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-    await closeSheet(page);
+    await expect(library.getByText("离线新增", { exact: true }).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await closeManager(page);
 
     // Chinese UI and responsive screenshots.
     await page.addInitScript(() => {
@@ -186,21 +216,32 @@ test("prompt library: create, insert at cursor, filter, rename tags, and sync of
     await expect(page.getByTestId("prompt-library-picker")).toBeVisible();
     await waitForSettledPosition(page.getByTestId("prompt-library-picker"));
     await capture(page, "prompt-library-picker-wide");
-    await page.getByTestId("prompt-library-picker-manage").click();
-    await expect(page.getByTestId("prompt-library-manager")).toBeVisible();
-    await waitForSettledPosition(page.getByTestId("prompt-library-manager"));
-    await capture(page, "prompt-library-manager-wide");
     await closeSheet(page);
 
+    // The page stays on the settings route from here on: a reload leaves no workspace to return to.
     await page.setViewportSize({ width: 412, height: 915 });
     await button.click();
     await expect(page.getByTestId("prompt-library-picker")).toBeVisible();
     await waitForSettledPosition(page.getByTestId("prompt-library-picker"));
+    await page.getByTestId("prompt-library-picker-tags-engineering").click();
     await capture(page, "prompt-library-picker-412");
     await page.getByTestId("prompt-library-picker-manage").click();
-    await expect(page.getByTestId("prompt-library-manager")).toBeVisible();
-    await waitForSettledPosition(page.getByTestId("prompt-library-manager"));
-    await capture(page, "prompt-library-manager-412");
+    await expect(page.getByTestId("prompt-library-narrow")).toBeVisible();
+    await capture(page, "prompt-library-page-412");
+    await page.getByTestId("prompt-library-manager-tags").click();
+    await capture(page, "prompt-library-tags-412");
+    await page.getByTestId("prompt-library-back").click();
+    await page.getByTestId("prompt-library-manager-new").click();
+    await expect(page.getByTestId("prompt-library-editor")).toBeVisible();
+    await capture(page, "prompt-library-editor-412");
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expect(page.getByTestId("prompt-library-wide")).toBeVisible();
+    await capture(page, "prompt-library-page-wide");
+    const wideId = await rowIdFor(page, "代码审查");
+    await page.getByTestId(`prompt-library-manager-row-${wideId}`).click();
+    await expect(page.getByTestId("prompt-library-editor")).toBeVisible();
+    await capture(page, "prompt-library-page-wide-editing");
   } finally {
     await workspace.cleanup();
   }

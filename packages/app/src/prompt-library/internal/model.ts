@@ -443,6 +443,7 @@ export class PromptLibraryModel {
       entries,
       tags: collectPromptTags(entries),
       pendingCount: host.pending.size,
+      pendingIds: [...host.pending.keys()],
       status: host.status,
       error: host.error,
       notice: host.notice,

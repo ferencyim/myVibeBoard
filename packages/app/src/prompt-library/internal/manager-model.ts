@@ -101,14 +101,14 @@ export class PromptLibraryManagerModel {
     this.update({ ...this.state, query });
   }
 
-  startCreate(): void {
+  startCreate(tags: readonly string[] = []): void {
     this.setState({
       view: "edit",
       draft: {
         id: null,
         title: "",
         body: "",
-        tags: [],
+        tags: normalizePromptLibraryTags(tags),
         original: null,
       },
       error: null,
@@ -129,6 +129,15 @@ export class PromptLibraryManagerModel {
       error: null,
       pending: false,
     });
+  }
+
+  /**
+   * Gate for leaving the current draft (switching entries, filters or views). Clean drafts pass;
+   * a dirty one needs `confirmDiscard` to resolve true.
+   */
+  async confirmLeave(confirmDiscard: () => Promise<boolean>): Promise<boolean> {
+    if (!this.state.dirty) return true;
+    return confirmDiscard();
   }
 
   cancelEdit(): void {
@@ -164,21 +173,23 @@ export class PromptLibraryManagerModel {
     this.updateDraft({ tags: removePromptLibraryTag(draft.tags, tag) });
   }
 
-  async save(): Promise<void> {
+  async save(): Promise<PromptLibraryEntry | null> {
     const draft = this.state.draft;
     const serverId = this.state.serverId;
-    if (!draft || !serverId || !this.state.canSubmit || this.state.pending) return;
+    if (!draft || !serverId || !this.state.canSubmit || this.state.pending) return null;
     this.setState({ pending: true, error: null });
     try {
-      await this.dependencies.save(serverId, {
+      const saved = await this.dependencies.save(serverId, {
         ...(draft.id ? { id: draft.id } : {}),
         title: draft.title,
         body: draft.body,
         tags: draft.tags,
       });
       this.setState({ view: "list", draft: null, pending: false, error: null });
+      return saved;
     } catch (error) {
       this.setState({ pending: false, error: errorCode(error) });
+      return null;
     }
   }
 

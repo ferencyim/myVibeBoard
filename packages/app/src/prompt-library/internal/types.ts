@@ -50,6 +50,8 @@ export interface PromptLibraryHostSnapshot {
   entries: PromptLibraryEntry[];
   tags: string[];
   pendingCount: number;
+  /** Ids of entries whose latest edit is still queued for the host. */
+  pendingIds: string[];
   status: PromptLibraryHostStatus;
   error: string | null;
   notice: PromptLibraryNotice | null;

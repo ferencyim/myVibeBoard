@@ -115,4 +115,32 @@ describe("PromptLibraryManagerModel", () => {
     });
     expect(model.getSnapshot().draft?.title).toBe("Title");
   });
+
+  test("a new prompt can start with a tag", () => {
+    const { model } = createModel();
+    model.startCreate(["Code", "code", " Team "]);
+    expect(model.getSnapshot().draft?.tags).toEqual(["Code", "Team"]);
+  });
+
+  test("leaving a clean draft needs no confirmation, a dirty one does", async () => {
+    const { model } = createModel();
+    let asked = 0;
+    const discard = (answer: boolean) => async () => {
+      asked += 1;
+      return answer;
+    };
+    model.startEdit(entry());
+    expect(await model.confirmLeave(discard(false))).toBe(true);
+    expect(asked).toBe(0);
+
+    model.setTitle("Changed");
+    expect(model.getSnapshot().dirty).toBe(true);
+    expect(await model.confirmLeave(discard(false))).toBe(false);
+    expect(await model.confirmLeave(discard(true))).toBe(true);
+    expect(asked).toBe(2);
+
+    model.setTitle("Review");
+    expect(model.getSnapshot().dirty).toBe(false);
+    expect(await model.confirmLeave(discard(false))).toBe(true);
+  });
 });

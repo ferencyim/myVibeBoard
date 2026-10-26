@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
@@ -8,9 +8,16 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import type { PromptLibraryEntry } from "@getpaseo/protocol/prompt-library";
 import { promptLibrary, usePromptLibraryHost } from "@/prompt-library";
-import { filterPromptEntries } from "@/prompt-library/internal/merge";
+import {
+  countPromptTags,
+  filterPrompts,
+  pruneTagSelection,
+  toggleTagSelection,
+} from "@/prompt-library/internal/browse";
+import { promptLibraryTagKey } from "@getpaseo/protocol/prompt-library";
 import { PromptLibraryNoticeBanner, promptLibraryErrorMessage } from "./messages";
 import { PromptTagChip } from "./tag-chip";
+import { PromptTagFilterBar, type PromptTagFilterOption } from "./tag-filter-bar";
 
 const ThemedSpinner = withUnistyles(LoadingSpinner, (theme) => ({
   color: theme.colors.foregroundMuted,
@@ -20,37 +27,49 @@ export function PromptLibraryPickerSheet({
   serverId,
   visible,
   onClose,
+  onDismiss,
   onInsert,
   onManage,
 }: {
   serverId: string;
   visible: boolean;
   onClose: () => void;
+  /** Runs after the sheet has finished closing. */
+  onDismiss?: () => void;
   onInsert: (body: string) => void;
   onManage: () => void;
 }): ReactElement {
   const { t } = useTranslation();
   const host = usePromptLibraryHost(serverId);
   const [query, setQuery] = useState("");
-  const [tag, setTag] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   useEffect(() => {
     if (!visible) return;
     setQuery("");
-    setTag(null);
+    setSelectedTags([]);
     void promptLibrary.ensureHydrated(serverId);
   }, [serverId, visible]);
 
   useEffect(() => {
-    if (tag && !host.tags.some((candidate) => candidate.toLowerCase() === tag.toLowerCase())) {
-      setTag(null);
-    }
-  }, [host.tags, tag]);
+    setSelectedTags((current) => {
+      const next = pruneTagSelection(current, host.tags);
+      return next.length === current.length ? current : next;
+    });
+  }, [host.tags]);
 
   const entries = useMemo(
-    () => filterPromptEntries({ entries: host.entries, query, tag }),
-    [host.entries, query, tag],
+    () => filterPrompts(host.entries, { query, tags: selectedTags }),
+    [host.entries, query, selectedTags],
   );
+  const tagOptions = useMemo<PromptTagFilterOption[]>(() => {
+    const { byTag } = countPromptTags(host.entries);
+    return host.tags.map((tag) => ({
+      id: tag,
+      label: tag,
+      count: byTag.get(promptLibraryTagKey(tag)) ?? 0,
+    }));
+  }, [host.entries, host.tags]);
   const header = useMemo<SheetHeader>(
     () => ({
       title: t("promptLibrary.title"),
@@ -70,8 +89,11 @@ export function PromptLibraryPickerSheet({
     },
     [onInsert],
   );
-  const selectTag = useCallback((next: string) => setTag(next), []);
-  const clearTag = useCallback(() => setTag(null), []);
+  const toggleTag = useCallback(
+    (next: string) => setSelectedTags((current) => toggleTagSelection(current, next)),
+    [],
+  );
+  const clearTags = useCallback(() => setSelectedTags([]), []);
   const footer = useMemo(
     () => (
       <View style={styles.footer}>
@@ -94,34 +116,38 @@ export function PromptLibraryPickerSheet({
     <AdaptiveModalSheet
       visible={visible}
       onClose={onClose}
+      onDismiss={onDismiss}
       header={header}
       footer={footer}
       testID="prompt-library-picker"
     >
       {host.tags.length > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tagRow}
-          style={styles.tagScroll}
-          testID="prompt-library-picker-tags"
-        >
-          <PromptTagChip
-            tag={t("promptLibrary.allTags")}
-            selected={tag === null}
-            onSelect={clearTag}
-            testID="prompt-library-picker-tag-all"
+        <>
+          <PromptTagFilterBar
+            options={tagOptions}
+            selectedIds={selectedTags}
+            onSelect={toggleTag}
+            onClear={clearTags}
+            testID="prompt-library-picker-tags"
           />
-          {host.tags.map((candidate) => (
-            <PromptTagChip
-              key={candidate.toLowerCase()}
-              tag={candidate}
-              selected={tag === candidate}
-              onSelect={selectTag}
-              testID={`prompt-library-picker-tag-${candidate}`}
-            />
-          ))}
-        </ScrollView>
+          {selectedTags.length > 0 ? (
+            <View style={styles.activeFilter} testID="prompt-library-picker-filter-active">
+              <Text style={styles.status} numberOfLines={1}>
+                {t("promptLibrary.filterActive", { count: selectedTags.length })}
+                {" · "}
+                {entries.length}
+              </Text>
+              <Button
+                variant="ghost"
+                size="sm"
+                onPress={clearTags}
+                testID="prompt-library-picker-filter-clear"
+              >
+                {t("promptLibrary.clearFilter")}
+              </Button>
+            </View>
+          ) : null}
+        </>
       ) : null}
       {!host.hydrated && host.status !== "error" ? (
         <View style={styles.loading}>
@@ -209,7 +235,7 @@ function PromptRow({
         </Text>
         {entry.tags.length > 0 ? (
           <View style={styles.rowTags}>
-            {entry.tags.slice(0, 3).map((tag) => (
+            {entry.tags.slice(0, 4).map((tag) => (
               <PromptTagChip key={tag.toLowerCase()} tag={tag} />
             ))}
           </View>
@@ -223,12 +249,11 @@ function PromptRow({
 }
 
 const styles = StyleSheet.create((theme) => ({
-  tagScroll: {
-    flexGrow: 0,
-  },
-  tagRow: {
+  activeFilter: {
     flexDirection: "row",
-    gap: theme.spacing[1],
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
     paddingBottom: theme.spacing[2],
   },
   list: {
@@ -249,7 +274,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
+    fontWeight: theme.fontWeight.normal,
   },
   rowTags: {
     flexDirection: "row",
