@@ -21,14 +21,15 @@ export function createTaskContextService(options: {
   db: VibeDb;
   store: VibeStore;
   prompts?: PromptResolver;
-  report?: (session: AgentSession, text: string) => Promise<void> | void;
+  /** `rowId` names a repeating notice (the watchdog) that updates one timeline row in place. */
+  report?: (session: AgentSession, text: string, rowId?: string) => Promise<void> | void;
 }) {
   const { store, db } = options;
   const runtime = createTaskRuntimeCommands(db);
-  const report = async (session: AgentSession, text: string) => {
+  const report = async (session: AgentSession, text: string, rowId?: string) => {
     if (session.workspaceId && store.tasks.get(session.workspaceId))
       store.tasks.setSummary(session.workspaceId, text);
-    await options.report?.(session, text);
+    await (rowId ? options.report?.(session, text, rowId) : options.report?.(session, text));
   };
   const freeze = (session: AgentSession) => {
     const task = session.workspaceId ? store.tasks.get(session.workspaceId) : undefined;
@@ -243,6 +244,45 @@ export function createTaskContextService(options: {
   };
 }
 
+/** The watchdog's repeating notice keeps one timeline row per task. */
+export function watchdogRowId(session: AgentSession): string {
+  return "context-watchdog:" + (session.workspaceId ?? session.agentId);
+}
+
+/** Appends context notices to the task's #1 timeline. The daemon merges same-id rows at the
+ *  first row's position, so only a repeating notice passes a `rowId`; compaction, continuation
+ *  and pause notices are new rows, and the same text for the same task within 30 seconds is
+ *  skipped instead. */
+export function createContextNotices(
+  store: Pick<VibeStore, "tasks">,
+  getPaseo: () => PaseoApi | null,
+  now: () => number = Date.now,
+) {
+  const REPEAT_MS = 30_000;
+  const recent = new Map<string, number>();
+  return async (session: AgentSession, text: string, rowId?: string) => {
+    const paseo = getPaseo();
+    const task = session.workspaceId ? store.tasks.get(session.workspaceId) : undefined;
+    if (!paseo || !task) return;
+    const at = now();
+    for (const [key, seen] of recent) if (at - seen >= REPEAT_MS) recent.delete(key);
+    const key = `${task.workspaceId}:${text}`;
+    if (!rowId && recent.has(key)) return;
+    try {
+      await paseo.agents.ref(task.anchorAgentId).timeline.append({
+        type: "plugin",
+        id: rowId ?? "context-status:" + randomUUID(),
+        kind: "context-status",
+        version: 1,
+        data: { text, workspaceId: task.workspaceId },
+      });
+      if (!rowId) recent.set(key, at);
+    } catch (error) {
+      console.error("上下文摘要追加失败：", error);
+    }
+  };
+}
+
 export function registerTaskContext(
   server: PluginServerContext,
   options: {
@@ -258,22 +298,7 @@ export function registerTaskContext(
   let paseo = (server as { paseo?: PaseoApi }).paseo ?? null;
   const service = createTaskContextService({
     ...options,
-    report: async (session, text) => {
-      const task = session.workspaceId ? options.store.tasks.get(session.workspaceId) : undefined;
-      if (paseo && task) {
-        try {
-          await paseo.agents.ref(task.anchorAgentId).timeline.append({
-            type: "plugin",
-            id: randomUUID(),
-            kind: "context_status",
-            version: 1,
-            data: { text, workspaceId: task.workspaceId },
-          });
-        } catch (error) {
-          console.error("上下文摘要追加失败：", error);
-        }
-      }
-    },
+    report: createContextNotices(options.store, () => paseo),
   });
   const resources = createContextResources({ ...options, report: service.report });
   const active = (agentId: string) => {
@@ -302,7 +327,7 @@ export function registerTaskContext(
       const timestamp = Date.parse(String(page.entries.at(-1)?.timestamp ?? ""));
       return Number.isFinite(timestamp) ? timestamp : null;
     },
-    report: service.report,
+    report: (session, text) => service.report(session, text, watchdogRowId(session)),
   });
   const pending = new Map<string, Set<string>>();
   const offs = [

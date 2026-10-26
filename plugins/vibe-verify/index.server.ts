@@ -103,6 +103,7 @@ export default function contribute(server: PluginServerContext) {
     prompts,
     roundTimeoutMs: () => tuning.roundTimeoutMs,
     claimTab,
+    log,
   });
 
   const taskVerify = createTaskVerifyStore(db, join(home, "verify"));
@@ -155,15 +156,22 @@ export default function contribute(server: PluginServerContext) {
         .timeline.refetch({ direction: "tail", limit: 1_000 });
       return page.entries ?? [];
     },
-    // The board owns task artifacts; verification summaries append to the anchor tab timeline.
-    async append(anchorAgentId: string, text: string) {
+    // The board owns task artifacts; verification summaries append to the anchor tab timeline
+    // with the task-verification renderer, which can open the report and evidence. The daemon
+    // merges same-id rows at the first row's position, so a summary keys on its verification:
+    // updates of one round stay together and later rounds never overwrite earlier ones.
+    async append(task: { workspaceId: string; anchorAgentId: string }, text: string, verificationId?: string) {
       if (!paseo) return;
-      await paseo.agents.ref(anchorAgentId).timeline.append({
+      await paseo.agents.ref(task.anchorAgentId).timeline.append({
         type: "plugin",
-        id: randomUUID(),
-        kind: "task-status",
+        id: "verify-status:" + (verificationId ?? randomUUID()),
+        kind: "task-verification",
         version: 1,
-        data: { text },
+        data: {
+          workspaceId: task.workspaceId,
+          text,
+          ...(verificationId ? { verificationId } : {}),
+        },
       });
     },
   });

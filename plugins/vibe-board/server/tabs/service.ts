@@ -4,14 +4,20 @@ import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { PluginBeforeRequests } from "@getpaseo/plugin/server";
 import type { VibeStore } from "../vibe/db";
 import {
+  OPTIONAL_TASK_ROLES,
   TASK_PHASE_LABELS,
   TASK_TAB_ROLE_LABEL,
   TASK_TAB_ROLE_LABELS,
   TASK_TAB_PRESET_LABEL,
+  TaskPresetSnapshotSchema,
   UNRESOLVED_TAB_MODEL,
+  presetModels,
   providerModelLabel,
   tabTitle,
+  type ModelRole,
   type Task,
+  type TaskPresetSnapshot,
+  type TaskRoleSelections,
   type TaskTab,
   type TaskTabRole,
 } from "../vibe/contract";
@@ -49,9 +55,163 @@ function statusOf(agent: PaseoAgent): string {
   if (agent.status === "closed") return "已关闭";
   return agent.status;
 }
-export function formatTabs(tabs: readonly Pick<TaskTabView, "number" | "roleLabel" | "model" | "status">[]) {
+export function formatTabs(
+  tabs: readonly (Pick<TaskTabView, "number" | "roleLabel" | "model"> & { status?: string })[],
+) {
   if (!tabs.length) return "（尚无）";
-  return tabs.map((tab) => `#${tab.number} ${tab.roleLabel} · ${tab.model}（${tab.status}）`).join("\n");
+  return tabs
+    .map(
+      (tab) =>
+        `#${tab.number} ${tab.roleLabel} · ${tab.model}${tab.status ? `（${tab.status}）` : ""}`,
+    )
+    .join("\n");
+}
+
+/** Pre-created role tabs follow the flow order; numbering matches sequential provisioning. */
+export type FlowRole = Extract<TaskTabRole, ModelRole>;
+export const FLOW_ROLE_ORDER: readonly FlowRole[] = ["scout", "worker", "reviewer", "verifier"];
+
+/** Resolve one role preset (task selection > project default > global default) without requiring
+ *  the other roles to be configured; optional roles resolve to null when disabled or missing. */
+export function resolveRolePreset(
+  store: Pick<VibeStore, "projectConfigs" | "modelDefaults" | "presets">,
+  role: ModelRole,
+  input: { selections?: TaskRoleSelections | null; projectId?: string | null } = {},
+): TaskPresetSnapshot | null {
+  const own = input.selections?.[role];
+  let id: string | null | undefined;
+  let source: TaskPresetSnapshot["source"] = "task";
+  if (own?.mode === "disabled") id = null;
+  else if (own?.mode === "preset") id = own.presetId;
+  else {
+    const project = input.projectId
+      ? store.projectConfigs.get(input.projectId)?.defaultPresets
+      : undefined;
+    if (project?.[role] !== undefined) {
+      id = project[role];
+      source = "project";
+    } else {
+      id = store.modelDefaults.global()[role];
+      source = "global";
+    }
+  }
+  if (!id) {
+    if (OPTIONAL_TASK_ROLES.includes(role)) return null;
+    throw new Error("角色 " + role + " 未配置可用预设");
+  }
+  const preset = store.presets.get(id);
+  if (!preset) throw new Error("角色 " + role + " 的预设不存在或不可用：" + id);
+  return TaskPresetSnapshotSchema.parse({
+    presetId: id,
+    source,
+    models: presetModels(preset),
+    environmentKind: preset.environmentKind,
+    runtimeEnv: preset.runtimeEnv,
+    instructions: preset.instructions,
+  });
+}
+
+export interface PlannedTabView {
+  number: number;
+  role: TaskTabRole;
+  roleLabel: string;
+  provider: string;
+  model: string;
+  status?: string;
+}
+
+/** The preset a flow role tab is (or will be) created with: the confirmed snapshot once the task
+ *  has one, otherwise the current default. A broken default skips the role (reported through
+ *  `onError`) instead of failing the whole roster. */
+export function roleTabPreset(
+  store: Pick<VibeStore, "projectConfigs" | "modelDefaults" | "presets">,
+  role: FlowRole,
+  input: { task?: Task; projectId?: string | null },
+  onError?: (error: unknown) => void,
+): { snapshot: TaskPresetSnapshot; model: TaskPresetSnapshot["models"][number] } | null {
+  let snapshot: TaskPresetSnapshot | null;
+  try {
+    snapshot = input.task?.rolesSnapshot
+      ? (input.task.rolesSnapshot[role] ?? null)
+      : resolveRolePreset(store, role, {
+          selections: input.task?.roleSelections,
+          projectId: input.projectId,
+        });
+  } catch (error) {
+    onError?.(error);
+    return null;
+  }
+  const model = snapshot?.models[0];
+  return snapshot && model ? { snapshot, model } : null;
+}
+
+/** The roster a new tab should see: live tabs plus the role tabs the plugin is about to create.
+ *  The current tab is never part of the roster; `selfNumber` is the number it will receive. */
+export function plannedTaskTabs(input: {
+  store: Pick<VibeStore, "projectConfigs" | "modelDefaults" | "presets">;
+  task?: Task;
+  projectId?: string | null;
+  selfRole: TaskTabRole;
+}): { tabs: PlannedTabView[]; selfNumber: number } {
+  const existing = [...(input.task?.tabs ?? [])].sort((a, b) => a.number - b.number);
+  const tabs: PlannedTabView[] = existing.map((tab) => ({
+    number: tab.number,
+    role: tab.role,
+    roleLabel: TASK_TAB_ROLE_LABELS[tab.role],
+    provider: tab.provider,
+    model: tab.modelLabel || tab.model,
+  }));
+  const selfNumber = input.task?.nextTabNumber ?? (existing.at(-1)?.number ?? 0) + 1;
+  const present = new Set<TaskTabRole>(existing.map((tab) => tab.role));
+  present.add(input.selfRole);
+  let next = selfNumber + 1;
+  for (const role of FLOW_ROLE_ORDER) {
+    if (present.has(role)) continue;
+    const preset = roleTabPreset(input.store, role, input);
+    if (!preset) continue;
+    tabs.push({
+      number: next++,
+      role,
+      roleLabel: TASK_TAB_ROLE_LABELS[role],
+      provider: preset.model.provider,
+      model: preset.model.model,
+    });
+    present.add(role);
+  }
+  return { tabs, selfNumber };
+}
+
+function roleRef(tabs: readonly PlannedTabView[], role: TaskTabRole): string | undefined {
+  const tab = tabs.find((candidate) => candidate.role === role);
+  return tab ? `#${tab.number} ${tab.roleLabel}` : undefined;
+}
+function roleOr(tabs: readonly PlannedTabView[], role: TaskTabRole, missing: string): string {
+  return roleRef(tabs, role) ?? missing;
+}
+
+/** Position line injected into the tab's system prompt (upstream/downstream). */
+export function rolePosition(
+  role: TaskTabRole,
+  selfNumber: number,
+  tabs: readonly PlannedTabView[],
+): string {
+  const main = roleOr(tabs, "main", "主会话");
+  const worker = roleOr(tabs, "worker", "执行（未配置）");
+  const reviewer = roleOr(tabs, "reviewer", "复核（未启用）");
+  const verifier = roleOr(tabs, "verifier", "验证（未配置）");
+  if (role === "main")
+    return `你是 #${selfNumber} 主会话（流程起点）。下游按需为 ${roleOr(tabs, "scout", "探路（未启用）")}、${worker}；之后为 ${reviewer}、${verifier}。方案复核按需临时打开。`;
+  if (role === "scout")
+    return `你是 #${selfNumber} 探路（只读调研）。上游：${main}；调研结论交回主会话 #1，不修改项目文件。`;
+  if (role === "plan_reviewer")
+    return `你是 #${selfNumber} 方案复核（只读审查）。上游：${main}；审查意见交回主会话 #1，不修改项目文件。`;
+  if (role === "worker")
+    return `你是 #${selfNumber} 执行。上游：${main}（确认方案）；下游：${reviewer}、${verifier}。交付后由插件启动复核与验证。`;
+  if (role === "reviewer")
+    return `你是 #${selfNumber} 复核（只读检查代码）。上游：${worker}；下游：${verifier}。`;
+  if (role === "verifier")
+    return `你是 #${selfNumber} 验证（只读核对证据）。上游：${worker}、${reviewer}；下游：用户确认「通过」后的 Git 收尾。`;
+  return `你是 #${selfNumber} 会话。上游与下游按用户要求确定；用户说「继续 #n 的工作」时先用 vibe_tabs 找到对应 tab。`;
 }
 
 /** Task tabs that vibe-context should track (worker registers at admission instead). */
@@ -303,7 +463,20 @@ export function createTaskTabs(options: {
   function rolePromptKey(role: TaskTabRole): string | undefined {
     if (role === "main") return "task.role.planner";
     if (role === "scout" || role === "plan_reviewer") return "task.role." + role;
+    if (role === "worker") return "board.task.work";
+    if (role === "reviewer") return "verify.reviewer_system";
+    if (role === "verifier") return "verify.verifier_system";
     return undefined;
+  }
+  function safeResolve(
+    key: string,
+    options: { projectId?: string | null; vars?: Record<string, string> },
+  ): string {
+    try {
+      return store.prompts.resolve(key, options);
+    } catch {
+      return "";
+    }
   }
   async function injectGuide(
     request: PluginBeforeRequests["agent.create"],
@@ -336,16 +509,47 @@ export function createTaskTabs(options: {
         },
       };
     }
-    // Plugin-opened tabs carry their role instructions in the initial prompt; a tab created by
-    // the user gets the planner rules only when it is the task's first tab.
-    const role: TaskTabRole = task?.tabs.length ? "session" : "main";
-    const tabs = task ? await tabsFor(task, false) : [];
+    // A plugin-created tab declares its role through the plugin-owned environment (agent labels
+    // alone are not trusted). A tab created by the user gets the planner rules only when it is
+    // the task's first tab; later user tabs are plain sessions.
+    const envRole = request.env?.VIBE_ROLE as TaskTabRole | undefined;
+    const pluginRole =
+      envRole && envRole !== "session" && Object.hasOwn(TASK_TAB_ROLE_LABELS, envRole)
+        ? envRole
+        : undefined;
+    const role: TaskTabRole = pluginRole ?? (task?.tabs.length ? "session" : "main");
+    const providerSpec = request.config.provider ?? "";
+    const slash = providerSpec.indexOf("/");
+    const modelId = slash >= 0 ? providerSpec.slice(slash + 1) : providerSpec;
+    const { tabs: planned, selfNumber } = plannedTaskTabs({
+      store,
+      ...(task ? { task } : {}),
+      projectId,
+      selfRole: role,
+    });
     const guide = store.prompts.resolve(TASK_TAB_GUIDE_PROMPT.key, {
       projectId,
-      vars: { tabs: formatTabs(tabs) },
+      vars: {
+        self: `#${selfNumber} ${TASK_TAB_ROLE_LABELS[role]}${modelId ? ` · ${modelId}` : ""}`,
+        position: rolePosition(role, selfNumber, planned),
+        tabs: formatTabs(planned),
+      },
     });
     const roleKey = rolePromptKey(role);
-    const roleText = roleKey ? store.prompts.resolve(roleKey, { projectId }) : "";
+    const roleText = roleKey
+      ? safeResolve(roleKey, {
+          projectId,
+          ...(role === "worker"
+            ? {
+                vars: {
+                  plan:
+                    "（尚未收到执行确认。插件发来执行确认（方案与调度准入结果）之前不要修改任何文件；用户在 #1 发送 /执行，或直接在本 tab 发消息，插件完成调度准入后会发来执行确认。用户只是提问时先回答，不要改文件。）",
+                  reason: "",
+                },
+              }
+            : {}),
+        })
+      : "";
     const format = role === "main" ? store.prompts.resolve("task.plan_format", { projectId }) : "";
     const parts = [guide, roleText, format].filter(
       (text): text is string => !!text && !supplied.includes(text),
@@ -371,22 +575,40 @@ export function createTaskTabs(options: {
       "任务 tab：",
       formatTabs(tabs),
     ];
+    if (task.control?.directInstruction)
+      lines.push("执行依据：无方案，按用户在执行 tab 的指示执行");
     if (task.control?.blockingReason) lines.push(`阻塞：${String(task.control.blockingReason)}`);
     if (task.summary) lines.push(`最新结论：${task.summary}`);
     for (const artifact of artifacts)
       lines.push(`沉淀（${artifact.kind}）：${artifact.summary}`);
     return { task, tabs, text: lines.join("\n") };
   }
+  // Every user-visible status is its own row (unique id): the daemon merges same-id rows at the
+  // first row's position, so a reused id would surface a new status above newer history and erase
+  // the old one. Repeats are suppressed in memory instead: the same text in the same tab within
+  // 30 seconds is skipped. Expired entries are pruned on every append and a closed tab is
+  // forgotten, so the map stays bounded.
+  const STATUS_DEDUPE_MS = 30_000;
+  const lastStatus = new Map<string, { text: string; at: number }>();
   async function appendStatus(agentId: string, text: string) {
+    const nowMs = now();
+    for (const [id, entry] of lastStatus)
+      if (nowMs - entry.at >= STATUS_DEDUPE_MS) lastStatus.delete(id);
+    const previous = lastStatus.get(agentId);
+    if (previous && previous.text === text) return;
     await paseo()
       .agents.ref(agentId)
       .timeline.append({
         type: "plugin",
-        id: randomUUID(),
+        id: "task-status:" + randomUUID(),
         kind: "task-status",
         version: 1,
         data: { text },
       });
+    lastStatus.set(agentId, { text, at: nowMs });
+  }
+  function forgetStatus(agentIds: Iterable<string>) {
+    for (const agentId of agentIds) lastStatus.delete(agentId);
   }
   async function vibeTabs(callerAgentId: string) {
     const { agent } = await refreshAgent(callerAgentId);
@@ -463,6 +685,7 @@ export function createTaskTabs(options: {
     tabsFor,
     status,
     appendStatus,
+    forgetStatus,
     vibeTabs,
     formatTabs,
     workspace: taskWorkspace,

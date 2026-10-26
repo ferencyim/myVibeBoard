@@ -69,7 +69,7 @@ export interface TaskPipelineDeps {
     provider: string,
     candidateIndex: number,
   ): Promise<TaskResourceLease>;
-  append(anchorAgentId: string, text: string, verificationId?: string): Promise<void>;
+  append(task: Task, text: string, verificationId?: string): Promise<void>;
   /** Reviewer/verifier timeline entries; any file edit or Git mutation voids the round. */
   timeline?(agentId: string): Promise<readonly unknown[]>;
   prompts?: PromptResolver;
@@ -123,7 +123,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
   async function announce(task: Task, text: string, verificationId?: string) {
     board.tasks.setSummary(task.workspaceId, text);
     await deps
-      .append(task.anchorAgentId, text, verificationId)
+      .append(task, text, verificationId)
       .catch((error) => log("原生验证摘要追加失败", error));
   }
   function artifactSource(
@@ -276,6 +276,9 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     ) {
       const current = board.tasks.get(task.workspaceId)!;
       snapshot = findTaskActualPreset(current, { role, admittedOnly: true }) ?? snapshot;
+      // Reuse the task's pre-created reviewer/verifier tab; the launcher falls back to a new
+      // top-level tab when it is closed, busy or runs a different model.
+      const reuseTab = [...current.tabs].reverse().find((tab) => tab.role === role);
       const entries = Array.isArray(current.control?.actualModels)
         ? current.control.actualModels
         : [];
@@ -336,30 +339,37 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         candidateIndex,
         forceNewMember,
         role,
+        ...(reuseTab ? { reuseAgentId: reuseTab.agentId } : {}),
         previousSessionId: () => previousSessionId,
         onCreated: (selection) => {
           verifiedAgents.add(selection.agentId);
           verify.setVerifier(vid, selection.agentId);
-          const session = previousSessionId
-            ? runtime.recordContinuation({
-                fromSessionId: previousSessionId,
-                ...selection,
-                reason: "验证模型不可用，按确认快照顺序接续",
-              }).to
-            : runtime.registerSession({
-                ...selection,
-                workspaceId: task.workspaceId,
-                projectId: workspace.projectId,
-                role,
-                confirmedAt: task.confirmedAt,
-              });
+          const existing = runtime.findSessionByAgent(selection.agentId);
+          const session =
+            existing ??
+            (previousSessionId
+              ? runtime.recordContinuation({
+                  fromSessionId: previousSessionId,
+                  ...selection,
+                  reason: "验证模型不可用，按确认快照顺序接续",
+                }).to
+              : runtime.registerSession({
+                  ...selection,
+                  workspaceId: task.workspaceId,
+                  projectId: workspace.projectId,
+                  role,
+                  confirmedAt: task.confirmedAt,
+                }));
           previousSessionId = session.id;
         },
-        onStopped: (agentId, outcome) => {
+        onStopped: (agentId, outcome, reused) => {
           const session = runtime.findSessionByAgent(agentId);
-          if (session && session.state !== "ended")
-            if (outcome === "failed") board.sessions.setState(session.id, "ended", { outcome });
-            else board.sessions.setState(session.id, "idle");
+          if (!session || session.state === "ended") return;
+          // A reused role tab stays available for the next round; only a newly created agent's
+          // failed session is terminal.
+          if (outcome === "failed" && !reused)
+            board.sessions.setState(session.id, "ended", { outcome });
+          else if (session.state !== "idle") board.sessions.setState(session.id, "idle");
         },
         acquire: async (provider, selectedIndex) => {
           const lease = await deps.acquire(task.workspaceId, role, provider, selectedIndex);

@@ -21,6 +21,7 @@ export function Btn({
   variant = "default",
   disabled,
   small,
+  testID,
 }: {
   label?: string;
   onPress: () => void;
@@ -28,6 +29,7 @@ export function Btn({
   variant?: "default" | "primary" | "danger" | "ghost";
   disabled?: boolean;
   small?: boolean;
+  testID?: string;
 }) {
   const { theme } = useHost();
   const bg =
@@ -44,6 +46,7 @@ export function Btn({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      testID={testID}
       onPress={onPress}
       disabled={disabled}
       style={{

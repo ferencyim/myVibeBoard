@@ -5,7 +5,8 @@
 ## 1. 用户看到的样子
 
 - 一个任务 = 一个 workspace（独立 worktree）。顶部 tab 就是流程，每个 tab 是一个普通的 Paseo agent 会话，标题为 `#编号 角色 · 模型`，例如 `#1 主会话 · Sol`、`#2 探路 · deepseek-flash`、`#3 执行 · Sol`、`#4 复核 · Opus`、`#5 验证 · deepseek-flash`。编号在任务内从 1 递增、固定不变，关掉的 tab 编号不复用。
-- `#1 主会话` 由首条消息创建，负责整理需求和出方案，可以派探路 tab。用户在 #1 里确认方案（`/执行`），插件开执行 tab；执行完自动开复核（选了才开）、验证 tab；验证通过后用户 `/通过`（或单独发「通过」），插件做 Git 收尾。
+- 第七轮起，`#1 主会话` 由首条消息创建后，插件立即按项目/全局默认预建 `#2 探路`、`#3 执行`、`#4 复核`、`#5 验证`（探路、复核默认不启用时不建）。除 #1 外都不带初始 prompt，保持空闲、不消耗 token。旧任务只在活动阶段、由回合事件或用户命令（如 `/执行`）补建缺少的角色 tab；暂停、完成、失败或归档中的任务不补建，面板和 `/状态` 只读、不补建。
+- `#1 主会话` 负责整理需求和出方案。用户在 #1 里确认方案（`/执行`），插件把方案发给已存在的执行 tab；执行完照常进入复核（选了才进）、验证，并复用已存在的复核/验证 tab；验证通过后用户 `/通过`（或单独发「通过」），插件做 Git 收尾。用户也可以直接打开任一 tab 对话：直接和执行 tab 说话本身就是执行授权，插件在用户发消息时补做资源准入。
 - **换模型 = 开新 tab**：用户点原生「+」新建 tab、选模型，说「继续 #3 的工作」。插件给这个新 tab 编号、注入同任务 tab 清单与交流说明，新 agent 读取 #3 的记录接着做。
 - 子代理仍是执行 tab 的原生子代理（Subagents track），不占顶部 tab。
 
@@ -28,6 +29,7 @@
 - task（WP-110）仍以 workspace_id 为键；新增 `tabs_json`（编号 → agentId、角色、预设/模型、创建时间）与下一个编号。不再需要 conversation_id、群聊行、成员表、artifact 发布到群聊。
 - 方案仍用 vibe-plan 固定格式，由 `/执行` 读取 #1（或用户所在 tab）最近一次完成输出中的方案段确认。
 - 复核/验证结论、Git 结果写 vibe.db（verification/evidence 等现有表），并在 #1 时间线 append 一条摘要（不触发模型回合）；`/状态` 在任意任务 tab 显示阶段、各 tab 状态与最近结论。
+- 第七轮恢复一个轻量「任务流程」workspace 面板：阶段与阻塞原因、tab 列表（点击用宿主的 `navigation.openAgent` 切换）、各步结论展开，以及执行/通过/停止/状态按钮（与斜杠命令同一服务端命令）。用户触发的状态（`/状态`、确认/排队、准入失败、Git 结果、验证摘要）每条都是新行，相同文本 30 秒内只追加一次；只有看门狗这类纯重复提示固定一行原位更新。验证摘要改用可打开报告与证据的 `task-verification` 卡片。
 - 调度（WP-112）、七角色默认、只读角色（**只靠提示词要求不修改文件**，不强制 provider 的只读/plan 权限模式，也不拒绝不支持只读模式的 provider）、Git 收尾安全规则（WP-115 复核后的版本）保留。
 
 ## 4. [core]
@@ -75,3 +77,15 @@
 - **删除**：会话内任务面板、客户端群聊 outbox/recipients、`taskConversations` 调用、vibe-context 的群聊成员压缩路径均已移除；首消息 outbox 交回宿主普通路径。
 - **偏差**：本 fork 的 Paseo 工具集没有 `wait_for_agent`，等待完成改用 `send_agent_prompt` 的 `notifyOnFinish` 通知及 `get_agent_activity`/`get_agent_status` 查询；设计表已同步修正。
 - **[core]**：为让插件完成上述能力，仅新增插件 agent 工具注册/调用（含 `callerAgentId`）、`agent.create` before 请求的 `workspaceId`/`parentAgentId`/`labels`、以及 `create_agent` 的 `asTab`（映射为顶层 `detached`）。详细文件清单见 WP-121 验收报告。
+
+## 8. WP-123 实现记录（第七轮）
+
+第七轮修正第六轮留下的三个缺口：状态消息无法渲染、流程 tab 全部按需打开、没有查看结论的轻量入口。没有新增 `[core]` 改动。
+
+- **状态消息**：`vibe-board` 重新注册 `task-status` 时间线渲染器（中文、首行标题、长正文可折叠）；`vibe-verify` 的验证摘要改以 `task-verification`（带 `workspaceId`/`verificationId`）追加，复用已有的报告/证据展开卡片；`vibe-context` 的上下文提示改为 `context-status` 并同样可折叠。v0.13 的贡献 ID / 渲染器 kind 只接受小写字母、数字和连字符，原来的 `context_status` 会被宿主拒绝注册；这是第六轮后上下文提示变成 unavailable 的原因。宿主按同 id 合并时保留第一行的位置（`timeline-projection.ts` 的 `mergeIdentityEntries`/`collapseByIdentity`），复用 id 会让新状态出现在历史上方并覆盖旧状态，所以 id 规则是：看门狗用 `context-watchdog:<workspaceId>` 原位更新；其它上下文提示与 `task-status` 每条唯一 id；验证摘要用 `verify-status:<verificationId>`（同一轮验证的更新合在一起，不同轮次互不覆盖）。重复抑制在内存里做：同一 tab（上下文为同一任务）相同文本 30 秒内跳过；记录随过期、tab 关闭/归档、workspace 归档和任务完成清理。
+- **预建流程 tab**：`provisionTabs` 在任务 #1 登记后按默认模型创建 scout/worker/reviewer/verifier（禁用的可选角色跳过），不带 prompt；角色顺序固定、编号连续。只在活动阶段补建（见第 1 节）。agent 已创建但登记失败时记下其 agentId，下次先补登记，仍失败就归档，不再重复创建孤儿 agent。预建 tab 的权限模式与按需打开的 tab 同源（共享契约 `taskRoleModeId`）：执行沿用预设模式，复核/验证用 `auto`（仅 Claude/Codex 传 modeId），探路保持 provider 默认。`board.tabs.guide` 增加 `self`/`position`/`tabs` 三个占位符，写明自身编号与角色、上下游、其它 tab 职责、`send_agent_prompt`/`get_agent_activity`/`vibe_tabs` 用法和结论交接时机；清单只是创建时的快照，提示词要求以 `vibe_tabs` 的实时结果为准。插件创建的 tab 通过 `VIBE_ROLE` 声明角色，agent 标签不参与角色判定。
+- **复用与直接执行**：确认时把已存在角色 tab 的模型冻结进本轮角色快照（`alignRolesToTabs`），调度器按该模型准入；`openWorker` 优先复用已有执行 tab。复核/验证由 `vibe-verify` 通过 `reuseAgentId` 复用预建 tab，但只在该 tab 从未跑过回合、且本轮不要求新成员（`forceNewMember`）时复用，否则新建，保持每轮复核/验证的独立性；复用 tab 的首条消息带上角色规则，提交、工作目录、检查清单等证据信息一律走轮次提示词，不依赖预建时没有的环境变量。
+- **执行 tab 的授权语义**：用户在执行 tab 发的原生消息本身就是执行授权，但仍要过调度准入；agent 互发消息带 `<paseo-system>`，不算授权。回合必须有 turnId，且只认属于本回合的用户消息。按阶段：规划/待确认时，有完整 `vibe-plan` 就确认该方案；没有完整方案时，这条消息本身就是任务说明（生成「无方案，按用户在执行 tab 的指示执行」的方案并记入 `control.directInstruction`，`/状态` 和面板都会显示），确认后同样准入。排队/暂停时补做准入。执行中且执行 tab 已持有租约时，用户追问直接放行，不重复准入、绑定或取消。复核/验证/待验收/完成阶段拒绝并停止本轮。准入成功后插件发出执行确认（执行提示词）；预建执行 tab 的提示词写明收到执行确认前不修改文件，用户只是提问时先回答、不改文件。不引入只读模式（第六轮已定不强制只读）。
+- **准入竞态**：调度器准入（`workerAdmitted`）与执行 tab 的直接授权都在同一个 workspace 队列里检查阶段，谁先到谁执行，后到的看到阶段已变就直接返回。准入时执行 tab 正在跑回合（通常是用户的直接消息）就保留准入、等该回合的授权绑定；回合结束仍没人绑定时自动重试。失败路径只释放本次调用自己绑定或尚未绑定的准入，不释放另一条路径绑定的租约。执行 tab 的回合记录所属租约代次（`noteTurnStarted`/`takeTurn`），回合结束只释放那一代租约，不会误放新的准入。
+- **面板**：`addWorkspacePanel` 注册「任务流程」，用只读 RPC `vibe.task.panel` 返回阶段、阻塞原因、tab 视图与最新结论；该 RPC 与命令 RPC 一样拒绝带 `callerAgentId` 的调用，且不补建 tab。tab 点击使用宿主已有的 `navigation.openAgent`，不需要切 tab 的 [core] API；移动端从 workspace 的「+」插件面板入口或 Command Center 打开。面板按钮调用与 `/执行` `/通过` `/停止任务` `/状态` 相同的 `vibe.task.tabs.command`，`callerAgentId` 校验保持只认用户操作。
+- **已知取舍**：宿主没有“发送前”插件钩子，直接在执行 tab 发消息时准入只能在回合开始后补做，模型可能已开始生成；提示词要求收到执行确认前不改文件，准入失败会立即停止该回合。方案复核（plan_reviewer）仍按需通过 `vibe_open_tab` 打开，不在固定 #2–#5 列表中。

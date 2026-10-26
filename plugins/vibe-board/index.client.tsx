@@ -1,7 +1,13 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { BehaviourScreen } from "./client/behaviour/BehaviourScreen";
 import { BehaviourSidebarItem, BoardSettingsScreen } from "./client/sidebar";
-import { taskTabCommandRpc, type TaskTabCommand } from "./shared/task-tabs";
+import { TaskFlowPanel } from "./client/task-panel";
+import { TaskStatusItem } from "./client/task-status";
+import {
+  taskStatusDataSchema,
+  taskTabCommandRpc,
+  type TaskTabCommand,
+} from "./shared/task-tabs";
 
 let requestCounter = 0;
 const requestId = () => `task-tab-${Date.now()}-${++requestCounter}`;
@@ -34,6 +40,28 @@ export default function contribute(client: PluginClientContext) {
         },
       }),
     ),
+    client.addTimelineRenderer({
+      kind: "task-status",
+      version: 1,
+      schema: taskStatusDataSchema,
+      Component: TaskStatusItem,
+    }),
+    client.addWorkspacePanel({
+      id: "task-flow",
+      title: "任务流程",
+      icon: "ListChecks",
+      Component: TaskFlowPanel,
+    }),
+    client.addCommandCenterItem({
+      id: "open-task-flow",
+      title: "任务流程面板",
+      icon: "ListChecks",
+      keywords: ["任务", "流程", "状态", "tab", "面板"],
+      context: "workspace",
+      onSelect({ openPanel }) {
+        openPanel("task-flow");
+      },
+    }),
     // Agent 行为: every prompt of every agent, editable globally or per project.
     client.addScreen({ id: "behaviour", title: "Agent 行为", Component: BehaviourScreen }),
     client.addSidebarHeaderItem({

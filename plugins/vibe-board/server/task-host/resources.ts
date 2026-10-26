@@ -93,7 +93,19 @@ export function createTaskResources(db: VibeDb, timeoutMs = 10_000) {
   return {
     request,
     admissionFor: (workspaceId: string) => admissions.get(workspaceId),
+    /** Drop a scheduler admission whose reservation was released without being bound. */
+    forgetAdmission(workspaceId: string, reservationId: string) {
+      if (admissions.get(workspaceId)?.reservationId === reservationId)
+        admissions.delete(workspaceId);
+    },
     hasLease: (agentId: string) => leases.has(agentId),
+    /** The agent this plugin bound (or is binding) to a reservation, if any. */
+    holderOf(reservationId: string): string | undefined {
+      for (const [agentId, lease] of leases) if (lease.reservationId === reservationId) return agentId;
+      return undefined;
+    },
+    /** Ties a started turn to the lease generation it runs under, so that turn's end can only
+     *  release that generation, never a newer admission of the same tab. */
     noteTurnStarted(agentId: string, turnId: string | null) {
       const lease = leases.get(agentId);
       if (lease && turnId) turns.set(agentId, { ...lease, turnId });

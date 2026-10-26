@@ -463,6 +463,28 @@ describe("原生 workspace 验证", () => {
     expect(h.collected).toBe(1);
     expect(h.launched).toHaveLength(1);
   });
+  it("复核与验证复用任务已预建的 role tab", async () => {
+    const h = setup({ review: "pass" });
+    h.board.tasks.allocateTab("ws-task", {
+      agentId: "reviewer-tab",
+      role: "reviewer",
+      provider: "codex",
+      model: "model-one",
+    });
+    h.board.tasks.allocateTab("ws-task", {
+      agentId: "verifier-tab",
+      role: "verifier",
+      provider: "codex",
+      model: "model-one",
+    });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "pass" });
+    expect(h.launched.map((input) => input.role)).toEqual(["reviewer", "verifier"]);
+    expect(h.launched.map((input) => input.reuseAgentId)).toEqual([
+      "reviewer-tab",
+      "verifier-tab",
+    ]);
+  });
   it("同提交旧中断报告与复核判词不进入当前材料，仅取最近独立采集原文且保留历史结论", async () => {
     const h = setup({ review: "pass" });
     const oldest = h.seedEvidence();

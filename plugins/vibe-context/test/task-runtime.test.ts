@@ -10,6 +10,8 @@ import {
   createTaskWatchdog,
   createTaskContextService,
   registerTaskContext,
+  createContextNotices,
+  watchdogRowId,
 } from "../server/runtime";
 import { readState, writeState } from "../server/complexity";
 import { createCompactionScheduler } from "../server/compaction";
@@ -664,5 +666,40 @@ describe("compaction resource ownership", () => {
     } finally {
       await resources.close();
     }
+  });
+});
+
+describe("上下文时间线提示", () => {
+  it("看门狗用固定行原位更新；其它提示每条唯一，相同文本 30 秒内只追加一次", async () => {
+    const s = setup();
+    const appended: Array<{ id: string; kind: string }> = [];
+    const paseo = {
+      agents: {
+        ref: () => ({
+          timeline: {
+            append: async (item: { id: string; kind: string }) => {
+              appended.push(item);
+            },
+          },
+        }),
+      },
+    };
+    let clock = 1_000_000;
+    const notices = createContextNotices(s.store, () => paseo as never, () => clock);
+    await notices(s.session, "会话长时间没有输出", watchdogRowId(s.session));
+    await notices(s.session, "会话长时间没有输出", watchdogRowId(s.session));
+    await notices(s.session, "上下文已压缩");
+    await notices(s.session, "上下文已压缩");
+    await notices(s.session, "会话已接续");
+    expect(appended.map((item) => item.kind)).toEqual(Array(4).fill("context-status"));
+    expect(appended[0]!.id).toBe("context-watchdog:workspace");
+    expect(appended[1]!.id).toBe("context-watchdog:workspace");
+    expect(appended[2]!.id).toMatch(/^context-status:/);
+    expect(appended[3]!.id).toMatch(/^context-status:/);
+    expect(appended[2]!.id).not.toBe(appended[3]!.id);
+    clock += 30_000;
+    await notices(s.session, "上下文已压缩");
+    expect(appended).toHaveLength(5);
+    expect(appended[4]!.id).not.toBe(appended[2]!.id);
   });
 });

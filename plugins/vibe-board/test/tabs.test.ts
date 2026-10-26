@@ -73,6 +73,7 @@ function fakePaseo(
   const operations: string[] = [];
   const created: Array<Record<string, unknown>> = [];
   let turnCount = 0;
+  let createPatch: Partial<FakeAgent> = {};
   let workspaceKind = "worktree";
   let projectKind = "git";
 
@@ -122,6 +123,12 @@ function fakePaseo(
           seqEnd: entries.length + 1,
         });
         timelines.set(agentId, entries);
+      },
+      archive: async () => {
+        operations.push("archive:" + agentId);
+        const agent = agents.get(agentId);
+        if (agent) agent.archivedAt = "2026-10-26T00:00:00.000Z";
+        return { archivedAt: "2026-10-26T00:00:00.000Z" };
       },
       cancelRun: async () => {
         operations.push("cancel:" + agentId);
@@ -182,6 +189,7 @@ function fakePaseo(
               model: model ?? "first",
               thinkingOptionId: "high",
               labels: input.labels as Record<string, string>,
+              ...createPatch,
             });
             return handle(id);
           },
@@ -203,6 +211,9 @@ function fakePaseo(
     addAgent,
     setTimeline(agentId: string, entries: TimelineEntry[]) {
       timelines.set(agentId, entries);
+    },
+    setCreatePatch(patch: Partial<FakeAgent>) {
+      createPatch = patch;
     },
     setWorkspaceKinds(kind: string, project: string) {
       workspaceKind = kind;
@@ -1884,6 +1895,609 @@ describe("命令授权", () => {
         { paseo: fake.paseo },
       )) as { message: string };
       expect(status.message).toContain("任务阶段：规划");
+    } finally {
+      await runtime.close();
+    }
+  });
+});
+
+function configurePresets(
+  store: ReturnType<typeof createVibeStore>,
+  options: { reviewer?: boolean; scout?: boolean } = {},
+) {
+  const make = (id: string, provider: string, model: string) =>
+    store.presets.create({
+      id,
+      name: id,
+      provider,
+      model,
+      thinking: "high",
+      permissionMode: "full",
+    });
+  const planner = make("p-planner", "codex", "planner-model");
+  const worker = make("p-worker", "codex", "second");
+  const scout = make("p-scout", "codex", "scout-model");
+  const reviewer = make("p-reviewer", "codex", "review-model");
+  const verifier = make("p-verifier", "gemini", "verify-model");
+  store.modelDefaults.setGlobal({
+    planner: planner.id,
+    worker: worker.id,
+    verifier: verifier.id,
+    scout: options.scout === false ? null : scout.id,
+    reviewer: options.reviewer === false ? null : reviewer.id,
+  });
+  return { planner, worker, scout, reviewer, verifier };
+}
+
+describe("预建流程 tab", () => {
+  it("新建任务按默认模型预建探路、执行、复核、验证 tab，且不发初始 prompt", async () => {
+    const { store, fake, flow } = await projectTask();
+    configurePresets(store);
+    await flow.provisionTabs("ws");
+    const task = store.tasks.get("ws")!;
+    expect(task.tabs.map((tab) => [tab.number, tab.role, tab.model])).toEqual([
+      [1, "main", "first"],
+      [2, "scout", "scout-model"],
+      [3, "worker", "second"],
+      [4, "reviewer", "review-model"],
+      [5, "verifier", "verify-model"],
+    ]);
+    expect(fake.created).toHaveLength(4);
+    for (const created of fake.created) expect(created).not.toHaveProperty("prompt");
+    await flow.provisionTabs("ws");
+    expect(store.tasks.get("ws")!.tabs).toHaveLength(5);
+    expect(fake.created).toHaveLength(4);
+  });
+
+  it("探路或复核默认不启用时不建对应 tab，编号仍连续", async () => {
+    const { store, fake, flow } = await projectTask();
+    configurePresets(store, { scout: false, reviewer: false });
+    await flow.provisionTabs("ws");
+    expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.number, tab.role])).toEqual([
+      [1, "main"],
+      [2, "worker"],
+      [3, "verifier"],
+    ]);
+    expect(fake.created).toHaveLength(2);
+  });
+
+  it("交流说明列出自身编号、上下游和预建的其它角色 tab", async () => {
+    const { store, tabs } = await projectTask();
+    configurePresets(store);
+    const result = (await tabs.injectGuide({
+      config: { provider: "codex/first" },
+      workspaceId: "ws",
+    } as never)) as { config: { systemPrompt?: string } };
+    const prompt = result.config.systemPrompt ?? "";
+    expect(prompt).toContain("你的身份：#2 会话");
+    expect(prompt).toContain("#3 探路");
+    expect(prompt).toContain("#4 执行");
+    expect(prompt).toContain("#5 复核");
+    expect(prompt).toContain("#6 验证");
+    expect(prompt).toContain("send_agent_prompt");
+    expect(prompt).toContain("get_agent_activity");
+  });
+
+  it("/执行 复用预建的执行 tab，并把确认快照冻结为该 tab 的模型", async () => {
+    const { db, store, fake, flow } = await projectTask();
+    const presets = configurePresets(store);
+    await flow.provisionTabs("ws");
+    const worker = store.tasks.get("ws")!.tabs.find((tab) => tab.role === "worker")!;
+    fake.setTimeline("agent-1", [
+      {
+        item: { type: "assistant_message", text: planMessage("整理文档"), messageId: "m-1" },
+        turnId: "turn-1",
+        seqEnd: 3,
+      },
+    ]);
+    const responder = createEventConsumer({
+      db,
+      consumer: "test-resources",
+      types: ["scheduler.task_resource_request"],
+      pollIntervalMs: 2,
+      startAt: "now",
+      handler: (event) => {
+        const payload = event.payload as { requestId: string; workspaceId: string };
+        publishEvent(db, {
+          type: "scheduler.task_resource_result",
+          payload: {
+            requestId: payload.requestId,
+            workspaceId: payload.workspaceId,
+            ok: true,
+            reason: "",
+            reservationId: "res-1",
+            provider: "codex",
+            model: "second",
+          },
+        });
+      },
+    });
+    responder.start();
+    try {
+      const result = await flow.execute({
+        workspaceId: "ws",
+        agentId: "agent-1",
+        requestId: "r-reuse",
+      });
+      expect(result.task.rolesSnapshot?.worker.models[0]).toMatchObject({
+        provider: "codex",
+        model: "second",
+      });
+      const queued = store.tasks.get("ws")!;
+      const admission = {
+        workspaceId: "ws",
+        confirmedAt: queued.confirmedAt!,
+        role: "worker" as const,
+        reservationId: "res-1",
+        presetId: presets.worker.id,
+        provider: "codex",
+        model: "second",
+        port: 17123,
+        deviceIds: [],
+      };
+      flow.resources.handleAdmission({
+        type: "scheduler.task_admitted",
+        payload: admission,
+      } as never);
+      await flow.workerAdmitted(admission);
+      expect(fake.created).toHaveLength(4);
+      expect(fake.sends.at(-1)?.agentId).toBe(worker.agentId);
+      expect(fake.sends.at(-1)?.text).toContain("整理文档");
+      const executing = store.tasks.get("ws")!;
+      expect(executing.phase).toBe("executing");
+      expect(executing.tabs.filter((tab) => tab.role === "worker")).toHaveLength(1);
+    } finally {
+      await responder.stop();
+    }
+  });
+
+  it("用户直接在预建执行 tab 发消息时确认方案并补做准入", async () => {
+    const { db, store, fake, flow } = await projectTask();
+    configurePresets(store);
+    await flow.provisionTabs("ws");
+    const worker = store.tasks.get("ws")!.tabs.find((tab) => tab.role === "worker")!;
+    fake.setTimeline("agent-1", [
+      {
+        item: { type: "assistant_message", text: planMessage("直接执行"), messageId: "m-1" },
+        turnId: "turn-1",
+        seqEnd: 3,
+      },
+    ]);
+    fake.setTimeline(worker.agentId, [
+      {
+        item: { type: "user_message", text: "直接开始，按方案做", messageId: "u-1" },
+        turnId: "direct-1",
+        seqEnd: 1,
+      },
+    ]);
+    const responder = createEventConsumer({
+      db,
+      consumer: "test-direct-resources",
+      types: ["scheduler.task_resource_request"],
+      pollIntervalMs: 2,
+      startAt: "now",
+      handler: (event) => {
+        const payload = event.payload as { requestId: string; workspaceId: string };
+        publishEvent(db, {
+          type: "scheduler.task_resource_result",
+          payload: {
+            requestId: payload.requestId,
+            workspaceId: payload.workspaceId,
+            ok: true,
+            reason: "",
+            reservationId: "res-direct",
+            provider: "codex",
+            model: "second",
+          },
+        });
+      },
+    });
+    responder.start();
+    try {
+      await flow.turnStarted({
+        agent: { id: worker.agentId, workspaceId: "ws" },
+        turnId: "direct-1",
+      });
+      const task = store.tasks.get("ws")!;
+      expect(task.confirmedAt).toBeTruthy();
+      expect(task.phase).toBe("executing");
+      expect(task.summary).toContain("直接授权");
+      expect(fake.sends.at(-1)?.agentId).toBe(worker.agentId);
+      expect(fake.sends.at(-1)?.text).toContain("直接执行");
+    } finally {
+      await responder.stop();
+    }
+  });
+});
+
+describe("状态行与流程面板", () => {
+  it("每条用户触发的状态用唯一 id；相同文本 30 秒内只追加一次，过期或遗忘后可再追加", async () => {
+    let clock = 1_000_000;
+    const context = setup({ now: () => clock });
+    context.fake.addAgent({ id: "agent-1" });
+    await context.tabs.ensureTab("agent-1");
+    const { fake, flow, tabs } = context;
+    await flow.status({ workspaceId: "ws", agentId: "agent-1" });
+    await flow.status({ workspaceId: "ws", agentId: "agent-1" });
+    expect(fake.appended).toHaveLength(1);
+    await tabs.appendStatus("agent-1", "不同的状态");
+    expect(fake.appended).toHaveLength(2);
+    const ids = fake.appended.map((entry) => (entry.item as { id: string }).id);
+    expect(new Set(ids).size).toBe(2);
+    for (const id of ids) expect(id).toMatch(/^task-status:/);
+    expect(ids).not.toContain("task-status:agent-1");
+    expect(fake.appended[0]!.item).toMatchObject({ kind: "task-status" });
+    await tabs.appendStatus("agent-1", "不同的状态");
+    expect(fake.appended).toHaveLength(2);
+    clock += 30_000;
+    await tabs.appendStatus("agent-1", "不同的状态");
+    expect(fake.appended).toHaveLength(3);
+    tabs.forgetStatus(["agent-1"]);
+    await tabs.appendStatus("agent-1", "不同的状态");
+    expect(fake.appended).toHaveLength(4);
+  });
+
+  it("面板返回阶段、tab 与可展开的探路和验证结论", async () => {
+    const { store, fake, tabs, flow } = await projectTask();
+    fake.addAgent({ id: "scout-agent", model: "first" });
+    await tabs.ensureTab("scout-agent", { role: "scout" });
+    fake.setTimeline("scout-agent", [
+      {
+        item: { type: "assistant_message", text: "探路结论：先改 service。", messageId: "s-1" },
+        turnId: "scout-turn",
+        seqEnd: 2,
+      },
+    ]);
+    await flow.turnEnded({
+      agent: { id: "scout-agent", workspaceId: "ws" },
+      turnId: "scout-turn",
+      outcome: { kind: "completed" },
+    });
+    store.taskArtifacts.record({
+      workspaceId: "ws",
+      kind: "verification",
+      sourceKey: "verify-panel",
+      confirmedAt: null,
+      source: { tabNumber: 1, agentId: "agent-1", sourceKey: "verify-panel" },
+      summary: "验证通过",
+      data: { conclusion: "pass" },
+    });
+    const view = await flow.panel("ws");
+    expect(view.isTask).toBe(true);
+    expect(view.tabs.find((tab) => tab.number === 2)).toMatchObject({
+      role: "scout",
+      roleLabel: "探路",
+    });
+    expect(view.steps.map((step) => step.kind)).toEqual(["scout", "verification"]);
+    expect(view.steps[0]!.summary).toContain("探路结论");
+    expect(view.steps[0]!.detail).toContain("先改 service");
+    expect(view.steps[1]!.summary).toBe("验证通过");
+  });
+});
+
+/** Answers every scheduler request with success and records the actions in order. */
+function startScheduler(db: VibeDb, reservationId = "res-1") {
+  const actions: string[] = [];
+  const responder = createEventConsumer({
+    db,
+    consumer: "test-scheduler-" + reservationId,
+    types: ["scheduler.task_resource_request"],
+    pollIntervalMs: 2,
+    startAt: "now",
+    handler: (event) => {
+      const payload = event.payload as { requestId: string; workspaceId: string; action: string };
+      actions.push(payload.action);
+      publishEvent(db, {
+        type: "scheduler.task_resource_result",
+        payload: {
+          requestId: payload.requestId,
+          workspaceId: payload.workspaceId,
+          ok: true,
+          reason: "",
+          reservationId,
+          provider: "codex",
+          model: "second",
+        },
+      });
+    },
+  });
+  responder.start();
+  return { actions, stop: () => responder.stop() };
+}
+
+/** A task with pre-created role tabs whose #1 holds a complete plan. */
+async function provisionedTask(options: { plan?: boolean } = {}) {
+  const context = await projectTask();
+  const presets = configurePresets(context.store);
+  await context.flow.provisionTabs("ws");
+  if (options.plan !== false)
+    context.fake.setTimeline("agent-1", [
+      {
+        item: { type: "assistant_message", text: planMessage("整理文档"), messageId: "m-1" },
+        turnId: "turn-1",
+        seqEnd: 3,
+      },
+    ]);
+  const worker = context.store.tasks.get("ws")!.tabs.find((tab) => tab.role === "worker")!;
+  return { ...context, presets, worker };
+}
+
+function admissionFor(
+  store: ReturnType<typeof createVibeStore>,
+  presetId: string,
+  reservationId = "res-1",
+) {
+  return {
+    workspaceId: "ws",
+    confirmedAt: store.tasks.get("ws")!.confirmedAt!,
+    role: "worker" as const,
+    reservationId,
+    presetId,
+    provider: "codex",
+    model: "second",
+    port: 17123,
+    deviceIds: [],
+  };
+}
+
+/** The user typed `text` in the execution tab; its turn is running. */
+function userTurn(
+  fake: ReturnType<typeof fakePaseo>,
+  agentId: string,
+  turnId: string,
+  text: string,
+) {
+  fake.setTimeline(agentId, [
+    { item: { type: "user_message", text, messageId: "u-" + turnId }, turnId, seqEnd: 1 },
+  ]);
+  const agent = fake.agents.get(agentId)!;
+  agent.status = "running";
+  agent.activeTurn = { id: turnId };
+}
+
+describe("执行 tab 直接授权与调度准入", () => {
+  it("/执行 排队后准入先到、用户消息正在运行：两条路径只执行一次，不释放对方租约", async () => {
+    const { db, store, fake, flow, presets, worker } = await provisionedTask();
+    const scheduler = startScheduler(db);
+    try {
+      await flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-1" });
+      expect(store.tasks.get("ws")!.phase).toBe("queued");
+      const admission = admissionFor(store, presets.worker.id);
+      flow.resources.handleAdmission({ type: "scheduler.task_admitted", payload: admission } as never);
+      userTurn(fake, worker.agentId, "direct-1", "开始执行吧");
+      const sendsBefore = fake.sends.length;
+      await Promise.all([
+        flow.workerAdmitted(admission),
+        flow.turnStarted({ agent: { id: worker.agentId, workspaceId: "ws" }, turnId: "direct-1" }),
+      ]);
+      const task = store.tasks.get("ws")!;
+      expect(task.phase).toBe("executing");
+      expect(task.control?.blockingReason ?? null).toBeNull();
+      expect(fake.sends.slice(sendsBefore).filter((send) => send.agentId === worker.agentId)).toHaveLength(1);
+      expect(scheduler.actions).not.toContain("release");
+      expect(scheduler.actions.filter((action) => action === "bind")).toHaveLength(1);
+      expect(flow.resources.holderOf("res-1")).toBe(worker.agentId);
+      expect(fake.operations).not.toContain("cancel:" + worker.agentId);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("/执行 排队后用户消息先完成授权、准入事件后到：准入路径直接返回，不释放", async () => {
+    const { db, store, fake, flow, presets, worker } = await provisionedTask();
+    const scheduler = startScheduler(db);
+    try {
+      await flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-1" });
+      const admission = admissionFor(store, presets.worker.id);
+      flow.resources.handleAdmission({ type: "scheduler.task_admitted", payload: admission } as never);
+      userTurn(fake, worker.agentId, "direct-1", "开始执行吧");
+      const sendsBefore = fake.sends.length;
+      await flow.turnStarted({ agent: { id: worker.agentId, workspaceId: "ws" }, turnId: "direct-1" });
+      await flow.workerAdmitted(admission);
+      expect(store.tasks.get("ws")!.phase).toBe("executing");
+      expect(fake.sends.slice(sendsBefore)).toHaveLength(1);
+      expect(scheduler.actions).not.toContain("release");
+      expect(scheduler.actions.filter((action) => action === "bind")).toHaveLength(1);
+      expect(flow.resources.holderOf("res-1")).toBe(worker.agentId);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("准入时执行 tab 正被 agent 消息占用：保留准入，回合结束后自动发送执行确认", async () => {
+    const { db, store, fake, flow, presets, worker } = await provisionedTask();
+    const scheduler = startScheduler(db);
+    try {
+      await flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-1" });
+      const admission = admissionFor(store, presets.worker.id);
+      flow.resources.handleAdmission({ type: "scheduler.task_admitted", payload: admission } as never);
+      const agent = fake.agents.get(worker.agentId)!;
+      agent.status = "running";
+      agent.activeTurn = { id: "agent-turn" };
+      await flow.workerAdmitted(admission);
+      expect(store.tasks.get("ws")!.phase).toBe("queued");
+      expect(scheduler.actions).not.toContain("release");
+      agent.status = "idle";
+      agent.activeTurn = null;
+      await flow.turnEnded({
+        agent: { id: worker.agentId, workspaceId: "ws" },
+        turnId: "agent-turn",
+        outcome: { kind: "completed" },
+      });
+      expect(store.tasks.get("ws")!.phase).toBe("executing");
+      expect(fake.sends.at(-1)).toMatchObject({ agentId: worker.agentId });
+      expect(fake.sends.at(-1)!.text).toContain("整理文档");
+      expect(scheduler.actions).not.toContain("release");
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("执行中且执行 tab 已持有租约时，用户追问不重复准入、不发送、不取消", async () => {
+    const { db, store, fake, flow, presets, worker } = await provisionedTask();
+    const scheduler = startScheduler(db);
+    try {
+      await flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-1" });
+      const admission = admissionFor(store, presets.worker.id);
+      flow.resources.handleAdmission({ type: "scheduler.task_admitted", payload: admission } as never);
+      await flow.workerAdmitted(admission);
+      expect(store.tasks.get("ws")!.phase).toBe("executing");
+      const actions = scheduler.actions.length;
+      const sends = fake.sends.length;
+      userTurn(fake, worker.agentId, "follow-up", "进度怎么样了？");
+      await flow.turnStarted({ agent: { id: worker.agentId, workspaceId: "ws" }, turnId: "follow-up" });
+      expect(scheduler.actions.length).toBe(actions);
+      expect(fake.sends.length).toBe(sends);
+      expect(fake.operations).not.toContain("cancel:" + worker.agentId);
+      expect(flow.resources.hasLease(worker.agentId)).toBe(true);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("规划阶段没有完整方案时，执行 tab 的用户消息就是任务说明：确认、准入并记录无方案", async () => {
+    const { db, store, fake, flow, worker } = await provisionedTask({ plan: false });
+    const scheduler = startScheduler(db, "res-direct");
+    try {
+      userTurn(fake, worker.agentId, "direct-1", "把 README 的标题改成 Vibe");
+      await flow.turnStarted({ agent: { id: worker.agentId, workspaceId: "ws" }, turnId: "direct-1" });
+      const task = store.tasks.get("ws")!;
+      expect(task.confirmedAt).toBeTruthy();
+      expect(task.phase).toBe("executing");
+      expect(task.plan?.goal).toBe("把 README 的标题改成 Vibe");
+      expect(task.plan?.approach).toContain("无方案，按用户在执行 tab 的指示执行");
+      expect(task.control?.directInstruction).toBe(true);
+      expect(task.summary).toContain("无方案");
+      expect(scheduler.actions).toEqual(expect.arrayContaining(["acquire", "bind"]));
+      expect(fake.sends.at(-1)).toMatchObject({ agentId: worker.agentId });
+      expect(fake.sends.at(-1)!.text).toContain("无方案，按用户在执行 tab 的指示执行");
+      expect(fake.sends.at(-1)!.text).toContain("只是提问");
+      expect(fake.operations).not.toContain("cancel:" + worker.agentId);
+      const status = await flow.status({ workspaceId: "ws", agentId: worker.agentId });
+      expect(status.text).toContain("执行依据：无方案");
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("回合没有 turnId 时不认定任何用户消息为授权", async () => {
+    const { db, store, fake, flow, worker } = await provisionedTask();
+    const scheduler = startScheduler(db);
+    try {
+      userTurn(fake, worker.agentId, "direct-1", "开始执行吧");
+      await flow.turnStarted({ agent: { id: worker.agentId, workspaceId: "ws" }, turnId: null });
+      expect(store.tasks.get("ws")!.confirmedAt).toBeNull();
+      expect(scheduler.actions).toHaveLength(0);
+      expect(fake.sends.filter((send) => send.agentId === worker.agentId)).toHaveLength(0);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("预建执行 tab 的提示词要求收到执行确认前不改文件，且清单以 vibe_tabs 为准", async () => {
+    const { store, tabs } = await projectTask();
+    configurePresets(store);
+    const result = (await tabs.injectGuide({
+      config: { provider: "codex/second" },
+      env: { VIBE_ROLE: "worker" },
+      workspaceId: "ws",
+    } as never)) as { config: { systemPrompt?: string } };
+    const prompt = result.config.systemPrompt ?? "";
+    expect(prompt).toContain("执行确认");
+    expect(prompt).toContain("之前不要修改任何文件");
+    expect(prompt).toContain("以 vibe_tabs 的实时结果为准");
+    expect(prompt).toContain("没有方案时这条消息就是任务说明");
+  });
+});
+
+describe("预建 tab 的边界", () => {
+  it("登记失败的预建 agent 下次先补登记，仍失败则归档，不重复创建", async () => {
+    const { store, fake, flow } = await projectTask();
+    configurePresets(store);
+    fake.setCreatePatch({ internal: true });
+    await flow.provisionTabs("ws");
+    expect(fake.created).toHaveLength(4);
+    expect(store.tasks.get("ws")!.tabs).toHaveLength(1);
+    fake.setCreatePatch({});
+    fake.agents.get("worker-1")!.internal = false;
+    await flow.provisionTabs("ws");
+    expect(fake.created).toHaveLength(4);
+    expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.agentId, tab.role])).toEqual([
+      ["agent-1", "main"],
+      ["worker-1", "scout"],
+    ]);
+    expect(fake.operations).toEqual(
+      expect.arrayContaining(["archive:worker-2", "archive:worker-3", "archive:worker-4"]),
+    );
+    expect(fake.operations).not.toContain("archive:worker-1");
+    await flow.provisionTabs("ws");
+    expect(fake.created).toHaveLength(7);
+    expect(store.tasks.get("ws")!.tabs.map((tab) => tab.role)).toEqual([
+      "main",
+      "scout",
+      "worker",
+      "reviewer",
+      "verifier",
+    ]);
+  });
+
+  it("暂停的任务不补建 tab；面板与 /状态 只读，不补建", async () => {
+    const { store, fake, flow } = await projectTask();
+    configurePresets(store);
+    await flow.panel("ws");
+    await flow.status({ workspaceId: "ws", agentId: "agent-1" });
+    await Promise.resolve();
+    expect(fake.created).toHaveLength(0);
+    store.tasks.setPhase("ws", "paused");
+    await flow.provisionTabs("ws");
+    expect(fake.created).toHaveLength(0);
+  });
+
+  it("预建复核/验证 tab 与按需打开时使用同一权限模式", async () => {
+    const { store, fake, flow } = await projectTask();
+    configurePresets(store);
+    await flow.provisionTabs("ws");
+    const byRole = (role: string) =>
+      fake.created.find((input) => (input.env as Record<string, string>).VIBE_ROLE === role)!
+        .config as { modeId?: string };
+    expect(byRole("reviewer").modeId).toBe("auto");
+    expect(byRole("worker").modeId).toBe("full-access");
+    expect(byRole("scout").modeId).toBeUndefined();
+  });
+
+  it("面板 RPC 拒绝 agent 调用", async () => {
+    const db = openVibeDb({ path: ":memory:" });
+    handles.push(db);
+    migrateOwner(db, "core");
+    const store = createVibeStore(db);
+    store.tasks.markTaskWorkspace("ws");
+    const fake = fakePaseo();
+    fake.addAgent({ id: "agent-1" });
+    const tabs = createTaskTabs({ store, getPaseo: () => fake.paseo as never });
+    await tabs.ensureTab("agent-1");
+    const handlers = new Map<string, (input: unknown, context: unknown) => Promise<unknown>>();
+    const server = {
+      before: () => () => {},
+      on: () => () => {},
+      handle: (rpc: { name: string }, fn: (input: unknown, context: unknown) => Promise<unknown>) => {
+        handlers.set(rpc.name, fn);
+      },
+    };
+    const runtime = registerTaskRuntime(server as never, {
+      db,
+      store,
+      getPaseo: () => fake.paseo as never,
+      onPaseo: () => {},
+    });
+    try {
+      const panel = handlers.get("vibe.task.panel")!;
+      await expect(
+        panel({ workspaceId: "ws" }, { callerAgentId: "agent-2", paseo: fake.paseo }),
+      ).rejects.toThrow("agent 消息不能授权任务命令");
+      const view = (await panel({ workspaceId: "ws" }, { paseo: fake.paseo })) as {
+        isTask: boolean;
+      };
+      expect(view.isTask).toBe(true);
     } finally {
       await runtime.close();
     }

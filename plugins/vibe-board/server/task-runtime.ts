@@ -4,7 +4,10 @@ import { EVENT_PAYLOADS } from "./vibe/contract";
 import { createEventConsumer, createTaskRuntimeCommands, type VibeDb, type VibeStore } from "./vibe/db";
 import { createTaskTabs } from "./tabs/service";
 import { createTaskFlow } from "./tabs/flow";
-import { taskTabCommandRpc } from "../shared/task-tabs";
+import { taskPanelRpc, taskTabCommandRpc } from "../shared/task-tabs";
+
+const AGENT_CALLER_ERROR =
+  "agent 消息不能授权任务命令；请由用户在原生输入框发送斜杠命令或「通过」";
 
 /** The business owner for numbered task tabs and the open-tab task flow. */
 export function registerTaskRuntime(
@@ -50,6 +53,27 @@ export function registerTaskRuntime(
       options.onPaseo(context.paseo);
       if (closed) return;
       await tabs.ensureTab(agent.id).catch((error) => log("任务 tab 登记失败", error));
+      const task = agent.workspaceId ? options.store.tasks.get(agent.workspaceId) : undefined;
+      if (task && task.anchorAgentId === agent.id && task.tabs.length === 1)
+        void flow
+          .provisionTabs(task.workspaceId)
+          .catch((error) => log("流程 tab 预建失败", error));
+    }),
+    // Closed or archived tabs no longer need status repeat suppression.
+    server.on("agent.closed", ({ agent }) => tabs.forgetStatus([agent.id])),
+    server.on("agent.archived", ({ agent }) => tabs.forgetStatus([agent.id])),
+    server.on("workspace.archived", ({ workspace }) => {
+      const task = options.store.tasks.get(workspace.id);
+      if (task) tabs.forgetStatus(task.tabs.map((tab) => tab.agentId));
+    }),
+    server.on("agent.turn_started", async ({ agent, turnId }, context) => {
+      options.onPaseo(context.paseo);
+      if (closed) return;
+      try {
+        await flow.turnStarted({ agent, turnId });
+      } catch (error) {
+        log("任务 tab 回合开始处理失败", error);
+      }
     }),
     server.on("agent.turn_ended", async ({ agent, turnId, outcome }, context) => {
       options.onPaseo(context.paseo);
@@ -61,10 +85,14 @@ export function registerTaskRuntime(
       }
     }),
   ];
+  server.handle(taskPanelRpc, async (input, context) => {
+    options.onPaseo(context.paseo);
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    return flow.panel(input.workspaceId);
+  });
   server.handle(taskTabCommandRpc, async (input, context) => {
     options.onPaseo(context.paseo);
-    if (context.callerAgentId)
-      throw new Error("agent 消息不能授权任务命令；请由用户在原生输入框发送斜杠命令或「通过」");
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
     if (input.action === "execute") {
       const result = await flow.execute(input);
       return { task: result.task, message: result.message };

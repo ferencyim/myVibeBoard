@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
+import type { PaseoAgent, PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import {
   TaskRoleSnapshotSchema,
@@ -13,9 +13,13 @@ import {
   findTaskActualPreset,
   freezeTaskSubtaskPresets,
   parseTaskPlan,
+  presetModeId,
+  taskRoleModeId,
+  TaskPlanSchema,
   validateTaskSubtaskPresets,
   TASK_PLAN_PROMPT,
   type Task,
+  type TaskArtifact,
   type TaskPlan,
   type TaskPlanSource,
   type TaskPresetSnapshot,
@@ -24,13 +28,17 @@ import {
   type TaskTab,
 } from "../vibe/contract";
 import { createTaskRuntimeCommands, publishEvent, type VibeDb, type VibeStore } from "../vibe/db";
-import { createTaskResources } from "../task-host/resources";
-import { modeIdFor } from "../task-host/permission";
+import { createTaskResources, type TaskTurnToken } from "../task-host/resources";
 import { createTaskGitFinalizer, type GitState } from "../task-conversation/git";
 import { TASK_FLOW_PROMPTS } from "../task-conversation/prompts";
 import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
 import { TASK_HOST_PROMPTS } from "../task-host/prompts";
-import { HANDOFF_PATTERN, tabTitle, type TaskTabs } from "./service";
+import {
+  HANDOFF_PATTERN,
+  roleTabPreset,
+  tabTitle,
+  type TaskTabs,
+} from "./service";
 
 type Admission = {
   workspaceId: string;
@@ -129,6 +137,85 @@ function sourceFor(tab: TaskTab, page: TimelinePage, entry: TimelineEntry): Task
   };
 }
 
+const PREBUILT_ROLES = ["scout", "worker", "reviewer", "verifier"] as const;
+type PrebuiltRole = (typeof PREBUILT_ROLES)[number];
+/** Phases in which a task still runs and may need its role tabs; a paused, finished or failed
+ *  task is never given new agents. */
+const PROVISION_PHASES = new Set<TaskPhase>([
+  "planning",
+  "awaiting_confirmation",
+  "queued",
+  "executing",
+  "reviewing",
+  "verifying",
+  "awaiting_acceptance",
+]);
+const DIRECT_NO_PLAN = "无方案，按用户在执行 tab 的指示执行";
+
+/** A user message in the execution tab without a complete plan is itself the task description. */
+function directPlan(text: string): TaskPlan {
+  return TaskPlanSchema.parse({
+    goal: text.replace(/\s+/g, " ").trim().slice(0, 200),
+    approach: `${DIRECT_NO_PLAN}。用户消息：\n${text.trim().slice(0, 4_000)}`,
+    files: ["**"],
+    subtasks: [],
+    checks: [{ text: "结果符合用户在执行 tab 的指示", method: "用户核对执行交付与验证结果" }],
+  });
+}
+
+/** Freeze a pre-created tab's actual model into the confirmation snapshot so the scheduler,
+ *  worker reuse and verify reuse all pick the model that tab already runs. */
+function snapshotForTab(tab: TaskTab, base: TaskPresetSnapshot | null): TaskPresetSnapshot {
+  const index = base?.models.findIndex(
+    (model) => model.provider === tab.provider && model.model === tab.model,
+  );
+  if (base && index !== undefined && index >= 0) {
+    if (index === 0) return base;
+    return {
+      ...base,
+      models: [base.models[index]!, ...base.models.filter((_, at) => at !== index)],
+    };
+  }
+  return {
+    presetId: base?.presetId ?? tab.presetId ?? "task-tab-native",
+    source: base?.source ?? "task",
+    models: [
+      {
+        provider: tab.provider,
+        model: tab.model,
+        thinking: tab.thinking ?? "",
+        // Same source as the role's preset; only a task without any snapshot falls back.
+        permissionMode: base?.models[0]?.permissionMode ?? "full",
+      },
+    ],
+    environmentKind: base?.environmentKind ?? "project-default",
+    runtimeEnv: base?.runtimeEnv ?? null,
+    instructions: base?.instructions ?? "",
+  };
+}
+
+/** Existing role tabs win over later default edits: freeze their model at confirmation. */
+function alignRolesToTabs(
+  roles: TaskRoleSnapshot,
+  tabs: readonly TaskTab[],
+): TaskRoleSnapshot {
+  const aligned = { ...roles };
+  for (const role of PREBUILT_ROLES) {
+    const base = aligned[role];
+    if (base === null) continue;
+    const tab = [...tabs]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.role === role && candidate.model && candidate.model !== UNRESOLVED_TAB_MODEL,
+      );
+    if (tab) aligned[role] = snapshotForTab(tab, base);
+  }
+  if (aligned.worker !== roles.worker)
+    aligned.subagent = { ...aligned.worker, source: "worker" };
+  return TaskRoleSnapshotSchema.parse(aligned);
+}
+
 export function createTaskFlow(options: {
   db: VibeDb;
   store: VibeStore;
@@ -143,7 +230,9 @@ export function createTaskFlow(options: {
   const resources = createTaskResources(db);
   const runtime = createTaskRuntimeCommands(db);
   const accepting = new Map<string, { cancelled: boolean }>();
-  const opening = new Set<string>();
+  // Pre-created tabs whose registration failed, keyed by workspace and role (see provisionTabsNow).
+  const orphanTabs = new Map<string, { agentId: string; presetId: string }>();
+  const provisioning = new Map<string, Promise<void>>();
   const serial = new Map<string, Promise<unknown>>();
 
   function paseo(): PaseoApi {
@@ -157,14 +246,17 @@ export function createTaskFlow(options: {
     return task;
   }
   /** A finished tab releases its slot; a still-running agent keeps the lease and freezes. */
-  async function releaseIdle(workspaceId: string, agentId: string) {
+  async function releaseIdle(workspaceId: string, agentId: string, turn?: TaskTurnToken) {
+    // A turn that ran under an older lease generation must not release a newer admission.
+    if (turn && !turn.isCurrent()) return;
     try {
       const handle = paseo().agents.ref(agentId);
       await handle.refresh();
       const agent = handle.current();
       if (!agent || agent.activeTurn || !["idle", "error", "closed"].includes(agent.status))
         return;
-      await resources.releaseAgent(workspaceId, agentId);
+      if (turn) await turn.release();
+      else await resources.releaseAgent(workspaceId, agentId);
     } catch (error) {
       log("执行 tab 资源释放未确认", error);
     }
@@ -259,6 +351,9 @@ export function createTaskFlow(options: {
     requestId: string;
     reason?: string;
   }) {
+    // An explicit user command: a task created before role tabs existed gets them first, so the
+    // confirmation freezes the execution tab's model (provisioning runs ahead in the same queue).
+    void provisionTabs(input.workspaceId).catch((error) => log("流程 tab 预建失败", error));
     return queue(input.workspaceId, async () => {
       let task = requireTask(input.workspaceId);
       if (!["planning", "awaiting_confirmation"].includes(task.phase))
@@ -300,7 +395,7 @@ export function createTaskFlow(options: {
     requestId: string,
     tab: TaskTab,
   ) {
-    const roles = await rolesFor(task, tab);
+    const roles = alignRolesToTabs(await rolesFor(task, tab), task.tabs);
     const frozen = freezeTaskSubtaskPresets(plan, roles, (id) => store.presets.get(id));
     validateTaskSubtaskPresets(plan, frozen);
     const confirmed = store.tasks.confirm(task.workspaceId, {
@@ -309,6 +404,9 @@ export function createTaskFlow(options: {
       planSource: source,
       requestId,
     });
+    // A confirmation of a real plan clears a previous round's "no plan" marker.
+    if (confirmed.control?.directInstruction)
+      store.tasks.updateControl(task.workspaceId, { directInstruction: null });
     store.taskArtifacts.record({
       workspaceId: task.workspaceId,
       kind: "plan",
@@ -322,18 +420,120 @@ export function createTaskFlow(options: {
       tab.agentId,
       `已确认方案并进入排队。\n${await tabs.status(task.workspaceId, tab.agentId).then((r) => r.text)}`,
     );
-    return { task: confirmed, message: "已确认方案，等待调度器准入后自动打开执行 tab。" };
+    return { task: confirmed, message: "已确认方案，等待调度器准入后发送给执行 tab。" };
   }
-  async function workerAdmitted(admission: Admission) {
-    const task = requireTask(admission.workspaceId);
-    if (task.confirmedAt !== admission.confirmedAt || task.phase !== "queued") return;
-    if (opening.has(task.workspaceId)) return;
-    opening.add(task.workspaceId);
+  /** Create the idle role tabs a task should expose (#2 探路、#3 执行、#4 复核、#5 验证).
+   *  No prompt is sent, so pre-created tabs do not consume a model turn. */
+  function provisionTabs(workspaceId: string): Promise<void> {
+    const pending = provisioning.get(workspaceId);
+    if (pending) return pending;
+    const run = queue(workspaceId, () => provisionTabsNow(workspaceId)).finally(() => {
+      if (provisioning.get(workspaceId) === run) provisioning.delete(workspaceId);
+    });
+    provisioning.set(workspaceId, run);
+    return run;
+  }
+  async function registerRoleTab(agentId: string, role: PrebuiltRole, presetId: string) {
     try {
-      await queue(task.workspaceId, () => openWorker(task, admission));
-    } finally {
-      opening.delete(task.workspaceId);
+      return !!(await tabs.ensureTab(agentId, { role, presetId }));
+    } catch (error) {
+      log("预建 " + role + " tab 登记失败", error);
+      return false;
     }
+  }
+  async function provisionTabsNow(workspaceId: string) {
+    let task = store.tasks.get(workspaceId);
+    if (!task || task.tabs.length === 0 || !PROVISION_PHASES.has(task.phase)) return;
+    let placement;
+    try {
+      placement = await tabs.workspace(workspaceId);
+    } catch (error) {
+      log("流程 tab 预建跳过：workspace 不可用", error);
+      return;
+    }
+    if (placement.current()?.archivingAt) return;
+    const projectId = placement.projectId;
+    for (const role of PREBUILT_ROLES) {
+      task = store.tasks.get(workspaceId);
+      if (!task || !PROVISION_PHASES.has(task.phase)) return;
+      const key = workspaceId + ":" + role;
+      if (task.tabs.some((tab) => tab.role === role)) {
+        orphanTabs.delete(key);
+        continue;
+      }
+      // A tab created earlier whose registration failed: register it instead of creating
+      // another agent; if it still cannot be registered, archive it so it does not linger.
+      const orphan = orphanTabs.get(key);
+      if (orphan) {
+        orphanTabs.delete(key);
+        if (await registerRoleTab(orphan.agentId, role, orphan.presetId)) continue;
+        await paseo()
+          .agents.ref(orphan.agentId)
+          .archive()
+          .catch((error) => log("未登记的预建 " + role + " tab 归档失败", error));
+        continue;
+      }
+      const preset = roleTabPreset(store, role, { task, projectId }, (error) =>
+        log("流程 " + role + " tab 的默认模型不可用，跳过预建", error),
+      );
+      if (!preset) continue;
+      const { snapshot, model } = preset;
+      const modeId = taskRoleModeId(role, model.provider, model.permissionMode);
+      let agentId: string;
+      try {
+        const handle = await paseo().workspaces.ref(workspaceId).agents.create({
+          config: {
+            provider: `${model.provider}/${model.model}`,
+            ...(modeId ? { modeId } : {}),
+            ...(model.thinking && model.thinking !== "default"
+              ? { thinkingOptionId: model.thinking }
+              : {}),
+            ...(snapshot.instructions ? { systemPrompt: snapshot.instructions } : {}),
+          },
+          env: {
+            VIBE_ROLE: role,
+            VIBE_WORKSPACE_ID: workspaceId,
+            ...(snapshot.runtimeEnv ? { VIBE_RUNTIME_ENV: snapshot.runtimeEnv } : {}),
+          },
+          labels: {
+            [TASK_TAB_ROLE_LABEL]: role,
+            [TASK_TAB_PRESET_LABEL]: snapshot.presetId,
+          },
+        });
+        agentId = handle.id;
+      } catch (error) {
+        log("预建 " + role + " tab 失败", error);
+        continue;
+      }
+      if (!(await registerRoleTab(agentId, role, snapshot.presetId)))
+        orphanTabs.set(key, { agentId, presetId: snapshot.presetId });
+    }
+  }
+  /** The scheduler admitted a queued task. The phase check runs inside the workspace queue, so a
+   *  direct authorization in the execution tab and this path always see each other's result. */
+  async function workerAdmitted(admission: Admission) {
+    await queue(admission.workspaceId, async () => {
+      const task = store.tasks.get(admission.workspaceId);
+      if (!task || task.confirmedAt !== admission.confirmedAt || task.phase !== "queued") return;
+      await openWorker(task, admission);
+    });
+  }
+  async function startWork(
+    task: Task,
+    handle: PaseoAgentHandle,
+    tab: TaskTab | null,
+    projectId: string,
+  ) {
+    const reason = String(task.control?.executionReason ?? "").trim();
+    const executing = store.tasks.setPhase(task.workspaceId, "executing");
+    const prompt = store.prompts.resolve("board.task.work", {
+      projectId,
+      vars: { plan: JSON.stringify(executing.plan, null, 2), reason },
+    });
+    await handle.send(prompt, { sourceAgentId: executing.anchorAgentId });
+    if (reason) store.tasks.updateControl(task.workspaceId, { executionReason: null });
+    store.tasks.updateControl(task.workspaceId, { blockingReason: null });
+    store.tasks.setSummary(task.workspaceId, `执行 tab #${tab?.number ?? "?"} 已启动，等待交付。`);
   }
   async function openWorker(initial: Task, admission: Admission) {
     let task = requireTask(initial.workspaceId);
@@ -346,16 +546,111 @@ export function createTaskFlow(options: {
     );
     if (index < 0) throw new Error("调度准入模型与确认快照不一致，保留排队等待核对");
     const model = preset.models[index]!;
-    const { directory, projectId } = await projectFor(task.workspaceId);
-    const ref = paseo().workspaces.ref(task.workspaceId);
-    let handle: PaseoAgentHandle | undefined;
+    const { projectId } = await projectFor(task.workspaceId);
+    // Another path (a direct authorization in the execution tab) already bound this admission.
+    if (resources.holderOf(admission.reservationId)) return;
+    // The agent this call binds the admission to; the failure path only releases that binding.
+    let admitting: string | undefined;
+    const admit = (agent: { id: string; provider: string; model: string; thinking?: string }) => {
+      admitting = agent.id;
+      return resources.admit(
+        {
+          workspaceId: task.workspaceId,
+          role: "worker",
+          agentId: agent.id,
+          presetId: preset.presetId,
+          provider: agent.provider,
+          model: agent.model,
+          candidateIndex: index,
+        },
+        task.confirmedAt,
+        () => {
+          runtime.registerSession({
+            workspaceId: task.workspaceId,
+            projectId,
+            agentId: agent.id,
+            role: "worker",
+            provider: agent.provider,
+            model: agent.model,
+            thinking: agent.thinking,
+            candidateIndex: index,
+            confirmedAt: task.confirmedAt!,
+          });
+        },
+      );
+    };
     try {
-      handle = await ref.agents.create({
+      // The pre-created execution tab is the execution surface: reuse it instead of opening
+      // another top-level tab. Only a missing/closed/mismatched tab falls back to creation.
+      const candidate = [...task.tabs].reverse().find((tab) => tab.role === "worker");
+      if (candidate) {
+        const existing = paseo().agents.ref(candidate.agentId);
+        let reusable: PaseoAgent | undefined;
+        let busy = false;
+        try {
+          await existing.refresh();
+          let current = existing.current();
+          if (current?.status === "closed" && typeof existing.resume === "function") {
+            await existing.resume().catch(() => {});
+            await existing.refresh();
+            current = existing.current();
+          }
+          if (
+            current &&
+            !current.archivedAt &&
+            !current.internal &&
+            current.model &&
+            !current.activeTurn &&
+            current.provider === admission.provider &&
+            current.model === admission.model
+          )
+            reusable = current;
+          else busy = !!current?.activeTurn;
+        } catch (error) {
+          log("执行 tab 核对失败，改用新 tab", error);
+        }
+        if (reusable || busy) {
+          // The probe above awaited the host; anything that left `queued` meanwhile owns the task.
+          task = requireTask(task.workspaceId);
+          if (task.phase !== "queued" || task.confirmedAt !== admission.confirmedAt) return;
+        }
+        if (busy) {
+          // A running turn in the execution tab is normally the user's own message: its
+          // turn_started authorization binds this admission. Keep the reservation; turnEnded
+          // retries the admission when nothing bound it.
+          store.tasks.updateControl(task.workspaceId, {
+            blockingReason: "执行 tab 正在运行；本轮结束后插件自动发送执行确认",
+          });
+          return;
+        }
+        if (reusable) {
+          const tab = await tabs.ensureTab(candidate.agentId, {
+            role: "worker",
+            presetId: preset.presetId,
+          });
+          await admit({
+            id: candidate.agentId,
+            provider: reusable.provider,
+            model: reusable.model!,
+            ...(reusable.thinkingOptionId ? { thinking: reusable.thinkingOptionId } : {}),
+          });
+          task = requireTask(task.workspaceId);
+          if (task.phase !== "queued") throw new Error("任务已停止，不启动执行 tab");
+          await startWork(task, existing, tab, projectId);
+          return;
+        }
+        const updated = store.tasks.updateTab(task.workspaceId, candidate.agentId, {
+          role: "session",
+        });
+        await existing
+          .setTitle(tabTitle(updated))
+          .catch((error) => log("旧执行 tab 标题更新失败", error));
+      }
+      const modeId = taskRoleModeId("worker", model.provider, model.permissionMode);
+      const handle = await paseo().workspaces.ref(task.workspaceId).agents.create({
         config: {
           provider: `${model.provider}/${model.model}`,
-          ...(modeIdFor(model.provider, model.permissionMode)
-            ? { modeId: modeIdFor(model.provider, model.permissionMode) }
-            : {}),
+          ...(modeId ? { modeId } : {}),
           ...(model.thinking ? { thinkingOptionId: model.thinking } : {}),
         },
         env: {
@@ -375,64 +670,37 @@ export function createTaskFlow(options: {
         role: "worker",
         presetId: preset.presetId,
       });
-      await resources.admit(
-        {
-          workspaceId: task.workspaceId,
-          role: "worker",
-          agentId: handle.id,
-          presetId: preset.presetId,
-          provider: agent.provider,
-          model: agent.model,
-          candidateIndex: index,
-        },
-        task.confirmedAt,
-        () => {
-          runtime.registerSession({
-            workspaceId: task.workspaceId,
-            projectId,
-            agentId: handle!.id,
-            role: "worker",
-            provider: agent.provider,
-            model: agent.model!,
-            thinking: agent.thinkingOptionId ?? undefined,
-            candidateIndex: index,
-            confirmedAt: task.confirmedAt!,
-          });
-        },
-      );
+      await admit({
+        id: handle.id,
+        provider: agent.provider,
+        model: agent.model,
+        ...(agent.thinkingOptionId ? { thinking: agent.thinkingOptionId } : {}),
+      });
       task = requireTask(task.workspaceId);
       if (task.phase !== "queued") throw new Error("任务已停止，不打开执行 tab");
-      const reason = String(task.control?.executionReason ?? "").trim();
-      task = store.tasks.setPhase(task.workspaceId, "executing");
-      const prompt = store.prompts.resolve("board.task.work", {
-        projectId,
-        vars: {
-          plan: JSON.stringify(task.plan, null, 2),
-          reason,
-        },
-      });
-      await handle.send(prompt, { sourceAgentId: task.anchorAgentId });
-      if (reason) store.tasks.updateControl(task.workspaceId, { executionReason: null });
-      store.tasks.setSummary(
-        task.workspaceId,
-        `执行 tab #${tab?.number ?? "?"} 已启动，等待交付。`,
-      );
+      await startWork(task, handle, tab, projectId);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      // Release only what this call holds: the admission it bound, or the still-unbound
+      // admission when it never started binding. A reservation another path bound stays put.
       try {
-        await resources.request({
-          workspaceId: task.workspaceId,
-          action: "release",
-          reservationId: admission.reservationId,
-        });
+        const holder = resources.holderOf(admission.reservationId);
+        if (holder && holder === admitting)
+          await resources.releaseAgent(task.workspaceId, holder);
+        else if (!holder && !admitting) {
+          await resources.request({
+            workspaceId: task.workspaceId,
+            action: "release",
+            reservationId: admission.reservationId,
+          });
+          resources.forgetAdmission(task.workspaceId, admission.reservationId);
+        }
       } catch (releaseError) {
         log("执行准入释放失败", releaseError);
       }
       if (store.tasks.get(task.workspaceId)?.phase === "queued")
         store.tasks.updateControl(task.workspaceId, { blockingReason: "执行启动失败：" + reason });
       throw error;
-    } finally {
-      void handle;
     }
   }
   async function workerCompleted(task: Task, tab: TaskTab, page: TimelinePage, turnId: string | null) {
@@ -599,6 +867,8 @@ export function createTaskFlow(options: {
           tab.agentId,
           `Git 收尾：${result.message}` + (reason ? `\n用户说明：${reason}` : ""),
         );
+        // The task is over: its tabs no longer need repeat suppression.
+        if (phase === "completed") tabs.forgetStatus(task.tabs.map((item) => item.agentId));
         return { task: requireTask(task.workspaceId), message: result.message };
       } finally {
         if (accepting.get(task.workspaceId) === active) accepting.delete(task.workspaceId);
@@ -953,7 +1223,7 @@ export function createTaskFlow(options: {
           provider = candidate.provider;
           model = candidate.model;
           thinking = candidate.thinking || undefined;
-          modeId = modeIdFor(provider, candidate.permissionMode);
+          modeId = taskRoleModeId("worker", provider, candidate.permissionMode);
           candidateIndex = index;
           presetId = preset.presetId;
           runtimeEnv = preset.runtimeEnv;
@@ -962,7 +1232,7 @@ export function createTaskFlow(options: {
             return fail("来源 tab 的模型尚未解析，请稍后重试");
           provider = fromView.provider;
           model = fromView.model;
-          modeId = modeIdFor(provider, "auto");
+          modeId = presetModeId(provider, "auto");
         }
         const handle = await paseo().workspaces.ref(input.workspaceId).agents.create({
           config: {
@@ -1103,6 +1373,291 @@ export function createTaskFlow(options: {
     }
     return true;
   }
+  async function locatePlan(candidates: readonly TaskTab[]) {
+    for (const candidate of candidates) {
+      const page = await timeline(candidate.agentId);
+      const found = planMessage(page);
+      if (found) return { ...found, page, sourceTab: candidate };
+    }
+    return undefined;
+  }
+  /** The real user message that started this turn; plugin/agent messages carry <paseo-system>.
+   *  Without a turn id nothing proves which message belongs to the turn, so nothing authorizes. */
+  async function userTurnMessage(agentId: string, turnId: string | null) {
+    if (!turnId) return undefined;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const page = await timeline(agentId, 30);
+      const entry = page.entries
+        .filter(
+          (candidate) =>
+            candidate.item.type === "user_message" &&
+            candidate.turnId === turnId &&
+            !!candidate.item.text.trim() &&
+            !candidate.item.text.trimStart().startsWith("<paseo-system"),
+        )
+        .at(-1);
+      if (entry) return { page, entry };
+      await delay(150);
+    }
+    return undefined;
+  }
+  async function recordConclusion(
+    task: Task,
+    tab: TaskTab,
+    page: TimelinePage,
+    turnId: string | null,
+  ) {
+    if (tab.role !== "scout" && tab.role !== "plan_reviewer") return;
+    const entry = lastAssistant(page, turnId);
+    if (!entry || entry.item.type !== "assistant_message") return;
+    const text = entry.item.text.trim();
+    if (!text) return;
+    const source = sourceFor(tab, page, entry);
+    try {
+      store.taskArtifacts.record({
+        workspaceId: task.workspaceId,
+        kind: tab.role === "scout" ? "scout" : "plan_review",
+        sourceKey: source.sourceKey,
+        confirmedAt: task.confirmedAt,
+        source,
+        summary: text.length > 600 ? text.slice(0, 600) + "…" : text,
+        data: { text: text.length > 8_000 ? text.slice(0, 8_000) : text },
+      });
+      store.tasks.setSummary(
+        task.workspaceId,
+        `#${tab.number} ${TASK_TAB_ROLE_LABELS[tab.role]}结论：${text.length > 200 ? text.slice(0, 200) + "…" : text}`,
+      );
+    } catch (error) {
+      log("探路或方案复核结论记录失败", error);
+    }
+  }
+  async function rejectWorkerTurn(
+    workspaceId: string,
+    tab: TaskTab,
+    text: string,
+  ): Promise<void> {
+    store.tasks.updateControl(workspaceId, { blockingReason: text });
+    await tabs.appendStatus(tab.agentId, text).catch((error) => log("执行提示追加失败", error));
+    await paseo()
+      .agents.ref(tab.agentId)
+      .cancelRun()
+      .catch((error) => log("未准入的执行回合停止失败", error));
+  }
+  /** A user's native message in the execution tab authorizes that tab's turn. It still goes
+   *  through scheduler admission; agent-to-agent messages never reach this path. */
+  async function authorizeWorkerTurn(input: {
+    workspaceId: string;
+    tab: TaskTab;
+    page: TimelinePage;
+    entry: TimelineEntry;
+    text: string;
+  }) {
+    const { workspaceId, tab } = input;
+    let previousPhase: TaskPhase | undefined;
+    try {
+      let task = requireTask(workspaceId);
+      const currentTab = tabFor(task, tab.agentId);
+      if (!currentTab || currentTab.role !== "worker") return;
+      // A follow-up while this tab already runs the admitted execution: nothing to admit, bind
+      // or cancel.
+      if (task.phase === "executing" && resources.hasLease(tab.agentId)) return;
+      if (["reviewing", "verifying", "awaiting_acceptance", "completed", "failed"].includes(task.phase)) {
+        await rejectWorkerTurn(
+          workspaceId,
+          tab,
+          `任务当前阶段为${TASK_PHASE_LABELS[task.phase]}，不能直接执行；请先停止或重新确认方案。`,
+        );
+        return;
+      }
+      previousPhase = task.phase;
+      let kickoff = ["queued", "paused"].includes(task.phase);
+      let direct = `用户在本 tab 直接授权执行。用户消息：\n${input.text}`;
+      if (task.phase === "planning" || task.phase === "awaiting_confirmation") {
+        // The user's message is the confirmation: of the latest complete plan when there is one,
+        // otherwise of the message itself as the task description.
+        const source = sourceFor(tab, input.page, input.entry);
+        const requestId = "direct:" + source.sourceKey;
+        const anchor = anchorTab(task);
+        const located = await locatePlan([
+          tab,
+          ...(anchor && anchor.agentId !== tab.agentId ? [anchor] : []),
+        ]);
+        if (located) {
+          task = store.tasks.savePlan(workspaceId, located.plan);
+          await confirmWith(
+            task,
+            located.plan,
+            sourceFor(located.sourceTab, located.page, located.entry),
+            requestId,
+            tab,
+          );
+        } else {
+          const plan = directPlan(input.text);
+          task = store.tasks.savePlan(workspaceId, plan);
+          await confirmWith(task, plan, source, requestId, tab);
+          store.tasks.updateControl(workspaceId, { directInstruction: true });
+          direct = `${DIRECT_NO_PLAN}。用户消息：\n${input.text}`;
+        }
+        task = requireTask(workspaceId);
+        kickoff = true;
+      } else if (!task.confirmedAt) {
+        await rejectWorkerTurn(workspaceId, tab, "任务没有可执行的确认方案，请先在 #1 主会话确认方案。");
+        return;
+      }
+      const snapshot = task.rolesSnapshot?.worker;
+      if (!snapshot || !task.confirmedAt) {
+        await rejectWorkerTurn(workspaceId, tab, "任务缺少本轮执行快照，请重新确认方案。");
+        return;
+      }
+      const handle = paseo().agents.ref(tab.agentId);
+      await handle.refresh();
+      const agent = handle.current();
+      if (!agent?.model) {
+        await rejectWorkerTurn(workspaceId, tab, "无法核对执行 tab 的实际模型，请稍后重试。");
+        return;
+      }
+      const index = snapshot.models.findIndex(
+        (model) => model.provider === agent.provider && model.model === agent.model,
+      );
+      if (index < 0) {
+        await rejectWorkerTurn(
+          workspaceId,
+          tab,
+          `执行 tab 的模型 ${agent.provider}/${agent.model} 不在本轮确认快照内；请在面板停止后重新确认方案。`,
+        );
+        return;
+      }
+      const { projectId } = await projectFor(workspaceId);
+      // A direct user message is a fresh authorization; a paused task moves to executing only
+      // after the snapshot checks, and an admission failure restores paused.
+      if (task.phase === "paused") task = store.tasks.setPhase(workspaceId, "executing");
+      try {
+        await resources.admit(
+          {
+            workspaceId,
+            role: "worker",
+            agentId: tab.agentId,
+            presetId: snapshot.presetId,
+            provider: agent.provider,
+            model: agent.model,
+            candidateIndex: index,
+          },
+          task.confirmedAt,
+          () => {
+            runtime.registerSession({
+              workspaceId,
+              projectId,
+              agentId: tab.agentId,
+              role: "worker",
+              provider: agent.provider,
+              model: agent.model!,
+              thinking: agent.thinkingOptionId ?? undefined,
+              candidateIndex: index,
+              confirmedAt: task.confirmedAt!,
+            });
+          },
+        );
+      } catch (error) {
+        if (previousPhase === "paused" && store.tasks.get(workspaceId)?.phase === "executing")
+          store.tasks.setPhase(workspaceId, "paused");
+        const queued = store.tasks.get(workspaceId)?.phase === "queued";
+        const text =
+          "执行准入未通过：" +
+          (error instanceof Error ? error.message : String(error)) +
+          (queued
+            ? "。任务保持排队，调度器准入后插件会在本 tab 发送执行确认。"
+            : "。本轮未获得资源；可在面板重试或停止任务。");
+        store.tasks.updateControl(workspaceId, { blockingReason: text });
+        await tabs.appendStatus(tab.agentId, text).catch(() => {});
+        await handle
+          .cancelRun()
+          .catch((cancelError) => log("未准入的执行回合停止失败", cancelError));
+        return;
+      }
+      const latest = requireTask(workspaceId);
+      if (latest.phase === "queued") store.tasks.setPhase(workspaceId, "executing");
+      store.tasks.updateControl(workspaceId, { blockingReason: null });
+      store.tasks.setSummary(
+        workspaceId,
+        latest.control?.directInstruction
+          ? `执行 tab #${tab.number} 已由用户直接授权运行（${DIRECT_NO_PLAN}）。`
+          : `执行 tab #${tab.number} 已由用户直接授权运行。`,
+      );
+      if (kickoff) {
+        // The execution confirmation: the tab was told not to edit files before it arrives.
+        const current = requireTask(workspaceId);
+        const prompt = store.prompts.resolve("board.task.work", {
+          projectId,
+          vars: { plan: JSON.stringify(current.plan, null, 2), reason: direct },
+        });
+        await handle.send(prompt, { sourceAgentId: current.anchorAgentId });
+      }
+    } catch (error) {
+      if (
+        previousPhase === "paused" &&
+        store.tasks.get(workspaceId)?.phase === "executing"
+      ) {
+        try {
+          store.tasks.setPhase(workspaceId, "paused");
+        } catch (restoreError) {
+          log("执行授权失败后恢复暂停状态失败", restoreError);
+        }
+      }
+      await rejectWorkerTurn(
+        workspaceId,
+        tab,
+        "执行授权失败：" + (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+  async function turnStarted(event: {
+    agent: { id: string; workspaceId: string | null };
+    turnId: string | null;
+  }) {
+    const workspaceId = event.agent.workspaceId;
+    if (!workspaceId) return;
+    let task = store.tasks.get(workspaceId);
+    if (!task) return;
+    if (task.tabs.length <= 1)
+      void provisionTabs(workspaceId).catch((error) => log("流程 tab 预建失败", error));
+    let tab = tabFor(task, event.agent.id);
+    if (!tab) {
+      tab =
+        (await tabs.ensureTab(event.agent.id).catch((error) => {
+          log("任务 tab 补登记失败", error);
+          return null;
+        })) ?? undefined;
+      if (!tab) return;
+      task = store.tasks.get(workspaceId) ?? task;
+    }
+    if (tab.role !== "worker") return;
+    const agentId = tab.agentId;
+    // Ties this turn to the lease it runs under, so its end cannot release a newer admission.
+    const noteTurn = () => {
+      if (resources.hasLease(agentId)) resources.noteTurnStarted(agentId, event.turnId);
+    };
+    const message = await userTurnMessage(agentId, event.turnId);
+    if (!message || message.entry.item.type !== "user_message") {
+      noteTurn();
+      return;
+    }
+    const text = message.entry.item.text.trim();
+    // Acceptance and handoff phrases are user authorizations for those actions, not execution.
+    if (text === "通过" || HANDOFF_PATTERN.test(text)) {
+      noteTurn();
+      return;
+    }
+    await queue(workspaceId, () =>
+      authorizeWorkerTurn({
+        workspaceId,
+        tab: tab!,
+        page: message.page,
+        entry: message.entry,
+        text,
+      }),
+    ).catch((error) => log("执行 tab 直接授权失败", error));
+    noteTurn();
+  }
   async function turnEnded(event: {
     agent: { id: string; workspaceId: string | null };
     turnId: string | null;
@@ -1112,6 +1667,8 @@ export function createTaskFlow(options: {
     if (!workspaceId) return;
     let task = store.tasks.get(workspaceId);
     if (!task) return;
+    if (task.tabs.length <= 1)
+      void provisionTabs(workspaceId).catch((error) => log("流程 tab 预建失败", error));
     let tab = tabFor(task, event.agent.id);
     if (!tab) {
       // A fast first turn can end before the agent.created hook has finished registering its tab.
@@ -1123,13 +1680,15 @@ export function createTaskFlow(options: {
       if (!tab) return;
       task = store.tasks.get(workspaceId) ?? task;
     }
+    const turn = tab.role === "worker" ? resources.takeTurn(tab.agentId, event.turnId) : undefined;
     const page = await timeline(tab.agentId);
     if (event.outcome.kind === "completed") {
       if (await naturalHandoff(task, tab, page, event.turnId)) return;
       if (["main", "session"].includes(tab.role)) await savePlanFromTurn(task, tab, page);
+      await recordConclusion(task, tab, page, event.turnId);
       if (tab.role === "worker") {
         await workerCompleted(task, tab, page, event.turnId);
-        await releaseIdle(workspaceId, tab.agentId);
+        await releaseIdle(workspaceId, tab.agentId, turn);
       }
       await standaloneAccept(tab.agentId, workspaceId, page, event.turnId);
     } else if (event.outcome.kind === "failed" && BUSY_ROLES.has(tab.role)) {
@@ -1139,8 +1698,87 @@ export function createTaskFlow(options: {
       store.tasks.updateControl(workspaceId, {
         blockingReason: `${tab.role} tab #${tab.number} 运行失败`,
       });
-      if (tab.role === "worker") await releaseIdle(workspaceId, tab.agentId);
+      if (tab.role === "worker") await releaseIdle(workspaceId, tab.agentId, turn);
     }
+    if (tab.role === "worker") await retryAdmission(workspaceId);
+  }
+  /** openWorker leaves an admission unbound while the execution tab is running a turn; once the
+   *  tab is idle again and nothing bound it, start execution with that admission. */
+  async function retryAdmission(workspaceId: string) {
+    const task = store.tasks.get(workspaceId);
+    const admission = resources.admissionFor(workspaceId);
+    if (!task || task.phase !== "queued" || !admission) return;
+    if (admission.confirmedAt !== task.confirmedAt || resources.holderOf(admission.reservationId))
+      return;
+    await workerAdmitted(admission).catch((error) => log("执行准入重试失败", error));
+  }
+  const STEP_TITLES: Record<string, string> = {
+    scout: "探路结论",
+    plan_review: "方案复核",
+    delivery: "执行交付",
+    review: "代码复核",
+    verification: "验证结果",
+    git: "Git 收尾",
+  };
+  function artifactDetail(value: Record<string, unknown> | null): string | null {
+    if (!value) return null;
+    const raw = typeof value.text === "string" ? value.text : JSON.stringify(value, null, 2);
+    return raw.length > 8_000 ? raw.slice(0, 8_000) + "\n…" : raw;
+  }
+  /** Read-only view for the flow panel. Reads never create tabs. */
+  async function panel(workspaceId: string) {
+    const task = store.tasks.get(workspaceId);
+    if (!task)
+      return {
+        isTask: false,
+        task: null,
+        phaseLabel: "",
+        blockingReason: null,
+        tabs: [],
+        steps: [],
+      };
+    const views = await tabs.tabsFor(task, true);
+    const steps: Array<{
+      kind: string;
+      title: string;
+      summary: string;
+      detail: string | null;
+      createdAt: string | null;
+    }> = [];
+    if (task.plan) {
+      const detail = JSON.stringify(task.plan, null, 2);
+      steps.push({
+        kind: "plan",
+        title: task.control?.directInstruction ? "用户指示（无方案）" : "方案",
+        summary: task.plan.goal,
+        detail: detail.length > 8_000 ? detail.slice(0, 8_000) + "\n…" : detail,
+        createdAt: task.confirmedAt,
+      });
+    }
+    const latest = new Map<string, TaskArtifact>();
+    for (const artifact of store.taskArtifacts.list(workspaceId))
+      latest.set(artifact.kind, artifact);
+    for (const kind of ["scout", "plan_review", "delivery", "review", "verification", "git"]) {
+      const artifact = latest.get(kind);
+      if (!artifact) continue;
+      steps.push({
+        kind,
+        title: STEP_TITLES[kind] ?? kind,
+        summary: artifact.summary,
+        detail: artifactDetail(artifact.data),
+        createdAt: artifact.createdAt,
+      });
+    }
+    const blockingReason =
+      typeof task.control?.blockingReason === "string" ? task.control.blockingReason : null;
+    return {
+      isTask: true,
+      task,
+      phaseLabel: TASK_PHASE_LABELS[task.phase],
+      blockingReason,
+      tabs: views,
+      steps,
+    };
   }
   function registerPrompts() {
     store.prompts.register(
@@ -1166,7 +1804,10 @@ export function createTaskFlow(options: {
     handoff,
     continuation,
     status,
+    panel,
+    provisionTabs,
     workerAdmitted,
+    turnStarted,
     turnEnded,
     releaseAgent: resources.releaseAgent,
     close: async () => {

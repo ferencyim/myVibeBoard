@@ -18,4 +18,6 @@ npm test
 
 SDK 依赖 `file:../../packages/plugin`，必须在本仓库内安装。`shared/vibe`、`server/vibe`、`client/vibe` 是声明式共享副本，修改源 `plugins/vibe-shared` 后在仓库根运行 `npm run vibe:sync-shared`，再运行 `npm run vibe:sync-shared:check`。不要手改副本。
 
-设计见 [ROUND5-DESIGN.md](../../docs/vibe/ROUND5-DESIGN.md)，操作见 [USER-GUIDE.md](../../docs/vibe/USER-GUIDE.md)。上游来源及许可证见 [UPSTREAM.md](UPSTREAM.md) 和 LICENSE。
+第六、七轮起任务流程是 workspace 里的编号 tab：新建任务即预建探路、执行、复核、验证 tab（空闲不耗 token），另有轻量「任务流程」面板。用户在执行 tab 发的原生消息本身就是执行授权，仍要过调度准入：有完整方案就确认该方案，没有方案时这条消息就是任务说明；执行中追问不重复准入；agent 互发消息不算授权。完整语义见 [ROUND6-DESIGN.md](../../docs/vibe/ROUND6-DESIGN.md) 第 8 节。
+
+设计见 [ROUND5-DESIGN.md](../../docs/vibe/ROUND5-DESIGN.md) 与 [ROUND6-DESIGN.md](../../docs/vibe/ROUND6-DESIGN.md)，操作见 [USER-GUIDE.md](../../docs/vibe/USER-GUIDE.md)。上游来源及许可证见 [UPSTREAM.md](UPSTREAM.md) 和 LICENSE。

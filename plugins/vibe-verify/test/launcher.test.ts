@@ -53,7 +53,46 @@ function fakePaseo() {
     status: "idle",
     lastMessage: "完整验证结论",
   });
+  const existing = new Map<string, FakeHandle>();
+  /** A pre-created role tab; `history` gives it earlier turns. */
+  function addExisting(id: string, model: string, history = false) {
+    let status = "idle";
+    let activeTurn: unknown = null;
+    const entries = history
+      ? [{ item: { type: "assistant_message", messageId: "old" }, turnId: "old", seqEnd: 1 }]
+      : [];
+    const handle: FakeHandle = {
+      id,
+      refresh: async () => {},
+      current: () => ({ provider: "codex", model, thinkingOptionId: "think" }),
+      get status() {
+        return status;
+      },
+      get activeTurn() {
+        return activeTurn;
+      },
+      send: async (text, options) => {
+        sends.push({ agentId: id, text, ...(options ? { options } : {}) });
+        status = "running";
+        activeTurn = { id: "turn-" + sends.length };
+        entries.push({
+          item: { type: "assistant_message", messageId: "message-" + sends.length },
+          turnId: "turn-" + sends.length,
+          seqEnd: entries.length + 1,
+        });
+      },
+      waitForFinish: async () => {
+        status = "idle";
+        activeTurn = null;
+        return { status: "idle", lastMessage: "完整验证结论" };
+      },
+      timeline: { refetch: async () => ({ epoch: "epoch-1", entries: [...entries] }) },
+    };
+    existing.set(id, handle);
+    return handle;
+  }
   const paseo = {
+    agents: { ref: (id: string) => existing.get(id) },
     providers: {
       listModels: async () => {
         if (models === "throw") throw new Error("catalog down");
@@ -124,6 +163,7 @@ function fakePaseo() {
     created,
     sends,
     handles,
+    addExisting,
     setModels: (value: typeof models) => {
       models = value;
     },
@@ -449,5 +489,49 @@ describe("验证/复核 tab", () => {
     expect(await agent.run("等待授权")).toMatchObject({ status: "timeout" });
     await expect(agent.close()).rejects.toThrow("尚未停止");
     expect(released).toBe(0);
+  });
+});
+
+describe("复用预建的复核/验证 tab", () => {
+  it("只复用从未跑过回合的 tab，首条消息带上角色规则，证据信息走提示词", async () => {
+    const f = fakePaseo();
+    f.addExisting("verifier-tab", "model-one");
+    const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo as never });
+    const agent = await launcher.launch(
+      input({
+        model: "model-one",
+        reuseAgentId: "verifier-tab",
+        task: { workspaceId: "ws", confirmedAt: "c-1", commitHash: "a".repeat(40) },
+      }),
+    );
+    expect(agent.agentId).toBe("verifier-tab");
+    expect(agent.reused).toBe(true);
+    expect(f.created).toHaveLength(0);
+    await agent.run("已收口提交：" + "a".repeat(40));
+    await agent.run("第二轮");
+    expect(f.sends[0]!.text).toContain("已收口提交：" + "a".repeat(40));
+    expect(f.sends[0]!.text.length).toBeGreaterThan(("已收口提交：" + "a".repeat(40)).length);
+    expect(f.sends[1]!.text).toBe("第二轮");
+  });
+
+  it("已有对话历史的 tab 不复用，改为新建", async () => {
+    const f = fakePaseo();
+    f.addExisting("verifier-tab", "model-one", true);
+    const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo as never });
+    const agent = await launcher.launch(input({ model: "model-one", reuseAgentId: "verifier-tab" }));
+    expect(agent.agentId).toBe("tab-1");
+    expect(agent.reused).toBe(false);
+    expect(f.created).toHaveLength(1);
+  });
+
+  it("要求新成员时不复用预建 tab", async () => {
+    const f = fakePaseo();
+    f.addExisting("verifier-tab", "model-one");
+    const launcher = createPaseoVerifierLauncher({ getPaseo: () => f.paseo as never });
+    const agent = await launcher.launch(
+      input({ model: "model-one", reuseAgentId: "verifier-tab", forceNewMember: true }),
+    );
+    expect(agent.agentId).toBe("tab-1");
+    expect(f.created).toHaveLength(1);
   });
 });
