@@ -67,7 +67,8 @@ $PASEO_HOME/
 ├── plugins/
 │   ├── sources.json                      # Managed kind and Git acquisition remote
 │   └── {pluginId}/{uuid}/                # Git checkout or npm package/lockfile/dependency tree
-└── push-tokens.json                     # Expo push notification tokens
+├── push-tokens.json                     # Expo push notification tokens
+├── prompt-library.json                  # Host prompt library, including tombstones
 ```
 
 The `agents/{sanitized-cwd}/` directory name is derived from the agent's `cwd` by stripping the filesystem root and replacing path separators with `-` (Windows drive letters become a `C-` style prefix). Persistent server stores write atomically by writing a temp file in the target directory and then renaming it into place.
@@ -532,6 +533,40 @@ publish only after the commit point; publication failure does not roll durable s
 history surfaces tolerate transient orphaned workspaces by omitting those rows so one bad FK cannot
 blank the whole History screen, but mutation paths should repair or remove the orphaned state rather
 than treating it as valid.
+
+### Prompt library
+
+**Path:** `$PASEO_HOME/prompt-library.json`
+
+One host-wide library of reusable prompt snippets: `{ entries: PromptLibraryEntry[] }`, where an
+entry carries `id`, `title`, `body`, `tags`, an ISO `updatedAt`, and a `deleted` tombstone flag.
+Entries are validated with the protocol schema and written atomically. Tags live on entries; there
+is no separate catalog, and tag rename/delete batch-update every affected non-deleted entry. A
+tombstone keeps only `id`, `updatedAt` and `deleted`; title, body and tags are cleared.
+
+Clients write through `prompt.library.upsert.request` and `prompt.library.delete.request` with the
+timestamp they want the change to carry. The daemon clamps that timestamp to at most five minutes
+ahead of its own clock, so one device with a wrong clock cannot pin an entry in the future, and
+returns the entry it actually stored. Last-write-wins orders by `updatedAt`, then a tombstone over a
+live entry, then `id` (`comparePromptLibraryEntries`); an identical write is accepted, so retries
+are idempotent and an offline edit cannot resurrect over a newer tombstone. `applied: false` means
+the stored entry sorted after the write. List reads always return the full library, tombstones
+included; it is small, so there is no incremental cursor. Tag operations stamp entries with the
+daemon clock.
+
+On load the daemon keeps what it can read. A file that is not JSON or has no `entries` array is
+renamed to `prompt-library.json.corrupt-<ms>` and the library starts empty; an invalid entry is
+logged and skipped while the rest load.
+
+The app keeps a per-host replica in AsyncStorage (`paseo:prompt-library:v1:{serverId}`) with the
+same entries plus a pending queue of full entry writes. Saves and deletes update the replica first,
+then sync. A pending write yields to a remote entry that sorts strictly after it, and that is
+surfaced to the user as a notice rather than dropped silently. A write the daemon refuses with a
+business error (`prompt_library_invalid`) is rolled back to the host's version and the queue keeps
+going; connection errors stop the round and the queue is retried. A cache read that throws leaves
+the replica unhydrated and writes nothing, so the queue is never overwritten by an empty replica;
+unparseable or partly invalid cache content is copied to `<key>:corrupt-<ms>` before it is rebuilt.
+The app enforces the protocol title and body limits before queuing a write.
 
 ---
 

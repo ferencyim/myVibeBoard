@@ -96,6 +96,7 @@ import { AutocompletePopover } from "@/components/ui/autocomplete-popover";
 import type { AutocompleteOption } from "@/components/ui/autocomplete";
 import { useAgentAutocomplete } from "@/hooks/use-agent-autocomplete";
 import { usePluginClientSlashCommands } from "@/plugins/client-slash-commands";
+import { PromptLibraryComposerButton } from "@/prompt-library/composer-button";
 import {
   executePluginClientSlashCommand,
   resolvePluginClientSlashCommand,
@@ -1503,6 +1504,22 @@ function ComposerContentImpl({
     });
   }, []);
 
+  // Insert at the caret without replacing a selection: the prompt is an addition to whatever
+  // the user already wrote, so text after the caret stays where it is.
+  const insertPromptAtCursor = useCallback(
+    (body: string) => {
+      const input = messageInputRef.current;
+      const snapshot = input?.getInputSnapshot();
+      const currentText = snapshot?.text ?? textSource.getSnapshot();
+      const start = Math.min(snapshot?.selection.start ?? currentText.length, currentText.length);
+      const nextText = currentText.slice(0, start) + body + currentText.slice(start);
+      const position = start + body.length;
+      input?.replaceText(nextText, { start: position, end: position });
+      focusInput();
+    },
+    [focusInput, textSource],
+  );
+
   const handleWorkspaceFileDropped = useCallback(
     (payload: WorkspaceFileDragPayload) => {
       if (!workspaceId) {
@@ -2226,16 +2243,31 @@ function ComposerContentImpl({
   );
 
   const leftContent = useMemo(
-    () =>
-      renderLeftContent({
-        agentControls,
-        agentId,
-        serverId,
-        focusInput,
-        isCompactLayout,
-        showAgentControls: mode.showAgentControls,
-      }),
-    [agentControls, agentId, focusInput, isCompactLayout, mode.showAgentControls, serverId],
+    () => (
+      <>
+        {renderLeftContent({
+          agentControls,
+          agentId,
+          serverId,
+          focusInput,
+          isCompactLayout,
+          showAgentControls: mode.showAgentControls,
+        })}
+        {mode.showAttachments ? (
+          <PromptLibraryComposerButton serverId={serverId} onInsert={insertPromptAtCursor} />
+        ) : null}
+      </>
+    ),
+    [
+      agentControls,
+      agentId,
+      focusInput,
+      insertPromptAtCursor,
+      isCompactLayout,
+      mode.showAgentControls,
+      mode.showAttachments,
+      serverId,
+    ],
   );
 
   const handleAttachButtonRef = useCallback((node: View | null) => {

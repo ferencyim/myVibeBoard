@@ -103,6 +103,7 @@ import {
   WorkspaceLabelStorageUncertainError,
   type WorkspaceLabelService,
 } from "./workspace-labels/index.js";
+import { PromptLibraryError, type PromptLibraryService } from "./prompt-library/index.js";
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
@@ -469,6 +470,7 @@ export interface SessionOptions {
   workspaceRegistry: WorkspaceRegistry;
   directorySync?: DirectorySyncService;
   workspaceLabelService?: WorkspaceLabelService;
+  promptLibraryService?: PromptLibraryService | null;
   filesystem?: SessionFileSystem;
   scheduleService: ScheduleService;
   checkoutDiffManager: CheckoutDiffManager;
@@ -666,6 +668,13 @@ function workspaceLabelErrorCode(error: unknown): string {
   return "workspace_label_failed";
 }
 
+function promptLibraryErrorCode(error: unknown): string {
+  if (error instanceof PromptLibraryError || error instanceof SessionRequestError) {
+    return error.code;
+  }
+  return "prompt_library_failed";
+}
+
 interface ClientActivity {
   deviceType: "web" | "mobile";
   focusedAgentId: string | null;
@@ -786,6 +795,7 @@ export class Session {
     WorkspaceUpdatesSubscriptionState
   >();
   private readonly workspaceLabelService: WorkspaceLabelService | null;
+  private readonly promptLibraryService: PromptLibraryService | null;
   private readonly eventSubscriptions = new Map<
     string,
     { owner: OwnedSubscription; events: Set<SessionEventSubscription>; notifications: boolean }
@@ -823,6 +833,8 @@ export class Session {
   private readonly createAgentLifecycleDispatch: CreateAgentLifecycleDispatch;
   private readonly creationService: Pick<CreationService, "create" | "subscribe">;
 
+  // One optional collaborator per daemon service; the constructor is a wiring list, not logic.
+  // eslint-disable-next-line complexity
   constructor(options: SessionOptions) {
     const {
       clientId,
@@ -848,6 +860,7 @@ export class Session {
       workspaceRegistry,
       directorySync,
       workspaceLabelService,
+      promptLibraryService = null,
       filesystem,
       scheduleService,
       checkoutDiffManager,
@@ -931,6 +944,7 @@ export class Session {
     this.workspaceRegistry = workspaceRegistry;
     this.directorySync = resolveDirectorySync(directorySync);
     this.workspaceLabelService = resolveWorkspaceLabelService(workspaceLabelService);
+    this.promptLibraryService = promptLibraryService;
     this.filesystem = filesystem ?? nodeSessionFileSystem;
     this.github = github ?? createGitHubService();
     this.renameCurrentBranch = renameCurrentBranch ?? renameCurrentBranchDefault;
@@ -2445,6 +2459,7 @@ export class Session {
     return (
       this.dispatchWorkspaceStateMessage(msg) ??
       this.dispatchWorkspaceLabelMessage(msg) ??
+      this.dispatchPromptLibraryMessage(msg) ??
       this.dispatchWorkspaceSetupMessage(msg) ??
       this.dispatchWorkspaceAndProjectMessage(msg)
     );
@@ -3058,6 +3073,23 @@ export class Session {
       return this.handleWorkspaceSetupRunRequest(msg);
     }
     return undefined;
+  }
+
+  private dispatchPromptLibraryMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
+      case "prompt.library.list.request":
+        return this.handlePromptLibraryList(msg);
+      case "prompt.library.upsert.request":
+        return this.handlePromptLibraryUpsert(msg);
+      case "prompt.library.delete.request":
+        return this.handlePromptLibraryDelete(msg);
+      case "prompt.library.tag.rename.request":
+        return this.handlePromptLibraryTagRename(msg);
+      case "prompt.library.tag.delete.request":
+        return this.handlePromptLibraryTagDelete(msg);
+      default:
+        return undefined;
+    }
   }
 
   private dispatchWorkspaceLabelMessage(msg: SessionInboundMessage): Promise<void> | undefined {
@@ -6632,6 +6664,105 @@ export class Session {
     } catch (error) {
       this.emitWorkspaceLabelError(request, error);
     }
+  }
+
+  private async handlePromptLibraryList(
+    request: Extract<SessionInboundMessage, { type: "prompt.library.list.request" }>,
+  ): Promise<void> {
+    try {
+      const service = this.requirePromptLibrary();
+      const result = await service.list();
+      this.emit({
+        type: "prompt.library.list.response",
+        payload: { requestId: request.requestId, ...result },
+      });
+    } catch (error) {
+      this.emitPromptLibraryError(request, error);
+    }
+  }
+
+  private async handlePromptLibraryUpsert(
+    request: Extract<SessionInboundMessage, { type: "prompt.library.upsert.request" }>,
+  ): Promise<void> {
+    try {
+      const result = await this.requirePromptLibrary().upsert(request.entry);
+      this.emit({
+        type: "prompt.library.upsert.response",
+        payload: { requestId: request.requestId, ...result },
+      });
+    } catch (error) {
+      this.emitPromptLibraryError(request, error);
+    }
+  }
+
+  private async handlePromptLibraryDelete(
+    request: Extract<SessionInboundMessage, { type: "prompt.library.delete.request" }>,
+  ): Promise<void> {
+    try {
+      const result = await this.requirePromptLibrary().delete({
+        id: request.id,
+        updatedAt: request.updatedAt,
+      });
+      this.emit({
+        type: "prompt.library.delete.response",
+        payload: { requestId: request.requestId, ...result },
+      });
+    } catch (error) {
+      this.emitPromptLibraryError(request, error);
+    }
+  }
+
+  private async handlePromptLibraryTagRename(
+    request: Extract<SessionInboundMessage, { type: "prompt.library.tag.rename.request" }>,
+  ): Promise<void> {
+    try {
+      const result = await this.requirePromptLibrary().renameTag({
+        from: request.from,
+        to: request.to,
+      });
+      this.emit({
+        type: "prompt.library.tag.rename.response",
+        payload: { requestId: request.requestId, ...result },
+      });
+    } catch (error) {
+      this.emitPromptLibraryError(request, error);
+    }
+  }
+
+  private async handlePromptLibraryTagDelete(
+    request: Extract<SessionInboundMessage, { type: "prompt.library.tag.delete.request" }>,
+  ): Promise<void> {
+    try {
+      const result = await this.requirePromptLibrary().deleteTag({ tag: request.tag });
+      this.emit({
+        type: "prompt.library.tag.delete.response",
+        payload: { requestId: request.requestId, ...result },
+      });
+    } catch (error) {
+      this.emitPromptLibraryError(request, error);
+    }
+  }
+
+  private requirePromptLibrary(): PromptLibraryService {
+    if (!this.promptLibraryService) {
+      throw new SessionRequestError("prompt_library_unavailable", "Prompt library unavailable");
+    }
+    return this.promptLibraryService;
+  }
+
+  private emitPromptLibraryError(
+    request: { requestId: string; type: string },
+    error: unknown,
+  ): void {
+    this.emit({
+      type: "rpc_error",
+      payload: {
+        requestId: request.requestId,
+        requestType: request.type,
+        code: promptLibraryErrorCode(error),
+        error: error instanceof Error ? error.message : "Prompt library operation failed",
+      },
+    });
   }
 
   private async readAgentDirectorySync(

@@ -26,6 +26,7 @@ import {
   type DirectoryTransaction,
 } from "./transaction";
 import { workspaceLabels } from "@/workspace-labels";
+import { promptLibrary } from "@/prompt-library";
 import type {
   CachedDirectory,
   CachedWorkspace,
@@ -193,12 +194,14 @@ export class DirectorySync {
     this.releaseSubscriptions();
     this.releaseScriptStatusEvents();
     workspaceLabels.disconnect(this.serverId);
+    promptLibrary.disconnect(this.serverId);
     this.connection = connection;
     this.abortPendingSessionWaits();
     if (!connection.client || connection.status !== "online") return true;
     if (this.scriptStatusDemand.size > 0) this.observeScriptStatusEvents();
-    // Reattach labels here because route-only demand can satisfy the epoch before full demand requests them.
+    // Reattach host catalogs here because route-only demand can satisfy the epoch before full demand requests them.
     void this.connectWorkspaceLabels().catch(() => undefined);
+    void this.connectPromptLibrary().catch(() => undefined);
     if (this.hasDemand()) void this.requestDemandRefresh().catch(() => undefined);
     return true;
   }
@@ -259,6 +262,7 @@ export class DirectorySync {
     this.fullDemandSources.clear();
     this.routeDemandIds.clear();
     workspaceLabels.disconnect(this.serverId);
+    promptLibrary.disconnect(this.serverId);
   }
 
   private releaseSubscriptions(): void {
@@ -654,6 +658,7 @@ export class DirectorySync {
       checkpoint: this.cursors,
     });
     if (this.getOnlineConnection()) await this.connectWorkspaceLabels();
+    if (this.getOnlineConnection()) await this.connectPromptLibrary();
   }
 
   async connectWorkspaceLabels(): Promise<void> {
@@ -663,6 +668,16 @@ export class DirectorySync {
       serverId: this.serverId,
       client,
       supportsWorkspaceLabels: serverInfo?.features?.workspaceLabels === true,
+    });
+  }
+
+  async connectPromptLibrary(): Promise<void> {
+    const { client } = this.requireOnline();
+    const serverInfo = client.getLastServerInfoMessage();
+    await promptLibrary.connect({
+      serverId: this.serverId,
+      client,
+      supported: serverInfo?.features?.promptLibrary === true,
     });
   }
 

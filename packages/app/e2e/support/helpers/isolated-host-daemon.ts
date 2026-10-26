@@ -48,8 +48,11 @@ export async function getAvailableHostDaemonPort(): Promise<number> {
   return port;
 }
 
+// Slow machines can need longer for the tsx cold start; override instead of editing this file.
+const DAEMON_START_TIMEOUT_MS = Number(process.env.PASEO_E2E_DAEMON_START_TIMEOUT_MS) || 90_000;
+
 async function waitForServer(port: number, child: ChildProcess): Promise<void> {
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
   let lastError: unknown = null;
 
   while (Date.now() < deadline) {
@@ -183,7 +186,11 @@ export async function startIsolatedHostDaemon(
       await waitForServer(port, child);
       return child;
     } catch (error) {
-      await killProcessTree(child);
+      // Keep the startup failure (with its stderr) as the reported error when the child already
+      // exited on its own; a kill failure on a live process is a real problem and surfaces.
+      await killProcessTree(child).catch((killError: unknown) => {
+        if (child.exitCode === null && child.signalCode === null) throw killError;
+      });
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\nDaemon stderr:\n${stderr}`,
         { cause: error },
