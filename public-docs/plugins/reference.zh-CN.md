@@ -745,7 +745,10 @@ type PluginTurnOutcome =
 | -------------------- | ----------------------------------------------------------------------- | ----------------------------------- |
 | `agent.create`       | `config`，可选的 `env`                                                  | 除 `cwd` 外的公开 Agent 配置；`env` |
 | `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | 仅 `env`                            |
+| `agent.prompt`       | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`    | 仅 `prompt`                         |
 | `workspace.create`   | `source`，可选的 `title`，`firstAgentContext`                           | 整个显式创建请求                    |
+
+`agent.prompt` 在 agent 调用本机 `send_agent_prompt`、提示词入队之前运行。`agentId` 是接收方，`parentAgentId` 是接收方作为子代理时的父 agent。抛出错误即拒绝该提示词，调用方 agent 收到错误；用户发送的提示词不经过此钩子。
 
 **`agent.create.config`** 使用 `AgentSessionConfig`：
 

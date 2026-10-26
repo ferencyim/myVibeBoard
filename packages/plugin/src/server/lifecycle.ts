@@ -80,6 +80,19 @@ export interface PluginBeforeRequests {
     labels?: Record<string, string>;
   };
   "agent.session_open": PluginSessionOpenRequest;
+  /**
+   * An agent's send_agent_prompt to another agent, before it is queued. Throwing rejects the
+   * prompt and the caller receives the error; a hook may change only the prompt text.
+   */
+  "agent.prompt": {
+    /** The recipient. */
+    agentId: string;
+    workspaceId: string | null;
+    /** The recipient's parent when it is a subagent. */
+    parentAgentId: string | null;
+    callerAgentId: string;
+    prompt: string;
+  };
   "workspace.create": Omit<WorkspaceCreateRequest, "type" | "requestId">;
 }
 

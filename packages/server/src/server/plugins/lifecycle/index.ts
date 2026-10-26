@@ -26,7 +26,12 @@ export const lifecycleEventNames = [
   "workspace.created",
   "workspace.archived",
 ] as const;
-export const beforeHookNames = ["agent.create", "agent.session_open", "workspace.create"] as const;
+export const beforeHookNames = [
+  "agent.create",
+  "agent.session_open",
+  "agent.prompt",
+  "workspace.create",
+] as const;
 
 const beforeSchemas = {
   "agent.create": CreateAgentRequestMessageSchema.pick({
@@ -46,6 +51,15 @@ const beforeSchemas = {
       reason: z.enum(["create", "resume", "refresh", "import"]),
       purpose: z.enum(["interactive", "history"]),
       env: z.record(z.string(), z.string()),
+    })
+    .strict(),
+  "agent.prompt": z
+    .object({
+      agentId: z.string(),
+      workspaceId: z.string().nullable(),
+      parentAgentId: z.string().nullable(),
+      callerAgentId: z.string(),
+      prompt: z.string(),
     })
     .strict(),
   "workspace.create": WorkspaceCreateRequestSchema.omit({ type: true, requestId: true }).strict(),
@@ -155,6 +169,18 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
       previous.purpose !== next.purpose
     ) {
       throw new Error("agent.session_open hooks can only change env");
+    }
+  }
+  if (name === "agent.prompt") {
+    const previous = beforeSchemas["agent.prompt"].parse(input);
+    const next = beforeSchemas["agent.prompt"].parse(result);
+    if (
+      previous.agentId !== next.agentId ||
+      previous.workspaceId !== next.workspaceId ||
+      previous.parentAgentId !== next.parentAgentId ||
+      previous.callerAgentId !== next.callerAgentId
+    ) {
+      throw new Error("agent.prompt hooks can only change the prompt");
     }
   }
   if (name === "agent.create") {

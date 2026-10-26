@@ -1977,6 +1977,10 @@ function createToolCatalog(
       if (callerAgentId && !agentManager.getAgent(agentId) && !(await agentStorage.get(agentId))) {
         throw new PaseoToolInputError(`Agent ${agentId} not found`);
       }
+      // Plugins may reject or rewrite an agent-to-agent prompt before anything is queued.
+      const vettedPrompt = callerAgentId
+        ? await agentManager.beforeAgentPrompt({ agentId, callerAgentId, prompt })
+        : prompt;
       const notifying = Boolean(callerAgentId && notifyOnFinish);
       const notification =
         notifying && callerAgentId
@@ -2007,7 +2011,7 @@ function createToolCatalog(
           try {
             return agentMessages().enqueue({
               recipientId: agentId,
-              prompt,
+              prompt: vettedPrompt,
               source: {
                 kind: "agent-message",
                 agentId: callerAgentId,
@@ -2043,7 +2047,7 @@ function createToolCatalog(
         agentManager,
         agentStorage,
         agentId,
-        prompt,
+        prompt: vettedPrompt,
         source: callerAgentId ? { kind: "agent-message", agentId: callerAgentId } : undefined,
         sessionMode,
         activeTurnBehavior,

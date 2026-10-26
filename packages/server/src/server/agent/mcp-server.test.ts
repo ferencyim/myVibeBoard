@@ -281,6 +281,7 @@ function buildAgentManagerSpies() {
     getPendingPermissions: vi.fn(),
     getRegisteredProviderIds: vi.fn().mockReturnValue(["claude"]),
     listDraftFeatures: vi.fn(),
+    beforeAgentPrompt: vi.fn(async (input: { prompt: string }) => input.prompt),
   };
 }
 
@@ -3986,6 +3987,49 @@ describe("send_agent_prompt MCP tool", () => {
       .waitForDispatch("child-agent", new AbortController().signal);
     expect(serverSubscriptionRecords.get(server)!.size).toBe(1);
     expect(response.structuredContent.guidance).toContain("You will get notified");
+  });
+
+  it("lets plugins reject or rewrite an agent-to-agent prompt before it is queued", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockImplementation((agentId: string) =>
+      agentId === "child-agent"
+        ? ({
+            id: "child-agent",
+            cwd: existingCwd,
+            lifecycle: "idle",
+            currentModeId: null,
+            availableModes: [],
+            config: { title: "Child" },
+          } as ManagedAgent)
+        : ({ id: agentId, config: {}, cwd: existingCwd } as ManagedAgent),
+    );
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "parent-agent",
+      logger,
+    });
+    const tool = registeredTool(server, "send_agent_prompt");
+    const enqueue = vi.spyOn(serverDeliveries.get(server)!, "enqueue").mockReturnValue({
+      status: "queued",
+      messageId: "message-1",
+      dispatched: Promise.resolve(),
+    } as ReturnType<AgentMessageDelivery["enqueue"]>);
+    spies.agentManager.beforeAgentPrompt.mockRejectedValueOnce(new Error("先认领子任务"));
+    await expect(
+      tool.handler({ agentId: "child-agent", prompt: "Do it", notifyOnFinish: false }),
+    ).rejects.toThrow("先认领子任务");
+    expect(spies.agentManager.beforeAgentPrompt).toHaveBeenCalledWith({
+      agentId: "child-agent",
+      callerAgentId: "parent-agent",
+      prompt: "Do it",
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+
+    spies.agentManager.beforeAgentPrompt.mockResolvedValueOnce("Do it (vetted)");
+    await tool.handler({ agentId: "child-agent", prompt: "Do it", notifyOnFinish: false });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ prompt: "Do it (vetted)" }));
   });
 
   it("acknowledges top-level prompts without a completion wait", async () => {

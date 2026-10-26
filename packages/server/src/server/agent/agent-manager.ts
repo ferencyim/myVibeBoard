@@ -1203,6 +1203,24 @@ export class AgentManager {
     return agent?.session?.usageSession?.() ?? null;
   }
 
+  /** Lets plugins vet an agent-to-agent prompt before it is queued; a plugin throw rejects it. */
+  async beforeAgentPrompt(input: {
+    agentId: string;
+    callerAgentId: string;
+    prompt: string;
+  }): Promise<string> {
+    const target = this.agents.get(input.agentId);
+    if (!this.pluginLifecycle || target?.internal) return input.prompt;
+    const request = await this.pluginLifecycle.before("agent.prompt", {
+      agentId: input.agentId,
+      workspaceId: target?.workspaceId ?? null,
+      parentAgentId: target?.labels[PARENT_AGENT_ID_LABEL] ?? null,
+      callerAgentId: input.callerAgentId,
+      prompt: input.prompt,
+    });
+    return request.prompt;
+  }
+
   getAgent(id: string): ManagedAgent | null {
     const agent = this.agents.get(id);
     return agent ? { ...agent } : null;

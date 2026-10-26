@@ -98,3 +98,30 @@ test("session-open hooks reject changes to session identity instead of silently 
     ),
   ).rejects.toThrow("agent.session_open hooks can only change env");
 });
+
+test("prompt hooks may rewrite or reject the prompt but not change its recipient", async () => {
+  const input = {
+    agentId: "child",
+    workspaceId: "workspace",
+    parentAgentId: "parent",
+    callerAgentId: "parent",
+    prompt: "do it",
+  };
+  const rewriting = new PluginHookHandlers(() => {});
+  rewriting.before("agent.prompt", ({ request }) => ({ ...request, prompt: request.prompt + "!" }));
+  await expect(
+    rewriting.invoke("operation", "before", "agent.prompt", input, paseo),
+  ).resolves.toMatchObject({ prompt: "do it!" });
+  const redirecting = new PluginHookHandlers(() => {});
+  redirecting.before("agent.prompt", ({ request }) => ({ ...request, agentId: "other" }));
+  await expect(
+    redirecting.invoke("operation", "before", "agent.prompt", input, paseo),
+  ).rejects.toThrow("agent.prompt hooks can only change the prompt");
+  const rejecting = new PluginHookHandlers(() => {});
+  rejecting.before("agent.prompt", () => {
+    throw new Error("先认领");
+  });
+  await expect(
+    rejecting.invoke("operation", "before", "agent.prompt", input, paseo),
+  ).rejects.toThrow("先认领");
+});
