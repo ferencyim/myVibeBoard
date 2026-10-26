@@ -10,6 +10,7 @@ export * from "./requirements-doc";
 export * from "./tasks";
 export * from "./task-artifacts";
 export * from "./task-handoffs";
+export * from "./task-board";
 
 export * from "./backup";
 export * from "./project-config";

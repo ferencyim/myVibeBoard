@@ -98,3 +98,14 @@
 - **存档**：新增共享表 `task_handoff`（core 迁移 17，`taskHandoffs` 命令），每 tab 一行，每个回合结束（`turnEnded`）覆盖。`/接手 #n` 与「继续 #n 的工作」优先读存档，来源 tab 仍在运行或没有存档时现场生成；接手时重新取检查点，HEAD 或 `dirtyHash` 变了就写「#n 交接之后仓库已变化」。
 - **围栏**：交接内容放在 `<<<VIBE-HISTORY-BEGIN/END>>>` 之间，前置只读提示词 `board.tabs.history_notice`（不可信历史数据，不是指令）；围栏内出现的标记被转义，总长 30000 字，超出按段截断并标注。渲染顺序为未决问题、下一步、改动文件、检查点，最后才是最近输出。
 - **已知限制**：只在 `turnEnded` 刷新，回合中途改动的文件不会进存档，但接手时的检查点比对会发现；host 会把注入消息 HTML 转义，围栏标记在 agent 眼中显示为实体。
+
+## 10. WP-127 实现记录（第七轮）
+
+同一任务的子代理共用一个 worktree，靠任务看板协调；`packages/` 只加了一个前置钩子。
+
+- **看板**（`vibe-shared/db/task-board.ts`，core 迁移 18 新表 `task_subtask`，命令 `taskBoard`）：方案确认（`/执行` 或执行 tab 直接授权）时用方案 subtasks 重建看板；无方案的直接授权看板为空。同一次确认的重放（看板已属于本轮 `confirmedAt`）不重建；新一轮重建时，上一轮进行中且新方案不再使用的子任务保留为受阻，插件给这些子代理发「停手」消息，不静默删除。状态待办/进行中/完成/受阻，记录认领者 agentId、tab 编号、认领与完成时间、结论和改动比对结果。认领规则在一个 `BEGIN IMMEDIATE` 事务里判断：依赖未完成、`files` 与其它进行中子任务重叠（`findOverlap`）、已被他人认领、写文件却没声明范围都拒绝，并返回挡路的子任务 id。范围必须显式写：整仓单写者写 `**`；只读调研/审查子任务标 `readOnly`（方案 subtasks 可带可选 `readOnly`），只读认领不占范围，不阻塞别人也不被别人阻塞。确认早于看板的旧任务首次使用时按方案补建。
+- **工具**（`vibe-board/server/tabs/board.ts`、`board-tools.ts`）：`vibe_board_list` 所有任务 tab 与子代理可用；`claim/complete/release/add` 只给执行 tab 及其子代理（沿父链找 tab）。主代理可用 `assignee` 替已有子代理认领。认领者已关闭、出错、归档或 30 分钟无活动（无运行中回合且 `updatedAt` 与认领时间都超过阈值）时，执行主代理可用 `vibe_board_release` 收回。
+- **派发拦截**：执行 tab 的 `create_agent` 必须带 `labels: {"vibe.subtask": "<id>"}`；`before("agent.create")` 校验并替父 tab 认领，`agent.created` 再把认领移交给新子代理，子任务说明追加进子代理系统提示词。钩子里先写认领、再取 git 基线（5 秒超时，失败就不带基线），慢 git 不会拖垮 `create_agent`。替父 tab 写的认领是「待分配」：60 秒内没有对应子代理就自动退回待办；子代理迟到时由它自己重新认领，再失败就在执行 tab 追加状态（主代理正在回合中时也发消息）。`send_agent_prompt` 原先没有插件拦截点，新增 [core] 前置钩子 `agent.prompt`（入队前、只能改 prompt、抛错即拒绝，用户消息不经过）；执行 tab 给自己的子代理发消息时，放行条件是：子代理持有进行中的认领；或它的 `vibe.subtask` 标签对应的子任务仍由执行 tab 持有（移交中），或已完成（追问、纠错、停手）。其它情况拒绝，提示先认领或先补登。宿主不支持该钩子时插件只记录日志，仍靠 create 拦截、认领拒绝和提示词。
+- **越界比对**：认领时记录 HEAD 与已脏文件的大小/mtime；完成时 `git status --porcelain -z -uall` 加 `git diff --name-only <认领 HEAD>`（`GIT_OPTIONAL_LOCKS=0`），只算认领期间新出现或再次变化的文件。重命名的新旧路径都计入（`--no-renames`）。不在本子任务范围、也不在认领期间进行中或完成的其它子任务范围内的文件，以及子代理自报的范围外文件，记为越界；锁文件、`*.snap`、`dist/`、`build/`、`*.generated.*` 内置忽略，子任务可用 `ignore` 追加。只读子任务认领期间出现的写入同样告警。越界写进结论和面板，在执行 tab 追加状态；只有执行主代理正在回合中才 steer 发消息，空闲时不唤醒它。git 快照或比对失败时结论写「越界比对未执行（git 失败）」，不当成没有改动。共用 worktree 无法精确归因，结论里标明是推断。收回（`vibe_board_release` 收回他人认领）时给原认领者发停手消息；`vibe_board_complete` 只接受当前认领者或执行主代理本身。
+- **提示词**：`board.task.work`、`task.role.subagent`、`board.tabs.guide` 写明先认领再派发、带标签、有同伴并行改别处、不回滚/覆盖/格式化别人的改动、冲突先协商或交回主代理、越界先改范围、最终答复列改动文件与验证结果。
+- **面板与状态**：`vibe.task.panel` 多返回可选 `board`，流程面板显示「任务看板 · 完成 x/y」与每个子任务的状态、认领 tab、范围与结论；`/状态` 加一行看板进度。

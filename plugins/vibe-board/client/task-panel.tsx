@@ -5,6 +5,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   taskPanelRpc,
   taskTabCommandRpc,
+  type TaskBoardItemData,
   type TaskTabCommand,
   type TaskTabViewData,
 } from "../shared/task-tabs";
@@ -209,6 +210,17 @@ function TaskFlowPanelBody({
         <Muted>当前宿主不支持从面板切换 tab；请使用顶部 tab 打开。</Muted>
       ) : null}
 
+      {data.board?.length ? (
+        <>
+          <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>
+            {`任务看板 · 完成 ${data.board.filter((item) => item.status === "done").length}/${data.board.length}`}
+          </Text>
+          {data.board.map((item) => (
+            <BoardRow key={item.id} item={item} />
+          ))}
+        </>
+      ) : null}
+
       <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>各步结论</Text>
       {data.steps.length === 0 ? <Muted>还没有可查看的结论。</Muted> : null}
       {data.steps.map((step) => (
@@ -269,6 +281,55 @@ function TabRow({
         {tab.status}
       </Text>
     </Pressable>
+  );
+}
+
+function BoardRow({ item }: { item: TaskBoardItemData }) {
+  const { theme } = useHost();
+  const color =
+    item.status === "done"
+      ? theme.colors.statusSuccess
+      : item.status === "in_progress"
+        ? theme.colors.statusWarning
+        : item.status === "blocked"
+          ? theme.colors.statusDanger
+          : theme.colors.foregroundMuted;
+  const meta = [
+    item.claimedTab ? `#${item.claimedTab}` : "",
+    item.readOnly ? "只读" : item.files.length ? item.files.join("、") : "未声明范围",
+    item.dependsOn.length ? `依赖 ${item.dependsOn.join("、")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <View
+      testID={`task-flow-board-${item.id}`}
+      style={{
+        borderWidth: 1,
+        borderColor: item.outOfScope.length ? theme.colors.statusWarning : theme.colors.border,
+        borderRadius: 8,
+        padding: 10,
+        gap: 4,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Dot color={color} size={8} />
+        <Text
+          style={{ flexShrink: 1, color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}
+        >
+          {`${item.id} ${item.goal}`}
+        </Text>
+        <Text style={{ marginLeft: "auto", color, fontSize: 12 }}>{item.statusLabel}</Text>
+      </View>
+      <Text numberOfLines={2} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+        {meta}
+      </Text>
+      {item.summary ? (
+        <Text numberOfLines={3} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          {item.summary}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 

@@ -42,6 +42,8 @@ export const TaskPlanSubtaskSchema = z
     files: z.array(Text),
     acceptance: Text,
     presetId: Text.nullable().optional(),
+    /** A research or review subtask that changes no files; its claim never conflicts. */
+    readOnly: z.boolean().optional(),
   })
   .strict();
 export type TaskPlanSubtask = z.infer<typeof TaskPlanSubtaskSchema>;
@@ -266,5 +268,5 @@ export const TASK_PLAN_PROMPT: PromptDef = {
   audience: "规划 agent",
   defaultText: "",
   fixedSuffix:
-    "请使用中文说明方案，并在最新完整回复中仅输出一个标记为 vibe-plan 的 JSON 代码块。JSON 必须包含 goal（目标）、approach（做法）、files（文件或 glob 数组）、subtasks（子任务数组）和 checks（至少一项，每项含 text 与 method）。每个子任务必须包含 id、goal、method、notes（注意事项，可为空）、dependsOn（依赖编号数组）、files 和 acceptance（验收），可选 presetId（预设编号或 null）。无涉及文件或无子任务时仍须输出空数组。依赖必须存在且不能成环。不要省略字段，不要输出多个方案段；普通说明仍用中文 Markdown。",
+    "请使用中文说明方案，并在最新完整回复中仅输出一个标记为 vibe-plan 的 JSON 代码块。JSON 必须包含 goal（目标）、approach（做法）、files（文件或 glob 数组）、subtasks（子任务数组）和 checks（至少一项，每项含 text 与 method）。每个子任务必须包含 id、goal、method、notes（注意事项，可为空）、dependsOn（依赖编号数组）、files 和 acceptance（验收），可选 presetId（预设编号或 null）；只读调研或审查类子任务加 readOnly: true，files 可为空；其余子任务必须写 files，整仓单写者显式写 [\"**\"]。无涉及文件或无子任务时仍须输出空数组。依赖必须存在且不能成环。不要省略字段，不要输出多个方案段；普通说明仍用中文 Markdown。",
 };

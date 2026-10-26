@@ -43,6 +43,22 @@ export const TaskStepSchema = z.object({
 });
 export type TaskStepData = z.infer<typeof TaskStepSchema>;
 
+/** One in-task board subtask as the flow panel shows it (WP-127). */
+export const TaskBoardItemSchema = z.object({
+  id: z.string(),
+  goal: z.string(),
+  status: z.enum(["todo", "in_progress", "done", "blocked"]),
+  statusLabel: z.string(),
+  files: z.array(z.string()),
+  readOnly: z.boolean().optional(),
+  dependsOn: z.array(z.string()),
+  claimedBy: z.string().nullable(),
+  claimedTab: z.number().nullable(),
+  summary: z.string(),
+  outOfScope: z.array(z.string()),
+});
+export type TaskBoardItemData = z.infer<typeof TaskBoardItemSchema>;
+
 /** Read-only data for the lightweight flow panel; no command is authorized here. */
 export const taskPanelRpc = defineRpc({
   name: "vibe.task.panel",
@@ -54,5 +70,6 @@ export const taskPanelRpc = defineRpc({
     blockingReason: z.string().nullable(),
     tabs: z.array(TaskTabViewSchema),
     steps: z.array(TaskStepSchema),
+    board: z.array(TaskBoardItemSchema).optional(),
   }),
 });

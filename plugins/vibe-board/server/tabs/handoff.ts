@@ -39,7 +39,7 @@ export const MAX_HISTORY_CHARS = 30_000;
 const FENCE_OPEN = "<<<VIBE-HISTORY-BEGIN>>>";
 const FENCE_CLOSE = "<<<VIBE-HISTORY-END>>>";
 
-function git(cwd: string, args: string[]): Promise<string | undefined> {
+export function git(cwd: string, args: string[], timeout = 15_000): Promise<string | undefined> {
   return new Promise((done) => {
     execFile(
       "git",
@@ -47,7 +47,7 @@ function git(cwd: string, args: string[]): Promise<string | undefined> {
       {
         cwd,
         windowsHide: true,
-        timeout: 15_000,
+        timeout,
         maxBuffer: 8 * 1024 * 1024,
         env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
       },

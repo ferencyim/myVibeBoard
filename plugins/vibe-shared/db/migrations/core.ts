@@ -663,4 +663,34 @@ CREATE TABLE task_handoff (
 );
 `,
   },
+  {
+    // In-task board: confirmed plan subtasks (or ones the executor adds) with claims (WP-127).
+    version: 18,
+    name: "task_subtask",
+    sql: `
+CREATE TABLE task_subtask (
+  workspace_id TEXT NOT NULL REFERENCES task(workspace_id),
+  subtask_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  confirmed_at TEXT,
+  source TEXT NOT NULL CHECK (source IN ('plan','agent')),
+  goal TEXT NOT NULL,
+  files_json TEXT NOT NULL CHECK (json_valid(files_json)),
+  depends_on_json TEXT NOT NULL CHECK (json_valid(depends_on_json)),
+  acceptance TEXT NOT NULL DEFAULT '',
+  read_only INTEGER NOT NULL DEFAULT 0,
+  ignore_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(ignore_json)),
+  status TEXT NOT NULL CHECK (status IN ('todo','in_progress','done','blocked')),
+  claimed_by TEXT,
+  claimed_tab INTEGER,
+  claimed_at TEXT,
+  claim_json TEXT CHECK (claim_json IS NULL OR json_valid(claim_json)),
+  completed_at TEXT,
+  summary TEXT NOT NULL DEFAULT '',
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, subtask_id)
+);
+`,
+  },
 ];

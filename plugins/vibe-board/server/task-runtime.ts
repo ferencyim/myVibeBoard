@@ -4,6 +4,7 @@ import { EVENT_PAYLOADS } from "./vibe/contract";
 import { createEventConsumer, createTaskRuntimeCommands, type VibeDb, type VibeStore } from "./vibe/db";
 import { createTaskTabs } from "./tabs/service";
 import { createTaskFlow } from "./tabs/flow";
+import { createTaskBoard } from "./tabs/board";
 import { taskPanelRpc, taskTabCommandRpc } from "../shared/task-tabs";
 
 const AGENT_CALLER_ERROR =
@@ -37,6 +38,17 @@ export function registerTaskRuntime(
     log,
   });
   flow.registerPrompts();
+  const board = createTaskBoard({
+    store: options.store,
+    getPaseo: options.getPaseo,
+    directory: async (workspaceId) => {
+      const placement = await tabs.workspace(workspaceId);
+      if (!placement.directory) throw new Error("找不到任务工作区目录");
+      return placement.directory;
+    },
+    appendStatus: tabs.appendStatus,
+    log,
+  });
   const cleanups = [
     server.before("workspace.create", ({ request }) => {
       tabs.trackWorkspaceCreate(request);
@@ -47,11 +59,22 @@ export function registerTaskRuntime(
     }),
     server.before("agent.create", async ({ request }, context) => {
       options.onPaseo(context.paseo);
-      return tabs.injectGuide(request);
+      // A sub-agent of the execution tab must be bound to a claimed board subtask.
+      const brief = await board.guardCreate(request);
+      const next = await tabs.injectGuide(request);
+      if (!brief) return next;
+      return {
+        ...next,
+        config: {
+          ...next.config,
+          systemPrompt: [next.config.systemPrompt, brief].filter(Boolean).join("\n\n"),
+        },
+      };
     }),
     server.on("agent.created", async ({ agent }, context) => {
       options.onPaseo(context.paseo);
       if (closed) return;
+      await board.agentCreated(agent).catch((error) => log("子代理认领移交失败", error));
       await tabs.ensureTab(agent.id).catch((error) => log("任务 tab 登记失败", error));
       const task = agent.workspaceId ? options.store.tasks.get(agent.workspaceId) : undefined;
       if (task && task.anchorAgentId === agent.id && task.tabs.length === 1)
@@ -85,10 +108,22 @@ export function registerTaskRuntime(
       }
     }),
   ];
+  // Hosts without the agent.prompt hook still enforce claims at create_agent and claim time.
+  try {
+    cleanups.push(
+      server.before("agent.prompt", async ({ request }, context) => {
+        options.onPaseo(context.paseo);
+        await board.guardPrompt(request);
+      }),
+    );
+  } catch (error) {
+    log("宿主不支持 agent.prompt 钩子，send_agent_prompt 派发不做看板检查", error);
+  }
   server.handle(taskPanelRpc, async (input, context) => {
     options.onPaseo(context.paseo);
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
-    return flow.panel(input.workspaceId);
+    const view = await flow.panel(input.workspaceId);
+    return { ...view, board: view.task ? board.panel(view.task) : [] };
   });
   server.handle(taskTabCommandRpc, async (input, context) => {
     options.onPaseo(context.paseo);
@@ -136,6 +171,7 @@ export function registerTaskRuntime(
   return {
     flow,
     tabs,
+    board,
     async close() {
       closed = true;
       for (const cleanup of cleanups) cleanup();

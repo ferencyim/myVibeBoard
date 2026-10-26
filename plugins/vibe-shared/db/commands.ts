@@ -66,6 +66,7 @@ import { decodeRow, decodeRows } from "./rows";
 import type { SqlParam, VibeDb } from "./sqlite";
 import { createTaskArtifactCommands } from "./task-artifacts";
 import { createTaskHandoffCommands } from "./task-handoffs";
+import { createTaskBoardCommands } from "./task-board";
 import { createTaskCommands } from "./tasks";
 
 export class CommandError extends Error {
@@ -1254,6 +1255,7 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
     tasks,
     taskArtifacts: createTaskArtifactCommands(db, { now }),
     taskHandoffs: createTaskHandoffCommands(db, { now }),
+    taskBoard: createTaskBoardCommands(db, { now }),
     presets,
     sessions,
     prompts,

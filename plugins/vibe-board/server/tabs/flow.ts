@@ -27,7 +27,13 @@ import {
   type TaskRoleSnapshot,
   type TaskTab,
 } from "../vibe/contract";
-import { createTaskRuntimeCommands, publishEvent, type VibeDb, type VibeStore } from "../vibe/db";
+import {
+  createTaskRuntimeCommands,
+  publishEvent,
+  type BoardSubtask,
+  type VibeDb,
+  type VibeStore,
+} from "../vibe/db";
 import { createTaskResources, type TaskTurnToken } from "../task-host/resources";
 import { createTaskGitFinalizer, type GitState } from "../task-conversation/git";
 import { TASK_FLOW_PROMPTS } from "../task-conversation/prompts";
@@ -396,6 +402,31 @@ export function createTaskFlow(options: {
       );
     });
   }
+  /** A new round ends the previous round's running claims; their sub-agents are told to stop.
+   *  Task tabs get the new plan anyway, and closed agents are not reopened. */
+  async function stopDisplacedClaimers(
+    task: Task,
+    displaced: readonly BoardSubtask[],
+    sourceAgentId: string,
+  ) {
+    for (const row of displaced) {
+      const agentId = row.claimedBy;
+      if (!agentId || task.tabs.some((tab) => tab.agentId === agentId)) continue;
+      try {
+        const handle = paseo().agents.ref(agentId);
+        await handle.refresh();
+        const agent = handle.current();
+        if (!agent || agent.archivedAt || agent.status === "closed" || agent.status === "error")
+          continue;
+        await handle.send(
+          `方案已重新确认（新一轮），你认领的看板子任务 ${row.id} 已中止。请立即停手：不要再修改文件，也不要调用 vibe_board_complete；等待执行主代理重新安排。`,
+          { sourceAgentId, activeTurnBehavior: "steer" },
+        );
+      } catch (error) {
+        log("新一轮停手消息发送失败", error);
+      }
+    }
+  }
   async function confirmWith(
     task: Task,
     plan: TaskPlan,
@@ -412,6 +443,10 @@ export function createTaskFlow(options: {
       planSource: source,
       requestId,
     });
+    // The confirmed subtasks become this round's board; a plan without subtasks starts empty. A
+    // replayed confirmation leaves the board alone.
+    const { displaced } = store.taskBoard.seed(task.workspaceId, confirmed.confirmedAt, plan.subtasks);
+    await stopDisplacedClaimers(confirmed, displaced, tab.agentId);
     // A confirmation of a real plan clears a previous round's "no plan" marker.
     if (confirmed.control?.directInstruction)
       store.tasks.updateControl(task.workspaceId, { directInstruction: null });

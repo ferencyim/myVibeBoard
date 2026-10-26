@@ -25,6 +25,7 @@ import { assertTaskWorkspace } from "../task-host/workspace";
 import type { TaskRuntimeCommands } from "../vibe/db";
 import type { SessionRole } from "../vibe/contract";
 import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
+import { boardProgress } from "./board";
 
 export { tabTitle };
 
@@ -577,6 +578,8 @@ export function createTaskTabs(options: {
     ];
     if (task.control?.directInstruction)
       lines.push("执行依据：无方案，按用户在执行 tab 的指示执行");
+    const board = store.taskBoard.list(workspaceId);
+    if (board.length) lines.push(boardProgress(board));
     if (task.control?.blockingReason) lines.push(`阻塞：${String(task.control.blockingReason)}`);
     if (task.summary) lines.push(`最新结论：${task.summary}`);
     for (const artifact of artifacts)

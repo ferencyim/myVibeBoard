@@ -6,6 +6,7 @@ import { registerBoardRpcs } from "./server/rpc";
 import { verifyEvidenceRpc } from "./shared/evidence";
 import { createTaskEvidenceReader } from "./server/evidence";
 import { registerTaskRuntime } from "./server/task-runtime";
+import { registerBoardTools } from "./server/tabs/board-tools";
 
 export default function contribute(server: PluginServerContext) {
   const runtime = openBoardRuntime();
@@ -52,6 +53,7 @@ export default function contribute(server: PluginServerContext) {
       return tasks.tabs.openTab(callerAgentId, openTabInput.parse(input));
     },
   });
+  registerBoardTools(server, tasks.board);
   return async () => {
     await tasks.close();
     runtime.close();

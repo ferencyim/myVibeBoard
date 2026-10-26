@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
@@ -29,6 +29,10 @@ import {
   renderHandoff,
 } from "../server/tabs/handoff";
 import { registerTaskRuntime } from "../server/task-runtime";
+import { createTaskBoard, SUBTASK_LABEL } from "../server/tabs/board";
+import { TASK_FLOW_PROMPTS } from "../server/task-conversation/prompts";
+import { TASK_HOST_PROMPTS } from "../server/task-host/prompts";
+import { TASK_TAB_GUIDE_PROMPT } from "../server/tabs/prompts";
 import {
   TASK_TAB_ROLE_LABEL,
   TASK_TAB_PRESET_LABEL,
@@ -52,6 +56,7 @@ interface FakeAgent {
   archivedAt?: string | null;
   internal?: boolean;
   labels?: Record<string, string>;
+  updatedAt?: string;
 }
 interface TimelineEntry {
   item: { type: string; text?: string; messageId?: string };
@@ -2625,5 +2630,432 @@ describe("结构化交接包", () => {
     expect(sent).toContain("跑测试");
     expect(sent).toContain("【检查点");
     expect(sent).not.toContain("交接之后仓库已变化");
+  });
+});
+
+describe("WP-127 任务看板与子代理协调", () => {
+  const subtasks = [
+    { id: "A", goal: "改 A", method: "实现", notes: "", dependsOn: [], files: ["src/a/**"], acceptance: "单测" },
+    { id: "B", goal: "改 B", method: "实现", notes: "", dependsOn: [], files: ["src/a/b.ts"], acceptance: "单测" },
+    { id: "C", goal: "改 C", method: "实现", notes: "", dependsOn: ["A"], files: ["src/c/**"], acceptance: "单测" },
+  ];
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+  async function boardTask(options: { plan?: boolean; confirm?: boolean; seed?: boolean } = {}) {
+    // The store stamps claims with the real clock; the board's staleness clock starts there.
+    const clock = { ms: Date.now() };
+    const context = await projectTask();
+    const dir = context.fake.directory;
+    git(dir, "init", "-q", "--initial-branch=main");
+    git(dir, "config", "user.email", "t@example.invalid");
+    git(dir, "config", "user.name", "t");
+    writeFileSync(join(dir, "README.md"), "# t\n");
+    git(dir, "add", ".");
+    git(dir, "commit", "-q", "-m", "init");
+    context.fake.addAgent({ id: "exec" });
+    await context.tabs.ensureTab("exec", { role: "worker" });
+    const plan = { ...planSnapshot(), subtasks: options.plan === false ? [] : subtasks };
+    if (options.confirm !== false) {
+      context.store.tasks.savePlan("ws", plan);
+      const confirmed = context.store.tasks.confirm("ws", {
+        plan,
+        rolesSnapshot: roleSnapshot(),
+        planSource: { sourceKey: "test" },
+        requestId: "confirm-1",
+      });
+      if (options.seed !== false)
+        context.store.taskBoard.seed("ws", confirmed.confirmedAt, plan.subtasks);
+    }
+    const board = createTaskBoard({
+      store: context.store,
+      getPaseo: () => context.fake.paseo as never,
+      directory: async () => dir,
+      appendStatus: context.tabs.appendStatus,
+      now: () => clock.ms,
+      log: () => {},
+    });
+    const sub = (id: string) =>
+      context.fake.addAgent({ id, labels: { [PARENT_AGENT_ID_LABEL]: "exec" } });
+    return { ...context, board, dir, clock, sub };
+  }
+
+  it("/执行 把方案子任务落成看板，所有 tab 可查看，只有执行 tab 能认领", async () => {
+    const context = setup();
+    context.store.projects.create({
+      name: "任务项目",
+      prefix: "T",
+      repoPath: context.fake.directory,
+      paseoProjectId: context.fake.projectId,
+    });
+    context.fake.addAgent({ id: "agent-1" });
+    await context.tabs.ensureTab("agent-1");
+    context.fake.setTimeline("agent-1", [
+      {
+        item: {
+          type: "assistant_message",
+          text: ["```vibe-plan", JSON.stringify({ ...planSnapshot(), subtasks }), "```"].join("\n"),
+          messageId: "m-1",
+        },
+        turnId: "turn-1",
+        seqEnd: 3,
+      },
+    ]);
+    await context.flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-1" });
+    expect(context.store.taskBoard.list("ws").map((row) => [row.id, row.status])).toEqual([
+      ["A", "todo"],
+      ["B", "todo"],
+      ["C", "todo"],
+    ]);
+    const board = createTaskBoard({
+      store: context.store,
+      getPaseo: () => context.fake.paseo as never,
+      directory: async () => context.fake.directory,
+      appendStatus: context.tabs.appendStatus,
+      log: () => {},
+    });
+    const listed = await board.list("agent-1");
+    expect(listed.progress).toBe("看板：完成 0/3");
+    expect(listed.subtasks.map((item) => item.statusLabel)).toEqual(["待办", "待办", "待办"]);
+    await expect(board.claim("agent-1", { id: "A" })).rejects.toThrow("只有执行 tab");
+  });
+
+  it("认领：依赖未完成被拒，范围与进行中子任务重叠被拒，重复认领被拒", async () => {
+    const { board, sub } = await boardTask();
+    sub("sub-a");
+    sub("sub-b");
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    await expect(board.claim("sub-b", { id: "B" })).rejects.toThrow(/src\/a\/b\.ts.*A/);
+    await expect(board.claim("exec", { id: "C" })).rejects.toThrow("A（进行中");
+    await expect(board.claim("sub-b", { id: "A" })).rejects.toThrow("已被 #");
+    expect((await board.list("exec")).progress).toBe("看板：完成 0/3，进行中 A（#2）");
+  });
+
+  it("create_agent 派发前必须带看板子任务标签；冲突时拒绝，通过后认领移交给子代理", async () => {
+    const { board, store, sub } = await boardTask();
+    const request = (labels: Record<string, string>) => ({
+      config: { provider: "codex/first", cwd: "x" } as never,
+      workspaceId: "ws",
+      parentAgentId: "exec",
+      labels: { [PARENT_AGENT_ID_LABEL]: "exec", ...labels },
+    });
+    await expect(board.guardCreate(request({}))).rejects.toThrow("vibe.subtask");
+    await expect(board.guardCreate(request({ [SUBTASK_LABEL]: "C" }))).rejects.toThrow("尚未完成");
+    const brief = await board.guardCreate(request({ [SUBTASK_LABEL]: "A" }));
+    expect(brief).toContain("子任务 A");
+    expect(brief).toContain("src/a/**");
+    expect(store.taskBoard.get("ws", "A")).toMatchObject({ status: "in_progress", claimedBy: "exec" });
+    board.agentCreated({
+      id: "sub-a",
+      workspaceId: "ws",
+      parentAgentId: "exec",
+      provider: "codex",
+      cwd: "x",
+      title: null,
+      labels: { [SUBTASK_LABEL]: "A" },
+    });
+    expect(store.taskBoard.get("ws", "A")).toMatchObject({ claimedBy: "sub-a", claimedTab: 2 });
+    sub("sub-b");
+    await expect(board.guardCreate(request({ [SUBTASK_LABEL]: "B" }))).rejects.toThrow("重叠");
+    // A sub-agent of a non-executor tab is not gated.
+    expect(
+      await board.guardCreate({ ...request({}), parentAgentId: "agent-1", labels: {} }),
+    ).toBeUndefined();
+  });
+
+  it("send_agent_prompt 给自己的子代理交代工作前必须为它认领", async () => {
+    const { board, sub } = await boardTask();
+    sub("sub-a");
+    const prompt = {
+      agentId: "sub-a",
+      workspaceId: "ws",
+      parentAgentId: "exec",
+      callerAgentId: "exec",
+      prompt: "做 A",
+    };
+    await expect(board.guardPrompt(prompt)).rejects.toThrow("assignee=sub-a");
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    await expect(board.guardPrompt(prompt)).resolves.toBeUndefined();
+    // Sub-agents talking to each other are not gated.
+    await expect(
+      board.guardPrompt({ ...prompt, agentId: "sub-b", callerAgentId: "sub-a" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("完成时比对认领期间的改动：范围外且不属于其它进行中子任务的文件写入结论并告警主代理", async () => {
+    const { board, fake, store, dir, sub } = await boardTask();
+    sub("sub-a");
+    sub("sub-d");
+    store.taskBoard.add("ws", { id: "D", goal: "改 D", files: ["src/d/**"], dependsOn: [] }, null);
+    // Already dirty before the claim and untouched afterwards: not this subtask's change.
+    writeFileSync(join(dir, "README.md"), "# dirty before claim\n");
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    await board.claim("exec", { id: "D", assignee: "sub-d" });
+    for (const folder of ["src/a", "src/d", "docs"]) mkdirSync(join(dir, folder), { recursive: true });
+    writeFileSync(join(dir, "src", "a", "x.ts"), "a\n");
+    writeFileSync(join(dir, "src", "d", "y.ts"), "d\n");
+    writeFileSync(join(dir, "docs", "z.md"), "z\n");
+    // The executor is mid-turn, so the warning also reaches it as a message.
+    fake.agents.get("exec")!.activeTurn = { id: "exec-turn" };
+    const result = await board.complete("sub-a", {
+      id: "A",
+      summary: "A 完成",
+      changedFiles: ["src/a/x.ts"],
+    });
+    expect(result.outOfScope).toEqual(["docs/z.md"]);
+    const row = store.taskBoard.get("ws", "A")!;
+    expect(row.status).toBe("done");
+    expect(row.summary).toContain("推断");
+    expect(row.result).toMatchObject({ changedFiles: ["src/a/x.ts"], outOfScope: ["docs/z.md"] });
+    const alert = fake.sends.find((send) => send.agentId === "exec");
+    expect(alert?.text).toContain("docs/z.md");
+    expect(alert?.options).toMatchObject({ sourceAgentId: "sub-a" });
+    expect(fake.appended.some((entry) => entry.agentId === "exec")).toBe(true);
+    // A done unblocks C; a sub-agent cannot complete a claim it does not hold.
+    await board.claim("exec", { id: "C", assignee: "sub-a" });
+    await expect(board.complete("sub-d", { id: "C", summary: "x" })).rejects.toThrow("只能由认领者");
+  });
+
+  it("认领超时：认领者仍活动时不能收回，关闭或长时间无活动后执行主代理可收回", async () => {
+    const { board, fake, clock, sub } = await boardTask();
+    sub("sub-a");
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    const agent = fake.agents.get("sub-a")!;
+    agent.status = "running";
+    agent.activeTurn = { id: "t" };
+    await expect(board.release("exec", { id: "A", reason: "" })).rejects.toThrow("仍在活动");
+    agent.status = "idle";
+    agent.activeTurn = null;
+    agent.updatedAt = new Date(clock.ms).toISOString();
+    clock.ms += 10 * 60_000;
+    await expect(board.release("exec", { id: "A", reason: "" })).rejects.toThrow("仍在活动");
+    clock.ms += 25 * 60_000;
+    await expect(board.claim("exec", { id: "A" })).rejects.toThrow("vibe_board_release 收回 A");
+    const released = await board.release("exec", { id: "A", reason: "换人" });
+    expect(released.subtask).toMatchObject({ status: "todo", claimedBy: null });
+    expect(released.subtask.summary).toContain("无活动");
+    sub("sub-b");
+    await board.claim("exec", { id: "A", assignee: "sub-b" });
+    fake.agents.get("sub-b")!.status = "closed";
+    const failed = await board.release("exec", { id: "A", reason: "失败", failed: true });
+    expect(failed.subtask.status).toBe("blocked");
+    // Failed work can be claimed again.
+    await board.claim("exec", { id: "A" });
+  });
+
+  it("执行 tab 直接授权（无方案）时看板为空，主代理补登后可认领", async () => {
+    const { board } = await boardTask({ plan: false });
+    expect((await board.list("exec")).subtasks).toEqual([]);
+    expect((await board.list("exec")).progress).toBe("看板：暂无子任务");
+    await expect(board.claim("exec", { id: "X" })).rejects.toThrow("vibe_board_add");
+    await expect(
+      board.add("exec", { id: "X", goal: "补登", files: [], dependsOn: [] }),
+    ).rejects.toThrow("没有声明文件范围");
+    await board.add("exec", { id: "X", goal: "补登", files: ["**"], dependsOn: [] });
+    const claimed = await board.claim("exec", { id: "X" });
+    expect(claimed.subtask.files).toEqual(["**"]);
+    expect(claimed.message).toContain("**");
+  });
+
+  it("旧任务：已确认但没有看板时按方案补建；未确认的任务看板为空且不能认领", async () => {
+    const old = await boardTask({ seed: false });
+    expect(old.store.taskBoard.list("ws")).toEqual([]);
+    expect((await old.board.list("agent-1")).subtasks.map((item) => item.id)).toEqual(["A", "B", "C"]);
+    const fresh = await boardTask({ confirm: false });
+    expect((await fresh.board.list("exec")).subtasks).toEqual([]);
+    await expect(fresh.board.claim("exec", { id: "A" })).rejects.toThrow("尚未确认");
+    await expect(
+      fresh.board.guardCreate({
+        config: { provider: "codex/first", cwd: "x" } as never,
+        workspaceId: "ws",
+        parentAgentId: "exec",
+        labels: { [SUBTASK_LABEL]: "A" },
+      }),
+    ).rejects.toThrow("尚未确认执行");
+  });
+
+  const createRequest = (id?: string) => ({
+    config: { provider: "codex/first", cwd: "x" } as never,
+    workspaceId: "ws",
+    parentAgentId: "exec",
+    labels: { [PARENT_AGENT_ID_LABEL]: "exec", ...(id ? { [SUBTASK_LABEL]: id } : {}) },
+  });
+  const created = (id: string, subtask: string) => ({
+    id,
+    workspaceId: "ws",
+    parentAgentId: "exec",
+    provider: "codex",
+    cwd: "x",
+    title: null,
+    labels: { [SUBTASK_LABEL]: subtask },
+  });
+  const promptTo = (agentId: string) => ({
+    agentId,
+    workspaceId: "ws",
+    parentAgentId: "exec",
+    callerAgentId: "exec",
+    prompt: "继续",
+  });
+
+  it("只读认领不与写文件的子任务冲突；只读子任务认领期间有文件写入时告警，执行 tab 空闲时不唤醒", async () => {
+    const { board, fake, store, dir, sub } = await boardTask();
+    sub("sub-a");
+    sub("sub-r");
+    await board.add("exec", { id: "R", goal: "调研", files: [], dependsOn: [], readOnly: true });
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    expect((await board.claim("exec", { id: "R", assignee: "sub-r" })).message).toContain("只读");
+    await expect(board.claim("exec", { id: "B" })).rejects.toThrow("与进行中的 A");
+    mkdirSync(join(dir, "src", "a"), { recursive: true });
+    writeFileSync(join(dir, "src", "a", "x.ts"), "a\n");
+    writeFileSync(join(dir, "notes.md"), "n\n");
+    const done = await board.complete("sub-r", { id: "R", summary: "调研完成" });
+    expect(done.outOfScope).toEqual(["notes.md"]);
+    expect(store.taskBoard.get("ws", "R")!.summary).toContain("只读子任务 R 认领期间有文件被写入");
+    expect(fake.appended.some((entry) => entry.agentId === "exec")).toBe(true);
+    expect(fake.sends.some((send) => send.agentId === "exec")).toBe(false);
+  });
+
+  it("重复确认（同一 requestId 重放）不清空看板与认领", async () => {
+    const { board, store, sub } = await boardTask();
+    sub("sub-a");
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    const replay = store.tasks.confirm("ws", {
+      plan: store.tasks.get("ws")!.plan!,
+      rolesSnapshot: roleSnapshot(),
+      planSource: { sourceKey: "test" },
+      requestId: "confirm-1",
+    });
+    expect(store.taskBoard.seed("ws", replay.confirmedAt, replay.plan!.subtasks).seeded).toBe(false);
+    expect(store.taskBoard.get("ws", "A")).toMatchObject({ status: "in_progress", claimedBy: "sub-a" });
+  });
+
+  it("create_agent 与 agent.created 之间：正在移交给子代理的子任务可以 send_agent_prompt", async () => {
+    const { board, fake, store } = await boardTask();
+    await board.guardCreate(createRequest("A"));
+    fake.addAgent({ id: "sub-a", labels: { [PARENT_AGENT_ID_LABEL]: "exec", [SUBTASK_LABEL]: "A" } });
+    await expect(board.guardPrompt(promptTo("sub-a"))).resolves.toBeUndefined();
+    fake.addAgent({ id: "sub-x", labels: { [PARENT_AGENT_ID_LABEL]: "exec" } });
+    await expect(board.guardPrompt(promptTo("sub-x"))).rejects.toThrow("vibe_board_add");
+    await board.agentCreated(created("sub-a", "A"));
+    expect(store.taskBoard.get("ws", "A")).toMatchObject({ claimedBy: "sub-a" });
+    await expect(board.guardPrompt(promptTo("sub-a"))).resolves.toBeUndefined();
+  });
+
+  it("子任务已完成的子代理可以追问；子任务未认领的子代理不能派活", async () => {
+    const { board, fake } = await boardTask();
+    fake.addAgent({ id: "sub-a", labels: { [PARENT_AGENT_ID_LABEL]: "exec", [SUBTASK_LABEL]: "A" } });
+    fake.addAgent({ id: "sub-b", labels: { [PARENT_AGENT_ID_LABEL]: "exec", [SUBTASK_LABEL]: "B" } });
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    await board.complete("sub-a", { id: "A", summary: "完成" });
+    await expect(board.guardPrompt(promptTo("sub-a"))).resolves.toBeUndefined();
+    await expect(board.guardPrompt(promptTo("sub-b"))).rejects.toThrow("assignee=sub-b");
+  });
+
+  it("认领后 create_agent 失败：60 秒内没有子代理认领自动退回；迟到的子代理自己认领，失败时告警执行 tab", async () => {
+    const { board, fake, store, clock } = await boardTask();
+    await board.guardCreate(createRequest("A"));
+    expect(store.taskBoard.get("ws", "A")).toMatchObject({ status: "in_progress", claimedBy: "exec" });
+    // Measured from the claim stamp: the store stamps with the real clock.
+    clock.ms = Date.parse(store.taskBoard.get("ws", "A")!.claimedAt!) + 30_000;
+    expect((await board.list("exec")).subtasks.find((item) => item.id === "A")!.status).toBe(
+      "in_progress",
+    );
+    clock.ms += 31_000;
+    const expired = (await board.list("exec")).subtasks.find((item) => item.id === "A")!;
+    expect(expired).toMatchObject({ status: "todo", claimedBy: null });
+    expect(expired.summary).toContain("自动退回");
+    fake.addAgent({ id: "sub-a", labels: { [PARENT_AGENT_ID_LABEL]: "exec", [SUBTASK_LABEL]: "A" } });
+    await board.agentCreated(created("sub-a", "A"));
+    expect(store.taskBoard.get("ws", "A")).toMatchObject({ status: "in_progress", claimedBy: "sub-a" });
+    // B overlaps A: the late sub-agent for B cannot claim it and the execution tab hears about it.
+    fake.addAgent({ id: "sub-b", labels: { [PARENT_AGENT_ID_LABEL]: "exec", [SUBTASK_LABEL]: "B" } });
+    await board.agentCreated(created("sub-b", "B"));
+    expect(store.taskBoard.get("ws", "B")).toMatchObject({ status: "todo" });
+    expect(
+      fake.appended.some(
+        (entry) => entry.agentId === "exec" && JSON.stringify(entry.item).includes("没能交给它"),
+      ),
+    ).toBe(true);
+  });
+
+  it("收回后原认领者收到停手消息，也不能再完成该子任务", async () => {
+    const { board, fake, clock, sub } = await boardTask();
+    sub("sub-a");
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    fake.agents.get("sub-a")!.updatedAt = new Date(clock.ms).toISOString();
+    clock.ms += 35 * 60_000;
+    await board.release("exec", { id: "A", reason: "换人" });
+    const stop = fake.sends.find((send) => send.agentId === "sub-a");
+    expect(stop?.text).toContain("请立即停手");
+    expect(stop?.options).toMatchObject({ sourceAgentId: "exec", activeTurnBehavior: "steer" });
+    // The executor takes A over; the old claimer, though its sub-agent, cannot complete it.
+    await board.claim("exec", { id: "A" });
+    await expect(board.complete("sub-a", { id: "A", summary: "x" })).rejects.toThrow(
+      "只能由认领者或执行主代理完成",
+    );
+    await board.complete("exec", { id: "A", summary: "主代理完成" });
+  });
+
+  it("越界比对忽略锁文件、快照与构建产物，可追加 ignore；重命名的旧路径计入比较", async () => {
+    const { board, dir, sub } = await boardTask();
+    sub("sub-a");
+    await board.add("exec", {
+      id: "A",
+      goal: "改 A",
+      files: ["src/a/**"],
+      dependsOn: [],
+      ignore: ["docs/gen/**"],
+    });
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    for (const folder of ["src/a", "dist", "docs/gen", "src/__snapshots__"])
+      mkdirSync(join(dir, folder), { recursive: true });
+    writeFileSync(join(dir, "package-lock.json"), "{}\n");
+    writeFileSync(join(dir, "dist", "x.js"), "x\n");
+    writeFileSync(join(dir, "docs", "gen", "api.md"), "api\n");
+    writeFileSync(join(dir, "src", "__snapshots__", "a.test.ts.snap"), "snap\n");
+    git(dir, "mv", "README.md", "src/a/README.md");
+    const result = await board.complete("sub-a", { id: "A", summary: "完成" });
+    expect(result.outOfScope).toEqual(["README.md"]);
+  });
+
+  it("git 失败时不当成没有改动：结论写明越界比对未执行", async () => {
+    const context = await boardTask();
+    context.sub("sub-a");
+    const board = createTaskBoard({
+      store: context.store,
+      getPaseo: () => context.fake.paseo as never,
+      directory: async () => join(context.dir, "missing"),
+      appendStatus: context.tabs.appendStatus,
+      log: () => {},
+    });
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    expect(context.store.taskBoard.get("ws", "A")!.claim).toEqual({ snapshot: null });
+    const result = await board.complete("sub-a", { id: "A", summary: "完成" });
+    expect(result.message).toContain("越界比对未执行（git 失败）");
+    expect(context.store.taskBoard.get("ws", "A")!.summary).toContain("越界比对未执行（git 失败）");
+  });
+
+  it("提示词：执行主代理、子代理与交流说明都讲清并行协作规则", () => {
+    const work = TASK_FLOW_PROMPTS.find((prompt) => prompt.key === "board.task.work")!.defaultText;
+    for (const phrase of [
+      "vibe_board_claim",
+      '{"vibe.subtask":"<子任务 id>"}',
+      "assignee",
+      "不要回滚、覆盖或格式化别人的改动",
+      "vibe_board_release 收回",
+      "列明改动文件",
+    ])
+      expect(work).toContain(phrase);
+    const subagent = TASK_HOST_PROMPTS.find((prompt) => prompt.key === "task.role.subagent")!
+      .defaultText;
+    for (const phrase of [
+      "不要回滚、覆盖或格式化别人的改动",
+      "vibe_board_add",
+      "send_agent_prompt 与对方协商",
+      "vibe_board_complete",
+      "列出改动文件路径与验证结果",
+    ])
+      expect(subagent).toContain(phrase);
+    for (const phrase of ["vibe_board_list", "vibe_board_claim", "不要回滚、覆盖或格式化别人的改动"])
+      expect(TASK_TAB_GUIDE_PROMPT.defaultText).toContain(phrase);
   });
 });
