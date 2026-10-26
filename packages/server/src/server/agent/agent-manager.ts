@@ -1221,6 +1221,23 @@ export class AgentManager {
     return request.prompt;
   }
 
+  /** Lets plugins veto an agent answering another agent's permission request; a throw rejects it. */
+  async beforeAgentPermissionResponse(input: {
+    agentId: string;
+    callerAgentId: string;
+    requestId: string;
+  }): Promise<void> {
+    const target = this.agents.get(input.agentId);
+    if (!this.pluginLifecycle || target?.internal) return;
+    await this.pluginLifecycle.before("agent.permission_response", {
+      agentId: input.agentId,
+      workspaceId: target?.workspaceId ?? null,
+      parentAgentId: target?.labels[PARENT_AGENT_ID_LABEL] ?? null,
+      callerAgentId: input.callerAgentId,
+      requestId: input.requestId,
+    });
+  }
+
   getAgent(id: string): ManagedAgent | null {
     const agent = this.agents.get(id);
     return agent ? { ...agent } : null;

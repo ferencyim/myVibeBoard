@@ -907,12 +907,13 @@ type PluginTurnOutcome =
 
 ### Before hooks
 
-| Name                 | Request fields                                                          | Editable                                |
-| -------------------- | ----------------------------------------------------------------------- | --------------------------------------- |
-| `agent.create`       | `config`, optional `env`, `workspaceId`, `parentAgentId`, `labels`      | Public agent config except `cwd`; `env` |
-| `agent.session_open` | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | Only `env`                              |
-| `agent.prompt`       | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`    | Only `prompt`                           |
-| `workspace.create`   | `source`, optional `title`, `firstAgentContext`, `callerAgentId`        | Entire explicit creation request        |
+| Name                        | Request fields                                                          | Editable                                |
+| --------------------------- | ----------------------------------------------------------------------- | --------------------------------------- |
+| `agent.create`              | `config`, optional `env`, `workspaceId`, `parentAgentId`, `labels`      | Public agent config except `cwd`; `env` |
+| `agent.session_open`        | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | Only `env`                              |
+| `agent.prompt`              | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`    | Only `prompt`                           |
+| `agent.permission_response` | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `requestId` | None (reject only)                      |
+| `workspace.create`          | `source`, optional `title`, `firstAgentContext`, `callerAgentId`        | Entire explicit creation request        |
 
 `agent.create.workspaceId`, `parentAgentId`, and `labels` are read-only context for scoping a
 transform (for example, to a task workspace or a child agent). Returning different values for them
@@ -923,6 +924,8 @@ local agent can shed it by running the CLI outside its agent environment.
 `agent.prompt` runs when an agent calls `send_agent_prompt` on this host, before the prompt is
 queued. `agentId` is the recipient and `parentAgentId` its parent when it is a subagent. Throw to
 reject the prompt: the calling agent receives the error. User prompts do not run this hook.
+
+`agent.permission_response` runs when an agent calls `respond_to_permission` on this host, before the response is applied. `agentId` is the agent that owns the request. Throw to reject: the calling agent receives the error. Answers from the app or CLI do not run this hook.
 
 **`agent.create.config`** uses `AgentSessionConfig`:
 

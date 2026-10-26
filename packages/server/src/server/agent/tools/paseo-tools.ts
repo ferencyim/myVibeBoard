@@ -3275,6 +3275,10 @@ function createToolCatalog(
       },
     },
     async ({ agentId, requestId, response }) => {
+      // Plugins may refuse an agent answering a permission request (only the user should).
+      if (callerAgentId) {
+        await agentManager.beforeAgentPermissionResponse({ agentId, callerAgentId, requestId });
+      }
       await respondToAgentPermission({
         agentManager,
         agentId,

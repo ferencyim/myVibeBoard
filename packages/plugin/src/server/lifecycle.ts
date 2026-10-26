@@ -93,6 +93,19 @@ export interface PluginBeforeRequests {
     callerAgentId: string;
     prompt: string;
   };
+  /**
+   * An agent's respond_to_permission for another agent's pending request, before it is applied.
+   * Throwing rejects it and the caller receives the error; a hook cannot change the request.
+   */
+  "agent.permission_response": {
+    /** The agent that owns the pending request. */
+    agentId: string;
+    workspaceId: string | null;
+    /** The owner's parent when it is a subagent. */
+    parentAgentId: string | null;
+    callerAgentId: string;
+    requestId: string;
+  };
   "workspace.create": Omit<WorkspaceCreateRequest, "type" | "requestId">;
 }
 

@@ -125,3 +125,33 @@ test("prompt hooks may rewrite or reject the prompt but not change its recipient
     rejecting.invoke("operation", "before", "agent.prompt", input, paseo),
   ).rejects.toThrow("先认领");
 });
+
+test("permission-response hooks may reject but not change the request", async () => {
+  const input = {
+    agentId: "child",
+    workspaceId: "workspace",
+    parentAgentId: "parent",
+    callerAgentId: "parent",
+    requestId: "req-1",
+  };
+  const passing = new PluginHookHandlers(() => {});
+  passing.before("agent.permission_response", () => {});
+  await expect(
+    passing.invoke("operation", "before", "agent.permission_response", input, paseo),
+  ).resolves.toEqual(input);
+  const redirecting = new PluginHookHandlers(() => {});
+  redirecting.before("agent.permission_response", ({ request }) => ({
+    ...request,
+    requestId: "other",
+  }));
+  await expect(
+    redirecting.invoke("operation", "before", "agent.permission_response", input, paseo),
+  ).rejects.toThrow("agent.permission_response hooks can only reject");
+  const rejecting = new PluginHookHandlers(() => {});
+  rejecting.before("agent.permission_response", () => {
+    throw new Error("审批只能由用户处理");
+  });
+  await expect(
+    rejecting.invoke("operation", "before", "agent.permission_response", input, paseo),
+  ).rejects.toThrow("审批只能由用户处理");
+});

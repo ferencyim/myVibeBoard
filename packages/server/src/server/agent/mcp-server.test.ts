@@ -282,6 +282,7 @@ function buildAgentManagerSpies() {
     getRegisteredProviderIds: vi.fn().mockReturnValue(["claude"]),
     listDraftFeatures: vi.fn(),
     beforeAgentPrompt: vi.fn(async (input: { prompt: string }) => input.prompt),
+    beforeAgentPermissionResponse: vi.fn(async () => undefined),
   };
 }
 
@@ -4522,6 +4523,48 @@ describe("send_agent_prompt MCP tool", () => {
     } finally {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
+  });
+});
+
+describe("respond_to_permission MCP tool", () => {
+  const logger = createTestLogger();
+  it("lets plugins veto an agent answering a permission request, but not the user path", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const response = { behavior: "allow" as const };
+    const build = (callerAgentId?: string) =>
+      createAgentMcpServer({
+        agentManager,
+        agentStorage,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        callerAgentId,
+        logger,
+      });
+    const agentServer = await build("parent-agent");
+    const tool = registeredTool(agentServer, "respond_to_permission");
+    spies.agentManager.beforeAgentPermissionResponse.mockRejectedValueOnce(
+      new Error("审批只能由用户处理"),
+    );
+    await expect(
+      tool.handler({ agentId: "child-agent", requestId: "req-1", response }),
+    ).rejects.toThrow("审批只能由用户处理");
+    expect(spies.agentManager.beforeAgentPermissionResponse).toHaveBeenCalledWith({
+      agentId: "child-agent",
+      callerAgentId: "parent-agent",
+      requestId: "req-1",
+    });
+    expect(spies.agentManager.respondToPermission).not.toHaveBeenCalled();
+
+    await tool.handler({ agentId: "child-agent", requestId: "req-2", response });
+    expect(spies.agentManager.respondToPermission).toHaveBeenCalledTimes(1);
+
+    spies.agentManager.beforeAgentPermissionResponse.mockClear();
+    const userServer = await build();
+    await registeredTool(userServer, "respond_to_permission").handler({
+      agentId: "child-agent",
+      requestId: "req-3",
+      response,
+    });
+    expect(spies.agentManager.beforeAgentPermissionResponse).not.toHaveBeenCalled();
   });
 });
 

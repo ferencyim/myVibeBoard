@@ -30,6 +30,7 @@ export const beforeHookNames = [
   "agent.create",
   "agent.session_open",
   "agent.prompt",
+  "agent.permission_response",
   "workspace.create",
 ] as const;
 
@@ -60,6 +61,15 @@ const beforeSchemas = {
       parentAgentId: z.string().nullable(),
       callerAgentId: z.string(),
       prompt: z.string(),
+    })
+    .strict(),
+  "agent.permission_response": z
+    .object({
+      agentId: z.string(),
+      workspaceId: z.string().nullable(),
+      parentAgentId: z.string().nullable(),
+      callerAgentId: z.string(),
+      requestId: z.string(),
     })
     .strict(),
   "workspace.create": WorkspaceCreateRequestSchema.omit({ type: true, requestId: true }).strict(),
@@ -181,6 +191,13 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
       previous.callerAgentId !== next.callerAgentId
     ) {
       throw new Error("agent.prompt hooks can only change the prompt");
+    }
+  }
+  if (name === "agent.permission_response") {
+    const previous = beforeSchemas["agent.permission_response"].parse(input);
+    const next = beforeSchemas["agent.permission_response"].parse(result);
+    if (JSON.stringify(previous) !== JSON.stringify(next)) {
+      throw new Error("agent.permission_response hooks can only reject");
     }
   }
   if (name === "agent.create") {
