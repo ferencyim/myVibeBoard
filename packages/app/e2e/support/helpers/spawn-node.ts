@@ -51,7 +51,7 @@ export async function killProcessTree(child: ChildProcess | null): Promise<void>
       } catch {
         // The child can exit between the state check and the direct kill.
       }
-      await waitForExitOrTimeout(exited, 5_000);
+      if (await waitForExitOrTimeout(exited, 5_000)) return;
       throw new Error(`Failed to terminate process tree for PID ${pid}`, { cause: taskkillError });
     }
     if (!hasExited(child) && !(await waitForExitOrTimeout(exited, 5_000))) {

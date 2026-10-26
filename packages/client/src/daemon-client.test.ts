@@ -1983,6 +1983,120 @@ test("sends and parses daemon config reload", async () => {
   });
 });
 
+test("sends and parses prompt library RPCs", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connectPromise = client.connect();
+  mock.triggerOpen({ features: { promptLibrary: true } });
+  await connectPromise;
+  expect(client.supportsPromptLibrary()).toBe(true);
+
+  const entry = {
+    id: "prompt_1",
+    title: "Review",
+    body: "Review this change.",
+    tags: ["code"],
+    updatedAt: "2026-10-26T08:00:00.000Z",
+    deleted: false,
+  };
+
+  const list = client.listPromptLibrary({ requestId: "pl-1" });
+  expect(parseSentFrame(mock.sent[0])).toEqual({
+    type: "prompt.library.list.request",
+    requestId: "pl-1",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "prompt.library.list.response",
+      payload: {
+        requestId: "pl-1",
+        entries: [entry],
+      },
+    }),
+  );
+  await expect(list).resolves.toEqual({
+    requestId: "pl-1",
+    entries: [entry],
+  });
+
+  const upsert = client.upsertPromptLibrary({ entry, requestId: "pl-2" });
+  expect(parseSentFrame(mock.sent[1])).toEqual({
+    type: "prompt.library.upsert.request",
+    requestId: "pl-2",
+    entry,
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "prompt.library.upsert.response",
+      payload: { requestId: "pl-2", entry, applied: true },
+    }),
+  );
+  await expect(upsert).resolves.toMatchObject({ applied: true });
+
+  const remove = client.deletePromptLibrary({
+    id: entry.id,
+    updatedAt: "2026-10-26T08:02:00.000Z",
+    requestId: "pl-3",
+  });
+  expect(parseSentFrame(mock.sent[2])).toEqual({
+    type: "prompt.library.delete.request",
+    requestId: "pl-3",
+    id: entry.id,
+    updatedAt: "2026-10-26T08:02:00.000Z",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "prompt.library.delete.response",
+      payload: {
+        requestId: "pl-3",
+        entry: { ...entry, deleted: true, updatedAt: "2026-10-26T08:02:00.000Z" },
+        applied: true,
+      },
+    }),
+  );
+  await expect(remove).resolves.toMatchObject({ entry: { deleted: true } });
+
+  const renameTag = client.renamePromptLibraryTag({
+    from: "code",
+    to: "engineering",
+    requestId: "pl-4",
+  });
+  expect(parseSentFrame(mock.sent[3])).toEqual({
+    type: "prompt.library.tag.rename.request",
+    requestId: "pl-4",
+    from: "code",
+    to: "engineering",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "prompt.library.tag.rename.response",
+      payload: { requestId: "pl-4", entries: [], affectedCount: 0 },
+    }),
+  );
+  await expect(renameTag).resolves.toMatchObject({ affectedCount: 0 });
+
+  const deleteTag = client.deletePromptLibraryTag({ tag: "code", requestId: "pl-5" });
+  expect(parseSentFrame(mock.sent[4])).toEqual({
+    type: "prompt.library.tag.delete.request",
+    requestId: "pl-5",
+    tag: "code",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "prompt.library.tag.delete.response",
+      payload: { requestId: "pl-5", entries: [], affectedCount: 0 },
+    }),
+  );
+  await expect(deleteTag).resolves.toMatchObject({ affectedCount: 0 });
+});
+
 test("gets a structured plugin log snapshot", async () => {
   const mock = createMockTransport();
   const client = new DaemonClient({

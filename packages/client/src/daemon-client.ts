@@ -22,6 +22,7 @@ import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 import { CLIENT_CAPS, type ClientCapability } from "@getpaseo/protocol/client-capabilities";
 import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import { MAX_WEBSOCKET_MESSAGE_BYTES } from "@getpaseo/protocol/websocket-message-limit";
+import type { PromptLibraryEntry } from "@getpaseo/protocol/prompt-library";
 import {
   AgentCreateFailedStatusPayloadSchema,
   AgentCreatedStatusPayloadSchema,
@@ -845,6 +846,26 @@ export type WorkspaceLabelDeletePayload = Extract<
 export type WorkspaceLabelDeleteInspectPayload = Extract<
   SessionOutboundMessage,
   { type: "workspace.label.delete.inspect.response" }
+>["payload"];
+export type PromptLibraryListPayload = Extract<
+  SessionOutboundMessage,
+  { type: "prompt.library.list.response" }
+>["payload"];
+export type PromptLibraryUpsertPayload = Extract<
+  SessionOutboundMessage,
+  { type: "prompt.library.upsert.response" }
+>["payload"];
+export type PromptLibraryDeletePayload = Extract<
+  SessionOutboundMessage,
+  { type: "prompt.library.delete.response" }
+>["payload"];
+export type PromptLibraryTagRenamePayload = Extract<
+  SessionOutboundMessage,
+  { type: "prompt.library.tag.rename.response" }
+>["payload"];
+export type PromptLibraryTagDeletePayload = Extract<
+  SessionOutboundMessage,
+  { type: "prompt.library.tag.delete.response" }
 >["payload"];
 export type ProjectListPayload = Extract<
   SessionOutboundMessage,
@@ -2856,6 +2877,73 @@ export class DaemonClient {
       message: {
         type: "workspace.label.delete.inspect.request",
         name: options.name,
+      },
+    });
+  }
+
+  supportsPromptLibrary(): boolean {
+    return this.lastServerInfoMessage?.features?.promptLibrary === true;
+  }
+
+  listPromptLibrary(options: { requestId?: string } = {}): Promise<PromptLibraryListPayload> {
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId: options.requestId,
+      message: { type: "prompt.library.list.request" },
+    });
+  }
+
+  upsertPromptLibrary(options: {
+    entry: PromptLibraryEntry;
+    requestId?: string;
+  }): Promise<PromptLibraryUpsertPayload> {
+    return this.sendNamespacedCorrelatedSessionRequest<"prompt.library.upsert.response">({
+      requestId: options.requestId,
+      message: {
+        type: "prompt.library.upsert.request",
+        entry: options.entry,
+      },
+    });
+  }
+
+  deletePromptLibrary(options: {
+    id: string;
+    updatedAt: string;
+    requestId?: string;
+  }): Promise<PromptLibraryDeletePayload> {
+    return this.sendNamespacedCorrelatedSessionRequest<"prompt.library.delete.response">({
+      requestId: options.requestId,
+      message: {
+        type: "prompt.library.delete.request",
+        id: options.id,
+        updatedAt: options.updatedAt,
+      },
+    });
+  }
+
+  renamePromptLibraryTag(options: {
+    from: string;
+    to: string;
+    requestId?: string;
+  }): Promise<PromptLibraryTagRenamePayload> {
+    return this.sendNamespacedCorrelatedSessionRequest<"prompt.library.tag.rename.response">({
+      requestId: options.requestId,
+      message: {
+        type: "prompt.library.tag.rename.request",
+        from: options.from,
+        to: options.to,
+      },
+    });
+  }
+
+  deletePromptLibraryTag(options: {
+    tag: string;
+    requestId?: string;
+  }): Promise<PromptLibraryTagDeletePayload> {
+    return this.sendNamespacedCorrelatedSessionRequest<"prompt.library.tag.delete.response">({
+      requestId: options.requestId,
+      message: {
+        type: "prompt.library.tag.delete.request",
+        tag: options.tag,
       },
     });
   }

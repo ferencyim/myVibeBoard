@@ -47,6 +47,12 @@ import { ProviderPaseoToolsPolicySchema } from "./provider-config.js";
 import { TOOL_CALL_ICON_NAMES } from "./agent-types.js";
 import { WORKSPACE_LABEL_COLORS } from "./workspace-labels.js";
 import {
+  PROMPT_LIBRARY_BODY_MAX_LENGTH,
+  PROMPT_LIBRARY_MAX_TAGS,
+  PROMPT_LIBRARY_TAG_MAX_LENGTH,
+  PROMPT_LIBRARY_TITLE_MAX_LENGTH,
+} from "./prompt-library.js";
+import {
   ChatCreateRequestSchema,
   ChatListRequestSchema,
   ChatInspectRequestSchema,
@@ -1053,6 +1059,42 @@ export const WorkspaceLabelDeleteInspectRequestSchema = z.object({
   type: z.literal("workspace.label.delete.inspect.request"),
   requestId: z.string(),
   name: z.string(),
+});
+
+export const PromptLibraryEntrySchema = z.object({
+  id: z.string().min(1),
+  title: z.string().max(PROMPT_LIBRARY_TITLE_MAX_LENGTH),
+  body: z.string().max(PROMPT_LIBRARY_BODY_MAX_LENGTH),
+  tags: z.array(z.string().max(PROMPT_LIBRARY_TAG_MAX_LENGTH)).max(PROMPT_LIBRARY_MAX_TAGS),
+  updatedAt: z.iso.datetime(),
+  deleted: z.boolean(),
+});
+
+export const PromptLibraryListRequestSchema = z.object({
+  type: z.literal("prompt.library.list.request"),
+  requestId: z.string(),
+});
+export const PromptLibraryUpsertRequestSchema = z.object({
+  type: z.literal("prompt.library.upsert.request"),
+  requestId: z.string(),
+  entry: PromptLibraryEntrySchema,
+});
+export const PromptLibraryDeleteRequestSchema = z.object({
+  type: z.literal("prompt.library.delete.request"),
+  requestId: z.string(),
+  id: z.string().min(1),
+  updatedAt: z.iso.datetime(),
+});
+export const PromptLibraryTagRenameRequestSchema = z.object({
+  type: z.literal("prompt.library.tag.rename.request"),
+  requestId: z.string(),
+  from: z.string(),
+  to: z.string(),
+});
+export const PromptLibraryTagDeleteRequestSchema = z.object({
+  type: z.literal("prompt.library.tag.delete.request"),
+  requestId: z.string(),
+  tag: z.string(),
 });
 
 export const WorkspaceRecoveryInspectRequestSchema = z.object({
@@ -3273,6 +3315,11 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceLabelUpdateRequestSchema,
   WorkspaceLabelDeleteRequestSchema,
   WorkspaceLabelDeleteInspectRequestSchema,
+  PromptLibraryListRequestSchema,
+  PromptLibraryUpsertRequestSchema,
+  PromptLibraryDeleteRequestSchema,
+  PromptLibraryTagRenameRequestSchema,
+  PromptLibraryTagDeleteRequestSchema,
   WorkspaceRecoveryInspectRequestSchema,
   WorkspaceRecoveryRestoreRequestSchema,
   SetVoiceModeMessageSchema,
@@ -3644,6 +3691,8 @@ export const ServerInfoStatusPayloadSchema = z
         directorySync: z.boolean().optional(),
         // COMPAT(workspaceLabels): added in v0.5.0, remove after 2027-08-14.
         workspaceLabels: z.boolean().optional(),
+        // COMPAT(promptLibrary): added in v0.14.0, remove gate after 2027-04-26.
+        promptLibrary: z.boolean().optional(),
         // COMPAT(workspaceSetupRun): added in v0.8.0, remove gate after 2027-09-02.
         workspaceSetupRun: z.boolean().optional(),
         // COMPAT(workspaceTerminals): added in v0.8.0, remove gate after 2027-09-05.
@@ -4415,6 +4464,47 @@ export const WorkspaceLabelDeleteInspectResponseSchema = z.object({
   payload: z.object({
     requestId: z.string(),
     affectedWorkspaceCount: z.number().int().nonnegative(),
+  }),
+});
+
+export const PromptLibraryListResponseSchema = z.object({
+  type: z.literal("prompt.library.list.response"),
+  payload: z.object({
+    requestId: z.string(),
+    entries: z.array(PromptLibraryEntrySchema),
+  }),
+});
+export const PromptLibraryUpsertResponseSchema = z.object({
+  type: z.literal("prompt.library.upsert.response"),
+  payload: z.object({
+    requestId: z.string(),
+    entry: PromptLibraryEntrySchema,
+    // False when the stored entry sorts after the incoming write; `entry` is always the stored one.
+    applied: z.boolean(),
+  }),
+});
+export const PromptLibraryDeleteResponseSchema = z.object({
+  type: z.literal("prompt.library.delete.response"),
+  payload: z.object({
+    requestId: z.string(),
+    entry: PromptLibraryEntrySchema,
+    applied: z.boolean(),
+  }),
+});
+export const PromptLibraryTagRenameResponseSchema = z.object({
+  type: z.literal("prompt.library.tag.rename.response"),
+  payload: z.object({
+    requestId: z.string(),
+    entries: z.array(PromptLibraryEntrySchema),
+    affectedCount: z.number().int().nonnegative(),
+  }),
+});
+export const PromptLibraryTagDeleteResponseSchema = z.object({
+  type: z.literal("prompt.library.tag.delete.response"),
+  payload: z.object({
+    requestId: z.string(),
+    entries: z.array(PromptLibraryEntrySchema),
+    affectedCount: z.number().int().nonnegative(),
   }),
 });
 
@@ -6992,6 +7082,11 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   WorkspaceLabelUpdateResponseSchema,
   WorkspaceLabelDeleteResponseSchema,
   WorkspaceLabelDeleteInspectResponseSchema,
+  PromptLibraryListResponseSchema,
+  PromptLibraryUpsertResponseSchema,
+  PromptLibraryDeleteResponseSchema,
+  PromptLibraryTagRenameResponseSchema,
+  PromptLibraryTagDeleteResponseSchema,
   ProjectUpdateMessageSchema,
   ProjectListResponseMessageSchema,
   ScriptStatusUpdateMessageSchema,
