@@ -109,3 +109,12 @@
 - **越界比对**：认领时记录 HEAD 与已脏文件的大小/mtime；完成时 `git status --porcelain -z -uall` 加 `git diff --name-only <认领 HEAD>`（`GIT_OPTIONAL_LOCKS=0`），只算认领期间新出现或再次变化的文件。重命名的新旧路径都计入（`--no-renames`）。不在本子任务范围、也不在认领期间进行中或完成的其它子任务范围内的文件，以及子代理自报的范围外文件，记为越界；锁文件、`*.snap`、`dist/`、`build/`、`*.generated.*` 内置忽略，子任务可用 `ignore` 追加。只读子任务认领期间出现的写入同样告警。越界写进结论和面板，在执行 tab 追加状态；只有执行主代理正在回合中才 steer 发消息，空闲时不唤醒它。git 快照或比对失败时结论写「越界比对未执行（git 失败）」，不当成没有改动。共用 worktree 无法精确归因，结论里标明是推断。收回（`vibe_board_release` 收回他人认领）时给原认领者发停手消息；`vibe_board_complete` 只接受当前认领者或执行主代理本身。
 - **提示词**：`board.task.work`、`task.role.subagent`、`board.tabs.guide` 写明先认领再派发、带标签、有同伴并行改别处、不回滚/覆盖/格式化别人的改动、冲突先协商或交回主代理、越界先改范围、最终答复列改动文件与验证结果。
 - **面板与状态**：`vibe.task.panel` 多返回可选 `board`，流程面板显示「任务看板 · 完成 x/y」与每个子任务的状态、认领 tab、范围与结论；`/状态` 加一行看板进度。
+
+## 11. WP-128 实现记录（第七轮）：tab 互通礼仪
+
+借鉴 herdr 的思路（只借鉴，不引入代码）。
+
+- **等审批时拒绝插话**：`board.guardPrompt`（`agent.prompt` 钩子，WP-127 已有）先看目标 agent 的 `pendingPermissions`（实时 `refresh`，任务 workspace 内的 tab 与子代理都算；提问也是待处理请求）。有就抛错：「#n 正在等待审批：<摘要>，请先由用户在 #n 处理，消息未送达」，并要求发送方转告用户，不要替用户回答。用户在应用里处理后再发即可。用户自己发的消息不经此钩子。
+- **禁止代答审批**：新增最小 [core] 前置钩子 `agent.permission_response`（`respond_to_permission` 经 `AgentManager.beforeAgentPermissionResponse`，只对 agent 调用者生效，只能拒绝）。`board.guardPermissionResponse` 判断调用者所在 workspace 是任务 workspace 就拒绝：「审批只能由用户处理」。非任务 workspace 的 agent 不受影响；`list_pending_permissions` 只读，保留。旧宿主没有该钩子时插件只记日志，任务 agent 仍可代答。
+- **协作约定与终端**：`board.tabs.guide` 增加「tab 协作约定」（不关闭/归档/重置别的 tab、不切换用户焦点、按 #编号/agentId 指定、发出后看回执与 `get_agent_activity`、超时先读记录再决定是否重发、不冒充用户授权）和终端工具说明；执行与子代理提示词加一句不替用户审批。
+- **已知限制**：只覆盖本机；对方在回合间没有待处理请求但马上要提问，这类竞态无法阻止；不在任何任务 workspace 的 agent 仍可代答任务 tab 的审批（按需求只限任务 tab 与其子代理）。

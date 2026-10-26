@@ -497,7 +497,9 @@ export function createTaskBoard(options: {
    *  the claim for it is still being handed over, or after its subtask is done (follow-ups,
    *  corrections, stop requests). Work for a sub-agent with no board relation is refused. */
   async function guardPrompt(request: PluginBeforeRequests["agent.prompt"]) {
-    if (!request.workspaceId || request.parentAgentId !== request.callerAgentId) return;
+    if (!request.workspaceId) return;
+    await rejectWhileAwaitingApproval(request.workspaceId, request.agentId);
+    if (request.parentAgentId !== request.callerAgentId) return;
     const task = store.tasks.get(request.workspaceId);
     const tab = task?.tabs.find((candidate) => candidate.agentId === request.callerAgentId);
     if (!task || tab?.role !== "worker") return;
@@ -515,6 +517,35 @@ export function createTaskBoard(options: {
       `子代理 ${request.agentId} 当前没有进行中的看板子任务。交代新工作前先用 vibe_board_claim（id=<子任务 id>，assignee=${request.agentId}）为它认领；看板没有合适的子任务（包括无方案直接授权时）先用 vibe_board_add 补登。依赖未完成或范围冲突时认领会被拒绝`,
     );
   }
+  /** A task agent waiting on the user's approval or answer takes no messages from other agents:
+   *  they would pile up behind the request, and the sender must send the user there instead. */
+  async function rejectWhileAwaitingApproval(workspaceId: string, agentId: string) {
+    const task = store.tasks.get(workspaceId);
+    if (!task) return;
+    const pending = (await agentOf(agentId))?.pendingPermissions?.[0];
+    if (!pending) return;
+    const tab = task.tabs.find((candidate) => candidate.agentId === agentId);
+    const who = tab ? `#${tab.number}` : `子代理 ${agentId}`;
+    const kind = pending.kind === "question" ? "提问" : "审批";
+    const what = [pending.title || pending.name, pending.description]
+      .filter(Boolean)
+      .join(" - ")
+      .replace(/\s+/g, " ")
+      .slice(0, 120);
+    throw new Error(
+      `${who} 正在等待${kind}：${what}。请先由用户在 ${who} 处理，消息未送达。请告诉用户去 ${who} 处理该${kind}，之后再发送；不要替用户回答。`,
+    );
+  }
+  /** Only the user answers permission requests: any agent of a task (its tabs and their
+   *  sub-agents) is refused when it tries to answer one, whoever the request belongs to. */
+  async function guardPermissionResponse(request: PluginBeforeRequests["agent.permission_response"]) {
+    // Approvals belong to the user: no task agent answers anyone's, and no agent answers a task's.
+    if (request.workspaceId && store.tasks.get(request.workspaceId))
+      throw new Error("审批只能由用户处理：任何 agent 都不能代替用户批准或拒绝任务里的审批请求");
+    const caller = await agentOf(request.callerAgentId);
+    if (caller?.workspaceId && store.tasks.get(caller.workspaceId))
+      throw new Error("审批只能由用户处理：任务 tab 与子代理不能代替用户批准或拒绝审批请求");
+  }
   function panel(task: Task): BoardItem[] {
     return rows(task).map(describe);
   }
@@ -527,6 +558,7 @@ export function createTaskBoard(options: {
     guardCreate,
     agentCreated,
     guardPrompt,
+    guardPermissionResponse,
     panel,
   };
 }

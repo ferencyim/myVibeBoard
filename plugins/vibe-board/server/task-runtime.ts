@@ -119,6 +119,16 @@ export function registerTaskRuntime(
   } catch (error) {
     log("宿主不支持 agent.prompt 钩子，send_agent_prompt 派发不做看板检查", error);
   }
+  try {
+    cleanups.push(
+      server.before("agent.permission_response", async ({ request }, context) => {
+        options.onPaseo(context.paseo);
+        await board.guardPermissionResponse(request);
+      }),
+    );
+  } catch (error) {
+    log("宿主不支持 agent.permission_response 钩子，任务 agent 仍可代答审批", error);
+  }
   server.handle(taskPanelRpc, async (input, context) => {
     options.onPaseo(context.paseo);
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);

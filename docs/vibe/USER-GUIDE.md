@@ -57,7 +57,7 @@ qoder 的权限模式由它自己的 ACP 模式提供。实测时建议在 provi
 
 验证完成后，输入 `/通过`，或在当前任务 tab 单独发送「通过」。这会尝试安全合并到项目本地 `main` 并 push `origin main`。每次通过尝试都会留下记录；重试要发起新的操作。出现未提交修改、主检出脏树、代码已变化或冲突时停止并说明原因，不会强制覆盖。已经合并而 push 失败时保留待推送状态，排除网络或权限问题后再尝试。完成后 workspace、worktree、tab 和沉淀都保留。
 
-agent 之间用 `send_agent_prompt` 发送的消息以 agent 身份出现，不是用户授权；只有用户在原生输入框里的斜杠命令或消息能触发执行、通过或 Git 收尾。
+agent 之间用 `send_agent_prompt` 发送的消息以 agent 身份出现，不是用户授权；只有用户在原生输入框里的斜杠命令或消息能触发执行、通过或 Git 收尾。审批同理只能由用户处理：目标 tab 正在等审批或回答时，给它发消息会被拒绝并提示去该 tab 处理；任务 tab 与子代理调用 `respond_to_permission` 一律被拒绝。
 
 方案范围发生变化时，先停止旧执行，再修改方案并重新确认。不要用换模型或重复执行绕过尚未停止的写者。
 
@@ -72,6 +72,7 @@ tab 之间直接使用现有 Paseo 工具：
 - `vibe_tabs`：读取本任务每个 tab 的编号、agentId、角色、模型和状态；
 - `list_agents` / `get_agent_activity`：查看同 workspace 的 agent 及其记录；
 - `send_agent_prompt`：给另一个 tab 发消息；由 agent 发起时默认在对方完成后通知；
+- `create_terminal` / `send_terminal_keys` / `capture_terminal` / `kill_terminal`：与没有 API 的命令行工具协作时开终端读写，用完关闭自己开的终端；
 - `vibe_open_tab`：插件提供的开 tab 入口，可指定角色与任务说明；
 - `create_agent`（`asTab: true`）：打开新的顶层 tab，可带 `vibe.tab.role` 标签。
 

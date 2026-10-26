@@ -57,6 +57,7 @@ interface FakeAgent {
   internal?: boolean;
   labels?: Record<string, string>;
   updatedAt?: string;
+  pendingPermissions?: Array<{ id: string; kind: string; name: string; title?: string; description?: string }>;
 }
 interface TimelineEntry {
   item: { type: string; text?: string; messageId?: string };
@@ -3057,5 +3058,92 @@ describe("WP-127 任务看板与子代理协调", () => {
       expect(subagent).toContain(phrase);
     for (const phrase of ["vibe_board_list", "vibe_board_claim", "不要回滚、覆盖或格式化别人的改动"])
       expect(TASK_TAB_GUIDE_PROMPT.defaultText).toContain(phrase);
+  });
+  it("WP-128：目标在等审批时 send_agent_prompt 被拒并指引去审批，处理后可正常发送", async () => {
+    const { board, fake, tabs } = await boardTask();
+    fake.addAgent({ id: "scout-1" });
+    await tabs.ensureTab("scout-1", { role: "scout" });
+    const target = fake.addAgent({ id: "sub-a", labels: { [PARENT_AGENT_ID_LABEL]: "exec" } });
+    const prompt = (agentId: string, callerAgentId: string) => ({
+      agentId,
+      workspaceId: "ws",
+      parentAgentId: agentId === "sub-a" ? "exec" : null,
+      callerAgentId,
+      prompt: "你好",
+    });
+    fake.agents.get("scout-1")!.pendingPermissions = [
+      { id: "p1", kind: "tool", name: "Bash", title: "运行 rm -rf build", description: "删除构建目录" },
+    ];
+    const scoutNumber = (await tabs.ensureTab("scout-1"))!.number;
+    await expect(board.guardPrompt(prompt("scout-1", "exec"))).rejects.toThrow(
+      `#${scoutNumber} 正在等待审批：运行 rm -rf build - 删除构建目录。请先由用户在 #${scoutNumber} 处理`,
+    );
+    await expect(board.guardPrompt(prompt("scout-1", "exec"))).rejects.toThrow("不要替用户回答");
+    // A question the user has not answered counts too; sub-agents are named by id.
+    target.pendingPermissions = [{ id: "q1", kind: "question", name: "AskUserQuestion", title: "用哪个库" }];
+    await expect(board.guardPrompt(prompt("sub-a", "scout-1"))).rejects.toThrow(
+      "子代理 sub-a 正在等待提问：用哪个库",
+    );
+    // The user answered: delivery works again.
+    fake.agents.get("scout-1")!.pendingPermissions = [];
+    target.pendingPermissions = [];
+    await expect(board.guardPrompt(prompt("scout-1", "exec"))).resolves.toBeUndefined();
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    await expect(board.guardPrompt(prompt("sub-a", "exec"))).resolves.toBeUndefined();
+    // Non-task workspaces are not affected.
+    fake.addAgent({ id: "plain", workspaceId: "other", pendingPermissions: [{ id: "p", kind: "tool", name: "x" }] });
+    await expect(
+      board.guardPrompt({ ...prompt("plain", "exec"), workspaceId: "other" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("WP-128：没有 agent 能代答任务里的审批，任务 agent 也不能代答别处的审批", async () => {
+    const { board, fake } = await boardTask();
+    fake.addAgent({ id: "sub-a", labels: { [PARENT_AGENT_ID_LABEL]: "exec" } });
+    fake.addAgent({ id: "outsider", workspaceId: "other" });
+    fake.addAgent({ id: "outsider-2", workspaceId: "other" });
+    const request = (callerAgentId: string, agentId = "sub-a", workspaceId = "ws") => ({
+      agentId,
+      workspaceId,
+      parentAgentId: null,
+      callerAgentId,
+      requestId: "p1",
+    });
+    for (const caller of ["exec", "sub-a", "outsider"])
+      await expect(board.guardPermissionResponse(request(caller))).rejects.toThrow(
+        "审批只能由用户处理",
+      );
+    await expect(
+      board.guardPermissionResponse(request("exec", "outsider-2", "other")),
+    ).rejects.toThrow("审批只能由用户处理");
+    await expect(
+      board.guardPermissionResponse(request("outsider", "outsider-2", "other")),
+    ).resolves.toBeUndefined();
+  });
+
+  it("WP-128：协作约定写进交流说明与角色提示词", () => {
+    const guide = TASK_TAB_GUIDE_PROMPT.defaultText;
+    for (const phrase of [
+      "不要关闭、归档或重置别的 tab",
+      "不要切换用户的焦点",
+      "#编号或 agentId",
+      "get_agent_activity",
+      "超时不等于没送达",
+      "避免重复投递",
+      "不要冒充用户授权",
+      "正在等待用户审批",
+      "respond_to_permission",
+      "create_terminal",
+      "send_terminal_keys",
+      "capture_terminal",
+      "kill_terminal",
+      "不要动别人的终端",
+    ])
+      expect(guide).toContain(phrase);
+    const work = TASK_FLOW_PROMPTS.find((prompt) => prompt.key === "board.task.work")!.defaultText;
+    expect(work).toContain("不要替用户审批");
+    const subagent = TASK_HOST_PROMPTS.find((prompt) => prompt.key === "task.role.subagent")!
+      .defaultText;
+    expect(subagent).toContain("不要替用户审批");
   });
 });
