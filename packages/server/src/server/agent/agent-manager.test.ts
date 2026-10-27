@@ -12186,3 +12186,122 @@ test("reads the last durable assistant response without loading a stored-only ch
   );
   expect(manager.getAgent("stored-child")).toBeNull();
 });
+
+test("agent.user_prompt hooks take a person's message over or fail open", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  let mode: "handle" | "throw" | "pass" = "handle";
+  const requests: unknown[] = [];
+  const events: unknown[] = [];
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+    pluginLifecycle: {
+      emit: (name, event) => events.push({ name, event }),
+      hasBefore: (name) => name === "agent.user_prompt",
+      before: async (name, request) => {
+        if (name !== "agent.user_prompt") return request;
+        requests.push(request);
+        if (mode === "throw") throw new Error("plugin crashed");
+        if (mode === "pass") return request;
+        return { ...request, handled: true, note: "正在转给 #4 执行" };
+      },
+    },
+  });
+  const agent = await manager.createAgent(
+    { provider: "codex", cwd: workdir, title: "#1 主会话" },
+    undefined,
+    { workspaceId: "wks_task" },
+  );
+  const images = [{ data: "aGk=", mimeType: "image/png" }];
+  const attachments = [
+    {
+      type: "uploaded_file" as const,
+      id: "f1",
+      fileName: "spec.pdf",
+      mimeType: "application/pdf",
+      size: 3,
+      path: "/tmp/spec.pdf",
+    },
+  ];
+
+  await expect(
+    manager.beforeUserPrompt({
+      agentId: agent.id,
+      messageId: "msg-1",
+      text: "@#4 开始执行",
+      images,
+      attachments,
+      sessionMode: "plan",
+    }),
+  ).resolves.toEqual({ note: "正在转给 #4 执行" });
+  // The hook sees what is attached, never the image bytes or file paths.
+  expect(requests[0]).toEqual({
+    agentId: agent.id,
+    workspaceId: "wks_task",
+    messageId: "msg-1",
+    text: "@#4 开始执行",
+    attachments: [
+      { type: "image", mimeType: "image/png" },
+      { type: "uploaded_file", mimeType: "application/pdf", name: "spec.pdf" },
+    ],
+    sessionMode: "plan",
+  });
+  mode = "throw";
+  await expect(
+    manager.beforeUserPrompt({ agentId: agent.id, messageId: "m", text: "hi" }),
+  ).resolves.toBeNull();
+  mode = "pass";
+  await expect(
+    manager.beforeUserPrompt({ agentId: agent.id, messageId: "m", text: "hi" }),
+  ).resolves.toBeNull();
+
+  await manager.recordHandledUserPrompt(agent.id, "@#4 开始执行", "msg-1", "正在转给 #4 执行");
+  expect(manager.getTimeline(agent.id)).toEqual([
+    expect.objectContaining({
+      type: "user_message",
+      text: "@#4 开始执行",
+      clientMessageId: "msg-1",
+    }),
+    { type: "notification", level: "info", message: "正在转给 #4 执行" },
+  ]);
+  expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
+
+  // The original content goes to plugins only after the takeover.
+  manager.userPromptHandled({ agentId: agent.id, messageId: "msg-1", images, attachments });
+  expect(events).toContainEqual({
+    name: "agent.user_prompt_handled",
+    event: { agentId: agent.id, messageId: "msg-1", images, attachments },
+  });
+});
+
+test("agent.user_prompt is skipped without a registered hook", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const before = vi.fn(async (_name: string, request: unknown) => request);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+    pluginLifecycle: { emit: () => {}, hasBefore: () => false, before: before as never },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: "wks_task",
+  });
+  const get = vi.spyOn(storage, "get");
+  await expect(
+    manager.beforeUserPrompt({ agentId: agent.id, messageId: "m", text: "@#4 x" }),
+  ).resolves.toBeNull();
+  expect(before).not.toHaveBeenCalledWith("agent.user_prompt", expect.anything());
+  expect(get).not.toHaveBeenCalled();
+
+  const bare = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: new AgentStorage(join(workdir, "bare"), logger),
+    logger,
+  });
+  await expect(
+    bare.beforeUserPrompt({ agentId: agent.id, messageId: "m", text: "@#4 x" }),
+  ).resolves.toBeNull();
+});

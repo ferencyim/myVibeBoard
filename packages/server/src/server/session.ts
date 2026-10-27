@@ -135,6 +135,7 @@ import {
   getAgentStreamEventTurnId,
   type AgentPersistenceHandle,
   type AgentPermissionResponse,
+  type AgentPromptInput,
   type AgentRunOptions,
   type AgentSessionConfig,
 } from "./agent/agent-sdk-types.js";
@@ -4038,6 +4039,11 @@ export class Session {
     const prompt = buildAgentPrompt(promptText, images, attachments);
 
     try {
+      if (
+        await this.interceptUserPrompt({ agentId, text, images, attachments, prompt, messageId })
+      ) {
+        return { ok: true };
+      }
       await sendPromptToAgent({
         agentManager: this.agentManager,
         agentStorage: this.agentStorage,
@@ -4058,6 +4064,53 @@ export class Session {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /**
+   * Lets a plugin take over a person's message (`agent.user_prompt`). True when one did: the
+   * message is recorded in the agent's timeline, no turn starts, and the plugin receives the
+   * original images and attachments to pass the message on. Plugin sessions are skipped, so a
+   * message a plugin forwards on the person's behalf is not intercepted again.
+   */
+  private async interceptUserPrompt(input: {
+    agentId: string;
+    text: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachment[];
+    sessionMode?: string;
+    prompt: AgentPromptInput;
+    messageId?: string;
+  }): Promise<boolean> {
+    if (parsePluginClientId(this.clientId)) return false;
+    const messageId = input.messageId ?? uuidv4();
+    const handled = await this.agentManager.beforeUserPrompt({ ...input, messageId });
+    if (!handled) return false;
+    try {
+      await ensureAgentLoaded(input.agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      await this.agentManager.recordHandledUserPrompt(
+        input.agentId,
+        input.prompt,
+        messageId,
+        handled.note,
+      );
+    } catch (error) {
+      // The plugin already owns the message; only its record is missing.
+      this.sessionLogger.warn(
+        { err: error, agentId: input.agentId },
+        "Failed to record a plugin-handled user message",
+      );
+    }
+    this.agentManager.userPromptHandled({
+      agentId: input.agentId,
+      messageId,
+      images: input.images,
+      attachments: input.attachments,
+    });
+    return true;
   }
 
   /**
@@ -8401,6 +8454,19 @@ export class Session {
           deliveryStatus = "queued";
           queued();
           await receipt.dispatched;
+          return;
+        }
+        if (
+          await this.interceptUserPrompt({
+            agentId,
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            sessionMode: msg.sessionMode,
+            prompt,
+            messageId: msg.messageId,
+          })
+        ) {
           return;
         }
         const result = await sendPromptToAgent({

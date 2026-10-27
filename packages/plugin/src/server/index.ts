@@ -22,6 +22,7 @@ export type {
   PluginTurnOutcome,
   PluginLifecycleEvents,
   PluginBeforeRequests,
+  PluginBeforeResult,
   PluginLifecycleRegistration,
 } from "./lifecycle.js";
 

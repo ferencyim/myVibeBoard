@@ -271,6 +271,8 @@ export interface WorkspaceTabSnapshot {
   terminalsHydrated: boolean;
   activeAgentIds: Iterable<string>;
   autoOpenAgentIds: Iterable<string>;
+  /** Agents with a tab-order key keep that order among their tabs in each pane. */
+  agentTabOrderKeys?: ReadonlyMap<string, string>;
   knownTerminalIds?: Iterable<string>;
   standaloneTerminalIds: Iterable<string>;
   hasActivePendingTerminalCreate?: boolean;
@@ -2432,6 +2434,46 @@ function addMissingEntityTabs(input: {
   return nextLayout;
 }
 
+/** Numeric keys compare as numbers, anything else as plain strings. */
+export function compareTabOrderKeys(a: string, b: string): number {
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right) && left !== right) return left - right;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+/**
+ * Puts the tabs of agents that carry a tab-order key in key order, in the slots those tabs already
+ * hold in each pane; every other tab keeps its place. Returns the same layout when nothing moves.
+ */
+function orderKeyedAgentTabs(
+  layout: WorkspaceLayout,
+  keys: ReadonlyMap<string, string> | undefined,
+): WorkspaceLayout {
+  if (!keys || keys.size === 0) return layout;
+  const keyOfTab = new Map<string, string>();
+  for (const tab of collectAllTabs(layout.root)) {
+    const key = isAgentTab(tab) ? keys.get(tab.target.agentId) : undefined;
+    if (key !== undefined) keyOfTab.set(tab.tabId, key);
+  }
+  let next = layout;
+  for (const pane of collectAllPanes(layout.root)) {
+    const slots = pane.tabIds.flatMap((tabId, index) => (keyOfTab.has(tabId) ? [index] : []));
+    const keyed = slots.map((slot) => pane.tabIds[slot]!);
+    const sorted = [...keyed].sort((a, b) =>
+      compareTabOrderKeys(keyOfTab.get(a)!, keyOfTab.get(b)!),
+    );
+    if (sorted.every((tabId, index) => tabId === keyed[index])) continue;
+    const tabIds = [...pane.tabIds];
+    slots.forEach((slot, index) => {
+      tabIds[slot] = sorted[index]!;
+    });
+    next = reorderPaneTabsInLayout({ layout: next, paneId: pane.id, tabIds }) ?? next;
+  }
+  return next;
+}
+
 export function reconcileWorkspaceTabs(
   state: WorkspaceTabReconcileState,
   snapshot: WorkspaceTabSnapshot,
@@ -2522,6 +2564,8 @@ export function reconcileWorkspaceTabs(
     hasActivePendingDraftCreate: snapshot.hasActivePendingDraftCreate ?? false,
     explorerSidebarPaneId: state.explorerSidebarPaneId,
   });
+
+  nextLayout = orderKeyedAgentTabs(nextLayout, snapshot.agentTabOrderKeys);
 
   if (reconciledFocusedTabId) {
     nextLayout =

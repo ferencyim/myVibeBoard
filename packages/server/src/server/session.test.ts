@@ -5915,3 +5915,87 @@ test("a failing direct source observes fire-and-forget file replies without unha
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+describe("agent.user_prompt takeover", () => {
+  const agentId = "22222222-2222-4222-8222-222222222222";
+  function managerFor(note: { note: string | null } | null) {
+    return {
+      getAgent: vi.fn(() => ({ id: agentId, provider: "codex", lifecycle: "idle" })),
+      beforeUserPrompt: vi.fn(async () => note),
+      recordHandledUserPrompt: vi.fn(async () => {}),
+      userPromptHandled: vi.fn(),
+      waitForAgentClose: vi.fn(async () => {}),
+      streamAgent: vi.fn(() => {
+        throw new Error("turn started");
+      }),
+    };
+  }
+
+  test("a handled message is recorded without starting a turn", async () => {
+    const messages: SessionOutboundMessage[] = [];
+    const agentManager = managerFor({ note: "已转给 #4" });
+    const session = createSessionForTest({ messages, agentManager });
+    const images = [{ data: "aGk=", mimeType: "image/png" }];
+
+    await session.handleMessage({
+      type: "send_agent_message_request",
+      requestId: "send-1",
+      agentId,
+      text: "@#4 开始执行",
+      messageId: "msg-1",
+      images,
+      sessionMode: "plan",
+    });
+
+    expect(agentManager.beforeUserPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId,
+        text: "@#4 开始执行",
+        images,
+        messageId: "msg-1",
+        sessionMode: "plan",
+      }),
+    );
+    expect(agentManager.recordHandledUserPrompt).toHaveBeenCalledWith(
+      agentId,
+      expect.anything(),
+      "msg-1",
+      "已转给 #4",
+    );
+    // Recorded first, then the plugin gets the original images to pass the message on.
+    expect(agentManager.userPromptHandled).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId, messageId: "msg-1", images }),
+    );
+    expect(agentManager.streamAgent).not.toHaveBeenCalled();
+    expect(messages).toContainEqual({
+      type: "send_agent_message_response",
+      payload: { requestId: "send-1", agentId, accepted: true, error: null },
+    });
+  });
+
+  test("plugin sessions and agent-to-agent messages skip the hook", async () => {
+    const pluginManager = managerFor({ note: null });
+    const pluginSession = createSessionForTest({
+      clientId: "plugin:vibe-board",
+      agentManager: pluginManager,
+    });
+    await pluginSession.handleMessage({
+      type: "send_agent_message_request",
+      requestId: "send-2",
+      agentId,
+      text: "@#4 开始执行",
+    });
+    expect(pluginManager.beforeUserPrompt).not.toHaveBeenCalled();
+
+    const agentManager = managerFor({ note: null });
+    const session = createSessionForTest({ agentManager });
+    await session.handleMessage({
+      type: "send_agent_message_request",
+      requestId: "send-3",
+      agentId,
+      text: "@#4 开始执行",
+      sourceAgentId: "33333333-3333-4333-8333-333333333333",
+    });
+    expect(agentManager.beforeUserPrompt).not.toHaveBeenCalled();
+  });
+});

@@ -2,10 +2,17 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { afterEach, describe, expect, it } from "vitest";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import {
+  collectAllTabs,
+  createDefaultLayout,
+  reconcileWorkspaceTabs,
+  type WorkspaceLayout,
+} from "@/stores/workspace-layout-actions";
+import {
   buildWorkspaceTabSnapshot,
   createWorkspaceAgentVisibilitySelector,
   deriveWorkspaceAgentVisibility,
   shouldPruneWorkspaceAgentTab,
+  TAB_ORDER_LABEL,
   workspaceAgentVisibilityEqual,
 } from "@/workspace-tabs/agent-visibility";
 
@@ -17,6 +24,7 @@ function makeAgent(input: {
   archivedAt?: Date | null;
   createdAt?: Date;
   lastActivityAt?: Date;
+  labels?: Record<string, string>;
 }): Agent {
   const createdAt = input.createdAt ?? new Date("2026-03-04T00:00:00.000Z");
   const lastActivityAt = input.lastActivityAt ?? createdAt;
@@ -52,7 +60,7 @@ function makeAgent(input: {
     model: null,
     thinkingOptionId: null,
     parentAgentId: input.parentAgentId ?? null,
-    labels: {},
+    labels: input.labels ?? {},
     requiresAttention: false,
     attentionReason: null,
     attentionTimestamp: null,
@@ -519,5 +527,56 @@ describe("workspace agent visibility", () => {
       };
       expect(workspaceAgentVisibilityEqual(a, b)).toBe(true);
     });
+  });
+});
+
+describe("tab order keys", () => {
+  function reconcile(layout: WorkspaceLayout, agents: Agent[]): WorkspaceLayout {
+    const agentVisibility = deriveWorkspaceAgentVisibility({
+      sessionAgents: new Map(agents.map((agent) => [agent.id, agent])),
+      workspaceId: WORKSPACE_ID,
+    });
+    return reconcileWorkspaceTabs(
+      { layout, explorerSidebarPaneId: null },
+      buildWorkspaceTabSnapshot({
+        agentVisibility,
+        agentsHydrated: true,
+        terminalsHydrated: true,
+        knownTerminalIds: [],
+        standaloneTerminalIds: [],
+        hasActivePendingTerminalCreate: false,
+        hasActivePendingDraftCreate: false,
+      }),
+    ).layout;
+  }
+  const agentIds = (layout: WorkspaceLayout) =>
+    collectAllTabs(layout.root).flatMap((tab) =>
+      tab.target.kind === "agent" ? [tab.target.agentId] : [],
+    );
+  // Ids sort opposite to the keys, as random agent ids often do.
+  const agent = (id: string, order?: string) =>
+    makeAgent({
+      id,
+      cwd: "/repo",
+      workspaceId: WORKSPACE_ID,
+      ...(order ? { labels: { [TAB_ORDER_LABEL]: order } } : {}),
+    });
+
+  it("keeps keyed agents in key order, whenever they arrive", () => {
+    const first = [agent("d", "1"), agent("c", "2"), agent("b", "10"), agent("plain")];
+    let layout = reconcile(createDefaultLayout(), first);
+    expect(agentIds(layout)).toEqual(["d", "c", "b", "plain"]);
+    // A later tab lands in key order among the keyed slots; the plain tab keeps its slot.
+    layout = reconcile(layout, [...first, agent("a", "3")]);
+    expect(agentIds(layout)).toEqual(["d", "c", "a", "plain", "b"]);
+    // Nothing to move: the same layout comes back.
+    expect(reconcile(layout, [...first, agent("a", "3")])).toBe(layout);
+  });
+
+  it("leaves agents without keys in the default order", () => {
+    expect(agentIds(reconcile(createDefaultLayout(), [agent("z"), agent("y")]))).toEqual([
+      "y",
+      "z",
+    ]);
   });
 });

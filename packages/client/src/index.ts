@@ -390,6 +390,8 @@ export interface PaseoAgentHandle {
   setMode(modeId: string): Promise<void>;
   /** Renames the agent through the existing `update_agent_request` RPC (shown as its title). */
   setTitle(title: string): Promise<void>;
+  /** Merges labels into the agent's labels. */
+  setLabels(labels: Record<string, string>): Promise<void>;
   /**
    * Loads a closed agent (daemon restart, process exit) back from its persisted session through the
    * existing `refresh_agent_request` RPC, the same call the app makes when a closed agent is opened.
@@ -1031,6 +1033,9 @@ function createAgentHandleFactory(
       },
       setTitle: async (title) => {
         await daemonClient.updateAgent(id, { name: title });
+      },
+      setLabels: async (labels) => {
+        await daemonClient.updateAgent(id, { labels });
       },
       cancelRun: async () => {
         await daemonClient.cancelAgent(id);

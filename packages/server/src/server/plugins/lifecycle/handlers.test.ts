@@ -155,3 +155,37 @@ test("permission-response hooks may reject but not change the request", async ()
     rejecting.invoke("operation", "before", "agent.permission_response", input, paseo),
   ).rejects.toThrow("审批只能由用户处理");
 });
+
+test("user-prompt hooks may take the message over but not change it", async () => {
+  const input = {
+    agentId: "main",
+    workspaceId: "workspace",
+    messageId: "msg-1",
+    text: "@#4 开始执行",
+    attachments: [{ type: "image", mimeType: "image/png" }],
+    sessionMode: "plan",
+  };
+  const passing = new PluginHookHandlers(() => {});
+  passing.before("agent.user_prompt", () => {});
+  await expect(
+    passing.invoke("operation", "before", "agent.user_prompt", input, paseo),
+  ).resolves.toEqual(input);
+
+  const later: string[] = [];
+  const taking = new PluginHookHandlers(() => {});
+  taking.before("agent.user_prompt", () => ({ handled: true, note: "已转给 #4" }));
+  taking.before("agent.user_prompt", () => {
+    later.push("ran");
+  });
+  await expect(
+    taking.invoke("operation", "before", "agent.user_prompt", input, paseo),
+  ).resolves.toEqual({ ...input, handled: true, note: "已转给 #4" });
+  // A takeover ends the chain.
+  expect(later).toEqual([]);
+
+  const rewriting = new PluginHookHandlers(() => {});
+  rewriting.before("agent.user_prompt", ({ request }) => ({ ...request, text: "改写" }));
+  await expect(
+    rewriting.invoke("operation", "before", "agent.user_prompt", input, paseo),
+  ).rejects.toThrow("agent.user_prompt hooks can only take the message over");
+});

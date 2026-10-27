@@ -5,7 +5,7 @@ import type {
   AgentSessionConfig,
 } from "@getpaseo/protocol/agent-types";
 import type { PaseoApi } from "@getpaseo/client";
-import type { WorkspaceCreateRequest } from "@getpaseo/protocol/messages";
+import type { SendAgentMessageRequest, WorkspaceCreateRequest } from "@getpaseo/protocol/messages";
 
 export interface PluginHookContext {
   paseo: PaseoApi;
@@ -68,6 +68,16 @@ export interface PluginLifecycleEvents {
   "agent.closed": { agent: PluginHookAgent };
   "workspace.created": { workspace: PluginHookWorkspace };
   "workspace.archived": { workspace: PluginHookWorkspace };
+  /**
+   * A plugin took an `agent.user_prompt` message over and the host recorded it. Carries what the
+   * hook request left out, so the plugin can pass the message on unchanged.
+   */
+  "agent.user_prompt_handled": {
+    agentId: string;
+    messageId: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: SendAgentMessageRequest["attachments"];
+  };
 }
 
 export interface PluginBeforeRequests {
@@ -106,8 +116,38 @@ export interface PluginBeforeRequests {
     callerAgentId: string;
     requestId: string;
   };
+  /**
+   * A message a person sent to an agent (composer, phone, voice), before it is delivered.
+   * Agent-to-agent and plugin-sent messages do not pass through. Return `{ handled: true, note }`
+   * to take the message over: the host records it in the agent's timeline with the note, does not
+   * start a turn, then emits `agent.user_prompt_handled` with the original images and attachments.
+   * Throwing, returning nothing or not answering within 5 seconds delivers it as usual, so answer
+   * at once and do slow work after `agent.user_prompt_handled`.
+   */
+  "agent.user_prompt": {
+    /** The recipient. */
+    agentId: string;
+    workspaceId: string | null;
+    /** The message id the host records it under; `agent.user_prompt_handled` carries it back. */
+    messageId: string;
+    text: string;
+    /** What is attached, without the content: images are `{ type: "image", mimeType }`. */
+    attachments?: Array<{ type: string; name?: string; mimeType?: string }>;
+    /** A session mode the sender asked for with this message. */
+    sessionMode?: string;
+    /** Set by a hook that took the message over. */
+    handled?: boolean;
+    /** Shown in the recipient's timeline when handled. */
+    note?: string;
+  };
   "workspace.create": Omit<WorkspaceCreateRequest, "type" | "requestId">;
 }
+
+/** What a before hook may return: the (changed) request, or for `agent.user_prompt` a takeover. */
+export type PluginBeforeResult<Name extends keyof PluginBeforeRequests> =
+  | PluginBeforeRequests[Name]
+  | (Name extends "agent.user_prompt" ? { handled: true; note?: string } : never)
+  | void;
 
 export interface PluginLifecycleRegistration {
   on<Name extends keyof PluginLifecycleEvents>(
@@ -122,6 +162,6 @@ export interface PluginLifecycleRegistration {
     handler: (
       input: { request: PluginBeforeRequests[Name] },
       context: PluginHookContext,
-    ) => PluginBeforeRequests[Name] | void | Promise<PluginBeforeRequests[Name] | void>,
+    ) => PluginBeforeResult<Name> | Promise<PluginBeforeResult<Name>>,
   ): () => void;
 }

@@ -18,6 +18,7 @@ import {
 } from "@getpaseo/protocol/agent-labels";
 import type { Logger } from "pino";
 import type { ToolPolicy } from "@getpaseo/protocol/agent-types";
+import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { z } from "zod";
 import type { TerminalManager } from "../../terminal/terminal-manager.js";
@@ -118,6 +119,18 @@ function submittedPromptText(prompt: AgentPromptInput): string {
     .flatMap((block) => (block.type === "text" && !("mimeType" in block) ? [block.text] : []))
     .join("\n")
     .trim();
+}
+
+/** What an `agent.user_prompt` hook sees of an attachment: its kind and name, never the content. */
+function describeAttachment(attachment: AgentAttachment): {
+  type: string;
+  name?: string;
+  mimeType?: string;
+} {
+  let name: string | null | undefined;
+  if (attachment.type === "uploaded_file") name = attachment.fileName;
+  else if ("title" in attachment) name = attachment.title;
+  return { type: attachment.type, mimeType: attachment.mimeType, ...(name ? { name } : {}) };
 }
 
 export class AgentManagerShuttingDownError extends Error {
@@ -1235,6 +1248,81 @@ export class AgentManager {
       parentAgentId: target?.labels[PARENT_AGENT_ID_LABEL] ?? null,
       callerAgentId: input.callerAgentId,
       requestId: input.requestId,
+    });
+  }
+
+  /**
+   * Lets plugins take over a person's message before it reaches the agent. Returns the plugin's
+   * note when one did. The hook sees only what is attached, not the content. A plugin that throws
+   * or times out delivers the message as usual so it is never lost.
+   */
+  async beforeUserPrompt(input: {
+    agentId: string;
+    messageId: string;
+    text: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachment[];
+    sessionMode?: string;
+  }): Promise<{ note: string | null } | null> {
+    if (!this.pluginLifecycle?.hasBefore?.("agent.user_prompt")) return null;
+    const target = this.agents.get(input.agentId) ?? (await this.registry?.get(input.agentId));
+    if (target?.internal) return null;
+    const attached = [
+      ...(input.images ?? []).map((image) => ({ type: "image", mimeType: image.mimeType })),
+      ...(input.attachments ?? []).map(describeAttachment),
+    ];
+    try {
+      const request = await this.pluginLifecycle.before("agent.user_prompt", {
+        agentId: input.agentId,
+        workspaceId: target?.workspaceId ?? null,
+        messageId: input.messageId,
+        text: input.text,
+        ...(attached.length ? { attachments: attached } : {}),
+        ...(input.sessionMode ? { sessionMode: input.sessionMode } : {}),
+      });
+      return request.handled ? { note: request.note ?? null } : null;
+    } catch (error) {
+      this.logger.warn(
+        { err: error, agentId: input.agentId },
+        "agent.user_prompt hook failed; delivering the message",
+      );
+      return null;
+    }
+  }
+
+  /** Records a message a plugin took over, without starting a turn. */
+  async recordHandledUserPrompt(
+    agentId: string,
+    prompt: AgentPromptInput,
+    clientMessageId: string,
+    note: string | null,
+  ): Promise<void> {
+    const agent = this.requireAgent(agentId);
+    this.recordSubmittedPrompt(agent, prompt, clientMessageId, "accepted");
+    if (note) {
+      this.touchUpdatedAt(agent);
+      this.recordAndDispatchTimelineItem(
+        agentId,
+        { type: "notification", level: "info", message: note },
+        agent.provider,
+      );
+    }
+    this.emitState(agent);
+    await this.persistSnapshot(agent);
+  }
+
+  /** Hands the original content of a taken-over message to plugins (`agent.user_prompt_handled`). */
+  userPromptHandled(input: {
+    agentId: string;
+    messageId: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachment[];
+  }): void {
+    this.pluginLifecycle?.emit("agent.user_prompt_handled", {
+      agentId: input.agentId,
+      messageId: input.messageId,
+      ...(input.images?.length ? { images: input.images } : {}),
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     });
   }
 

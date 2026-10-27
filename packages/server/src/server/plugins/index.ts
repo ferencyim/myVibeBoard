@@ -43,6 +43,7 @@ interface PluginRuntimePort {
   emit?: PluginLifecycle["emit"];
   drainEvents?: PluginRuntime["drainEvents"];
   before?: PluginLifecycle["before"];
+  hasBefore?: PluginLifecycle["hasBefore"];
   catalog: PluginRuntime["catalog"];
   invoke(
     pluginId: string,
@@ -150,6 +151,9 @@ export class PluginService {
     }
     return request;
   };
+
+  readonly hasBefore: NonNullable<PluginLifecycle["hasBefore"]> = (name) =>
+    this.runtime.before ? (this.runtime.hasBefore?.(name) ?? true) : false;
 
   subscribeSettings(listener: (pluginId: string, settingsId: string) => void): () => void {
     this.settingsListeners.add(listener);

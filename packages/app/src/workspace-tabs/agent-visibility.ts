@@ -3,9 +3,18 @@ import type { WorkspaceTabSnapshot } from "@/stores/workspace-layout-actions";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
 import { normalizeWorkspaceOpaqueId } from "@/utils/workspace-identity";
 
+/**
+ * An agent label that orders the agent's workspace tab among other agents carrying it: ascending,
+ * numeric values by number. Plugins set it with `agent.setLabels`; agents without it keep the
+ * default placement.
+ */
+export const TAB_ORDER_LABEL = "paseo.tab-order";
+
 export interface WorkspaceAgentVisibility {
   activeAgentIds: Set<string>;
   autoOpenAgentIds: Set<string>;
+  /** Tab-order keys of the auto-open agents that carry TAB_ORDER_LABEL. */
+  tabOrderKeys?: Map<string, string>;
 }
 
 function agentBelongsToWorkspace(agent: Agent, workspaceId: string): boolean {
@@ -23,11 +32,13 @@ export function deriveWorkspaceAgentVisibility(input: {
     return {
       activeAgentIds: new Set<string>(),
       autoOpenAgentIds: new Set<string>(),
+      tabOrderKeys: new Map<string, string>(),
     };
   }
 
   const activeAgentIds = new Set<string>();
   const autoOpenAgentIds = new Set<string>();
+  const tabOrderKeys = new Map<string, string>();
   for (const agent of sessionAgents?.values() ?? []) {
     if (!agentBelongsToWorkspace(agent, workspaceId)) {
       continue;
@@ -39,10 +50,12 @@ export function deriveWorkspaceAgentVisibility(input: {
         : undefined;
       if (isWorkspaceRootAgent(agent, parentAgent)) {
         autoOpenAgentIds.add(agent.id);
+        const orderKey = agent.labels?.[TAB_ORDER_LABEL];
+        if (orderKey) tabOrderKeys.set(agent.id, orderKey);
       }
     }
   }
-  return { activeAgentIds, autoOpenAgentIds };
+  return { activeAgentIds, autoOpenAgentIds, tabOrderKeys };
 }
 
 interface AgentMapsSnapshot {
@@ -99,6 +112,7 @@ export function buildWorkspaceTabSnapshot(input: {
     terminalsHydrated: input.terminalsHydrated,
     activeAgentIds: input.agentVisibility.activeAgentIds,
     autoOpenAgentIds: input.agentVisibility.autoOpenAgentIds,
+    agentTabOrderKeys: input.agentVisibility.tabOrderKeys,
     knownTerminalIds: input.knownTerminalIds,
     standaloneTerminalIds: input.standaloneTerminalIds,
     hasActivePendingTerminalCreate: input.hasActivePendingTerminalCreate,
@@ -113,8 +127,19 @@ export function workspaceAgentVisibilityEqual(
   return (
     a === b ||
     (setsEqual(a.activeAgentIds, b.activeAgentIds) &&
-      setsEqual(a.autoOpenAgentIds, b.autoOpenAgentIds))
+      setsEqual(a.autoOpenAgentIds, b.autoOpenAgentIds) &&
+      mapsEqual(a.tabOrderKeys ?? NO_KEYS, b.tabOrderKeys ?? NO_KEYS))
   );
+}
+
+const NO_KEYS = new Map<string, string>();
+
+function mapsEqual(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, value] of a) {
+    if (b.get(key) !== value) return false;
+  }
+  return true;
 }
 
 function setsEqual(a: Set<string>, b: Set<string>): boolean {

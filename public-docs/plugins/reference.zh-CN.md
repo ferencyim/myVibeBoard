@@ -689,17 +689,18 @@ export default function contribute(server: PluginServerContext) {
 
 ### 事件 {#events}
 
-| 名称                         | 事件字段                                              | 触发时机                      |
-| ---------------------------- | ----------------------------------------------------- | ----------------------------- |
-| `agent.created`              | `agent`                                               | 普通创建完成；不包括导入/恢复 |
-| `agent.closed`               | `agent`                                               | 一个运行中的 Agent 运行时关闭 |
-| `agent.turn_started`         | `agent`, `turnId`                                     | 实时轮次开始                  |
-| `agent.turn_ended`           | `agent`, `turnId`, `outcome`, 已弃用的 `timeline: []` | 实时轮次完成、失败或被取消    |
-| `agent.permission_requested` | `agent`, `request`                                    | 权限请求或问题进入待处理状态  |
-| `agent.permission_resolved`  | `agent`, `requestId`, `resolution`                    | 待处理的请求得到回应或被清除  |
-| `agent.archived`             | `agent`, `archivedAt`                                 | 归档状态已保存                |
-| `workspace.created`          | `workspace`                                           | 记录已创建；目录可用          |
-| `workspace.archived`         | `workspace`                                           | 归档状态已保存                |
+| 名称                         | 事件字段                                               | 触发时机                                            |
+| ---------------------------- | ------------------------------------------------------ | --------------------------------------------------- |
+| `agent.created`              | `agent`                                                | 普通创建完成；不包括导入/恢复                       |
+| `agent.closed`               | `agent`                                                | 一个运行中的 Agent 运行时关闭                       |
+| `agent.turn_started`         | `agent`, `turnId`                                      | 实时轮次开始                                        |
+| `agent.turn_ended`           | `agent`, `turnId`, `outcome`, 已弃用的 `timeline: []`  | 实时轮次完成、失败或被取消                          |
+| `agent.permission_requested` | `agent`, `request`                                     | 权限请求或问题进入待处理状态                        |
+| `agent.permission_resolved`  | `agent`, `requestId`, `resolution`                     | 待处理的请求得到回应或被清除                        |
+| `agent.archived`             | `agent`, `archivedAt`                                  | 归档状态已保存                                      |
+| `workspace.created`          | `workspace`                                            | 记录已创建；目录可用                                |
+| `workspace.archived`         | `workspace`                                            | 归档状态已保存                                      |
+| `agent.user_prompt_handled`  | `agentId`, `messageId`，可选的 `images`、`attachments` | 插件接管了一条 `agent.user_prompt` 消息，宿主已记录 |
 
 Agent 事件不包括 daemon 私有的一次性辅助 Agent。公开的后台工作区及其普通 Agent 与其他工作区运行相同的生命周期钩子。归档事件可能早于运行时/worktree 清理；当清理很重要时，请单独观察生命周期何时完成。
 
@@ -741,17 +742,20 @@ type PluginTurnOutcome =
 
 ### before 钩子 {#before-hooks}
 
-| 名称                        | 请求字段                                                                | 可编辑                              |
-| --------------------------- | ----------------------------------------------------------------------- | ----------------------------------- |
-| `agent.create`              | `config`，可选的 `env`                                                  | 除 `cwd` 外的公开 Agent 配置；`env` |
-| `agent.session_open`        | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | 仅 `env`                            |
-| `agent.prompt`              | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`    | 仅 `prompt`                         |
-| `agent.permission_response` | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `requestId` | 无（只能拒绝）                      |
-| `workspace.create`          | `source`，可选的 `title`，`firstAgentContext`                           | 整个显式创建请求                    |
+| 名称                        | 请求字段                                                                           | 可编辑                                |
+| --------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------- |
+| `agent.create`              | `config`，可选的 `env`                                                             | 除 `cwd` 外的公开 Agent 配置；`env`   |
+| `agent.session_open`        | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env`            | 仅 `env`                              |
+| `agent.prompt`              | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`               | 仅 `prompt`                           |
+| `agent.permission_response` | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `requestId`            | 无（只能拒绝）                        |
+| `agent.user_prompt`         | `agentId`, `workspaceId`, `messageId`, `text`，可选的 `attachments`、`sessionMode` | 无；可返回 `{ handled: true, note? }` |
+| `workspace.create`          | `source`，可选的 `title`，`firstAgentContext`                                      | 整个显式创建请求                      |
 
 `agent.prompt` 在 agent 调用本机 `send_agent_prompt`、提示词入队之前运行。`agentId` 是接收方，`parentAgentId` 是接收方作为子代理时的父 agent。抛出错误即拒绝该提示词，调用方 agent 收到错误；用户发送的提示词不经过此钩子。
 
 `agent.permission_response` 在 agent 调用本机 `respond_to_permission`、审批结果生效之前运行。`agentId` 是持有该请求的 agent。抛出错误即拒绝，调用方 agent 收到错误；用户在应用或 CLI 中的审批不经过此钩子。
+
+`agent.user_prompt` 在用户向本机 agent 发送消息（应用输入框、手机、CLI、语音）、消息送达之前运行。agent 之间的消息、插件发送的消息、以及创建 agent 时的首条提示词不经过此钩子；没有插件注册它时宿主直接跳过。`attachments` 只描述附件（`type`、可选的 `name`、`mimeType`；图片为 `{ type: "image", mimeType }`），不含内容。返回 `{ handled: true, note }` 即接管这条消息：宿主在接收方时间线记下这条消息，把 `note` 作为提示通知追加在后面，不启动回合，然后发出 `agent.user_prompt_handled`，带同一个 `messageId` 和原始的 `images`、`attachments`。转发（`paseo.agents.ref(id).send(...)`）这类慢操作放在收到该事件之后做。宿主最多等这个钩子 5 秒；超时未答、不返回内容或抛出错误都会照常投递，插件不会丢失用户的消息。第一个接管的插件结束调用链。
 
 **`agent.create.config`** 使用 `AgentSessionConfig`：
 

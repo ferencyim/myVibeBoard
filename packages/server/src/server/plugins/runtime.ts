@@ -45,6 +45,8 @@ import { evaluateBundle } from "./bundle-evaluator.js";
 const CLIENT_ENTRY_FILENAMES = ["index.client.ts", "index.client.tsx"] as const;
 const SERVER_ENTRY_FILENAMES = ["index.server.ts", "index.server.tsx"] as const;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** A person is waiting on `agent.user_prompt`: a plugin that does not answer fast lets it through. */
+const USER_PROMPT_HOOK_TIMEOUT_MS = 5_000;
 const MAX_LOG_ENTRIES = 500;
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_LOG_LINE_BYTES = 16 * 1024;
@@ -571,6 +573,13 @@ export class PluginRuntime {
     await Promise.all(this.pendingEvents);
   }
 
+  hasBefore(name: keyof PluginBeforeRequests): boolean {
+    for (const loaded of this.plugins.values()) {
+      if (loaded.hooks.before.includes(name)) return true;
+    }
+    return false;
+  }
+
   async before<Name extends keyof PluginBeforeRequests>(
     name: Name,
     input: PluginBeforeRequests[Name],
@@ -584,14 +593,14 @@ export class PluginRuntime {
         continue;
       }
       try {
-        const output = await this.request(loaded, {
-          type: "hook",
-          requestId: randomUUID(),
-          kind: "before",
-          name,
-          input: request,
-        });
-        request = validateBeforeResult(name, request, output);
+        const output = await this.request(
+          loaded,
+          { type: "hook", requestId: randomUUID(), kind: "before", name, input: request },
+          name === "agent.user_prompt" ? USER_PROMPT_HOOK_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
+        );
+        const validated = validateBeforeResult(name, request, output);
+        request = validated.request;
+        if (validated.stop) break;
       } catch (error) {
         throw new Error(`Plugin ${loaded.id} before ${name} failed: ${describeError(error)}`, {
           cause: error,
@@ -622,6 +631,7 @@ export class PluginRuntime {
   private request(
     loaded: LoadedPlugin,
     message: Extract<PluginProcessRequest, { requestId: string }>,
+    timeoutMs = REQUEST_TIMEOUT_MS,
   ): Promise<unknown> {
     const child = loaded.child;
     const pluginId = loaded.id;
@@ -634,7 +644,7 @@ export class PluginRuntime {
           void send(child, { type: "hook.cancel", requestId }).catch(() => {});
         }
         reject(new Error(`Plugin RPC timed out: ${pluginId}.${message.type}`));
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       loaded.pending.set(requestId, { resolve, reject, timeout });
       void send(child, message).catch((error) => {
         clearTimeout(timeout);

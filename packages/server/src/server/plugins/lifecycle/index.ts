@@ -25,12 +25,14 @@ export const lifecycleEventNames = [
   "agent.archived",
   "workspace.created",
   "workspace.archived",
+  "agent.user_prompt_handled",
 ] as const;
 export const beforeHookNames = [
   "agent.create",
   "agent.session_open",
   "agent.prompt",
   "agent.permission_response",
+  "agent.user_prompt",
   "workspace.create",
 ] as const;
 
@@ -72,6 +74,28 @@ const beforeSchemas = {
       requestId: z.string(),
     })
     .strict(),
+  "agent.user_prompt": z
+    .object({
+      agentId: z.string(),
+      workspaceId: z.string().nullable(),
+      messageId: z.string(),
+      text: z.string(),
+      attachments: z
+        .array(
+          z
+            .object({
+              type: z.string(),
+              name: z.string().optional(),
+              mimeType: z.string().optional(),
+            })
+            .strict(),
+        )
+        .optional(),
+      sessionMode: z.string().optional(),
+      handled: z.boolean().optional(),
+      note: z.string().optional(),
+    })
+    .strict(),
   "workspace.create": WorkspaceCreateRequestSchema.omit({ type: true, requestId: true }).strict(),
 };
 
@@ -84,6 +108,8 @@ export interface PluginLifecycle {
     name: Name,
     request: PluginBeforeRequests[Name],
   ): Promise<PluginBeforeRequests[Name]>;
+  /** False when no plugin registered this before hook, so callers can skip building the request. */
+  hasBefore?(name: keyof PluginBeforeRequests): boolean;
 }
 
 export function validateBeforeRequest<Name extends keyof PluginBeforeRequests>(
@@ -165,7 +191,12 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
   name: Name,
   input: PluginBeforeRequests[Name],
   output: unknown,
-): PluginBeforeRequests[Name] {
+): { request: PluginBeforeRequests[Name]; stop: boolean } {
+  if (name === "agent.user_prompt") {
+    const handled = userPromptTakeover(input, output);
+    // A takeover ends the chain: later hooks never see a message that is no longer delivered.
+    return { request: validateBeforeRequest(name, { ...input, ...handled }), stop: !!handled };
+  }
   const result = validateBeforeRequest(name, output);
   if (name === "agent.session_open") {
     const previous = beforeSchemas["agent.session_open"].parse(input);
@@ -207,7 +238,31 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
       throw new Error("agent.create hooks cannot change the workspace directory");
     }
   }
-  return result;
+  return { request: result, stop: false };
+}
+
+/** A user_prompt hook may only take the message over (`{ handled: true, note? }`), not change it.
+ *  Returns the takeover, or null when the hook let the message through. */
+function userPromptTakeover(
+  input: unknown,
+  output: unknown,
+): { handled: true; note?: string } | null {
+  const { handled, note, ...rest } = z
+    .object({ handled: z.boolean().optional(), note: z.string().optional() })
+    .passthrough()
+    .parse(output);
+  const {
+    handled: _handled,
+    note: _note,
+    ...unchanged
+  } = beforeSchemas["agent.user_prompt"].parse(input);
+  for (const [key, value] of Object.entries(rest)) {
+    if (JSON.stringify(value) !== JSON.stringify(unchanged[key as keyof typeof unchanged])) {
+      throw new Error("agent.user_prompt hooks can only take the message over");
+    }
+  }
+  if (handled !== true) return null;
+  return { handled: true, ...(note ? { note } : {}) };
 }
 
 type Handler = (input: unknown, context: PluginHookContext) => unknown;
@@ -267,9 +322,10 @@ export class PluginHookHandlers implements PluginLifecycleRegistration {
             { request: structuredClone(request) },
             { paseo, signal: controller.signal },
           );
-          if (result !== undefined) {
-            request = validateBeforeResult(hookName, request, result);
-          }
+          if (result === undefined) continue;
+          const validated = validateBeforeResult(hookName, request, result);
+          request = validated.request;
+          if (validated.stop) break;
         }
         return request;
       }

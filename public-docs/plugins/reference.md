@@ -851,17 +851,18 @@ plans, and mode changes; requesting permission does not end the turn.
 
 ### Events
 
-| Name                         | Event fields                                            | Trigger                                            |
-| ---------------------------- | ------------------------------------------------------- | -------------------------------------------------- |
-| `agent.created`              | `agent`                                                 | Ordinary creation finishes; excludes import/resume |
-| `agent.closed`               | `agent`                                                 | A live agent runtime closes                        |
-| `agent.turn_started`         | `agent`, `turnId`                                       | Live turn starts                                   |
-| `agent.turn_ended`           | `agent`, `turnId`, `outcome`, deprecated `timeline: []` | Live turn completes, fails, or is canceled         |
-| `agent.permission_requested` | `agent`, `request`                                      | Permission or question becomes pending             |
-| `agent.permission_resolved`  | `agent`, `requestId`, `resolution`                      | Pending request is answered or cleared             |
-| `agent.archived`             | `agent`, `archivedAt`                                   | Archive state is saved                             |
-| `workspace.created`          | `workspace`                                             | Record created; directory available                |
-| `workspace.archived`         | `workspace`                                             | Archive state is saved                             |
+| Name                         | Event fields                                             | Trigger                                                                    |
+| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `agent.created`              | `agent`                                                  | Ordinary creation finishes; excludes import/resume                         |
+| `agent.closed`               | `agent`                                                  | A live agent runtime closes                                                |
+| `agent.turn_started`         | `agent`, `turnId`                                        | Live turn starts                                                           |
+| `agent.turn_ended`           | `agent`, `turnId`, `outcome`, deprecated `timeline: []`  | Live turn completes, fails, or is canceled                                 |
+| `agent.permission_requested` | `agent`, `request`                                       | Permission or question becomes pending                                     |
+| `agent.permission_resolved`  | `agent`, `requestId`, `resolution`                       | Pending request is answered or cleared                                     |
+| `agent.archived`             | `agent`, `archivedAt`                                    | Archive state is saved                                                     |
+| `workspace.created`          | `workspace`                                              | Record created; directory available                                        |
+| `workspace.archived`         | `workspace`                                              | Archive state is saved                                                     |
+| `agent.user_prompt_handled`  | `agentId`, `messageId`, optional `images`, `attachments` | A plugin took an `agent.user_prompt` message over and the host recorded it |
 
 Agent events exclude the daemon's private disposable helpers. Public background workspaces and
 their ordinary agents run the same lifecycle hooks as other workspaces. Archive events can precede
@@ -907,13 +908,14 @@ type PluginTurnOutcome =
 
 ### Before hooks
 
-| Name                        | Request fields                                                          | Editable                                |
-| --------------------------- | ----------------------------------------------------------------------- | --------------------------------------- |
-| `agent.create`              | `config`, optional `env`, `workspaceId`, `parentAgentId`, `labels`      | Public agent config except `cwd`; `env` |
-| `agent.session_open`        | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env` | Only `env`                              |
-| `agent.prompt`              | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`    | Only `prompt`                           |
-| `agent.permission_response` | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `requestId` | None (reject only)                      |
-| `workspace.create`          | `source`, optional `title`, `firstAgentContext`, `callerAgentId`        | Entire explicit creation request        |
+| Name                        | Request fields                                                                       | Editable                                    |
+| --------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
+| `agent.create`              | `config`, optional `env`, `workspaceId`, `parentAgentId`, `labels`                   | Public agent config except `cwd`; `env`     |
+| `agent.session_open`        | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env`              | Only `env`                                  |
+| `agent.prompt`              | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`                 | Only `prompt`                               |
+| `agent.permission_response` | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `requestId`              | None (reject only)                          |
+| `agent.user_prompt`         | `agentId`, `workspaceId`, `messageId`, `text`, optional `attachments`, `sessionMode` | None; may return `{ handled: true, note? }` |
+| `workspace.create`          | `source`, optional `title`, `firstAgentContext`, `callerAgentId`                     | Entire explicit creation request            |
 
 `agent.create.workspaceId`, `parentAgentId`, and `labels` are read-only context for scoping a
 transform (for example, to a task workspace or a child agent). Returning different values for them
@@ -926,6 +928,8 @@ queued. `agentId` is the recipient and `parentAgentId` its parent when it is a s
 reject the prompt: the calling agent receives the error. User prompts do not run this hook.
 
 `agent.permission_response` runs when an agent calls `respond_to_permission` on this host, before the response is applied. `agentId` is the agent that owns the request. Throw to reject: the calling agent receives the error. Answers from the app or CLI do not run this hook.
+
+`agent.user_prompt` runs when a person sends a message to an agent on this host (app composer, phone, CLI, voice), before it is delivered. Agent-to-agent messages, plugin sends, and an agent's first prompt at creation do not run it, and the host skips it entirely when no plugin registered it. `attachments` describes what is attached (`type`, optional `name`, `mimeType`; images are `{ type: "image", mimeType }`) without the content. Return `{ handled: true, note }` to take the message over: the host records the message in the recipient's timeline with `note` as an info notification, starts no turn, and then emits `agent.user_prompt_handled` with the same `messageId` and the original `images` and `attachments`. Do the slow part, such as forwarding with `paseo.agents.ref(id).send(...)`, after that event. The host waits 5 seconds for this hook; a hook that has not answered by then, returns nothing, or throws gets the message delivered as usual, so a plugin never loses a person's message. The first plugin that takes the message over ends the chain.
 
 **`agent.create.config`** uses `AgentSessionConfig`:
 
