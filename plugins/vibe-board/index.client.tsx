@@ -3,6 +3,7 @@ import { BehaviourScreen } from "./client/behaviour/BehaviourScreen";
 import { BehaviourSidebarItem, BoardSettingsScreen } from "./client/sidebar";
 import { TaskFlowPanel } from "./client/task-panel";
 import { TaskStatusItem } from "./client/task-status";
+import { contributeGroupTarget } from "./client/group-target";
 import {
   taskStatusDataSchema,
   taskTabCommandRpc,
@@ -88,6 +89,8 @@ export default function contribute(client: PluginClientContext) {
         openScreen({ screenId: "behaviour" });
       },
     }),
+    // 「发给」on each task's #1 composer.
+    contributeGroupTarget(client),
   ];
 
   // The host requires a cleanup function back.

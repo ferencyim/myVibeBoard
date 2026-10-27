@@ -46,6 +46,10 @@ export interface TaskTabView {
 export const HANDOFF_PATTERN =
   /^\s*(?:[/／]?\s*接手\s*#?(\d+)|继续\s*#(\d+)\s*的工作)\s*$/;
 
+/** The app keeps agents carrying this label in label order (TAB_ORDER_LABEL in the app's
+ *  workspace-tabs/agent-visibility.ts): task tabs show as #1, #2, … */
+const TAB_ORDER_LABEL = "paseo.tab-order";
+
 function isSubagent(agent: Pick<PaseoAgent, "labels">): boolean {
   return !!agent.labels?.[PARENT_AGENT_ID_LABEL];
 }
@@ -374,6 +378,15 @@ export function createTaskTabs(options: {
     store.tasks.markTaskWorkspace(workspaceId);
     return true;
   }
+  /** The tab's number as its tab-order key, so the workspace shows #1, #2 … in order. Hosts
+   *  without label updates keep their default order. */
+  async function syncTabOrder(handle: PaseoAgentHandle, agent: PaseoAgent, tab: TaskTab) {
+    const order = String(tab.number);
+    if (agent.labels?.[TAB_ORDER_LABEL] === order || !handle.setLabels) return;
+    await handle.setLabels({ [TAB_ORDER_LABEL]: order }).catch((error) => {
+      log("任务 tab 排序标签更新失败", error);
+    });
+  }
   async function syncResolvedModel(
     workspaceId: string,
     tab: TaskTab,
@@ -448,6 +461,7 @@ export function createTaskTabs(options: {
           updates.modelLabel = modelLabel ?? null;
         }
       }
+      await syncTabOrder(handle, agent, existing);
       if (Object.keys(updates).length === 0) {
         await registerTabSession(workspaceId, existing, agent, placement.current()?.projectId ?? null);
         return existing;
@@ -472,6 +486,7 @@ export function createTaskTabs(options: {
     await handle.setTitle(tabTitle(tab)).catch((error) => {
       log("任务 tab 标题设置失败（编号已保留）", error);
     });
+    await syncTabOrder(handle, agent, tab);
     // The catalog lookup may be a cold provider discovery. Allocate first so a fast first turn
     // still finds its tab; the readable label lands in a second title update.
     let resolved = tab;
@@ -497,6 +512,7 @@ export function createTaskTabs(options: {
             agent = result.agent;
             handle = result.handle;
             current = await syncResolvedModel(task.workspaceId, tab, agent, handle);
+            await syncTabOrder(handle, agent, current);
           } catch {
             agent = undefined;
           }
@@ -655,25 +671,41 @@ export function createTaskTabs(options: {
   // forgotten, so the map stays bounded.
   const STATUS_DEDUPE_MS = 30_000;
   const lastStatus = new Map<string, { text: string; at: number }>();
-  async function appendStatus(agentId: string, text: string) {
+  // The id of each tab's latest status row, so a caller can replace that row in place (`replace`)
+  // while nothing else was appended after it. Returns the row id, or undefined when deduplicated.
+  const lastRow = new Map<string, string>();
+  async function appendStatus(
+    agentId: string,
+    text: string,
+    options: { replace?: string } = {},
+  ): Promise<string | undefined> {
     const nowMs = now();
     for (const [id, entry] of lastStatus)
       if (nowMs - entry.at >= STATUS_DEDUPE_MS) lastStatus.delete(id);
     const previous = lastStatus.get(agentId);
-    if (previous && previous.text === text) return;
+    if (previous && previous.text === text) return undefined;
+    const id = options.replace ?? "task-status:" + randomUUID();
     await paseo()
       .agents.ref(agentId)
       .timeline.append({
         type: "plugin",
-        id: "task-status:" + randomUUID(),
+        id,
         kind: "task-status",
         version: 1,
         data: { text },
       });
     lastStatus.set(agentId, { text, at: nowMs });
+    lastRow.set(agentId, id);
+    return id;
+  }
+  function lastStatusId(agentId: string): string | undefined {
+    return lastRow.get(agentId);
   }
   function forgetStatus(agentIds: Iterable<string>) {
-    for (const agentId of agentIds) lastStatus.delete(agentId);
+    for (const agentId of agentIds) {
+      lastStatus.delete(agentId);
+      lastRow.delete(agentId);
+    }
   }
   async function vibeTabs(callerAgentId: string) {
     const { agent } = await refreshAgent(callerAgentId);
@@ -752,6 +784,7 @@ export function createTaskTabs(options: {
     tabsFor,
     status,
     appendStatus,
+    lastStatusId,
     forgetStatus,
     vibeTabs,
     formatTabs,

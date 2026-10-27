@@ -89,3 +89,37 @@ export const taskPanelRpc = defineRpc({
     otherPlans: z.array(ProjectPlanSchema).optional(),
   }),
 });
+
+/** #1「发给」选择器：主会话 composer 的发送目标。`number` 为 null 表示群主（#1 自己）。 */
+export const GroupTargetsSchema = z.object({
+  /** True only for a task's #1 (main) tab; the picker shows nowhere else. */
+  main: z.boolean(),
+  selfNumber: z.number().int().positive().nullable(),
+  selected: z.number().int().positive().nullable(),
+  options: z.array(
+    z.object({
+      number: z.number().int().positive(),
+      label: z.string(),
+      /** The tab's role; `worker` means a message there authorizes execution. */
+      role: z.string(),
+      open: z.boolean(),
+    }),
+  ),
+});
+export type GroupTargets = z.infer<typeof GroupTargetsSchema>;
+
+export const groupTargetsRpc = defineRpc({
+  name: "vibe.task.group.targets",
+  input: z.object({ workspaceId: z.string().min(1), agentId: z.string().min(1) }),
+  output: GroupTargetsSchema,
+});
+
+export const groupSelectRpc = defineRpc({
+  name: "vibe.task.group.select",
+  input: z.object({
+    workspaceId: z.string().min(1),
+    agentId: z.string().min(1),
+    number: z.number().int().positive().nullable(),
+  }),
+  output: GroupTargetsSchema,
+});

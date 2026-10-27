@@ -6,7 +6,13 @@ import { createTaskTabs } from "./tabs/service";
 import { createTaskFlow } from "./tabs/flow";
 import { createTaskBoard } from "./tabs/board";
 import { createCoordination } from "./tabs/coordination";
-import { taskPanelRpc, taskTabCommandRpc } from "../shared/task-tabs";
+import { createGroupChat } from "./tabs/group-chat";
+import {
+  groupSelectRpc,
+  groupTargetsRpc,
+  taskPanelRpc,
+  taskTabCommandRpc,
+} from "../shared/task-tabs";
 
 const AGENT_CALLER_ERROR =
   "agent 消息不能授权任务命令；请由用户在原生输入框发送斜杠命令或「通过」";
@@ -33,11 +39,18 @@ export function registerTaskRuntime(
     sessions: runtime,
     log,
   });
+  const groupChat = createGroupChat({
+    store: options.store,
+    tabs,
+    getPaseo: options.getPaseo,
+    log,
+  });
   const flow = createTaskFlow({
     db: options.db,
     store: options.store,
     tabs,
     getPaseo: options.getPaseo,
+    progress: groupChat,
     log,
     ...(options.reviewTimeoutMs ? { reviewTimeoutMs: options.reviewTimeoutMs } : {}),
   });
@@ -51,6 +64,7 @@ export function registerTaskRuntime(
       return placement.directory;
     },
     appendStatus: tabs.appendStatus,
+    report: groupChat.report,
     log,
   });
   const coordination = createCoordination({
@@ -116,6 +130,7 @@ export function registerTaskRuntime(
     server.on("agent.turn_started", async ({ agent, turnId }, context) => {
       options.onPaseo(context.paseo);
       if (closed) return;
+      groupChat.anchorTurn(agent, true);
       try {
         await flow.turnStarted({ agent, turnId });
       } catch (error) {
@@ -125,11 +140,19 @@ export function registerTaskRuntime(
     server.on("agent.turn_ended", async ({ agent, turnId, outcome }, context) => {
       options.onPaseo(context.paseo);
       if (closed) return;
+      groupChat.anchorTurn(agent, false);
       try {
         await flow.turnEnded({ agent, turnId, outcome });
       } catch (error) {
         log("任务 tab 回合收尾失败", error);
       }
+    }),
+    server.on("agent.permission_requested", async ({ agent }, context) => {
+      options.onPaseo(context.paseo);
+      if (closed) return;
+      await groupChat
+        .permissionRequested(agent)
+        .catch((error) => log("#1 审批提示失败", error));
     }),
   ];
   // Hosts without the agent.prompt hook still enforce claims at create_agent and claim time.
@@ -153,6 +176,34 @@ export function registerTaskRuntime(
   } catch (error) {
     log("宿主不支持 agent.permission_response 钩子，任务 agent 仍可代答审批", error);
   }
+  // #1 group chat: `@#n` and the「发给」target route a person's message to another tab. Hosts
+  // without the hook keep #1 as an ordinary chat.
+  try {
+    cleanups.push(
+      // Decide and queue only: the host waits on this hook, and the forward runs after the
+      // host recorded the takeover (agent.user_prompt_handled).
+      server.before("agent.user_prompt", ({ request }, context) => {
+        options.onPaseo(context.paseo);
+        if (closed || !request.workspaceId) return;
+        return groupChat.userPrompt(request);
+      }),
+      server.on("agent.user_prompt_handled", (event) => {
+        if (!closed) groupChat.userPromptHandled(event);
+      }),
+    );
+  } catch (error) {
+    log("宿主不支持 agent.user_prompt 钩子，#1 不能用 @#n 直接转给其它 tab", error);
+  }
+  server.handle(groupTargetsRpc, async (input, context) => {
+    options.onPaseo(context.paseo);
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    return groupChat.targetsFor(input.workspaceId, input.agentId);
+  });
+  server.handle(groupSelectRpc, async (input, context) => {
+    options.onPaseo(context.paseo);
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    return groupChat.select(input.workspaceId, input.agentId, input.number);
+  });
   server.handle(taskPanelRpc, async (input, context) => {
     options.onPaseo(context.paseo);
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
@@ -210,6 +261,18 @@ export function registerTaskRuntime(
     onError: (error) => log("任务准入或接续事件处理失败", error),
   });
   consumer.start();
+  const progress = createEventConsumer({
+    db: options.db,
+    consumer: "vibe-board:group-chat",
+    types: ["task.updated"],
+    startAt: "now",
+    handler: async (event) => {
+      const payload = EVENT_PAYLOADS["task.updated"].parse(event.payload);
+      await groupChat.taskUpdated(payload.workspaceId, payload.fields);
+    },
+    onError: (error) => log("#1 阶段汇报失败", error),
+  });
+  progress.start();
   // Review cycles survive plugin restarts: settle them shortly after start, then sweep for
   // timeouts and missed events once a minute.
   const startRecovery = setTimeout(() => void flow.recoverReviews(), 5_000);
@@ -219,12 +282,15 @@ export function registerTaskRuntime(
     tabs,
     board,
     coordination,
+    groupChat,
     async close() {
       closed = true;
       clearTimeout(startRecovery);
       clearInterval(sweep);
       for (const cleanup of cleanups) cleanup();
       await consumer.stop();
+      await progress.stop();
+      groupChat.close();
       await flow.close();
     },
   };

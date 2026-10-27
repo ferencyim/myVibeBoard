@@ -34,6 +34,8 @@ import {
 } from "../server/tabs/handoff";
 import { registerTaskRuntime } from "../server/task-runtime";
 import { createTaskBoard, SUBTASK_LABEL } from "../server/tabs/board";
+import { createGroupChat, outputDigest, parseMention } from "../server/tabs/group-chat";
+import { targetLabel } from "../client/group-target";
 import { TASK_FLOW_PROMPTS } from "../server/task-conversation/prompts";
 import { TASK_HOST_PROMPTS } from "../server/task-host/prompts";
 import { TASK_TAB_GUIDE_PROMPT } from "../server/tabs/prompts";
@@ -92,6 +94,9 @@ function fakePaseo(
   const created: Array<Record<string, unknown>> = [];
   let turnCount = 0;
   let createPatch: Partial<FakeAgent> = {};
+  /** Runs before every send; may delay or throw (slow or failing deliveries). */
+  let sendHook: ((agentId: string) => Promise<void>) | null = null;
+  const labelUpdates: Array<{ agentId: string; labels: Record<string, string> }> = [];
   const createFailures = new Set<string>();
   let workspaceKind = "worktree";
   let projectKind = "git";
@@ -120,10 +125,16 @@ function fakePaseo(
         if (agent) agent.title = title;
         titles.push({ agentId, title });
       },
+      setLabels: async (labels: Record<string, string>) => {
+        const agent = agents.get(agentId);
+        if (agent) agent.labels = { ...agent.labels, ...labels };
+        labelUpdates.push({ agentId, labels });
+      },
       send: async (
         text: string,
         options?: { sourceAgentId?: string; messageId?: string },
       ) => {
+        if (sendHook) await sendHook(agentId);
         sends.push({ agentId, text, ...(options ? { options } : {}) });
         operations.push("send:" + agentId);
         const turnId = "turn-" + ++turnCount;
@@ -229,6 +240,7 @@ function fakePaseo(
     titles,
     appended,
     sends,
+    labelUpdates,
     modes,
     operations,
     created,
@@ -248,6 +260,9 @@ function fakePaseo(
         agent.activeTurn = null;
       }
       return turnId;
+    },
+    setSendHook(hook: ((agentId: string) => Promise<void>) | null) {
+      sendHook = hook;
     },
     failCreate(spec: string) {
       createFailures.add(spec);
@@ -285,18 +300,26 @@ function setup(
     sessions: runtime,
     ...(options.now ? { now: options.now } : {}),
   });
+  const group = createGroupChat({
+    store,
+    tabs,
+    getPaseo: () => fake.paseo as never,
+    reportIntervalMs: 0,
+    log: () => {},
+  });
   const flow = createTaskFlow({
     db,
     store,
     tabs,
     getPaseo: () => fake.paseo as never,
+    progress: group,
     ...(options.git ? { git: options.git } : {}),
     ...(options.reviewNow ? { now: options.reviewNow } : {}),
     ...(options.reviewTimeoutMs ? { reviewTimeoutMs: options.reviewTimeoutMs } : {}),
     log: () => {},
   });
   flow.registerPrompts();
-  return { db, store, fake, tabs, flow, runtime };
+  return { db, store, fake, tabs, flow, runtime, group };
 }
 
 function planMessage(goal = "完成目标") {
@@ -3668,6 +3691,7 @@ describe("WP-130 复核修复：审阅者候选、超时与恢复", () => {
       store: first.store,
       tabs: first.tabs,
       getPaseo: () => first.fake.paseo as never,
+      progress: first.group,
       now: () => clock,
       log: () => {},
     });
@@ -3861,5 +3885,500 @@ describe("WP-130 复核修复：方案感知的调用者与文件范围", () => 
       files: ["a.ts", "rel/c"],
       unknown: ["/tmp/b"],
     });
+  });
+});
+
+describe("WP-131 #1 群聊", () => {
+  /** A provisioned task (#1 主会话 … #6 验证) with a group chat over the same fake host. */
+  async function groupTask(
+    options: { clock?: () => number; handoffWaitMs?: number; reportIntervalMs?: number } = {},
+  ) {
+    const context = await provisionedTask();
+    const group = createGroupChat({
+      store: context.store,
+      tabs: context.tabs,
+      getPaseo: () => context.fake.paseo as never,
+      log: () => {},
+      handoffWaitMs: options.handoffWaitMs ?? 2_000,
+      reportIntervalMs: options.reportIntervalMs ?? 0,
+      ...(options.clock ? { now: options.clock } : {}),
+    });
+    const groupFlow = createTaskFlow({
+      db: context.db,
+      store: context.store,
+      tabs: context.tabs,
+      getPaseo: () => context.fake.paseo as never,
+      progress: group,
+      log: () => {},
+    });
+    const tab = (role: string) =>
+      context.store.tasks.get("ws")!.tabs.find((candidate) => candidate.role === role)!;
+    let messages = 0;
+    /** The hook only: what the host gets back. */
+    const hook = (text: string, extra: Record<string, unknown> = {}) =>
+      group.userPrompt({
+        agentId: "agent-1",
+        workspaceId: "ws",
+        messageId: "msg-" + ++messages,
+        text,
+        ...extra,
+      });
+    /** A full send as the host runs it: hook, then (when taken over) the handover event with
+     *  the original content, then the queued forward finishes. */
+    const prompt = async (
+      text: string,
+      content: { images?: unknown[]; attachments?: unknown[]; sessionMode?: string } = {},
+    ) => {
+      const messageId = "msg-" + ++messages;
+      const attached = [
+        ...(content.images ?? []).map(() => ({ type: "image", mimeType: "image/png" })),
+        ...(content.attachments ?? []).map(() => ({ type: "text" })),
+      ];
+      const result = group.userPrompt({
+        agentId: "agent-1",
+        workspaceId: "ws",
+        messageId,
+        text,
+        ...(attached.length ? { attachments: attached } : {}),
+        ...(content.sessionMode ? { sessionMode: content.sessionMode } : {}),
+      });
+      if (result?.handled)
+        group.userPromptHandled({
+          agentId: "agent-1",
+          messageId,
+          ...(content.images ? { images: content.images } : {}),
+          ...(content.attachments ? { attachments: content.attachments } : {}),
+        } as never);
+      await group.settle();
+      return result;
+    };
+    const rows = (agentId = "agent-1") =>
+      context.fake.appended
+        .filter((entry) => entry.agentId === agentId)
+        .map((entry) => entry.item as { id: string; data: { text: string } });
+    return { ...context, group, groupFlow, tab, hook, prompt, rows };
+  }
+
+  it("解析 @#n：全角变体、去掉前导标点与空白、编号最多 3 位", () => {
+    expect(parseMention("@#4 开始执行")).toEqual({ number: 4, body: "开始执行" });
+    expect(parseMention("＠＃４：开始")).toEqual({ number: 4, body: "开始" });
+    expect(parseMention("  @ #12,做")).toEqual({ number: 12, body: "做" });
+    expect(parseMention("@#4。，、 - 开始")).toEqual({ number: 4, body: "开始" });
+    expect(parseMention("@#4：- 看看")).toEqual({ number: 4, body: "看看" });
+    expect(parseMention("@#123 x")).toEqual({ number: 123, body: "x" });
+    expect(parseMention("@#1234 x")).toBeNull();
+    expect(parseMention("请 @#4 开始")).toBeNull();
+    expect(parseMention("#4 开始")).toBeNull();
+  });
+
+  it("@#4 开始执行：#1 不跑回合，以用户身份转给 #4，经调度准入授权执行", async () => {
+    const { db, store, fake, prompt, tab, flow } = await groupTask();
+    const worker = tab("worker");
+    const result = await prompt("@#4 开始执行");
+    expect(result).toEqual({ handled: true, note: "正在转给 #4 执行。" });
+    const sent = fake.sends.at(-1)!;
+    expect(sent).toMatchObject({ agentId: worker.agentId, text: "开始执行" });
+    expect(sent.options?.sourceAgentId).toBeUndefined();
+    expect(fake.sends.some((send) => send.agentId === "agent-1")).toBe(false);
+    // #4 received a user message: the round-7 direct authorization runs with admission.
+    const scheduler = startScheduler(db);
+    try {
+      const turnId = fake.agents.get(worker.agentId)!.activeTurn!.id;
+      await flow.turnStarted({ agent: { id: worker.agentId, workspaceId: "ws" }, turnId });
+      const task = store.tasks.get("ws")!;
+      expect(task.confirmedAt).toBeTruthy();
+      expect(task.phase).toBe("executing");
+      expect(task.plan?.goal).toBe("整理文档");
+      expect(task.summary).toContain("直接授权");
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("钩子立即返回：慢转发不阻塞钩子，宿主确认接管后才转发，只转一次", async () => {
+    const { group, fake, hook, tab } = await groupTask();
+    let release!: () => void;
+    fake.setSendHook(() => new Promise<void>((resolve) => (release = resolve)));
+    const before = fake.sends.length;
+    // The hook answers synchronously even though the delivery will be slow.
+    const result = hook("@#2 写个方案");
+    expect(result).toEqual({ handled: true, note: "正在转给 #2 方案。" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Nothing goes out before the host has recorded the takeover.
+    expect(fake.sends.length).toBe(before);
+    group.userPromptHandled({ agentId: "agent-1", messageId: "msg-1" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    await group.settle();
+    fake.setSendHook(null);
+    const delivered = fake.sends.slice(before);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({ agentId: tab("planner").agentId, text: "写个方案" });
+    // The same handover again changes nothing.
+    group.userPromptHandled({ agentId: "agent-1", messageId: "msg-1" });
+    await group.settle();
+    expect(fake.sends.length).toBe(before + 1);
+  });
+
+  it("宿主没确认接管（钩子超时、消息已交给 #1）时不转发，#1 提示请重发", async () => {
+    const { group, fake, hook, rows } = await groupTask({ handoffWaitMs: 30 });
+    const before = fake.sends.length;
+    expect(hook("@#4 开始执行")?.handled).toBe(true);
+    await group.settle();
+    expect(fake.sends.length).toBe(before);
+    expect(rows().at(-1)!.data.text).toBe(
+      "转给 #4 执行 失败：宿主没有确认接管，这条消息已交给 #1，请重发。",
+    );
+  });
+
+  it("转发失败往 #1 补一条状态行，「发给」选择保留以便重发", async () => {
+    const { group, fake, prompt, rows, tab } = await groupTask();
+    await group.select("ws", "agent-1", 3);
+    fake.setSendHook(async () => {
+      throw new Error("连接断开");
+    });
+    expect((await prompt("帮我查查依赖"))?.handled).toBe(true);
+    expect(rows().at(-1)!.data.text).toBe("转给 #3 探路 失败：连接断开，请重发。");
+    expect((await group.targetsFor("ws", "agent-1")).selected).toBe(3);
+    fake.setSendHook(null);
+    await prompt("帮我查查依赖");
+    expect(fake.sends.at(-1)).toMatchObject({ agentId: tab("scout").agentId, text: "帮我查查依赖" });
+    expect((await group.targetsFor("ws", "agent-1")).selected).toBeNull();
+    // A closed tab is reported the same way.
+    fake.agents.get(tab("scout").agentId)!.status = "closed";
+    fake.agents.get(tab("scout").agentId)!.activeTurn = null;
+    await prompt("@#3 再查");
+    expect(rows().at(-1)!.data.text).toBe("转给 #3 探路 失败：#3 探路已关闭，请重发。");
+  });
+
+  it("@#2 转给方案 tab；宿主转交的原始附件与图片随消息转发", async () => {
+    const { fake, prompt, tab } = await groupTask();
+    const images = [{ data: "aGk=", mimeType: "image/png" }];
+    const attachments = [{ type: "text", text: "附件内容" }];
+    await prompt("@#2 写个方案", { images, attachments });
+    const sent = fake.sends.at(-1)! as {
+      agentId: string;
+      text: string;
+      options?: Record<string, unknown>;
+    };
+    expect(sent).toMatchObject({ agentId: tab("planner").agentId, text: "写个方案" });
+    expect(sent.options).toEqual({ images, attachments });
+    // Attachments alone still go through.
+    await prompt("@#2", { images });
+    expect(fake.sends.at(-1)).toMatchObject({ agentId: tab("planner").agentId, text: "（见附件）" });
+  });
+
+  it("随消息的模式：同一种 agent 带上，不同种在 #1 提示未生效", async () => {
+    const { fake, prompt, rows, tab } = await groupTask();
+    await prompt("@#4 开始", { sessionMode: "plan" });
+    expect(fake.sends.at(-1)!.options).toEqual({ sessionMode: "plan" });
+    fake.agents.get(tab("scout").agentId)!.provider = "claude";
+    await prompt("@#3 查一下", { sessionMode: "plan" });
+    expect(fake.sends.at(-1)!.options).toEqual({});
+    expect(rows().at(-1)!.data.text).toContain("模式切换未随转发生效");
+  });
+
+  it("编号不存在、内容为空时不转发；@#1、无前缀、其它 tab 与非任务 workspace 不接管", async () => {
+    const { fake, hook, tab, group } = await groupTask();
+    const before = fake.sends.length;
+    const missing = hook("@#９ 你好");
+    expect(missing?.handled).toBe(true);
+    expect(missing?.note).toContain("#9 不存在");
+    expect(missing?.note).toContain("#2 方案、#3 探路、#4 执行");
+    expect(hook("@#2")).toEqual({ handled: true, note: "@#2 后面没有内容，消息没有转发。" });
+    await group.settle();
+    expect(fake.sends.length).toBe(before);
+    expect(hook("@#1 你来")).toBeUndefined();
+    expect(hook("普通消息")).toBeUndefined();
+    // Only #1 routes: the same text in #2 is #2's own message.
+    const other = { workspaceId: "ws", messageId: "x", text: "@#4 开始" };
+    expect(group.userPrompt({ ...other, agentId: tab("planner").agentId })).toBeUndefined();
+    expect(group.userPrompt({ ...other, agentId: "agent-1", workspaceId: "plain" })).toBeUndefined();
+    expect(group.userPrompt({ ...other, agentId: "agent-1", workspaceId: null })).toBeUndefined();
+  });
+
+  it("「发给」选择：只在 #1 可用，下一条无前缀消息送达所选 tab 后回到群主", async () => {
+    const { group, fake, prompt, tab } = await groupTask();
+    const targets = await group.targetsFor("ws", "agent-1");
+    expect(targets.main).toBe(true);
+    expect(targets.selected).toBeNull();
+    expect(targets.options.map((option) => [option.label, option.role])).toEqual([
+      ["#2 方案 · planner-model", "planner"],
+      ["#3 探路 · scout-model", "scout"],
+      ["#4 执行 · second", "worker"],
+      ["#5 复核 · review-model", "reviewer"],
+      ["#6 验证 · verify-model", "verifier"],
+    ]);
+    expect((await group.targetsFor("ws", tab("planner").agentId)).main).toBe(false);
+    await expect(group.select("ws", tab("planner").agentId, 3)).rejects.toThrow("主会话");
+    expect((await group.select("ws", "agent-1", 3)).selected).toBe(3);
+    expect((await prompt("帮我查查依赖"))?.note).toBe("正在转给 #3 探路。");
+    expect(fake.sends.at(-1)).toMatchObject({ agentId: tab("scout").agentId, text: "帮我查查依赖" });
+    expect((await group.targetsFor("ws", "agent-1")).selected).toBeNull();
+    expect(await prompt("再说一句")).toBeUndefined();
+  });
+
+  it("「发给」pill 写明发送对象，执行 tab 提示发送即授权执行", () => {
+    const base = { main: true, selfNumber: 1, options: [
+      { number: 2, label: "#2 方案 · m", role: "planner", open: true },
+      { number: 4, label: "#4 执行 · m", role: "worker", open: true },
+    ] };
+    expect(targetLabel({ ...base, selected: null })).toBe("将发给 群主");
+    expect(targetLabel({ ...base, selected: 2 })).toBe("将发给 #2 方案");
+    expect(targetLabel({ ...base, selected: 4 })).toBe("发送即授权 #4 执行");
+  });
+
+  it("选择的目标 3 分钟后失效", async () => {
+    let clock = 1_000_000;
+    const { group, hook } = await groupTask({ clock: () => clock });
+    await group.select("ws", "agent-1", 4);
+    clock += 3 * 60_000 - 1;
+    expect((await group.targetsFor("ws", "agent-1")).selected).toBe(4);
+    clock += 1;
+    expect(hook("随便聊聊")).toBeUndefined();
+  });
+
+  it("回合结束、失败、中止各自新增一行；#1 自己的回合不汇报", async () => {
+    const { fake, groupFlow, tab, rows } = await groupTask();
+    const scout = tab("scout");
+    const ended = (agentId: string, outcome: Record<string, unknown>, turnId: string | null = "s-1") =>
+      groupFlow.turnEnded({
+        agent: { id: agentId, workspaceId: "ws" },
+        turnId,
+        outcome: outcome as never,
+      });
+    fake.setTimeline(scout.agentId, [
+      { item: { type: "user_message", text: "查" }, turnId: "s-1", seqEnd: 1 },
+      {
+        item: {
+          type: "assistant_message",
+          text: "## 结论\n依赖在 src/a。\n```ts\ncode\n```\n影响两个文件。\n\n## 下一步\n- 交给 #2",
+        },
+        turnId: "s-1",
+        seqEnd: 2,
+      },
+    ]);
+    await ended(scout.agentId, { kind: "completed" });
+    expect(rows().at(-1)!.data.text).toBe(
+      "#3 探路 本轮结束 · 查看 #3\n结论\n依赖在 src/a。\n影响两个文件。\n下一步：交给 #2",
+    );
+    const count = rows().length;
+    const first = rows().at(-1)!.id;
+    fake.reply(scout.agentId, "第二轮结论");
+    await ended(scout.agentId, { kind: "completed" });
+    expect(rows()).toHaveLength(count + 1);
+    expect(rows().at(-1)!.id).not.toBe(first);
+    expect(rows().at(-2)!.data.text).toContain("依赖在 src/a。");
+    // #1's own turn is not reported.
+    fake.reply("agent-1", "我是群主");
+    await ended("agent-1", { kind: "completed" }, "turn-1");
+    expect(rows()).toHaveLength(count + 1);
+    await ended(tab("verifier").agentId, { kind: "failed", error: { message: "额度耗尽" } }, null);
+    expect(rows().at(-1)!.data.text).toBe("#6 验证 回合失败 · 查看 #6\n额度耗尽");
+    await ended(tab("reviewer").agentId, { kind: "canceled", reason: "用户中止" }, null);
+    expect(rows().at(-1)!.data.text).toBe("#5 复核 回合已中止 · 查看 #5\n用户中止");
+    expect(rows()).toHaveLength(count + 3);
+  });
+
+  it("只有进度行原位替换；重要提示新增一行；同类同文 30 秒去重；同类连发合并成最新一条", async () => {
+    let clock = 1_000_000;
+    const context = await provisionedTask();
+    const tabs = createTaskTabs({
+      store: context.store,
+      getPaseo: () => context.fake.paseo as never,
+      now: () => clock,
+    });
+    const group = createGroupChat({
+      store: context.store,
+      tabs,
+      getPaseo: () => context.fake.paseo as never,
+      now: () => clock,
+      reportIntervalMs: 40,
+    });
+    const rows = () =>
+      context.fake.appended
+        .filter((entry) => entry.agentId === "agent-1")
+        .map((entry) => entry.item as { id: string; data: { text: string } });
+    const start = rows().length;
+    await group.report("ws", "review", "审阅 1/2 已完成", "progress");
+    await group.report("ws", "review", "审阅 2/2 已完成", "progress");
+    expect(rows()).toHaveLength(start + 2);
+    expect(rows().at(-1)!.id).toBe(rows().at(-2)!.id);
+    // An important review row is new, and the next progress row does not overwrite it.
+    await group.report("ws", "review", "审阅者全部失败");
+    await group.report("ws", "review", "审阅 1/2 已完成", "progress");
+    const ids = rows().slice(start).map((row) => row.id);
+    expect(new Set(ids).size).toBe(3);
+
+    await group.report("ws", "a", "同一条");
+    clock += 1_000;
+    await group.report("ws", "a", "同一条");
+    expect(rows().filter((row) => row.data.text === "同一条")).toHaveLength(1);
+    clock += 30_000;
+    await group.report("ws", "a", "同一条");
+    expect(rows().filter((row) => row.data.text === "同一条")).toHaveLength(2);
+
+    // A burst of one kind: the first lands, the rest collapse into the latest after the window.
+    const burst = rows().length;
+    await group.report("ws", "turn:x", "第 1 轮");
+    await group.report("ws", "turn:x", "第 2 轮");
+    await group.report("ws", "turn:x", "第 3 轮");
+    expect(rows().slice(burst).map((row) => row.data.text)).toEqual(["第 1 轮"]);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(rows().slice(burst).map((row) => row.data.text)).toEqual(["第 1 轮", "第 3 轮"]);
+    group.close();
+  });
+
+  it("等审批新增一行，阶段变化原位合并", async () => {
+    const { group, store, fake, tab, rows } = await groupTask();
+    const worker = tab("worker");
+    const hookAgent = (id: string, parentAgentId: string | null, title: string | null = null) => ({
+      id,
+      workspaceId: "ws",
+      parentAgentId,
+      provider: "codex",
+      cwd: "x",
+      title,
+      labels: {},
+    });
+    await group.permissionRequested(hookAgent(worker.agentId, null));
+    expect(rows().at(-1)!.data.text).toBe("#4 执行正在等你审批，请去 #4 处理");
+    fake.addAgent({ id: "sub-1", labels: { [PARENT_AGENT_ID_LABEL]: worker.agentId } });
+    await group.permissionRequested(hookAgent("sub-1", worker.agentId, "跑测试"));
+    expect(rows().at(-1)!.data.text).toBe("#4 执行 的子代理「跑测试」正在等你审批，请去 #4 处理");
+    const count = rows().length;
+    await group.permissionRequested(hookAgent("agent-1", null));
+    expect(rows()).toHaveLength(count);
+
+    store.tasks.savePlan("ws", planSnapshot());
+    await group.taskUpdated("ws", ["phase"]);
+    expect(rows().at(-1)!.data.text).toBe("任务阶段：待确认");
+    await group.taskUpdated("ws", ["plan", "phase"]);
+    await group.taskUpdated("ws", ["summary"]);
+    expect(rows()).toHaveLength(count + 1);
+    store.tasks.confirm("ws", {
+      plan: planSnapshot(),
+      rolesSnapshot: roleSnapshot(),
+      planSource: { sourceKey: "t" },
+      requestId: "c-1",
+    });
+    await group.taskUpdated("ws", ["phase"]);
+    // Consecutive phase rows merge: the latest replaces the previous one (same row id).
+    expect(rows()).toHaveLength(count + 2);
+    expect(rows().at(-1)!.id).toBe(rows().at(-2)!.id);
+    expect(rows().at(-1)!.data.text).toBe("任务阶段：待确认 → 排队");
+  });
+
+  it("看板认领、完成与越界告警写进 #1", async () => {
+    const context = await projectTask();
+    context.fake.addAgent({ id: "exec" });
+    await context.tabs.ensureTab("exec", { role: "worker" });
+    const plan = {
+      ...planSnapshot(),
+      subtasks: [
+        {
+          id: "A",
+          goal: "改 A",
+          method: "实现",
+          notes: "",
+          dependsOn: [],
+          files: ["src/a/**"],
+          acceptance: "单测",
+        },
+      ],
+    };
+    context.store.tasks.savePlan("ws", plan);
+    const confirmed = context.store.tasks.confirm("ws", {
+      plan,
+      rolesSnapshot: roleSnapshot(),
+      planSource: { sourceKey: "test" },
+      requestId: "confirm-1",
+    });
+    context.store.taskBoard.seed("ws", confirmed.confirmedAt, plan.subtasks);
+    const reports: Array<[string, string]> = [];
+    const board = createTaskBoard({
+      store: context.store,
+      getPaseo: () => context.fake.paseo as never,
+      directory: async () => {
+        throw new Error("no git");
+      },
+      appendStatus: context.tabs.appendStatus,
+      report: async (_workspaceId, key, text) => {
+        reports.push([key, text]);
+      },
+      log: () => {},
+    });
+    context.fake.addAgent({ id: "sub-a", labels: { [PARENT_AGENT_ID_LABEL]: "exec" } });
+    await board.claim("exec", { id: "A", assignee: "sub-a" });
+    expect(reports.at(-1)).toEqual(["board:A", "#2 执行看板：子任务 A 已认领（子代理 sub-a）\n改 A"]);
+    await board.complete("sub-a", { id: "A", summary: "改好了", changedFiles: ["docs/x.md"] });
+    expect(reports.at(-1)![0]).toBe("board:A");
+    expect(reports.at(-1)![1]).toContain("子任务 A 已完成，越界告警 · 查看 #2");
+    expect(reports.at(-1)![1]).toContain("docs/x.md");
+  });
+
+  it("方案审阅开始与定稿汇报到 #1", async () => {
+    const { store, fake, groupFlow, tab, rows } = await groupTask();
+    // Two planner models: the first plan starts a review cycle.
+    const reviewer = store.presets.create({
+      id: "p-review-2",
+      name: "p-review-2",
+      provider: "codex",
+      model: "review-2",
+      thinking: "high",
+      permissionMode: "full",
+    });
+    store.modelDefaults.setGlobal({
+      ...store.modelDefaults.global(),
+      planners: ["p-planner", reviewer.id],
+    });
+    const planner = tab("planner");
+    fake.setTimeline(planner.agentId, [
+      { item: { type: "assistant_message", text: planMessage("群聊方案") }, turnId: "p-1", seqEnd: 1 },
+    ]);
+    const count = rows().length;
+    await groupFlow.turnEnded({
+      agent: { id: planner.agentId, workspaceId: "ws" },
+      turnId: "p-1",
+      outcome: { kind: "completed" },
+    });
+    expect(reviewState(store.tasks.get("ws"))?.status).toBe("reviewing");
+    const texts = rows().slice(count).map((row) => row.data.text);
+    expect(texts.some((text) => text.includes("开始多模型审阅"))).toBe(true);
+    // The planner's own turn row is covered by the review rows.
+    expect(texts.some((text) => text.startsWith("#2 方案 本轮结束"))).toBe(false);
+  });
+
+  it("任务 tab 带上编号排序标签，旧 tab 刷新时补上", async () => {
+    const { fake, store, tabs, tab } = await groupTask();
+    for (const candidate of store.tasks.get("ws")!.tabs)
+      expect(fake.agents.get(candidate.agentId)!.labels?.["paseo.tab-order"]).toBe(
+        String(candidate.number),
+      );
+    // An old task tab without the label gets it when the tabs are read.
+    const scout = tab("scout");
+    delete fake.agents.get(scout.agentId)!.labels!["paseo.tab-order"];
+    await tabs.tabsFor(store.tasks.get("ws")!, true);
+    expect(fake.agents.get(scout.agentId)!.labels?.["paseo.tab-order"]).toBe("3");
+    const updates = fake.labelUpdates.length;
+    await tabs.tabsFor(store.tasks.get("ws")!, true);
+    expect(fake.labelUpdates.length).toBe(updates);
+  });
+
+  it("群主提示词说明 @#n、「发给」、进展汇报与上下文边界，编号用占位符", async () => {
+    const { store } = await groupTask();
+    const main = TASK_HOST_PROMPTS.find((prompt) => prompt.key === "task.role.main")!.defaultText;
+    expect(main).toContain("@#编号");
+    expect(main).toContain("「发给」选择器");
+    expect(main).toContain("状态行");
+    expect(main).toContain("不会进入你的上下文");
+    expect(main).toContain("vibe_tabs / get_agent_activity");
+    expect(main).toContain("{{planner}}");
+    expect(main).not.toMatch(/#[2-6]/);
+    const rendered = store.prompts.resolve("task.role.main", {
+      vars: roleVars(store.tasks.get("ws")!.tabs),
+    });
+    expect(rendered).toContain("@#编号 点名 #4 执行");
+    expect(outputDigest("```vibe-plan\n{}\n```\n方案已写好")).toEqual(["方案已写好"]);
   });
 });

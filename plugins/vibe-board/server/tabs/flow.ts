@@ -44,7 +44,9 @@ import {
   SCOUT_ASK_PROMPT,
   TASK_TAB_GUIDE_PROMPT,
 } from "./prompts";
-import { createPlanReview, reviewActive } from "./plan-review";
+import { createPlanReview, reviewActive, reviewState } from "./plan-review";
+import type { PluginTurnOutcome } from "@getpaseo/plugin/server";
+import type { GroupChat } from "./group-chat";
 import {
   HandoffPacketSchema,
   buildPacket,
@@ -251,6 +253,8 @@ export function createTaskFlow(options: {
   /** Per plan reviewer timeout (owner setting); default 20 minutes. */
   reviewTimeoutMs?: () => number;
   now?: () => number;
+  /** #1 progress rows (WP-131). */
+  progress: Pick<GroupChat, "report" | "tabTurnEnded">;
 }) {
   const { db, store, tabs } = options;
   const log = options.log ?? ((message, error) => console.error("[vibe-board]", message, error ?? ""));
@@ -360,6 +364,7 @@ export function createTaskFlow(options: {
   const review = createPlanReview({
     store,
     tabs,
+    report: options.progress.report,
     getPaseo: options.getPaseo,
     turnOutput: async (agentId, turnId) => {
       const entry = lastAssistant(await timeline(agentId), turnId);
@@ -1887,7 +1892,7 @@ export function createTaskFlow(options: {
   async function turnEnded(event: {
     agent: { id: string; workspaceId: string | null };
     turnId: string | null;
-    outcome: { kind: string };
+    outcome: PluginTurnOutcome;
   }) {
     const workspaceId = event.agent.workspaceId;
     if (!workspaceId) return;
@@ -1918,6 +1923,7 @@ export function createTaskFlow(options: {
     const turn = tab.role === "worker" ? resources.takeTurn(tab.agentId, event.turnId) : undefined;
     const page = await timeline(tab.agentId);
     await refreshHandoff(task, tab, page, event.turnId);
+    const reviewBefore = reviewMark(task);
     if (event.outcome.kind === "completed") {
       if (await naturalHandoff(task, tab, page, event.turnId)) return;
       if (["main", "session"].includes(tab.role)) await savePlanFromTurn(task, tab, page);
@@ -1937,9 +1943,28 @@ export function createTaskFlow(options: {
       });
       if (tab.role === "worker") await releaseIdle(workspaceId, tab.agentId, turn);
     }
+    // #1 hears about every other tab's turn; a planner turn that moved the review cycle is already
+    // reported by the review rows.
+    if (!(tab.role === "planner" && reviewMark(store.tasks.get(workspaceId)) !== reviewBefore)) {
+      const entry = lastAssistant(page, event.turnId);
+      await options.progress
+        .tabTurnEnded({
+          task: store.tasks.get(workspaceId) ?? task,
+          tab,
+          outcome: event.outcome,
+          output: entry?.item.type === "assistant_message" ? entry.item.text : "",
+        })
+        .catch((error) => log("#1 回合汇报失败", error));
+    }
     if (tab.role === "worker") await retryAdmission(workspaceId);
     if (reviewActive(store.tasks.get(workspaceId))) await recoverReviews(workspaceId);
   }
+  /** Changes when a turn moved the review cycle (started, advanced or finalized it). */
+  function reviewMark(task: Task | undefined): string {
+    const state = reviewState(task);
+    return state ? `${state.cycle}:${state.status}:${task?.plan?.goal ?? ""}` : "";
+  }
+
   /** openWorker leaves an admission unbound while the execution tab is running a turn; once the
    *  tab is idle again and nothing bound it, start execution with that admission. */
   async function retryAdmission(workspaceId: string) {

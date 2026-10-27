@@ -176,7 +176,9 @@ export function createTaskBoard(options: {
   getPaseo(): PaseoApi | null;
   /** The task worktree; the board's git checks run there. */
   directory(workspaceId: string): Promise<string>;
-  appendStatus(agentId: string, text: string): Promise<void>;
+  appendStatus(agentId: string, text: string): Promise<unknown>;
+  /** A progress row in the task's #1 (WP-131): claims, completions and scope warnings. */
+  report?(workspaceId: string, key: string, text: string): Promise<void>;
   now?: () => number;
   staleMs?: number;
   log?: (message: string, error?: unknown) => void;
@@ -285,7 +287,7 @@ export function createTaskBoard(options: {
     claimer: string,
     pendingParent?: string,
   ): Promise<BoardSubtask> {
-    rows(task);
+    const row0 = rows(task).find((candidate) => candidate.id === id);
     const result = store.taskBoard.claim(task.workspaceId, id, {
       agentId: claimer,
       tabNumber: tab.number,
@@ -299,6 +301,12 @@ export function createTaskBoard(options: {
       throw new Error(message);
     }
     const record = recordOf(result.subtask);
+    if (result.subtask.claimedBy !== row0?.claimedBy || row0?.status !== "in_progress")
+      await options.report?.(
+        task.workspaceId,
+        "board:" + id,
+        `#${tab.number} 执行看板：子任务 ${id} 已认领（${claimer === tab.agentId ? "执行主代理" : "子代理 " + claimer.slice(0, 8)}）\n${result.subtask.goal}`,
+      );
     if (record.snapshot !== undefined || !result.subtask.claimedAt) return result.subtask;
     const directory = await options.directory(task.workspaceId).catch(() => null);
     const snapshot = directory ? await scopeSnapshot(directory) : null;
@@ -392,6 +400,13 @@ export function createTaskBoard(options: {
     const summary = [input.summary.trim(), warning, gitNote].filter(Boolean).join("\n");
     const result: SubtaskResult = { changedFiles, outOfScope };
     const done = store.taskBoard.complete(task.workspaceId, row.id, { summary, result });
+    await options.report?.(
+      task.workspaceId,
+      "board:" + row.id,
+      warning
+        ? `#${tab.number} 执行看板：子任务 ${row.id} 已完成，越界告警 · 查看 #${tab.number}\n${warning}`
+        : `#${tab.number} 执行看板：子任务 ${row.id} 已完成\n${input.summary.trim().split(/\r?\n/)[0] ?? ""}`,
+    );
     if (warning)
       await notifyExecutor(
         tab.agentId,
