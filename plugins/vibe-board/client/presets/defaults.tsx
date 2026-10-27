@@ -12,16 +12,15 @@ import { Btn, Muted } from "../common/ui";
 import { ModelPicker } from "./ModelPicker";
 const MODEL_ROLE_LABELS = {
   scout: "探路",
-  planner: "规划方案",
-  plan_reviewer: "方案复核",
   worker: "执行主代理",
   subagent: "执行子代理",
   reviewer: "代码复核",
   verifier: "验证",
 };
-import { setDefault } from "./logic";
+import { plannersOf, setDefault, setPlanner } from "./logic";
 
-/** Seven pickers. `inherited` (project level) names the global default each job follows when empty. */
+/** The #2 方案 list: the first model writes, the rest review in order; then the single jobs.
+ *  `inherited` (project level) names the global default each job follows when empty. */
 export function DefaultModelsEditor({
   value,
   onChange,
@@ -34,9 +33,36 @@ export function DefaultModelsEditor({
   inherited?: ModelDefaults;
 }) {
   const nameOf = (id: string | null | undefined) => presets.find((p) => p.id === id)?.name ?? null;
+  const planners = plannersOf(value);
+  const inheritedPlanners = inherited ? plannersOf(inherited) : [];
+  const inheritedNames = inheritedPlanners.map((id) => nameOf(id) ?? id).join(" → ");
   return (
     <View style={{ gap: 4 }}>
-      {MODEL_ROLES.map((role) => (
+      <Muted>
+        方案模型（#2 方案）：第 1 个写方案，其余依次审阅，最后由第 1 个汇总修订。
+        {inherited ? (inheritedNames ? `留空沿用全局：${inheritedNames}` : "留空沿用全局（未设置）") : ""}
+      </Muted>
+      {planners.map((id, index) => (
+        <ModelPicker
+          key={`planner-${index}`}
+          label={index === 0 ? "方案 · 写方案" : `方案 · 审阅 ${index}`}
+          presets={presets}
+          value={id}
+          noneLabel="移除"
+          onChange={(presetId) => onChange(setPlanner(value, index, presetId))}
+        />
+      ))}
+      <ModelPicker
+        key={`planner-add-${planners.length}`}
+        label={planners.length ? "方案 · 添加审阅模型（可选）" : "方案 · 写方案"}
+        presets={presets}
+        value={null}
+        noneLabel={planners.length ? "不添加" : inherited ? "沿用全局" : "不设置"}
+        onChange={(presetId) => presetId && onChange(setPlanner(value, planners.length, presetId))}
+      />
+      {MODEL_ROLES.filter(
+        (role): role is keyof typeof MODEL_ROLE_LABELS => role in MODEL_ROLE_LABELS,
+      ).map((role) => (
         <ModelPicker
           key={role}
           label={MODEL_ROLE_LABELS[role]}

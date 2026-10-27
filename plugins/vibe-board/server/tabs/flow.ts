@@ -37,7 +37,14 @@ import {
 import { createTaskResources, type TaskTurnToken } from "../task-host/resources";
 import { createTaskGitFinalizer, type GitState } from "../task-conversation/git";
 import { TASK_FLOW_PROMPTS } from "../task-conversation/prompts";
-import { HISTORY_NOTICE_PROMPT, TASK_TAB_GUIDE_PROMPT } from "./prompts";
+import {
+  HISTORY_NOTICE_PROMPT,
+  PLAN_REVIEW_REQUEST_PROMPT,
+  PLAN_REVIEW_REVISE_PROMPT,
+  SCOUT_ASK_PROMPT,
+  TASK_TAB_GUIDE_PROMPT,
+} from "./prompts";
+import { createPlanReview, reviewActive } from "./plan-review";
 import {
   HandoffPacketSchema,
   buildPacket,
@@ -48,9 +55,12 @@ import {
 } from "./handoff";
 import { TASK_HOST_PROMPTS } from "../task-host/prompts";
 import {
+  FLOW_ROLE_ORDER,
   HANDOFF_PATTERN,
   roleTabPreset,
+  roleVars,
   tabTitle,
+  type FlowRole,
   type TaskTabs,
 } from "./service";
 
@@ -87,7 +97,8 @@ function naturalHandoffTarget(text: string): number | undefined {
   return match ? Number(match[1] ?? match[2]) : undefined;
 }
 const ROLE_PROMPT_KEYS: Partial<Record<TaskTab["role"], string>> = {
-  main: "task.role.planner",
+  main: "task.role.main",
+  planner: "task.role.planner",
   scout: "task.role.scout",
   plan_reviewer: "task.role.plan_reviewer",
   worker: "board.task.work",
@@ -151,8 +162,8 @@ function sourceFor(tab: TaskTab, page: TimelinePage, entry: TimelineEntry): Task
   };
 }
 
-const PREBUILT_ROLES = ["scout", "worker", "reviewer", "verifier"] as const;
-type PrebuiltRole = (typeof PREBUILT_ROLES)[number];
+const PREBUILT_ROLES = FLOW_ROLE_ORDER;
+type PrebuiltRole = FlowRole;
 /** Phases in which a task still runs and may need its role tabs; a paused, finished or failed
  *  task is never given new agents. */
 const PROVISION_PHASES = new Set<TaskPhase>([
@@ -237,6 +248,9 @@ export function createTaskFlow(options: {
   getPaseo(): PaseoApi | null;
   git?: Pick<ReturnType<typeof createTaskGitFinalizer>, "finalize">;
   log?: (message: string, error?: unknown) => void;
+  /** Per plan reviewer timeout (owner setting); default 20 minutes. */
+  reviewTimeoutMs?: () => number;
+  now?: () => number;
 }) {
   const { db, store, tabs } = options;
   const log = options.log ?? ((message, error) => console.error("[vibe-board]", message, error ?? ""));
@@ -330,6 +344,79 @@ export function createTaskFlow(options: {
   function anchorTab(task: Task) {
     return tabFor(task, task.anchorAgentId) ?? task.tabs[0];
   }
+  /** The tab that writes plans: the latest 方案 tab (a task from before round 8 may not have one yet). */
+  function plannerTab(task: Task) {
+    return [...task.tabs].reverse().find((tab) => tab.role === "planner");
+  }
+  /** Where a confirmation looks for the latest complete plan: the user's tab, #2, then #1. */
+  function planCandidates(task: Task, tab: TaskTab): TaskTab[] {
+    const list = [tab, plannerTab(task), anchorTab(task)].filter(
+      (candidate): candidate is TaskTab => !!candidate,
+    );
+    return list.filter(
+      (candidate, index) => list.findIndex((other) => other.agentId === candidate.agentId) === index,
+    );
+  }
+  const review = createPlanReview({
+    store,
+    tabs,
+    getPaseo: options.getPaseo,
+    turnOutput: async (agentId, turnId) => {
+      const entry = lastAssistant(await timeline(agentId), turnId);
+      return entry?.item.type === "assistant_message" ? entry.item.text : "";
+    },
+    projectId: async (workspaceId) => {
+      try {
+        return (await tabs.workspace(workspaceId)).projectId ?? null;
+      } catch {
+        return null;
+      }
+    },
+    log,
+    ...(options.reviewTimeoutMs ? { timeoutMs: options.reviewTimeoutMs } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
+  /** Settle review cycles whose events were missed (plugin start, periodic sweep, task turns). */
+  async function recoverReviews(workspaceId?: string) {
+    const ids = workspaceId
+      ? [workspaceId]
+      : store.tasks
+          .list()
+          .filter((task) => reviewActive(task))
+          .map((task) => task.workspaceId);
+    for (const id of ids)
+      await queue(id, () => review.recover(id)).catch((error) => log("方案审阅恢复失败", error));
+  }
+  /** agent.closed / agent.archived: a running plan reviewer counts as failed. */
+  async function reviewerGone(
+    agent: { id: string; workspaceId: string | null },
+    how: "closed" | "archived",
+  ) {
+    const workspaceId = agent.workspaceId;
+    if (!workspaceId || !review.isReviewer(store.tasks.get(workspaceId), agent.id)) return;
+    await queue(workspaceId, () => review.reviewerGone(workspaceId, agent.id, how));
+  }
+  /** /重新审阅 (only from the user's composer or the panel, in #1 or the 方案 tab): review the
+   *  方案 tab's latest plan again. */
+  function rereview(input: { workspaceId: string; agentId: string }) {
+    return queue(input.workspaceId, async () => {
+      const task = requireTask(input.workspaceId);
+      const caller = tabFor(task, input.agentId);
+      if (!caller || (caller.role !== "main" && caller.role !== "planner"))
+        throw new Error("请在主会话或方案 tab（或任务流程面板）发送 /重新审阅");
+      const planner = plannerTab(task);
+      if (!planner) throw new Error("本任务还没有方案 tab");
+      const page = await timeline(planner.agentId);
+      const found = planMessage(page);
+      if (!found) throw new Error(`#${planner.number} 方案还没有输出完整方案`);
+      const result = await review.restart(task, planner, {
+        plan: found.plan,
+        text: found.entry.item.type === "assistant_message" ? found.entry.item.text : "",
+        source: sourceFor(planner, page, found.entry),
+      });
+      return { task: requireTask(input.workspaceId), message: result.message };
+    });
+  }
   async function projectFor(workspaceId: string) {
     const placement = await tabs.workspace(workspaceId);
     const project = placement.projectId ? store.projectConfigs.get(placement.projectId) : undefined;
@@ -374,9 +461,7 @@ export function createTaskFlow(options: {
         throw new Error("当前阶段不能确认执行；请先在主会话修改方案");
       const tab = tabFor(task, input.agentId) ?? anchorTab(task);
       if (!tab) throw new Error("任务还没有主会话 tab");
-      const candidates = [tab];
-      const anchor = anchorTab(task);
-      if (anchor && anchor.agentId !== tab.agentId) candidates.push(anchor);
+      const candidates = planCandidates(task, tab);
       let located:
         | { plan: TaskPlan; entry: TimelineEntry; page: TimelinePage; sourceTab: TaskTab }
         | undefined;
@@ -389,7 +474,7 @@ export function createTaskFlow(options: {
         }
       }
       if (!located)
-        throw new Error("还没有保存完整方案，请让主会话输出 vibe-plan 方案");
+        throw new Error("还没有完整方案，请让 #2 方案输出 vibe-plan 方案");
       task = store.tasks.savePlan(input.workspaceId, located.plan);
       const reason = input.reason?.trim();
       if (reason) store.tasks.updateControl(input.workspaceId, { executionReason: reason });
@@ -434,6 +519,8 @@ export function createTaskFlow(options: {
     requestId: string,
     tab: TaskTab,
   ) {
+    // The user's confirmation wins over an unfinished review: it confirms the plan as it stands.
+    await review.cancel(task.workspaceId, "用户在审阅完成前确认了方案");
     const roles = alignRolesToTabs(await rolesFor(task, tab), task.tabs);
     const frozen = freezeTaskSubtaskPresets(plan, roles, (id) => store.presets.get(id));
     validateTaskSubtaskPresets(plan, frozen);
@@ -465,7 +552,7 @@ export function createTaskFlow(options: {
     );
     return { task: confirmed, message: "已确认方案，等待调度器准入后发送给执行 tab。" };
   }
-  /** Create the idle role tabs a task should expose (#2 探路、#3 执行、#4 复核、#5 验证).
+  /** Create the idle role tabs a task should expose (#2 方案、#3 探路、#4 执行、#5 复核、#6 验证).
    *  No prompt is sent, so pre-created tabs do not consume a model turn. */
   function provisionTabs(workspaceId: string): Promise<void> {
     const pending = provisioning.get(workspaceId);
@@ -792,6 +879,28 @@ export function createTaskFlow(options: {
       `执行 tab #${tab.number} 回合结束，未输出 vibe-delivery 完成标记；可在该 tab 继续。`,
     );
   }
+  /** A complete plan in a #2 turn starts, continues or finishes the multi-model review. */
+  async function plannerTurnEnded(
+    workspaceId: string,
+    tab: TaskTab,
+    page: TimelinePage,
+    turnId: string | null,
+  ) {
+    const entry = lastAssistant(page, turnId);
+    if (entry?.item.type !== "assistant_message") return;
+    let plan: TaskPlan;
+    try {
+      plan = parseTaskPlan(entry.item.text);
+    } catch {
+      return;
+    }
+    const text = entry.item.text;
+    await queue(workspaceId, async () => {
+      const task = store.tasks.get(workspaceId);
+      if (!task || !tabFor(task, tab.agentId)) return;
+      await review.onPlannerPlan(task, tab, { plan, text, source: sourceFor(tab, page, entry) });
+    });
+  }
   async function savePlanFromTurn(task: Task, tab: TaskTab, page: TimelinePage) {
     if (!["planning", "awaiting_confirmation"].includes(task.phase)) return;
     const found = planMessage(page);
@@ -936,6 +1045,7 @@ export function createTaskFlow(options: {
     if (activeAccept) activeAccept.cancelled = true;
     return queue(input.workspaceId, async () => {
       const task = requireTask(input.workspaceId);
+      await review.cancel(task.workspaceId, "任务已停止");
       const views = await tabs.tabsFor(task, true);
       const failures: string[] = [];
       for (const view of views) {
@@ -1180,7 +1290,15 @@ export function createTaskFlow(options: {
               "请继续未完成的工作，保持已确认方案范围。",
           },
         });
-        const message = [roleText ? store.prompts.resolve(roleText, { projectId }) : "", continuation]
+        const message = [
+          roleText
+            ? store.prompts.resolve(roleText, {
+                projectId,
+                vars: roleVars(requireTask(task.workspaceId).tabs),
+              })
+            : "",
+          continuation,
+        ]
           .filter(Boolean)
           .join("\n\n");
         await toHandle.send(message, { sourceAgentId: from.agentId });
@@ -1267,7 +1385,7 @@ export function createTaskFlow(options: {
         return fail("任务的执行确认已变化，未自动接续");
       const from = tabFor(initial, input.agentId);
       // Reviewer/verifier (vibe-verify) and master have their own owners.
-      if (!from || !["main", "scout", "worker"].includes(from.role)) return;
+      if (!from || !["main", "planner", "scout", "worker"].includes(from.role)) return;
       const sessionRole = from.role === "main" ? "planner" : from.role;
       if (sessionRole !== input.role) return fail("接续请求的角色与来源 tab 不一致");
       const oldSession = runtime.findSessionByAgent(input.agentId);
@@ -1575,11 +1693,7 @@ export function createTaskFlow(options: {
         // otherwise of the message itself as the task description.
         const source = sourceFor(tab, input.page, input.entry);
         const requestId = "direct:" + source.sourceKey;
-        const anchor = anchorTab(task);
-        const located = await locatePlan([
-          tab,
-          ...(anchor && anchor.agentId !== tab.agentId ? [anchor] : []),
-        ]);
+        const located = await locatePlan(planCandidates(task, tab));
         if (located) {
           task = store.tasks.savePlan(workspaceId, located.plan);
           await confirmWith(
@@ -1599,7 +1713,7 @@ export function createTaskFlow(options: {
         task = requireTask(workspaceId);
         kickoff = true;
       } else if (!task.confirmedAt) {
-        await rejectWorkerTurn(workspaceId, tab, "任务没有可执行的确认方案，请先在 #1 主会话确认方案。");
+        await rejectWorkerTurn(workspaceId, tab, "任务没有可执行的确认方案，请先确认 #2 的方案（/执行 或面板「执行」）。");
         return;
       }
       const snapshot = task.rolesSnapshot?.worker;
@@ -1708,6 +1822,18 @@ export function createTaskFlow(options: {
       );
     }
   }
+  /** A task in an active phase that lacks a role tab its defaults (or snapshot) would create.
+   *  Tasks from before round 8 get their #方案 tab this way, numbered after the existing tabs. */
+  function needsProvision(task: Task): boolean {
+    if (!PROVISION_PHASES.has(task.phase) || task.tabs.length === 0) return false;
+    if (task.tabs.length === 1) return true;
+    const projectId = typeof task.control?.projectId === "string" ? task.control.projectId : null;
+    return PREBUILT_ROLES.some(
+      (role) =>
+        !task.tabs.some((tab) => tab.role === role) &&
+        !!roleTabPreset(store, role, { task, projectId }),
+    );
+  }
   async function turnStarted(event: {
     agent: { id: string; workspaceId: string | null };
     turnId: string | null;
@@ -1716,8 +1842,10 @@ export function createTaskFlow(options: {
     if (!workspaceId) return;
     let task = store.tasks.get(workspaceId);
     if (!task) return;
-    if (task.tabs.length <= 1)
+    if (needsProvision(task))
       void provisionTabs(workspaceId).catch((error) => log("流程 tab 预建失败", error));
+    if (review.isReviewer(task, event.agent.id)) return;
+    if (reviewActive(task)) void recoverReviews(workspaceId);
     let tab = tabFor(task, event.agent.id);
     if (!tab) {
       tab =
@@ -1765,8 +1893,17 @@ export function createTaskFlow(options: {
     if (!workspaceId) return;
     let task = store.tasks.get(workspaceId);
     if (!task) return;
-    if (task.tabs.length <= 1)
+    if (needsProvision(task))
       void provisionTabs(workspaceId).catch((error) => log("流程 tab 预建失败", error));
+    // #2's plan reviewers are sub-agents, not tabs: their turns feed the review cycle.
+    if (review.isReviewer(task, event.agent.id)) {
+      const agentId = event.agent.id;
+      await queue(workspaceId, async () => {
+        const current = store.tasks.get(workspaceId);
+        if (current) await review.reviewerTurnEnded(current, agentId, event.turnId, event.outcome);
+      });
+      return;
+    }
     let tab = tabFor(task, event.agent.id);
     if (!tab) {
       // A fast first turn can end before the agent.created hook has finished registering its tab.
@@ -1784,6 +1921,7 @@ export function createTaskFlow(options: {
     if (event.outcome.kind === "completed") {
       if (await naturalHandoff(task, tab, page, event.turnId)) return;
       if (["main", "session"].includes(tab.role)) await savePlanFromTurn(task, tab, page);
+      if (tab.role === "planner") await plannerTurnEnded(workspaceId, tab, page, event.turnId);
       await recordConclusion(task, tab, page, event.turnId);
       if (tab.role === "worker") {
         await workerCompleted(task, tab, page, event.turnId);
@@ -1800,6 +1938,7 @@ export function createTaskFlow(options: {
       if (tab.role === "worker") await releaseIdle(workspaceId, tab.agentId, turn);
     }
     if (tab.role === "worker") await retryAdmission(workspaceId);
+    if (reviewActive(store.tasks.get(workspaceId))) await recoverReviews(workspaceId);
   }
   /** openWorker leaves an admission unbound while the execution tab is running a turn; once the
    *  tab is idle again and nothing bound it, start execution with that admission. */
@@ -1857,7 +1996,11 @@ export function createTaskFlow(options: {
     const latest = new Map<string, TaskArtifact>();
     for (const artifact of store.taskArtifacts.list(workspaceId))
       latest.set(artifact.kind, artifact);
+    const reviewStep = review.panelStep(task);
+    if (reviewStep) steps.push(reviewStep);
     for (const kind of ["scout", "plan_review", "delivery", "review", "verification", "git"]) {
+      // The review cycle has its own step; plan_review artifacts are its drafts and opinions.
+      if (kind === "plan_review" && reviewStep) continue;
       const artifact = latest.get(kind);
       if (!artifact) continue;
       steps.push({
@@ -1881,7 +2024,16 @@ export function createTaskFlow(options: {
   }
   function registerPrompts() {
     store.prompts.register(
-      [TASK_PLAN_PROMPT, ...TASK_HOST_PROMPTS, ...TASK_FLOW_PROMPTS, TASK_TAB_GUIDE_PROMPT, HISTORY_NOTICE_PROMPT],
+      [
+        TASK_PLAN_PROMPT,
+        ...TASK_HOST_PROMPTS,
+        ...TASK_FLOW_PROMPTS,
+        TASK_TAB_GUIDE_PROMPT,
+        HISTORY_NOTICE_PROMPT,
+        PLAN_REVIEW_REQUEST_PROMPT,
+        PLAN_REVIEW_REVISE_PROMPT,
+        SCOUT_ASK_PROMPT,
+      ],
       {
         pruneMissing: true,
         // WP-122 merges these scenario templates into their replacement keys.
@@ -1908,12 +2060,16 @@ export function createTaskFlow(options: {
     workerAdmitted,
     turnStarted,
     turnEnded,
+    rereview,
+    recoverReviews,
+    reviewerGone,
     releaseAgent: resources.releaseAgent,
     close: async () => {
       for (const active of accepting.values()) active.cancelled = true;
     },
     resources,
     runtime,
+    review,
   };
 }
 export type TaskFlow = ReturnType<typeof createTaskFlow>;

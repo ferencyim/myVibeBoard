@@ -694,4 +694,53 @@ CREATE TABLE task_subtask (
 );
 `,
   },
+  {
+    // Round 8 (WP-130): the #2 方案 tab runs an ordered model list. The single planner and the
+    // plan reviewer of every defaults level become `planners` [planner, plan_reviewer?]. A project
+    // that inherited the planner but turned review off (plan_reviewer null) keeps review off: it
+    // gets a one-model list with the global planner. The project rows go first, while the global
+    // row still has its legacy planner.
+    version: 19,
+    name: "planner_list",
+    sql: `
+UPDATE project SET default_presets_json = json_remove(
+  CASE
+    WHEN json_type(default_presets_json, '$.planners') IS NOT NULL THEN default_presets_json
+    WHEN json_type(default_presets_json, '$.planner') = 'text'
+    THEN json_set(default_presets_json, '$.planners',
+      CASE WHEN json_type(default_presets_json, '$.plan_reviewer') = 'text'
+        THEN json_array(json_extract(default_presets_json, '$.planner'),
+                        json_extract(default_presets_json, '$.plan_reviewer'))
+        ELSE json_array(json_extract(default_presets_json, '$.planner')) END)
+    WHEN json_type(default_presets_json, '$.plan_reviewer') = 'null'
+      AND (SELECT COALESCE(json_extract(value, '$.planner'), json_extract(value, '$.planners[0]'))
+           FROM vibe_meta WHERE key = 'models.defaults' AND json_valid(value)) IS NOT NULL
+    THEN json_set(default_presets_json, '$.planners', json_array(
+      (SELECT COALESCE(json_extract(value, '$.planner'), json_extract(value, '$.planners[0]'))
+       FROM vibe_meta WHERE key = 'models.defaults' AND json_valid(value))))
+    ELSE default_presets_json END,
+  '$.planner', '$.plan_reviewer')
+WHERE json_valid(default_presets_json)
+  AND (json_type(default_presets_json, '$.planner') IS NOT NULL
+    OR json_type(default_presets_json, '$.plan_reviewer') IS NOT NULL);
+UPDATE vibe_meta SET value = json_remove(
+  CASE WHEN json_type(value, '$.planner') = 'text' AND json_type(value, '$.planners') IS NULL
+    THEN json_set(value, '$.planners',
+      CASE WHEN json_type(value, '$.plan_reviewer') = 'text'
+        THEN json_array(json_extract(value, '$.planner'), json_extract(value, '$.plan_reviewer'))
+        ELSE json_array(json_extract(value, '$.planner')) END)
+    ELSE value END,
+  '$.planner', '$.plan_reviewer')
+WHERE key = 'models.defaults' AND json_valid(value)
+  AND (json_type(value, '$.planner') IS NOT NULL OR json_type(value, '$.plan_reviewer') IS NOT NULL);
+`,
+  },
+  {
+    // Round 8 (WP-130): when a task last changed, for the cross-task plan list.
+    version: 20,
+    name: "task_updated_at",
+    sql: `
+ALTER TABLE task ADD COLUMN updated_at TEXT;
+`,
+  },
 ];

@@ -243,9 +243,11 @@ describe("task roles and native project extensions", () => {
         }),
       ).toThrow(/Preset not found/);
       store.modelDefaults.setGlobal({ ...defaults, plan_reviewer: null, reviewer: null });
+      // Round 8: the planning roles are stored as the #2 方案 list.
       expect(store.modelDefaults.global()).toEqual({
-        ...defaults,
-        plan_reviewer: null,
+        planners: [preset.id],
+        worker: preset.id,
+        verifier: preset.id,
         reviewer: null,
       });
     } finally {

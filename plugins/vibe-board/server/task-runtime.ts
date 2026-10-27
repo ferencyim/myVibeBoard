@@ -5,6 +5,7 @@ import { createEventConsumer, createTaskRuntimeCommands, type VibeDb, type VibeS
 import { createTaskTabs } from "./tabs/service";
 import { createTaskFlow } from "./tabs/flow";
 import { createTaskBoard } from "./tabs/board";
+import { createCoordination } from "./tabs/coordination";
 import { taskPanelRpc, taskTabCommandRpc } from "../shared/task-tabs";
 
 const AGENT_CALLER_ERROR =
@@ -18,6 +19,8 @@ export function registerTaskRuntime(
     store: VibeStore;
     getPaseo(): PaseoApi | null;
     onPaseo(paseo: PaseoApi): void;
+    /** Plan reviewer timeout from the owner settings. */
+    reviewTimeoutMs?: () => number;
   },
 ) {
   const log = (message: string, error?: unknown) =>
@@ -36,6 +39,7 @@ export function registerTaskRuntime(
     tabs,
     getPaseo: options.getPaseo,
     log,
+    ...(options.reviewTimeoutMs ? { reviewTimeoutMs: options.reviewTimeoutMs } : {}),
   });
   flow.registerPrompts();
   const board = createTaskBoard({
@@ -47,6 +51,12 @@ export function registerTaskRuntime(
       return placement.directory;
     },
     appendStatus: tabs.appendStatus,
+    log,
+  });
+  const coordination = createCoordination({
+    store: options.store,
+    tabs,
+    getPaseo: options.getPaseo,
     log,
   });
   const cleanups = [
@@ -82,12 +92,26 @@ export function registerTaskRuntime(
           .provisionTabs(task.workspaceId)
           .catch((error) => log("流程 tab 预建失败", error));
     }),
-    // Closed or archived tabs no longer need status repeat suppression.
-    server.on("agent.closed", ({ agent }) => tabs.forgetStatus([agent.id])),
-    server.on("agent.archived", ({ agent }) => tabs.forgetStatus([agent.id])),
+    // Closed or archived tabs no longer need status repeat suppression; a closed or archived plan
+    // reviewer fails its review slot.
+    server.on("agent.closed", async ({ agent }) => {
+      tabs.forgetStatus([agent.id]);
+      await flow.reviewerGone(agent, "closed").catch((error) => log("方案审阅者关闭处理失败", error));
+    }),
+    server.on("agent.archived", async ({ agent }) => {
+      tabs.forgetStatus([agent.id]);
+      await flow
+        .reviewerGone(agent, "archived")
+        .catch((error) => log("方案审阅者归档处理失败", error));
+    }),
     server.on("workspace.archived", ({ workspace }) => {
       const task = options.store.tasks.get(workspace.id);
       if (task) tabs.forgetStatus(task.tabs.map((tab) => tab.agentId));
+      try {
+        coordination.markArchived(workspace.id);
+      } catch (error) {
+        log("任务归档标记失败", error);
+      }
     }),
     server.on("agent.turn_started", async ({ agent, turnId }, context) => {
       options.onPaseo(context.paseo);
@@ -133,7 +157,11 @@ export function registerTaskRuntime(
     options.onPaseo(context.paseo);
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
     const view = await flow.panel(input.workspaceId);
-    return { ...view, board: view.task ? board.panel(view.task) : [] };
+    return {
+      ...view,
+      board: view.task ? board.panel(view.task) : [],
+      otherPlans: view.task ? await coordination.panelPlans(input.workspaceId) : [],
+    };
   });
   server.handle(taskTabCommandRpc, async (input, context) => {
     options.onPaseo(context.paseo);
@@ -148,6 +176,10 @@ export function registerTaskRuntime(
     }
     if (input.action === "stop") {
       const result = await flow.stop(input);
+      return { task: result.task, message: result.message };
+    }
+    if (input.action === "rereview") {
+      const result = await flow.rereview(input);
       return { task: result.task, message: result.message };
     }
     if (input.action === "handoff") {
@@ -178,12 +210,19 @@ export function registerTaskRuntime(
     onError: (error) => log("任务准入或接续事件处理失败", error),
   });
   consumer.start();
+  // Review cycles survive plugin restarts: settle them shortly after start, then sweep for
+  // timeouts and missed events once a minute.
+  const startRecovery = setTimeout(() => void flow.recoverReviews(), 5_000);
+  const sweep = setInterval(() => void flow.recoverReviews(), 60_000);
   return {
     flow,
     tabs,
     board,
+    coordination,
     async close() {
       closed = true;
+      clearTimeout(startRecovery);
+      clearInterval(sweep);
       for (const cleanup of cleanups) cleanup();
       await consumer.stop();
       await flow.close();

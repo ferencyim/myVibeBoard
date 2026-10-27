@@ -124,6 +124,7 @@ export type TaskSubtaskRun = z.infer<typeof TaskSubtaskRunSchema>;
 /** A task tab is an ordinary Paseo agent; the number never changes and is never reused. */
 export const TASK_TAB_ROLES = [
   "main",
+  "planner",
   "scout",
   "plan_reviewer",
   "worker",
@@ -135,6 +136,7 @@ export const TaskTabRoleSchema = z.enum(TASK_TAB_ROLES);
 export type TaskTabRole = z.infer<typeof TaskTabRoleSchema>;
 export const TASK_TAB_ROLE_LABELS: Record<TaskTabRole, string> = {
   main: "主会话",
+  planner: "方案",
   scout: "探路",
   plan_reviewer: "方案复核",
   worker: "执行",
@@ -255,8 +257,59 @@ export const TaskSchema = z.object({
   planSource: TaskPlanSourceSchema.nullable().optional(),
   roleSelections: TaskRoleSelectionsSchema.nullable().optional(),
   control: TaskControlSchema.nullable().optional(),
+  /** Last change of the task row (core migration 20); older rows stay null until they change. */
+  updatedAt: z.string().nullable().optional(),
 });
 export type Task = z.infer<typeof TaskSchema>;
+
+/** Round 8: a plan's status is derived from its task's phase, never stored. */
+export const PLAN_STATUSES = [
+  "draft",
+  "awaiting_confirmation",
+  "executing",
+  "checking",
+  "awaiting_acceptance",
+  "completed",
+  "paused",
+  "abandoned",
+] as const;
+export type PlanStatus = (typeof PLAN_STATUSES)[number];
+export const PLAN_STATUS_LABELS: Record<PlanStatus, string> = {
+  draft: "草稿",
+  awaiting_confirmation: "待确认",
+  executing: "执行中",
+  checking: "复核/验证中",
+  awaiting_acceptance: "待验收",
+  completed: "已完成",
+  paused: "已暂停",
+  abandoned: "已放弃",
+};
+export function taskPlanStatus(task: Pick<Task, "phase">, archived = false): PlanStatus {
+  if (archived || task.phase === "failed") return "abandoned";
+  switch (task.phase) {
+    case "planning":
+      return "draft";
+    case "awaiting_confirmation":
+      return "awaiting_confirmation";
+    case "queued":
+    case "executing":
+      return "executing";
+    case "reviewing":
+    case "verifying":
+      return "checking";
+    case "awaiting_acceptance":
+      return "awaiting_acceptance";
+    case "completed":
+      return "completed";
+    default:
+      return "paused";
+  }
+}
+/** Every file or glob a plan may touch: its own list and each subtask's. */
+export function planFiles(plan: Pick<TaskPlan, "files" | "subtasks"> | null | undefined): string[] {
+  if (!plan) return [];
+  return [...new Set([...plan.files, ...plan.subtasks.flatMap((subtask) => subtask.files)])];
+}
 
 /** The reply format is a registered read-only suffix; ordinary planning guidance stays editable. */
 export const TASK_PLAN_PROMPT: PromptDef = {

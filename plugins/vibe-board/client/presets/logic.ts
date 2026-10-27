@@ -4,6 +4,7 @@ import {
   DEFAULT_REQUIREMENTS_PATH,
   presetModels,
   isSafeRepoRelativePath,
+  plannerList,
   type ModelDefaults,
   type Preset,
   type PresetEnvironmentKind,
@@ -257,10 +258,33 @@ export function projectToDraft(p: Project, fallbackColor: string): ProjectDraft 
 }
 
 /** Sets one job of a defaults map; null removes it (follow the next level). */
-export function setDefault(d: ModelDefaults, role: keyof ModelDefaults, presetId: string | null): ModelDefaults {
+export function setDefault(
+  d: ModelDefaults,
+  role: Exclude<keyof ModelDefaults, "planners">,
+  presetId: string | null,
+): ModelDefaults {
   const next = { ...d };
   if (presetId) next[role] = presetId;
   else delete next[role];
+  return next;
+}
+
+/** The #2 方案 list of a defaults level (legacy planner + plan reviewer read as a list). */
+export function plannersOf(d: ModelDefaults): string[] {
+  return plannerList(d) ?? [];
+}
+
+/** Sets entry `index` of the #2 方案 list (index = length appends); null removes the entry and
+ *  the later ones move up. An empty list removes the key (follow the next level). */
+export function setPlanner(d: ModelDefaults, index: number, presetId: string | null): ModelDefaults {
+  const list = plannersOf(d);
+  if (presetId) list[index] = presetId;
+  else list.splice(index, 1);
+  const next = { ...d };
+  delete next.planner;
+  delete next.plan_reviewer;
+  if (list.length) next.planners = list;
+  else delete next.planners;
   return next;
 }
 

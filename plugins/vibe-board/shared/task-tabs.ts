@@ -6,7 +6,7 @@ import { TaskSchema, TaskTabRoleSchema } from "./vibe/contract";
 export const TaskTabCommandSchema = z.object({
   workspaceId: z.string().min(1),
   agentId: z.string().min(1),
-  action: z.enum(["execute", "accept", "stop", "handoff", "status"]),
+  action: z.enum(["execute", "accept", "stop", "handoff", "status", "rereview"]),
   requestId: z.string().min(1),
   reason: z.string().optional(),
 });
@@ -59,6 +59,21 @@ export const TaskBoardItemSchema = z.object({
 });
 export type TaskBoardItemData = z.infer<typeof TaskBoardItemSchema>;
 
+/** Another task of the same project and its derived plan status (WP-130). */
+export const ProjectPlanSchema = z.object({
+  workspaceId: z.string(),
+  name: z.string().nullable(),
+  status: z.string(),
+  statusLabel: z.string(),
+  goal: z.string().nullable(),
+  files: z.array(z.string()),
+  updatedAt: z.string().nullable(),
+  overlap: z.tuple([z.string(), z.string()]).nullable(),
+  /** Absolute paths outside that task's worktree (scope unknown, not overlap-checked). */
+  unknownFiles: z.array(z.string()).optional(),
+});
+export type ProjectPlanData = z.infer<typeof ProjectPlanSchema>;
+
 /** Read-only data for the lightweight flow panel; no command is authorized here. */
 export const taskPanelRpc = defineRpc({
   name: "vibe.task.panel",
@@ -71,5 +86,6 @@ export const taskPanelRpc = defineRpc({
     tabs: z.array(TaskTabViewSchema),
     steps: z.array(TaskStepSchema),
     board: z.array(TaskBoardItemSchema).optional(),
+    otherPlans: z.array(ProjectPlanSchema).optional(),
   }),
 });

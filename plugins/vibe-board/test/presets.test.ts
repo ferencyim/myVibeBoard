@@ -3,8 +3,10 @@ import {
   draftToPayload,
   EMPTY_PRESET_DRAFT,
   movePresetModel,
+  plannersOf,
   presetToDraft,
   quotaFor,
+  setPlanner,
   validateDraft,
   type ProviderUsageLike,
 } from "../client/presets/logic";
@@ -111,5 +113,19 @@ describe("preset persistence round trip", () => {
     expect(presetsCreateRpc.input.safeParse({ ...base, roleHint: "boss" }).success).toBe(false);
     expect(presetsCreateRpc.input.safeParse({ ...base, model: "  " }).success).toBe(false);
     expect(presetsUpdateRpc.input.safeParse({ presetId: "x", model: "" }).success).toBe(false);
+  });
+});
+
+describe("WP-130 方案模型列表编辑", () => {
+  it("追加、替换、移除后续前移；旧的 planner + plan_reviewer 读作列表并改写为 planners", () => {
+    expect(plannersOf({ planner: "a", plan_reviewer: "b" })).toEqual(["a", "b"]);
+    let value = setPlanner({ planner: "a", plan_reviewer: "b", worker: "w" }, 2, "c");
+    expect(value).toEqual({ worker: "w", planners: ["a", "b", "c"] });
+    value = setPlanner(value, 1, "x");
+    expect(value.planners).toEqual(["a", "x", "c"]);
+    value = setPlanner(value, 0, null);
+    expect(value.planners).toEqual(["x", "c"]);
+    value = setPlanner(setPlanner(value, 0, null), 0, null);
+    expect(value).toEqual({ worker: "w" });
   });
 });

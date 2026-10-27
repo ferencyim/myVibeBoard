@@ -1,5 +1,10 @@
-import { type PluginSidebarItemProps, type PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { SidebarRow } from "@getpaseo/plugin/client/ui";
+import {
+  useSettings,
+  type PluginSidebarItemProps,
+  type PluginSurfaceProps,
+} from "@getpaseo/plugin/client";
+import { SettingsCard, SettingsInput, SidebarRow } from "@getpaseo/plugin/client/ui";
+import { boardSettings } from "../shared/settings";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useMemo } from "react";
 import type { Preset, Project } from "../shared/vibe/contract";
@@ -54,6 +59,7 @@ function SettingsContent() {
     <ScrollView contentContainerStyle={SETTINGS_STYLE}>
       <Text>配置项目扩展、角色默认模型和有序模型预设。新任务请在原生工作区发送需求。</Text>
       <Btn label="管理项目与 Agent 预设" onPress={openManager} />
+      <ReviewTimeoutField />
       <ManageModal
         open={open}
         onClose={closeManager}
@@ -64,5 +70,25 @@ function SettingsContent() {
         refresh={refresh}
       />
     </ScrollView>
+  );
+}
+
+/** Owner setting: how long one plan reviewer may run before it counts as failed. */
+function ReviewTimeoutField() {
+  const settings = useSettings(boardSettings);
+  if (settings.status !== "ready") return null;
+  const { values, revision } = settings;
+  return (
+    <SettingsCard>
+      <SettingsInput
+        label="方案审阅者单人超时（分钟，1-240；超时按失败处理并换候选模型）"
+        initialValue={String(values.planReviewTimeoutMinutes)}
+        onChangeText={(text) => {
+          const minutes = Number(text.trim());
+          if (!Number.isFinite(minutes) || minutes < 1 || minutes > 240) return;
+          void settings.save({ ...values, planReviewTimeoutMinutes: minutes }, revision);
+        }}
+      />
+    </SettingsCard>
   );
 }
