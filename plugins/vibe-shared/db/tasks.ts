@@ -127,7 +127,16 @@ function assertConfirmationSource(task: Task, source: TaskPlanSource | null): vo
 /** Replanning clears execution state, but cannot revive a previously consumed user action. */
 function planningControl(control: TaskControl | null | undefined): string | null {
   const retained: TaskControl = {};
-  for (const key of ["completedRequestIds", "handledAcceptanceSource", "startedCommandRequests"]) {
+  // Round 8: the review cycle, the native project and the archive mark describe the task, not
+  // one execution round.
+  for (const key of [
+    "completedRequestIds",
+    "handledAcceptanceSource",
+    "startedCommandRequests",
+    "planReview",
+    "projectId",
+    "archivedAt",
+  ]) {
     if (control && Object.hasOwn(control, key)) retained[key] = control[key];
   }
   return Object.keys(retained).length ? JSON.stringify(retained) : null;
@@ -145,7 +154,13 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
     if (!task) throw new TaskCommandError("not_found", "任务不存在：" + workspaceId);
     return task;
   };
+  const touch = (workspaceId: string) =>
+    db.prepare("UPDATE task SET updated_at = ? WHERE workspace_id = ?").run(
+      now().toISOString(),
+      workspaceId,
+    );
   const changed = (workspaceId: string, fields: string[]) => {
+    touch(workspaceId);
     publishEvent(db, { type: "task.updated", payload: { workspaceId, fields } }, now);
     return requireTask(workspaceId);
   };
@@ -248,6 +263,55 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
         return changed(workspaceId, ["anchorAgentId"]);
       });
     },
+    /** A plugin that creates the task before its first agent replaces the planned anchor when
+     *  that agent could not be created; only while no tab is numbered and nothing is confirmed. */
+    replaceAnchor(
+      workspaceId: string,
+      input: { expectedAnchorAgentId: string; anchorAgentId: string },
+    ): Task {
+      const parsed = z
+        .object({
+          expectedAnchorAgentId: z.string().trim().min(1),
+          anchorAgentId: z.string().trim().min(1),
+        })
+        .strict()
+        .parse(input);
+      return db.immediate(() => {
+        const task = requireTask(workspaceId);
+        if (task.anchorAgentId === parsed.anchorAgentId) return task;
+        if (task.anchorAgentId !== parsed.expectedAnchorAgentId)
+          throw new TaskCommandError("conflict", "任务初始 anchor 已变化，请重新读取");
+        if (task.tabs.length || task.confirmedAt)
+          throw new TaskCommandError("conflict", "任务已有 tab 或已确认，不能替换初始 anchor");
+        db.prepare("UPDATE task SET anchor_agent_id = ? WHERE workspace_id = ?").run(
+          parsed.anchorAgentId,
+          workspaceId,
+        );
+        return changed(workspaceId, ["anchorAgentId"]);
+      });
+    },
+    /** Rolls back a task a plugin created before its first agent when that agent never came up:
+     *  only while no tab is numbered and nothing is confirmed. Leaves no row behind for the board,
+     *  the scheduler or the project plan list. */
+    discardUnstarted(workspaceId: string, input: { expectedAnchorAgentId: string }): void {
+      const parsed = z
+        .object({ expectedAnchorAgentId: z.string().trim().min(1) })
+        .strict()
+        .parse(input);
+      db.immediate(() => {
+        const task = get(workspaceId);
+        if (!task) return;
+        if (task.anchorAgentId !== parsed.expectedAnchorAgentId)
+          throw new TaskCommandError("conflict", "任务初始 anchor 已变化，不能回滚");
+        if (task.tabs.length || task.confirmedAt || task.phase !== "planning")
+          throw new TaskCommandError("conflict", "任务已有 tab 或已开始，不能回滚");
+        for (const table of ["task_artifact", "task_handoff", "task_subtask"])
+          db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).run(workspaceId);
+        db.prepare("DELETE FROM task WHERE workspace_id = ?").run(workspaceId);
+        db.prepare("DELETE FROM task_workspace WHERE workspace_id = ?").run(workspaceId);
+        publishEvent(db, { type: "task.updated", payload: { workspaceId, fields: ["deleted"] } }, now);
+      });
+    },
     setPlanSource(workspaceId: string, input: TaskPlanSource): Task {
       const source = TaskPlanSourceSchema.parse(input);
       return db.immediate(() => {
@@ -347,6 +411,7 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           JSON.stringify(task.tabs.map((item) => (item.agentId === agentId ? tab : item))),
           workspaceId,
         );
+        touch(workspaceId);
         publishEvent(db, { type: "task.updated", payload: { workspaceId, fields: ["tabs"] } }, now);
         return tab;
       });

@@ -13,6 +13,7 @@ import {
   UNRESOLVED_TAB_MODEL,
   presetModels,
   providerModelLabel,
+  resolvePlannerIds,
   tabTitle,
   type ModelRole,
   type Task,
@@ -68,17 +69,66 @@ export function formatTabs(
     .join("\n");
 }
 
-/** Pre-created role tabs follow the flow order; numbering matches sequential provisioning. */
+/** Pre-created role tabs follow the flow order (round 8: #2 方案、#3 探路、#4 执行、#5 复核、
+ *  #6 验证); numbering matches sequential provisioning. */
 export type FlowRole = Extract<TaskTabRole, ModelRole>;
-export const FLOW_ROLE_ORDER: readonly FlowRole[] = ["scout", "worker", "reviewer", "verifier"];
+export const FLOW_ROLE_ORDER: readonly FlowRole[] = [
+  "planner",
+  "scout",
+  "worker",
+  "reviewer",
+  "verifier",
+];
+/** Label of a plan reviewer sub-agent of #2; its value is the review cycle id. */
+export const PLAN_REVIEW_LABEL = "vibe.plan_review";
+
+type DefaultsStore = Pick<VibeStore, "projectConfigs" | "modelDefaults" | "presets">;
+
+function snapshotOf(
+  store: DefaultsStore,
+  role: ModelRole,
+  id: string,
+  source: TaskPresetSnapshot["source"],
+): TaskPresetSnapshot {
+  const preset = store.presets.get(id);
+  if (!preset) throw new Error("角色 " + role + " 的预设不存在或不可用：" + id);
+  return TaskPresetSnapshotSchema.parse({
+    presetId: id,
+    source,
+    models: presetModels(preset),
+    environmentKind: preset.environmentKind,
+    runtimeEnv: preset.runtimeEnv,
+    instructions: preset.instructions,
+  });
+}
+
+/** The #2 方案 model list (writer first, then reviewers in order), resolved live: reviews run
+ *  before confirmation freezes anything. Empty when no planner is configured anywhere. */
+export function resolvePlannerPresets(
+  store: DefaultsStore,
+  input: { selections?: TaskRoleSelections | null; projectId?: string | null } = {},
+): TaskPresetSnapshot[] {
+  const project = input.projectId
+    ? store.projectConfigs.get(input.projectId)?.defaultPresets
+    : undefined;
+  const { ids, source } = resolvePlannerIds(input.selections, project, store.modelDefaults.global());
+  return ids.map((id, index) =>
+    snapshotOf(store, index === 0 ? "planner" : "plan_reviewer", id, source),
+  );
+}
 
 /** Resolve one role preset (task selection > project default > global default) without requiring
  *  the other roles to be configured; optional roles resolve to null when disabled or missing. */
 export function resolveRolePreset(
-  store: Pick<VibeStore, "projectConfigs" | "modelDefaults" | "presets">,
+  store: DefaultsStore,
   role: ModelRole,
   input: { selections?: TaskRoleSelections | null; projectId?: string | null } = {},
 ): TaskPresetSnapshot | null {
+  if (role === "planner") {
+    const writer = resolvePlannerPresets(store, input)[0];
+    if (!writer) throw new Error("角色 planner 未配置可用预设");
+    return writer;
+  }
   const own = input.selections?.[role];
   let id: string | null | undefined;
   let source: TaskPresetSnapshot["source"] = "task";
@@ -100,16 +150,7 @@ export function resolveRolePreset(
     if (OPTIONAL_TASK_ROLES.includes(role)) return null;
     throw new Error("角色 " + role + " 未配置可用预设");
   }
-  const preset = store.presets.get(id);
-  if (!preset) throw new Error("角色 " + role + " 的预设不存在或不可用：" + id);
-  return TaskPresetSnapshotSchema.parse({
-    presetId: id,
-    source,
-    models: presetModels(preset),
-    environmentKind: preset.environmentKind,
-    runtimeEnv: preset.runtimeEnv,
-    instructions: preset.instructions,
-  });
+  return snapshotOf(store, role, id, source);
 }
 
 export interface PlannedTabView {
@@ -182,12 +223,23 @@ export function plannedTaskTabs(input: {
   return { tabs, selfNumber };
 }
 
-function roleRef(tabs: readonly PlannedTabView[], role: TaskTabRole): string | undefined {
-  const tab = tabs.find((candidate) => candidate.role === role);
-  return tab ? `#${tab.number} ${tab.roleLabel}` : undefined;
-}
-function roleOr(tabs: readonly PlannedTabView[], role: TaskTabRole, missing: string): string {
-  return roleRef(tabs, role) ?? missing;
+/** The roles task prompts name through `{{main}}`, `{{planner}}` … placeholders. */
+export const ROLE_VAR_NAMES = ["main", "planner", "scout", "worker", "reviewer", "verifier"] as const;
+export type RoleVarName = (typeof ROLE_VAR_NAMES)[number];
+
+/** `#n 标签` of the latest tab of each role, or `标签（未启用）` when the task has none. Shared by the
+ *  position line and the role prompts' placeholders, so both always name the same tabs. */
+export function roleVars(
+  tabs: readonly { number: number; role: TaskTabRole }[],
+): Record<RoleVarName, string> {
+  const out = {} as Record<RoleVarName, string>;
+  for (const role of ROLE_VAR_NAMES) {
+    const tab = [...tabs].reverse().find((candidate) => candidate.role === role);
+    out[role] = tab
+      ? `#${tab.number} ${TASK_TAB_ROLE_LABELS[role]}`
+      : `${TASK_TAB_ROLE_LABELS[role]}（未启用）`;
+  }
+  return out;
 }
 
 /** Position line injected into the tab's system prompt (upstream/downstream). */
@@ -196,18 +248,17 @@ export function rolePosition(
   selfNumber: number,
   tabs: readonly PlannedTabView[],
 ): string {
-  const main = roleOr(tabs, "main", "主会话");
-  const worker = roleOr(tabs, "worker", "执行（未配置）");
-  const reviewer = roleOr(tabs, "reviewer", "复核（未启用）");
-  const verifier = roleOr(tabs, "verifier", "验证（未配置）");
+  const { main, planner, scout, worker, reviewer, verifier } = roleVars(tabs);
   if (role === "main")
-    return `你是 #${selfNumber} 主会话（流程起点）。下游按需为 ${roleOr(tabs, "scout", "探路（未启用）")}、${worker}；之后为 ${reviewer}、${verifier}。方案复核按需临时打开。`;
+    return `你是 #${selfNumber} 主会话（群主）。需求交给 ${planner} 出方案，调查交给 ${scout}，用户授权后由 ${worker} 执行；之后为 ${reviewer}、${verifier}。`;
+  if (role === "planner")
+    return `你是 #${selfNumber} 方案。上游：${main} 转达需求，用户也可以直接和你对话；调查可请 ${scout}；下游：用户确认后由 ${worker} 执行。`;
   if (role === "scout")
-    return `你是 #${selfNumber} 探路（只读调研）。上游：${main}；调研结论交回主会话 #1，不修改项目文件。`;
+    return `你是 #${selfNumber} 探路（共享、只读调研）。任何 tab 都可以向你提问；结论发回提问的 tab，并给 ${main} 留摘要，不修改项目文件。`;
   if (role === "plan_reviewer")
-    return `你是 #${selfNumber} 方案复核（只读审查）。上游：${main}；审查意见交回主会话 #1，不修改项目文件。`;
+    return `你是 #${selfNumber} 方案复核（只读审查）。上游：${planner}；审查意见交回 ${planner}，不修改项目文件。`;
   if (role === "worker")
-    return `你是 #${selfNumber} 执行。上游：${main}（确认方案）；下游：${reviewer}、${verifier}。交付后由插件启动复核与验证。`;
+    return `你是 #${selfNumber} 执行。上游：${planner}（方案，经用户确认）；下游：${reviewer}、${verifier}。交付后由插件启动复核与验证。`;
   if (role === "reviewer")
     return `你是 #${selfNumber} 复核（只读检查代码）。上游：${worker}；下游：${verifier}。`;
   if (role === "verifier")
@@ -218,6 +269,7 @@ export function rolePosition(
 /** Task tabs that vibe-context should track (worker registers at admission instead). */
 const SESSION_ROLE_BY_TAB: Partial<Record<TaskTabRole, SessionRole>> = {
   main: "planner",
+  planner: "planner",
   scout: "scout",
 };
 
@@ -365,9 +417,11 @@ export function createTaskTabs(options: {
     }
     if (!isTaskWorkspace(workspaceId)) return null;
     let task = store.tasks.get(workspaceId);
-    if (!task) {
-      task = store.tasks.create({ workspaceId, anchorAgentId: agentId });
-    } else if (task.tabs.length === 0 && task.anchorAgentId !== agentId) {
+    if (!task) task = store.tasks.create({ workspaceId, anchorAgentId: agentId });
+    // The native project of every task, so the cross-task plan list still finds it later.
+    if (placement.projectId && task.control?.projectId !== placement.projectId)
+      task = store.tasks.updateControl(workspaceId, { projectId: placement.projectId });
+    if (task.tabs.length === 0 && task.anchorAgentId !== agentId) {
       // Backfill tasks created before tab numbering: the anchor is always #1.
       await ensureTab(task.anchorAgentId, { role: "main" }).catch((error) => {
         log("旧任务 #1 登记失败", error);
@@ -462,8 +516,8 @@ export function createTaskTabs(options: {
     );
   }
   function rolePromptKey(role: TaskTabRole): string | undefined {
-    if (role === "main") return "task.role.planner";
-    if (role === "scout" || role === "plan_reviewer") return "task.role." + role;
+    if (role === "main" || role === "planner" || role === "scout" || role === "plan_reviewer")
+      return "task.role." + role;
     if (role === "worker") return "board.task.work";
     if (role === "reviewer") return "verify.reviewer_system";
     if (role === "verifier") return "verify.verifier_system";
@@ -499,8 +553,11 @@ export function createTaskTabs(options: {
     const supplied = request.config.systemPrompt ?? "";
     if (subagent) {
       // Native subagents are spawned by the worker through create_agent; they are not task tabs,
-      // but the task's 子任务 role rules still apply.
-      const roleText = store.prompts.resolve("task.role.subagent", { projectId });
+      // but the task's 子任务 role rules still apply. #2's plan reviewers get the reviewer rules.
+      const roleText = store.prompts.resolve(
+        request.labels?.[PLAN_REVIEW_LABEL] ? "task.role.plan_reviewer" : "task.role.subagent",
+        { projectId, vars: roleVars(task?.tabs ?? []) },
+      );
       if (!roleText || supplied.includes(roleText)) return request;
       return {
         ...request,
@@ -528,9 +585,12 @@ export function createTaskTabs(options: {
       projectId,
       selfRole: role,
     });
+    // The role placeholders see the roster this tab will join, itself included.
+    const roles = roleVars([...planned, { number: selfNumber, role }]);
     const guide = store.prompts.resolve(TASK_TAB_GUIDE_PROMPT.key, {
       projectId,
       vars: {
+        ...roles,
         self: `#${selfNumber} ${TASK_TAB_ROLE_LABELS[role]}${modelId ? ` · ${modelId}` : ""}`,
         position: rolePosition(role, selfNumber, planned),
         tabs: formatTabs(planned),
@@ -540,18 +600,20 @@ export function createTaskTabs(options: {
     const roleText = roleKey
       ? safeResolve(roleKey, {
           projectId,
-          ...(role === "worker"
-            ? {
-                vars: {
+          vars: {
+            ...roles,
+            ...(role === "worker"
+              ? {
                   plan:
-                    "（尚未收到执行确认。插件发来执行确认（方案与调度准入结果）之前不要修改任何文件；用户在 #1 发送 /执行，或直接在本 tab 发消息，插件完成调度准入后会发来执行确认。用户只是提问时先回答，不要改文件。）",
+                    "（尚未收到执行确认。插件发来执行确认（方案与调度准入结果）之前不要修改任何文件；用户发送 /执行、在任务流程面板点「执行」，或直接在本 tab 发消息，插件完成调度准入后会发来执行确认。用户只是提问时先回答，不要改文件。）",
                   reason: "",
-                },
-              }
-            : {}),
+                }
+              : {}),
+          },
         })
       : "";
-    const format = role === "main" ? store.prompts.resolve("task.plan_format", { projectId }) : "";
+    const format =
+      role === "planner" ? store.prompts.resolve("task.plan_format", { projectId }) : "";
     const parts = [guide, roleText, format].filter(
       (text): text is string => !!text && !supplied.includes(text),
     );
@@ -655,7 +717,9 @@ export function createTaskTabs(options: {
     const placement = await taskWorkspace(workspaceId);
     const projectId = placement.projectId;
     const roleKey = rolePromptKey(input.role);
-    const roleText = roleKey ? store.prompts.resolve(roleKey, { projectId }) : "";
+    const roleText = roleKey
+      ? store.prompts.resolve(roleKey, { projectId, vars: roleVars(task.tabs) })
+      : "";
     const prompt = [roleText, preset?.instructions, input.task.trim()]
       .filter(Boolean)
       .join("\n\n");

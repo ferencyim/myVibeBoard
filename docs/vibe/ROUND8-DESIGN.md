@@ -100,3 +100,19 @@
 | WP-131 [core] | `agent.user_prompt` 钩子；#1 群聊：`@#n` 点名路由、「发给」选择器、进展汇报状态行、群主提示词                         | 130  |
 
 两个包都由 Claude 子代理实现，Claude 主代理复核后合入。验收要有单测，再用隔离 daemon 实测：模拟模型跑通「#1 提需求 → #2 写稿 → 两个审阅者 → 修订 → #1 汇报 → `@#4` 授权执行」，以及两个任务方案的文件重叠时 `vibe_project_plans` 能提示。
+
+## 9. WP-130 实现记录
+
+没有改 `packages/`。
+
+- **角色与编号**：tab 角色新增 `planner`（标签「方案」）；预建顺序 `FLOW_ROLE_ORDER` 为方案、探路、执行、复核、验证，不启用的可选角色跳过、编号顺延。`#1` 注入 `task.role.main`（群主），`#2` 注入 `task.role.planner` 加 `task.plan_format`。旧任务在活动阶段的任一回合发现缺角色 tab（`needsProvision`，按快照或当前默认判断）就补建，编号接在已有 tab 之后。旧任务的 `#1` 仍是创建时注入的规划规则，它输出的方案照旧保存。
+- **模型列表**：`ModelDefaults.planners` 是有序 preset 列表；旧键 `planner`/`plan_reviewer` 由 core 迁移 19 改写为 `planners: [planner, plan_reviewer?]`，`cleanDefaults` 对读入的旧形状做同样转换（标 `COMPAT(planner-list)`）。只设了 `plan_reviewer`、没设 `planner` 的项目层无法表达成列表，迁移后沿用全局；但项目层显式 `plan_reviewer: null`（关闭审阅）迁移为只含全局 planner 的单元素列表，审阅保持关闭（全局也没有 planner 时只删旧键）。项目层列表整体覆盖全局列表；任务层 `planner` 选择只替换写作模型，`plan_reviewer: disabled` 关闭审阅。确认快照保持原形状（`planner` 为第 1 个，`plan_reviewer` 为第 2 个或 null）。
+- **互审编排**（`vibe-board/server/tabs/plan-review.ts`）：`#2` 回合结束且有完整方案时，列表长度为 1 直接保存方案；否则开一个审阅周期，状态存 `task.control.planReview`（`planningControl` 保留此键），初稿和每条意见存 `plan_review` 沉淀（sourceKey `review:<cycle>:draft|<n>`）。审阅者是 `parent=#2` 的原生子代理，带 `vibe.plan_review` 标签，注入 `task.role.plan_reviewer`；按顺序一个接一个，每个拿到初稿和前面所有意见。启动失败或回合失败记为失败并跳过；全部失败时沿用初稿；否则把全部意见发给 `#2`，它的下一个方案即定稿，并在 `#2` 与 `#1` 追加「已定稿」状态。审阅期间初稿不保存为任务方案（阶段仍是规划）；审阅中 `#2` 又出新稿时周期不重开，后续审阅者读新稿。用户在审阅中 `/执行`（或在执行 tab 直接授权）会中止周期、停止审阅者并确认当前方案；`/停止任务` 同样中止。
+- **只审一次**：一个确认轮次（`state.round` = 任务 `confirmedAt`）只自动审第一份完整方案；修订稿和之后的方案直接保存，面板标「修订稿（未再审阅）」，之后再改会提示可 `/重新审阅`。`/重新审阅` 是 RPC 命令（拒绝 agent 调用方），只接受主会话或方案 tab（面板按钮以 #1 身份发），对方案 tab 最新的完整方案开一个 `manual` 周期。
+- **候选与失败**：审阅者带预设的全部模型（`candidates`/`attempt`）；启动失败、回合失败、无产出、超时、关闭、出错都换下一个候选，用户归档或回合被取消则直接记失败。失败的审阅者立即归档（create 成功但 send 失败的也归档），周期 done/cancelled 时归档其余审阅者。
+- **恢复**：插件启动 5 秒后、之后每分钟、以及有审阅的任务每次回合事件，`recover` 扫描 reviewing/revising 周期：审阅者不存在、关闭、出错、空闲超过 60 秒没产出（有产出则补记意见）、超过超时（设置 `planReviewTimeoutMinutes`，默认 20）都按失败推进；revising 没有 `reviseSentAt` 就重发修订请求。`agent.closed` / `agent.archived` 事件同样按失败处理。所有写状态的地方在 await 之后重新读取最新状态再保存。
+- **看板**：WP-127 的 `guardCreate` 只管父 tab 为执行 tab 的子代理，审阅者的父是 `#2`，直接放行；`agent.created` 的认领移交只看 `vibe.subtask` 标签，不受影响。
+- **共享探路**：`vibe_ask_scout` 以提问方 agent 身份（`sourceAgentId`）把 `board.scout.ask` 发给最新的探路 tab，消息里写明提问方 #编号与 agentId；子代理提问时沿父链找到所属 tab。没有探路 tab、或探路已关闭时报错。
+- **方案感知**：`vibe_project_plans` 与面板「同项目其它方案」共用 `coordination.projectPlans`。任务所属原生项目记在 `control.projectId`（`ensureTab` 写入，查不到时读一次 workspace 再写回），归档由 `workspace.archived` 记 `control.archivedAt`，因此归档后的任务仍能列为「已放弃」。状态按第 6 节由阶段映射，`paused` 不在表中，显示「已暂停」。最近更新时间来自 core 迁移 20 新增的 `task.updated_at`（任务命令每次写入时更新；迁移前的行在下一次改动前为空，回退 `confirmedAt`）。重叠用 `findOverlap` 比较本任务的文件（参数 `files`、审阅中的初稿或已存方案，含子任务 files）与对方方案文件；比较前把绝对路径按各自任务 worktree 根转成相对路径，转不了的列为「范围未知」，不参与重叠。进行中且重叠的排在最前；名称只给排序截断后的前 50 条并行读取，单个超过 1.5 秒就先显示 workspace id。项目判定失败 60 秒后重试。两个工具只接受任务 tab 或其子代理调用。
+- **提示词编号**：角色提示词和 `board.tabs.guide` 不写死编号，用 `{{main}}`、`{{planner}}`、`{{scout}}`、`{{worker}}`、`{{reviewer}}`、`{{verifier}}`，由 `roleVars`（与 `rolePosition` 同源）按任务实际 tab 渲染，缺的角色写「X（未启用）」。
+- **维护任务**：vibe-maintain 先在一个事务里建任务行、标记任务 workspace、写任务层 `planner` 选择（维护规则的预设），再建 anchor（`VIBE_ROLE=main`），vibe-board 的 `agent.created` 立即建齐 tab。维护提示词以 `#1` 身份发给 `#2 方案`，资源租约与会话登记都落在 `#2`；等不到 `#2`（默认 30 秒）时退回由 anchor 规划。anchor 的模型不可用时换下一个候选，用新命令 `tasks.replaceAnchor` 改写任务的初始 anchor；候选全部失败时用 `tasks.discardUnstarted` 删除任务行与标记并归档 workspace，不留幽灵任务。第八轮之前建的维护任务，后补的方案 tab 排在执行 tab 之后，补充发现仍发给原 anchor。

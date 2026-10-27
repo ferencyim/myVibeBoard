@@ -18,8 +18,12 @@ import {
   createTaskTabs,
   formatTabs,
   HANDOFF_PATTERN,
+  PLAN_REVIEW_LABEL,
+  roleVars,
   tabTitle,
 } from "../server/tabs/service";
+import { createCoordination, scopeFiles } from "../server/tabs/coordination";
+import { reviewState } from "../server/tabs/plan-review";
 import { createTaskFlow } from "../server/tabs/flow";
 import {
   buildPacket,
@@ -88,6 +92,7 @@ function fakePaseo(
   const created: Array<Record<string, unknown>> = [];
   let turnCount = 0;
   let createPatch: Partial<FakeAgent> = {};
+  const createFailures = new Set<string>();
   let workspaceKind = "worktree";
   let projectKind = "git";
 
@@ -196,13 +201,18 @@ function fakePaseo(
             created.push(input);
             const config = input.config as { provider: string; modeId?: string };
             const [provider, model] = config.provider.split("/");
+            if (createFailures.has(config.provider)) throw new Error("model not found: " + model);
             const id = "worker-" + created.length;
             addAgent({
               id,
               provider: provider!,
               model: model ?? "first",
               thinkingOptionId: "high",
-              labels: input.labels as Record<string, string>,
+              title: (input.title as string | undefined) ?? null,
+              labels: {
+                ...(input.labels as Record<string, string>),
+                ...(input.parent ? { [PARENT_AGENT_ID_LABEL]: input.parent as string } : {}),
+              },
               ...createPatch,
             });
             return handle(id);
@@ -226,6 +236,22 @@ function fakePaseo(
     setTimeline(agentId: string, entries: TimelineEntry[]) {
       timelines.set(agentId, entries);
     },
+    /** The agent answers its latest turn: an assistant message, then idle. */
+    reply(agentId: string, text: string): string | null {
+      const entries = timelines.get(agentId) ?? [];
+      const turnId = entries.at(-1)?.turnId ?? null;
+      entries.push({ item: { type: "assistant_message", text }, turnId, seqEnd: entries.length + 1 });
+      timelines.set(agentId, entries);
+      const agent = agents.get(agentId);
+      if (agent) {
+        agent.status = "idle";
+        agent.activeTurn = null;
+      }
+      return turnId;
+    },
+    failCreate(spec: string) {
+      createFailures.add(spec);
+    },
     setCreatePatch(patch: Partial<FakeAgent>) {
       createPatch = patch;
     },
@@ -241,6 +267,9 @@ function setup(
     git?: Parameters<typeof createTaskFlow>[0]["git"];
     now?: () => number;
     models?: Record<string, Array<{ id: string; label: string }>>;
+    /** Clock and reviewer timeout of the plan review (the flow, not the tab registry). */
+    reviewNow?: () => number;
+    reviewTimeoutMs?: () => number;
   } = {},
 ) {
   const db = openVibeDb({ path: ":memory:" });
@@ -262,10 +291,12 @@ function setup(
     tabs,
     getPaseo: () => fake.paseo as never,
     ...(options.git ? { git: options.git } : {}),
+    ...(options.reviewNow ? { now: options.reviewNow } : {}),
+    ...(options.reviewTimeoutMs ? { reviewTimeoutMs: options.reviewTimeoutMs } : {}),
     log: () => {},
   });
   flow.registerPrompts();
-  return { db, store, fake, tabs, flow };
+  return { db, store, fake, tabs, flow, runtime };
 }
 
 function planMessage(goal = "完成目标") {
@@ -304,9 +335,7 @@ function roleSnapshot(provider = "codex", model = "first") {
     verifier: preset,
   };
 }
-async function projectTask(
-  options: { git?: Parameters<typeof createTaskFlow>[0]["git"] } = {},
-) {
+async function projectTask(options: Parameters<typeof setup>[0] = {}) {
   const context = setup(options);
   context.store.projects.create({
     name: "任务项目",
@@ -355,6 +384,7 @@ describe("提示词注册表", () => {
     ).toEqual(
       [
         "task.plan_format",
+        "task.role.main",
         "task.role.planner",
         "task.role.scout",
         "task.role.plan_reviewer",
@@ -363,6 +393,9 @@ describe("提示词注册表", () => {
         "board.tabs.guide",
         "board.tabs.history_notice",
         "board.task.continuation",
+        "board.plan_review.request",
+        "board.plan_review.revise",
+        "board.scout.ask",
       ].sort(),
     );
 
@@ -723,7 +756,7 @@ describe("接手短语匹配", () => {
 });
 
 describe("任务 tab 交流说明注入", () => {
-  it("首次创建包含规划规则、方案格式和空清单", async () => {
+  it("首次创建的 #1 是群主：注入群主规则和空清单，不注入方案格式；#2 方案才注入方案规则与格式", async () => {
     const { fake, tabs } = setup();
     fake.addAgent({ id: "agent-1" });
     const result = (await tabs.injectGuide({
@@ -732,9 +765,20 @@ describe("任务 tab 交流说明注入", () => {
     } as never)) as { config: { systemPrompt?: string } };
     const prompt = result.config.systemPrompt ?? "";
     expect(prompt).toContain("本任务 workspace 由带编号的 tab 组成");
-    expect(prompt).toContain("你是任务规划者");
-    expect(prompt).toContain("vibe-plan");
+    expect(prompt).toContain("本任务的群主");
+    expect(prompt).toContain("不写方案、不改代码");
+    expect(prompt).not.toContain("vibe-plan");
     expect(prompt).toContain("（尚无）");
+    const planner = (await tabs.injectGuide({
+      config: {},
+      workspaceId: "ws",
+      env: { VIBE_ROLE: "planner" },
+    } as never)) as { config: { systemPrompt?: string } };
+    // No task row yet: the planner is the first tab, and the prompt names the real number.
+    expect(planner.config.systemPrompt).toContain("你是 #1 方案");
+    expect(planner.config.systemPrompt).not.toContain("#2 方案");
+    expect(planner.config.systemPrompt).toContain("vibe_project_plans");
+    expect(planner.config.systemPrompt).toContain("vibe-plan");
     expect(prompt).toContain("vibe_tabs");
     expect(prompt).not.toContain("wait_for_agent");
   });
@@ -749,7 +793,7 @@ describe("任务 tab 交流说明注入", () => {
     } as never)) as { config: { systemPrompt?: string } };
     const prompt = result.config.systemPrompt ?? "";
     expect(prompt).toContain("#1 主会话 · first");
-    expect(prompt).not.toContain("你是任务规划者");
+    expect(prompt).not.toContain("本任务的群主");
     expect(store.tasks.get("ws")!.tabs).toHaveLength(1);
 
     const repeated = (await tabs.injectGuide({
@@ -1897,7 +1941,7 @@ describe("命令授权", () => {
     });
     try {
       const command = handlers.get("vibe.task.tabs.command")!;
-      for (const action of ["execute", "accept", "status"] as const) {
+      for (const action of ["execute", "accept", "status", "rereview"] as const) {
         await expect(
           command(
             { workspaceId: "ws", agentId: "agent-1", action, requestId: "r-" + action },
@@ -1952,16 +1996,17 @@ describe("预建流程 tab", () => {
     const task = store.tasks.get("ws")!;
     expect(task.tabs.map((tab) => [tab.number, tab.role, tab.model])).toEqual([
       [1, "main", "first"],
-      [2, "scout", "scout-model"],
-      [3, "worker", "second"],
-      [4, "reviewer", "review-model"],
-      [5, "verifier", "verify-model"],
+      [2, "planner", "planner-model"],
+      [3, "scout", "scout-model"],
+      [4, "worker", "second"],
+      [5, "reviewer", "review-model"],
+      [6, "verifier", "verify-model"],
     ]);
-    expect(fake.created).toHaveLength(4);
+    expect(fake.created).toHaveLength(5);
     for (const created of fake.created) expect(created).not.toHaveProperty("prompt");
     await flow.provisionTabs("ws");
-    expect(store.tasks.get("ws")!.tabs).toHaveLength(5);
-    expect(fake.created).toHaveLength(4);
+    expect(store.tasks.get("ws")!.tabs).toHaveLength(6);
+    expect(fake.created).toHaveLength(5);
   });
 
   it("探路或复核默认不启用时不建对应 tab，编号仍连续", async () => {
@@ -1970,10 +2015,11 @@ describe("预建流程 tab", () => {
     await flow.provisionTabs("ws");
     expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.number, tab.role])).toEqual([
       [1, "main"],
-      [2, "worker"],
-      [3, "verifier"],
+      [2, "planner"],
+      [3, "worker"],
+      [4, "verifier"],
     ]);
-    expect(fake.created).toHaveLength(2);
+    expect(fake.created).toHaveLength(3);
   });
 
   it("交流说明列出自身编号、上下游和预建的其它角色 tab", async () => {
@@ -1985,10 +2031,11 @@ describe("预建流程 tab", () => {
     } as never)) as { config: { systemPrompt?: string } };
     const prompt = result.config.systemPrompt ?? "";
     expect(prompt).toContain("你的身份：#2 会话");
-    expect(prompt).toContain("#3 探路");
-    expect(prompt).toContain("#4 执行");
-    expect(prompt).toContain("#5 复核");
-    expect(prompt).toContain("#6 验证");
+    expect(prompt).toContain("#3 方案");
+    expect(prompt).toContain("#4 探路");
+    expect(prompt).toContain("#5 执行");
+    expect(prompt).toContain("#6 复核");
+    expect(prompt).toContain("#7 验证");
     expect(prompt).toContain("send_agent_prompt");
     expect(prompt).toContain("get_agent_activity");
   });
@@ -2055,7 +2102,7 @@ describe("预建流程 tab", () => {
         payload: admission,
       } as never);
       await flow.workerAdmitted(admission);
-      expect(fake.created).toHaveLength(4);
+      expect(fake.created).toHaveLength(5);
       expect(fake.sends.at(-1)?.agentId).toBe(worker.agentId);
       expect(fake.sends.at(-1)?.text).toContain("整理文档");
       const executing = store.tasks.get("ws")!;
@@ -2431,24 +2478,30 @@ describe("预建 tab 的边界", () => {
     configurePresets(store);
     fake.setCreatePatch({ internal: true });
     await flow.provisionTabs("ws");
-    expect(fake.created).toHaveLength(4);
+    expect(fake.created).toHaveLength(5);
     expect(store.tasks.get("ws")!.tabs).toHaveLength(1);
     fake.setCreatePatch({});
     fake.agents.get("worker-1")!.internal = false;
     await flow.provisionTabs("ws");
-    expect(fake.created).toHaveLength(4);
+    expect(fake.created).toHaveLength(5);
     expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.agentId, tab.role])).toEqual([
       ["agent-1", "main"],
-      ["worker-1", "scout"],
+      ["worker-1", "planner"],
     ]);
     expect(fake.operations).toEqual(
-      expect.arrayContaining(["archive:worker-2", "archive:worker-3", "archive:worker-4"]),
+      expect.arrayContaining([
+        "archive:worker-2",
+        "archive:worker-3",
+        "archive:worker-4",
+        "archive:worker-5",
+      ]),
     );
     expect(fake.operations).not.toContain("archive:worker-1");
     await flow.provisionTabs("ws");
-    expect(fake.created).toHaveLength(7);
+    expect(fake.created).toHaveLength(9);
     expect(store.tasks.get("ws")!.tabs.map((tab) => tab.role)).toEqual([
       "main",
+      "planner",
       "scout",
       "worker",
       "reviewer",
@@ -3145,5 +3198,668 @@ describe("WP-127 任务看板与子代理协调", () => {
     const subagent = TASK_HOST_PROMPTS.find((prompt) => prompt.key === "task.role.subagent")!
       .defaultText;
     expect(subagent).toContain("不要替用户审批");
+  });
+});
+
+// ---- Round 8 (WP-130) -------------------------------------------------------------------------
+
+/** Planner list: the writer `p-planner` plus the given reviewer models in order. */
+function configureRound8(
+  store: ReturnType<typeof createVibeStore>,
+  reviewers: Array<[string, string]> = [],
+  options: { scout?: boolean } = {},
+) {
+  const presets = configurePresets(store, options);
+  const extra = reviewers.map(([provider, model], index) =>
+    store.presets.create({
+      id: "p-review-" + (index + 1),
+      name: "审阅 " + (index + 1),
+      provider,
+      model,
+      thinking: "high",
+      permissionMode: "full",
+    }),
+  );
+  store.modelDefaults.setGlobal({
+    ...store.modelDefaults.global(),
+    planners: [presets.planner.id, ...extra.map((preset) => preset.id)],
+  });
+  return presets;
+}
+async function round8Task(
+  reviewerModels: Array<[string, string]> = [],
+  options: { scout?: boolean } & Parameters<typeof setup>[0] = {},
+) {
+  const context = await projectTask(options);
+  configureRound8(context.store, reviewerModels, options);
+  await context.flow.provisionTabs("ws");
+  const tab = (role: string) =>
+    context.store.tasks.get("ws")!.tabs.find((item) => item.role === role)!;
+  /** One finished turn of `agentId` that answered with `text`. */
+  const turn = async (agentId: string, text: string, kind = "completed") => {
+    const turnId = context.fake.reply(agentId, text);
+    await context.flow.turnEnded({
+      agent: { id: agentId, workspaceId: "ws" },
+      turnId,
+      outcome: { kind },
+    });
+  };
+  return { ...context, tab, turn };
+}
+function reviewersOf(fake: ReturnType<typeof fakePaseo>) {
+  return [...fake.agents.values()].filter((agent) => agent.labels?.[PLAN_REVIEW_LABEL]);
+}
+
+describe("WP-130 tab 新顺序与旧任务补 tab", () => {
+  it("新任务：#1 主会话、#2 方案、#3 探路、#4 执行、#5 复核、#6 验证，标题按新角色", async () => {
+    const { store, fake } = await round8Task();
+    expect(store.tasks.get("ws")!.tabs.map((tab) => `#${tab.number} ${tab.role}`)).toEqual([
+      "#1 main",
+      "#2 planner",
+      "#3 scout",
+      "#4 worker",
+      "#5 reviewer",
+      "#6 verifier",
+    ]);
+    expect(fake.titles.map((title) => title.title)).toContain("#2 方案 · planner-model");
+  });
+
+  it("第八轮之前的任务保持原编号，下一个回合只补缺的方案 tab，编号接着往后排", async () => {
+    const { store, fake, flow } = await projectTask();
+    configurePresets(store);
+    // The round-7 layout: #1 主会话, then 探路, 执行, 复核, 验证.
+    for (const [id, role] of [
+      ["old-scout", "scout"],
+      ["old-worker", "worker"],
+      ["old-reviewer", "reviewer"],
+      ["old-verifier", "verifier"],
+    ] as const) {
+      fake.addAgent({ id });
+      store.tasks.allocateTab("ws", { agentId: id, role, provider: "codex", model: "first" });
+    }
+    fake.setTimeline("agent-1", [
+      { item: { type: "user_message", text: "继续" }, turnId: "t-1", seqEnd: 1 },
+      { item: { type: "assistant_message", text: "好的" }, turnId: "t-1", seqEnd: 2 },
+    ]);
+    const end = () =>
+      flow.turnEnded({
+        agent: { id: "agent-1", workspaceId: "ws" },
+        turnId: "t-1",
+        outcome: { kind: "completed" },
+      });
+    await end();
+    await flow.provisionTabs("ws");
+    expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.number, tab.role, tab.agentId])).toEqual([
+      [1, "main", "agent-1"],
+      [2, "scout", "old-scout"],
+      [3, "worker", "old-worker"],
+      [4, "reviewer", "old-reviewer"],
+      [5, "verifier", "old-verifier"],
+      [6, "planner", "worker-1"],
+    ]);
+    expect(fake.created).toHaveLength(1);
+    // Nothing is missing any more: later turns create nothing.
+    await end();
+    await flow.provisionTabs("ws");
+    expect(fake.created).toHaveLength(1);
+  });
+});
+
+describe("WP-130 #2 方案多模型互审（插件编排）", () => {
+  it("列表只有 1 个模型：#2 的方案直接保存待确认，不开审阅者", async () => {
+    const { store, fake, tab, turn } = await round8Task();
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求：整理文档");
+    await turn(planner.agentId, planMessage("整理文档"));
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("awaiting_confirmation");
+    expect(task.plan?.goal).toBe("整理文档");
+    expect(reviewersOf(fake)).toHaveLength(0);
+    expect(reviewState(task)).toBeUndefined();
+  });
+
+  it("3 个模型：初稿 → 审阅者 1、2 依次（后者看到前面的意见）→ #2 修订定稿 → 汇报 #1，面板可见", async () => {
+    const { store, fake, flow, tab, turn } = await round8Task([
+      ["claude", "review-a"],
+      ["gemini", "review-b"],
+    ]);
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求：整理文档");
+    await turn(planner.agentId, planMessage("初稿目标"));
+    // The draft is not saved as the task plan while it is under review.
+    expect(store.tasks.get("ws")!.phase).toBe("planning");
+    let state = reviewState(store.tasks.get("ws"))!;
+    expect(state.status).toBe("reviewing");
+    expect(state.reviewers.map((item) => [item.provider, item.model, item.status])).toEqual([
+      ["claude", "review-a", "running"],
+      ["gemini", "review-b", "pending"],
+    ]);
+    const first = reviewersOf(fake);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.labels?.[PARENT_AGENT_ID_LABEL]).toBe(planner.agentId);
+    expect(first[0]!.title).toBe("#2 方案审阅 1/2");
+    const firstPrompt = fake.sends.find((send) => send.agentId === first[0]!.id)!;
+    expect(firstPrompt.options?.sourceAgentId).toBe(planner.agentId);
+    expect(firstPrompt.text).toContain("初稿目标");
+    expect(firstPrompt.text).toContain("你是第一位审阅者");
+    // Not a tab: the reviewer stays off the numbered list.
+    expect(store.tasks.get("ws")!.tabs).toHaveLength(6);
+
+    await turn(first[0]!.id, "意见一：缺少回滚步骤。");
+    const second = reviewersOf(fake).find((agent) => agent.id !== first[0]!.id)!;
+    expect(second.provider).toBe("gemini");
+    const secondPrompt = fake.sends.find((send) => send.agentId === second.id)!;
+    expect(secondPrompt.text).toContain("意见一：缺少回滚步骤。");
+    expect(secondPrompt.text).toContain("第 2/2 位");
+
+    await turn(second.id, "意见二：同意意见一，另需补充测试。");
+    state = reviewState(store.tasks.get("ws"))!;
+    expect(state.status).toBe("revising");
+    const revise = fake.sends.filter((send) => send.agentId === planner.agentId).at(-1)!;
+    expect(revise.text).toContain("意见一：缺少回滚步骤。");
+    expect(revise.text).toContain("意见二：同意意见一");
+    expect(revise.text).toContain("审阅意见处理");
+    expect(revise.options?.sourceAgentId).toBe(second.id);
+
+    await turn(planner.agentId, planMessage("最终目标") + "\n\n## 审阅意见处理\n- 采纳意见一");
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("awaiting_confirmation");
+    expect(task.plan?.goal).toBe("最终目标");
+    expect(reviewState(task)?.status).toBe("done");
+    const toMain = fake.appended.filter((entry) => entry.agentId === "agent-1");
+    expect(JSON.stringify(toMain.at(-1))).toContain("方案已定稿（经 2 位审阅者审阅，修订稿未再审阅）");
+
+    const panel = await flow.panel("ws");
+    const step = panel.steps.find((item) => item.kind === "plan_review")!;
+    expect(step.title).toBe("方案审阅");
+    expect(step.summary).toContain("已定稿：2 位审阅者给出意见");
+    expect(step.detail).toContain("意见二：同意意见一");
+
+    // The same plan again does not start a new cycle.
+    const created = fake.created.length;
+    await turn(planner.agentId, planMessage("最终目标"));
+    expect(fake.created).toHaveLength(created);
+  });
+
+  it("审阅者失败：启动失败或回合失败都跳过并记下原因；有意见时照常修订，全部失败时沿用初稿", async () => {
+    const { store, fake, tab, turn } = await round8Task([
+      ["claude", "review-a"],
+      ["gemini", "review-b"],
+    ]);
+    fake.failCreate("claude/review-a");
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求");
+    await turn(planner.agentId, planMessage("初稿"));
+    let state = reviewState(store.tasks.get("ws"))!;
+    expect(state.reviewers[0]).toMatchObject({ status: "failed" });
+    expect(state.reviewers[0]!.error).toContain("启动失败");
+    const second = reviewersOf(fake)[0]!;
+    await turn(second.id, "只有一条意见：补测试。");
+    state = reviewState(store.tasks.get("ws"))!;
+    expect(state.status).toBe("revising");
+    const revise = fake.sends.filter((send) => send.agentId === planner.agentId).at(-1)!;
+    expect(revise.text).toContain("审阅失败");
+    expect(revise.text).toContain("只有一条意见：补测试。");
+
+    // Every reviewer failing keeps the draft as the plan.
+    const again = await round8Task([["gemini", "review-b"]]);
+    const writer = again.tab("planner");
+    await again.fake.paseo.agents.ref(writer.agentId).send("需求");
+    await again.turn(writer.agentId, planMessage("唯一初稿"));
+    const only = reviewersOf(again.fake)[0]!;
+    await again.turn(only.id, "", "failed");
+    const task = again.store.tasks.get("ws")!;
+    expect(reviewState(task)).toMatchObject({ status: "done", note: "审阅者全部失败，沿用初稿" });
+    expect(task.plan?.goal).toBe("唯一初稿");
+    expect(task.phase).toBe("awaiting_confirmation");
+  });
+
+  it("审阅中用户 /执行：中止审阅、停止审阅者，确认 #2 当前方案", async () => {
+    const { store, fake, flow, tab, turn } = await round8Task([["claude", "review-a"]]);
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求");
+    await turn(planner.agentId, planMessage("赶时间的方案"));
+    const reviewer = reviewersOf(fake)[0]!;
+    expect(reviewer.activeTurn).not.toBeNull();
+    await flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "r-now" });
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("queued");
+    expect(task.plan?.goal).toBe("赶时间的方案");
+    expect(reviewState(task)).toMatchObject({ status: "cancelled" });
+    expect(fake.operations).toContain("cancel:" + reviewer.id);
+  });
+
+  it("审阅子代理与 WP-127 看板不冲突：父是 #2，guardCreate 放行，注入方案审阅规则而非子任务规则", async () => {
+    const { store, fake, tabs, tab } = await round8Task([["claude", "review-a"]]);
+    const board = createTaskBoard({
+      store,
+      getPaseo: () => fake.paseo as never,
+      directory: async () => fake.directory,
+      appendStatus: async () => {},
+    });
+    const planner = tab("planner");
+    const request = {
+      config: { provider: "claude/review-a" },
+      workspaceId: "ws",
+      parentAgentId: planner.agentId,
+      labels: { [PARENT_AGENT_ID_LABEL]: planner.agentId, [PLAN_REVIEW_LABEL]: "cycle-1" },
+    };
+    await expect(board.guardCreate(request as never)).resolves.toBeUndefined();
+    const injected = (await tabs.injectGuide(request as never)) as {
+      config: { systemPrompt?: string };
+    };
+    expect(injected.config.systemPrompt).toContain("#2 方案的审阅者");
+    expect(injected.config.systemPrompt).not.toContain("你是执行子代理");
+  });
+});
+
+describe("WP-130 #3 共享探路 vibe_ask_scout", () => {
+  it("把问题连同提问方 #编号投给探路 tab；未启用探路时返回明确错误", async () => {
+    const { store, fake, tabs, tab } = await round8Task();
+    const coordination = createCoordination({ store, tabs, getPaseo: () => fake.paseo as never });
+    const worker = tab("worker");
+    const scout = tab("scout");
+    const result = await coordination.askScout(worker.agentId, { question: "登录模块在哪里？" });
+    expect(result.scout).toEqual({ number: 3, agentId: scout.agentId });
+    const sent = fake.sends.at(-1)!;
+    expect(sent.agentId).toBe(scout.agentId);
+    expect(sent.options?.sourceAgentId).toBe(worker.agentId);
+    expect(sent.text).toContain("#4 执行");
+    expect(sent.text).toContain(worker.agentId);
+    expect(sent.text).toContain("登录模块在哪里？");
+    expect(sent.text).toContain("send_agent_prompt");
+
+    const off = await round8Task([], { scout: false });
+    const offCoordination = createCoordination({
+      store: off.store,
+      tabs: off.tabs,
+      getPaseo: () => off.fake.paseo as never,
+    });
+    await expect(
+      offCoordination.askScout(off.tab("planner").agentId, { question: "x" }),
+    ).rejects.toThrow("没有启用探路");
+  });
+});
+
+describe("WP-130 任务间方案感知 vibe_project_plans", () => {
+  it("列出同项目其它任务的方案状态与文件，标出与本任务方案文件的重叠；其它项目不列", async () => {
+    const { store, fake, tabs, tab } = await round8Task();
+    const coordination = createCoordination({ store, tabs, getPaseo: () => fake.paseo as never });
+    store.tasks.savePlan("ws", { ...planSnapshot("本任务"), files: ["src/login/**"] });
+    const other = (workspaceId: string, goal: string, files: string[], projectId = "project-1") => {
+      store.tasks.create({ workspaceId, anchorAgentId: workspaceId + "-anchor" });
+      store.tasks.updateControl(workspaceId, { projectId });
+      store.tasks.savePlan(workspaceId, { ...planSnapshot(goal), files });
+    };
+    other("ws-overlap", "改登录页", ["src/login/page.tsx"]);
+    store.tasks.confirm("ws-overlap", {
+      rolesSnapshot: roleSnapshot(),
+      planSource: { sourceKey: "s" },
+      requestId: "c",
+    });
+    other("ws-free", "改文档", ["docs/**"]);
+    other("ws-elsewhere", "别的项目", ["src/login/**"], "project-2");
+    other("ws-archived", "已归档", ["src/login/**"]);
+    coordination.markArchived("ws-archived");
+
+    const result = await coordination.projectPlansFor(tab("planner").agentId, {});
+    expect(result.files).toEqual(["src/login/**"]);
+    expect(result.plans.map((plan) => plan.workspaceId)).toEqual([
+      "ws-overlap",
+      "ws-free",
+      "ws-archived",
+    ]);
+    expect(result.plans[0]).toMatchObject({
+      status: "executing",
+      statusLabel: "执行中",
+      goal: "改登录页",
+      overlap: ["src/login/**", "src/login/page.tsx"],
+    });
+    expect(result.plans[0]!.updatedAt).toBeTruthy();
+    expect(result.plans[1]).toMatchObject({ statusLabel: "待确认", overlap: null });
+    expect(result.plans[2]).toMatchObject({ statusLabel: "已放弃" });
+    expect(result.message).toContain("改登录页");
+    expect(result.message).toContain("避让");
+
+    // Candidate files from #2 before it writes the plan.
+    const candidate = await coordination.projectPlansFor(tab("planner").agentId, {
+      files: ["docs/guide.md"],
+    });
+    expect(candidate.plans.find((plan) => plan.workspaceId === "ws-free")?.overlap).toEqual([
+      "docs/guide.md",
+      "docs/**",
+    ]);
+
+    // The flow panel section shows the same list.
+    const panel = await coordination.panelPlans("ws");
+    expect(panel[0]?.workspaceId).toBe("ws-overlap");
+  });
+
+  it("#2 与 #4 的提示词要求先调用 vibe_project_plans；#1 群主不写方案", () => {
+    const planner = TASK_HOST_PROMPTS.find((prompt) => prompt.key === "task.role.planner")!;
+    const work = TASK_FLOW_PROMPTS.find((prompt) => prompt.key === "board.task.work")!;
+    expect(planner.defaultText).toContain("写方案前先调用 vibe_project_plans");
+    expect(work.defaultText).toContain("开始修改文件前先调用 vibe_project_plans");
+    expect(TASK_TAB_GUIDE_PROMPT.defaultText).toContain("vibe_ask_scout");
+    const main = TASK_HOST_PROMPTS.find((prompt) => prompt.key === "task.role.main")!;
+    expect(main.defaultText).toContain("不写方案、不改代码");
+  });
+});
+
+// ---- WP-130 review fixes ----------------------------------------------------------------------
+
+/** A reviewer preset with several candidate models; the global list becomes [writer, it]. */
+function candidateReviewer(
+  store: ReturnType<typeof createVibeStore>,
+  models: Array<[string, string]>,
+) {
+  const preset = store.presets.create({
+    id: "p-candidates",
+    name: "候选审阅",
+    provider: models[0]![0],
+    model: models[0]![1],
+    thinking: "high",
+    permissionMode: "full",
+    models: models.map(([provider, model]) => ({
+      provider,
+      model,
+      thinking: "high",
+      permissionMode: "full" as const,
+    })),
+  });
+  store.modelDefaults.setGlobal({
+    ...store.modelDefaults.global(),
+    planners: ["p-planner", preset.id],
+  });
+}
+
+describe("WP-130 复核修复：审阅者候选、超时与恢复", () => {
+  it("启动或运行失败依次换候选模型，失败的审阅者被归档；候选用尽才跳过", async () => {
+    const { store, fake, tab, turn } = await round8Task();
+    candidateReviewer(store, [
+      ["claude", "a"],
+      ["gemini", "b"],
+      ["openai", "c"],
+    ]);
+    fake.failCreate("claude/a");
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求");
+    await turn(planner.agentId, planMessage("初稿"));
+    let state = reviewState(store.tasks.get("ws"))!;
+    expect(state.reviewers[0]).toMatchObject({
+      provider: "gemini",
+      model: "b",
+      status: "running",
+      attempt: 1,
+    });
+    expect(state.reviewers[0]!.error).toContain("claude/a：启动失败");
+    const second = reviewersOf(fake)[0]!;
+    expect(second.provider).toBe("gemini");
+
+    await turn(second.id, "", "failed");
+    expect(fake.operations).toContain("archive:" + second.id);
+    state = reviewState(store.tasks.get("ws"))!;
+    expect(state.reviewers[0]).toMatchObject({
+      provider: "openai",
+      model: "c",
+      status: "running",
+      attempt: 2,
+    });
+    const third = reviewersOf(fake).find((agent) => agent.provider === "openai")!;
+    await turn(third.id, "", "failed");
+    state = reviewState(store.tasks.get("ws"))!;
+    // Candidates exhausted: the only reviewer failed, the draft stands.
+    expect(state).toMatchObject({ status: "done", note: "审阅者全部失败，沿用初稿" });
+    expect(state.reviewers[0]!.status).toBe("failed");
+    expect(state.reviewers[0]!.error).toContain("openai/c：审阅回合失败");
+    expect(fake.operations).toContain("archive:" + third.id);
+  });
+
+  it("审阅者超时（设置项）按失败处理：停止、归档并换候选；全部超时沿用初稿", async () => {
+    let clock = Date.parse("2026-10-26T08:00:00.000Z");
+    const { store, fake, flow, tab, turn } = await round8Task([], {
+      reviewNow: () => clock,
+      reviewTimeoutMs: () => 5 * 60_000,
+    });
+    candidateReviewer(store, [
+      ["claude", "a"],
+      ["gemini", "b"],
+    ]);
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求");
+    await turn(planner.agentId, planMessage("初稿"));
+    const first = reviewersOf(fake)[0]!;
+    clock += 4 * 60_000;
+    await flow.recoverReviews();
+    expect(reviewState(store.tasks.get("ws"))!.reviewers[0]!.agentId).toBe(first.id);
+
+    clock += 2 * 60_000;
+    await flow.recoverReviews();
+    expect(fake.operations).toContain("cancel:" + first.id);
+    expect(fake.operations).toContain("archive:" + first.id);
+    let state = reviewState(store.tasks.get("ws"))!;
+    expect(state.reviewers[0]!.error).toContain("审阅超时（超过 5 分钟）");
+    expect(state.reviewers[0]).toMatchObject({ provider: "gemini", status: "running" });
+
+    clock += 6 * 60_000;
+    await flow.recoverReviews();
+    state = reviewState(store.tasks.get("ws"))!;
+    expect(state).toMatchObject({ status: "done", note: "审阅者全部失败，沿用初稿" });
+    expect(store.tasks.get("ws")!.plan?.goal).toBe("初稿");
+  });
+
+  it("插件重启后恢复：审阅者已不存在就换下一位；空闲且已有意见的补记；修订请求没发出就重发", async () => {
+    let clock = Date.parse("2026-10-26T08:00:00.000Z");
+    const first = await round8Task(
+      [
+        ["claude", "review-a"],
+        ["gemini", "review-b"],
+      ],
+      { reviewNow: () => clock },
+    );
+    const planner = first.tab("planner");
+    await first.fake.paseo.agents.ref(planner.agentId).send("需求");
+    await first.turn(planner.agentId, planMessage("初稿"));
+    const lost = reviewersOf(first.fake)[0]!;
+    // The plugin restarts; meanwhile the first reviewer disappeared from the host.
+    first.fake.agents.delete(lost.id);
+    const restarted = createTaskFlow({
+      db: first.db,
+      store: first.store,
+      tabs: first.tabs,
+      getPaseo: () => first.fake.paseo as never,
+      now: () => clock,
+      log: () => {},
+    });
+    await restarted.recoverReviews();
+    let state = reviewState(first.store.tasks.get("ws"))!;
+    expect(state.reviewers[0]!.error).toContain("审阅者已不存在");
+    const second = reviewersOf(first.fake).find((agent) => agent.provider === "gemini")!;
+    expect(state.reviewers[1]).toMatchObject({ agentId: second.id, status: "running" });
+
+    // The second reviewer answered while nobody listened (no turn_ended reached the plugin).
+    first.fake.reply(second.id, "意见：补上回滚步骤。");
+    clock += 30_000;
+    await restarted.recoverReviews();
+    expect(reviewState(first.store.tasks.get("ws"))!.reviewers[1]!.status).toBe("running");
+    clock += 60_000;
+    await restarted.recoverReviews();
+    state = reviewState(first.store.tasks.get("ws"))!;
+    expect(state.reviewers[1]!.status).toBe("done");
+    expect(state.status).toBe("revising");
+    expect(state.reviseSentAt).toBeTruthy();
+    const toPlanner = () => first.fake.sends.filter((send) => send.agentId === planner.agentId);
+    expect(toPlanner().at(-1)!.text).toContain("意见：补上回滚步骤。");
+
+    // A crash between "revising" and the send: the request is sent again on recovery, once.
+    const before = toPlanner().length;
+    const { reviseSentAt: _sent, ...unsent } = state;
+    first.store.tasks.updateControl("ws", { planReview: unsent });
+    await restarted.recoverReviews();
+    expect(toPlanner()).toHaveLength(before + 1);
+    expect(reviewState(first.store.tasks.get("ws"))!.reviseSentAt).toBeTruthy();
+    await restarted.recoverReviews();
+    expect(toPlanner()).toHaveLength(before + 1);
+  });
+
+  it("空闲且没有产出、已出错、被归档的审阅者按失败处理并推进", async () => {
+    let clock = Date.parse("2026-10-26T08:00:00.000Z");
+    const { store, fake, flow, tab, turn } = await round8Task(
+      [
+        ["claude", "review-a"],
+        ["gemini", "review-b"],
+        ["openai", "review-c"],
+      ],
+      { reviewNow: () => clock },
+    );
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求");
+    await turn(planner.agentId, planMessage("初稿"));
+    const idle = reviewersOf(fake)[0]!;
+    idle.status = "idle";
+    idle.activeTurn = null;
+    clock += 2 * 60_000;
+    await flow.recoverReviews();
+    let state = reviewState(store.tasks.get("ws"))!;
+    expect(state.reviewers[0]!.error).toContain("审阅者空闲且没有产出");
+
+    const errored = reviewersOf(fake).find((agent) => agent.provider === "gemini")!;
+    errored.status = "error";
+    await flow.recoverReviews();
+    state = reviewState(store.tasks.get("ws"))!;
+    expect(state.reviewers[1]!.error).toContain("审阅者出错");
+
+    // The user archives the last reviewer: no retry, the cycle moves on (all failed: draft kept).
+    const archived = reviewersOf(fake).find((agent) => agent.provider === "openai")!;
+    await flow.reviewerGone({ id: archived.id, workspaceId: "ws" }, "archived");
+    state = reviewState(store.tasks.get("ws"))!;
+    expect(state.reviewers[2]!.error).toContain("审阅者已被归档");
+    expect(state.status).toBe("done");
+  });
+});
+
+describe("WP-130 复核修复：只审初稿一次与 /重新审阅", () => {
+  it("修订稿定稿后再出方案不再审阅；/重新审阅只认主会话或方案 tab，对最新方案再审一轮", async () => {
+    const { store, fake, flow, tab, turn } = await round8Task([["claude", "review-a"]]);
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求");
+    await turn(planner.agentId, planMessage("初稿"));
+    const reviewer = reviewersOf(fake)[0]!;
+    await turn(reviewer.id, "意见：拆小一点。");
+    await turn(planner.agentId, planMessage("修订稿"));
+    let panel = await flow.panel("ws");
+    expect(panel.steps.find((step) => step.kind === "plan_review")!.summary).toContain(
+      "修订稿（未再审阅）",
+    );
+    // Cycle over: its reviewer sub-agent is archived.
+    expect(fake.operations).toContain("archive:" + reviewer.id);
+
+    const created = fake.created.length;
+    await turn(planner.agentId, planMessage("小改后的方案"));
+    expect(fake.created).toHaveLength(created);
+    const task = store.tasks.get("ws")!;
+    expect(task.plan?.goal).toBe("小改后的方案");
+    expect(task.summary).toContain("未再审阅");
+    panel = await flow.panel("ws");
+    expect(panel.steps.find((step) => step.kind === "plan_review")!.summary).toContain(
+      "又更新了方案（未审阅）",
+    );
+
+    await expect(
+      flow.rereview({ workspaceId: "ws", agentId: tab("worker").agentId }),
+    ).rejects.toThrow("主会话或方案 tab");
+    const result = await flow.rereview({ workspaceId: "ws", agentId: "agent-1" });
+    expect(result.message).toContain("按用户要求重新审阅");
+    const again = reviewersOf(fake).find((agent) => agent.id !== reviewer.id)!;
+    expect(fake.sends.find((send) => send.agentId === again.id)!.text).toContain("小改后的方案");
+    expect(reviewState(store.tasks.get("ws"))).toMatchObject({ status: "reviewing", manual: true });
+    panel = await flow.panel("ws");
+    expect(panel.steps.find((step) => step.kind === "plan_review")!.summary).toContain(
+      "用户要求重新审阅",
+    );
+  });
+
+  it("只有 1 个方案模型时 /重新审阅 给出明确错误", async () => {
+    const { fake, flow, tab, turn } = await round8Task();
+    const planner = tab("planner");
+    await fake.paseo.agents.ref(planner.agentId).send("需求");
+    await turn(planner.agentId, planMessage("方案"));
+    await expect(flow.rereview({ workspaceId: "ws", agentId: planner.agentId })).rejects.toThrow(
+      "只有 1 个模型",
+    );
+  });
+});
+
+describe("WP-130 复核修复：提示词编号占位", () => {
+  it("角色提示词不写死编号：按实际 tab 渲染，不存在的角色写「未启用」", async () => {
+    for (const prompt of [...TASK_HOST_PROMPTS, TASK_TAB_GUIDE_PROMPT])
+      expect(prompt.defaultText, prompt.key).not.toMatch(/#\d/);
+    const { store, tabs, tab } = await round8Task([], { scout: false });
+    const task = store.tasks.get("ws")!;
+    expect(task.tabs.map((item) => `#${item.number} ${item.role}`)).toEqual([
+      "#1 main",
+      "#2 planner",
+      "#3 worker",
+      "#4 reviewer",
+      "#5 verifier",
+    ]);
+    const main = store.prompts.resolve("task.role.main", { vars: roleVars(task.tabs) });
+    expect(main).toContain("交给 #2 方案 出方案");
+    expect(main).toContain("交给 探路（未启用）");
+    expect(main).toContain("直接在 #3 执行 发消息");
+    expect(main).not.toContain("{{");
+    // #1 群主的授权措辞。
+    expect(main).toContain("执行只能由用户授权");
+    expect(main).toContain("用户确认后插件会通知 #3 执行");
+    expect(main).toContain("不要自己给 #3 执行 发执行指令");
+    expect(main).toContain("不能替用户确认方案或回答审批");
+
+    const reviewer = (await tabs.injectGuide({
+      config: { provider: "claude/x" },
+      workspaceId: "ws",
+      parentAgentId: tab("planner").agentId,
+      labels: { [PARENT_AGENT_ID_LABEL]: tab("planner").agentId, [PLAN_REVIEW_LABEL]: "c" },
+    } as never)) as { config: { systemPrompt?: string } };
+    expect(reviewer.config.systemPrompt).toContain("你是 #2 方案的审阅者");
+    const sub = (await tabs.injectGuide({
+      config: { provider: "claude/x" },
+      workspaceId: "ws",
+      parentAgentId: tab("worker").agentId,
+      labels: { [PARENT_AGENT_ID_LABEL]: tab("worker").agentId },
+    } as never)) as { config: { systemPrompt?: string } };
+    expect(sub.config.systemPrompt).toContain("由 #3 执行 派发");
+    expect(sub.config.systemPrompt).not.toContain("{{");
+  });
+});
+
+describe("WP-130 复核修复：方案感知的调用者与文件范围", () => {
+  it("只有任务 tab 或其子代理能调用；绝对路径按 worktree 根转相对，转不了的标为范围未知", async () => {
+    const { store, fake, tabs, tab } = await round8Task();
+    const coordination = createCoordination({ store, tabs, getPaseo: () => fake.paseo as never });
+    fake.addAgent({ id: "outsider" });
+    await expect(coordination.projectPlansFor("outsider", {})).rejects.toThrow(
+      "只能由任务 tab 或其子代理调用",
+    );
+    await expect(coordination.askScout("outsider", { question: "x" })).rejects.toThrow(
+      "只能由任务 tab 或其子代理调用",
+    );
+    fake.addAgent({
+      id: "worker-child",
+      labels: { [PARENT_AGENT_ID_LABEL]: tab("worker").agentId },
+    });
+    store.tasks.create({ workspaceId: "ws-other", anchorAgentId: "other-anchor" });
+    store.tasks.updateControl("ws-other", { projectId: "project-1" });
+    store.tasks.savePlan("ws-other", { ...planSnapshot("别的"), files: ["src/login/a.ts"] });
+    const result = await coordination.projectPlansFor("worker-child", {
+      files: [join(fake.directory, "src", "login", "**"), "D:/elsewhere/x.ts"],
+    });
+    expect(result.files).toEqual(["src/login/**"]);
+    expect(result.unknownFiles).toEqual(["D:/elsewhere/x.ts"]);
+    expect(result.plans[0]!.overlap).toEqual(["src/login/**", "src/login/a.ts"]);
+    expect(result.message).toContain("范围未知");
+    expect(scopeFiles(["C:\\repo\\wt\\a.ts", "/tmp/b", "rel/c"], "C:/Repo/WT/")).toEqual({
+      files: ["a.ts", "rel/c"],
+      unknown: ["/tmp/b"],
+    });
   });
 });

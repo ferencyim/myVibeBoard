@@ -24,6 +24,31 @@ import {
   timestamp,
 } from "./legacy-fixture";
 
+/** Core migration 19 turns each legacy planner + plan reviewer into the round-8 planner list. */
+function plannerListJson(text: unknown): string {
+  const defaults = JSON.parse(String(text)) as Record<string, unknown>;
+  if (typeof defaults.planner !== "string") return String(text);
+  const planners = [defaults.planner, defaults.plan_reviewer].filter((id) => typeof id === "string");
+  delete defaults.planner;
+  delete defaults.plan_reviewer;
+  defaults.planners = planners;
+  return JSON.stringify(defaults);
+}
+function withPlannerList<T extends { project?: unknown; vibe_meta?: unknown }>(snap: T): T {
+  const rows = (key: "project" | "vibe_meta") =>
+    (snap[key] ?? []) as Array<Record<string, unknown>>;
+  return {
+    ...snap,
+    project: rows("project").map((row) => ({
+      ...row,
+      default_presets_json: plannerListJson(row.default_presets_json),
+    })),
+    vibe_meta: rows("vibe_meta").map((row) =>
+      row.key === "models.defaults" ? { ...row, value: plannerListJson(row.value) } : row,
+    ),
+  };
+}
+
 function backupFiles(path: string) {
   const dir = join(dirname(path), "backups");
   return existsSync(dir) ? readdirSync(dir).map((name) => join(dir, name)) : [];
@@ -39,10 +64,10 @@ describe("WP-114 legacy cutover", () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM card").get()).toEqual({ n: 3 });
     expect(migrateOwner(db, "core")).toMatchObject({
       from: 10,
-      to: 18,
-      applied: [11, 12, 13, 14, 15, 16, 17, 18],
+      to: 20,
+      applied: [11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     });
-    expect(snapshot(db)).toEqual(before);
+    expect(snapshot(db)).toEqual(withPlannerList(before));
     expect(maintenanceCounts(db)).toEqual(counts);
     expect(db.prepare("SELECT COUNT(*) AS n FROM task").get()).toEqual({ n: 0 });
     for (const table of [
@@ -79,7 +104,7 @@ describe("WP-114 legacy cutover", () => {
     const restarted = openVibeDb({ path });
     migrateAll(restarted);
     expect(migrateAll(restarted).every((r) => r.applied.length === 0)).toBe(true);
-    expect(snapshot(restarted)).toEqual(before);
+    expect(snapshot(restarted)).toEqual(withPlannerList(before));
     expect(backupFiles(path)).toEqual(backups);
     restarted.close();
   });
@@ -185,7 +210,9 @@ describe("WP-114 legacy cutover", () => {
       (row: Record<string, unknown>): Record<string, unknown> =>
         name === "task"
           ? Object.fromEntries(
-              Object.entries(row).filter(([key]) => !["tabs_json", "next_tab_number"].includes(key)),
+              Object.entries(row).filter(
+                ([key]) => !["tabs_json", "next_tab_number", "updated_at"].includes(key),
+              ),
             )
           : row;
     const surviving = Object.fromEntries(
@@ -195,7 +222,7 @@ describe("WP-114 legacy cutover", () => {
       ]),
     );
     migrateOwner(db, "core");
-    expect(snapshot(db)).toEqual(before);
+    expect(snapshot(db)).toEqual(withPlannerList(before));
     for (const table of tables)
       expect(db.prepare(`SELECT * FROM ${table}`).all().map(stripTabs(table))).toEqual(
         surviving[table],

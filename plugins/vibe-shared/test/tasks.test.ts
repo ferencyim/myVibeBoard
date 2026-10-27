@@ -164,6 +164,7 @@ describe("workspace task commands", () => {
       planSource: null,
       roleSelections: null,
       control: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
     });
     expect(() => s.tasks.create({ workspaceId: "workspace-1", anchorAgentId: "other" })).toThrow(
       TaskCommandError,

@@ -16,6 +16,7 @@ const COMMANDS: readonly { command: string; action: TaskTabCommand["action"]; la
   [
     { command: "执行", action: "execute", label: "确认最新方案并打开执行 tab", hint: "可附修改要求" },
     { command: "通过", action: "accept", label: "验收本轮验证结果并完成 Git 收尾", hint: "可附说明" },
+    { command: "重新审阅", action: "rereview", label: "让方案模型列表再审阅一次当前最新方案（在主会话或方案 tab 发送）", hint: "无" },
     { command: "停止任务", action: "stop", label: "撤销排队并停止运行中的任务 tab", hint: "可附说明" },
     { command: "接手", action: "handoff", label: "接手指定 tab 的角色与进度", hint: "#编号，可附要求" },
     { command: "状态", action: "status", label: "把任务阶段、tab 状态和最新结论追加到当前 tab", hint: "无" },

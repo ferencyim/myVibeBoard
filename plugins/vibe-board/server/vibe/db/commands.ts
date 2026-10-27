@@ -32,9 +32,9 @@ import {
   type Project,
 } from "../contract/model";
 import {
-  MODEL_ROLES,
   ModelDefaultsSchema,
   cleanDefaults,
+  defaultsPresetIds,
   resolveTaskRoles,
   type ModelDefaults,
   type TaskRoleSelections,
@@ -347,10 +347,8 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
   function validateDefaults(value: ModelDefaults | undefined): void {
     if (value === undefined) return;
     const parsed = ModelDefaultsSchema.parse(value);
-    for (const role of MODEL_ROLES) {
-      const id = parsed[role]?.trim();
-      if (id && !presets.get(id)) throw new CommandError("not_found", `Preset not found: ${id}`);
-    }
+    for (const id of defaultsPresetIds(parsed))
+      if (!presets.get(id)) throw new CommandError("not_found", `Preset not found: ${id}`);
   }
 
   const projects = {
@@ -572,17 +570,12 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
         mustPreset(id);
         // WP-108: forget the preset in the project and global default models.
         for (const p of projects.list(true)) {
-          const kept = Object.fromEntries(
-            Object.entries(p.defaultPresets).filter(([, v]) => v !== id),
-          );
-          if (Object.keys(kept).length !== Object.keys(p.defaultPresets).length)
-            patchRow("project", p.id, PROJECT_FIELDS, { defaultPresets: kept }, hlc);
+          const defaults = cleanDefaults(p.defaultPresets);
+          if (defaultsPresetIds(defaults).includes(id))
+            patchRow("project", p.id, PROJECT_FIELDS, { defaultPresets: withoutPreset(defaults, id) }, hlc);
         }
         const globals = modelDefaults.global();
-        if (Object.values(globals).includes(id))
-          writeGlobalDefaults(
-            Object.fromEntries(Object.entries(globals).filter(([, v]) => v !== id)),
-          );
+        if (defaultsPresetIds(globals).includes(id)) writeGlobalDefaults(withoutPreset(globals, id));
         db.prepare("DELETE FROM preset WHERE id = ?").run(id);
         // Drop the deleted id from other presets' fallback chains.
         for (const other of presets.list()) {
@@ -1176,6 +1169,17 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
 
   // ---- default models (WP-108): the global level; the project level is project.defaultPresets ----
 
+  /** A deleted preset leaves every job it filled; an emptied planner list inherits again. */
+  function withoutPreset(defaults: ModelDefaults, id: string): ModelDefaults {
+    const kept = Object.fromEntries(
+      Object.entries(defaults).filter(([key, v]) => key === "planners" || v !== id),
+    ) as ModelDefaults;
+    const planners = kept.planners?.filter((v) => v !== id);
+    if (planners?.length) kept.planners = planners;
+    else delete kept.planners;
+    return kept;
+  }
+
   function writeGlobalDefaults(value: ModelDefaults): void {
     db.prepare(
       "INSERT INTO vibe_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1209,10 +1213,6 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
     setGlobal(value: ModelDefaults): ModelDefaults {
       validateDefaults(value);
       const clean = cleanDefaults(value);
-      for (const role of MODEL_ROLES) {
-        const id = clean[role];
-        if (id && !presets.get(id)) throw new CommandError("not_found", `Preset not found: ${id}`);
-      }
       writeGlobalDefaults(clean);
       return clean;
     },

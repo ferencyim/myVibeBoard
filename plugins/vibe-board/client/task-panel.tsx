@@ -5,6 +5,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   taskPanelRpc,
   taskTabCommandRpc,
+  type ProjectPlanData,
   type TaskBoardItemData,
   type TaskTabCommand,
   type TaskTabViewData,
@@ -224,14 +225,85 @@ function TaskFlowPanelBody({
       <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>各步结论</Text>
       {data.steps.length === 0 ? <Muted>还没有可查看的结论。</Muted> : null}
       {data.steps.map((step) => (
-        <StepRow
-          key={step.kind}
-          step={step}
-          expanded={!!expandedSteps[step.kind]}
-          onToggle={() => toggleStep(step.kind)}
-        />
+        <View key={step.kind} style={{ gap: 6 }}>
+          <StepRow
+            step={step}
+            expanded={!!expandedSteps[step.kind]}
+            onToggle={() => toggleStep(step.kind)}
+          />
+          {step.kind === "plan_review" ? (
+            <View style={{ flexDirection: "row" }}>
+              <Btn
+                label="重新审阅"
+                small
+                disabled={disabled}
+                onPress={() => void run("rereview")}
+                testID="task-flow-rereview"
+              />
+            </View>
+          ) : null}
+        </View>
       ))}
+
+      <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>同项目其它方案</Text>
+      {data.otherPlans?.length ? (
+        data.otherPlans.map((plan) => <ProjectPlanRow key={plan.workspaceId} plan={plan} />)
+      ) : (
+        <Muted>同项目没有其它任务的方案。</Muted>
+      )}
     </ScrollView>
+  );
+}
+
+function ProjectPlanRow({ plan }: { plan: ProjectPlanData }) {
+  const { theme } = useHost();
+  const meta = [
+    plan.updatedAt ? `更新于 ${plan.updatedAt.slice(0, 16).replace("T", " ")}` : "",
+    plan.files.length ? plan.files.slice(0, 6).join("、") + (plan.files.length > 6 ? " 等" : "") : "未声明文件",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <View
+      testID={`task-flow-plan-${plan.workspaceId}`}
+      style={{
+        borderWidth: 1,
+        borderColor: plan.overlap ? theme.colors.statusWarning : theme.colors.border,
+        borderRadius: 8,
+        padding: 10,
+        gap: 4,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Text
+          numberOfLines={2}
+          style={{ flexShrink: 1, color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}
+        >
+          {plan.goal ?? plan.name ?? plan.workspaceId}
+        </Text>
+        <Text style={{ marginLeft: "auto", color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          {plan.statusLabel}
+        </Text>
+      </View>
+      {plan.name && plan.goal ? (
+        <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          {plan.name}
+        </Text>
+      ) : null}
+      <Text numberOfLines={2} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+        {meta}
+      </Text>
+      {plan.unknownFiles?.length ? (
+        <Text numberOfLines={2} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          {`范围未知（不在该任务 worktree 内）：${plan.unknownFiles.join("、")}`}
+        </Text>
+      ) : null}
+      {plan.overlap ? (
+        <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+          {`与本任务文件重叠：${plan.overlap[0]} ↔ ${plan.overlap[1]}`}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
