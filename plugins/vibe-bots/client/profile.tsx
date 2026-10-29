@@ -7,9 +7,10 @@ import { StyleSheet, Text, View } from "react-native";
 import { z } from "zod";
 import { botsListRpc, botsUpdateRpc, botsArchiveRpc, projectDefaultBotSetRpc, modelsListRpc, memoriesAddRpc, memoriesUpdateRpc, memoriesRemoveRpc, BotViewSchema } from "../shared/rpc";
 import type { BotMemory } from "../shared/vibe/contract/bots";
-import { Feedback } from "./ui";
+import { Button, Feedback } from "./ui";
 import { useBotConversation } from "./use-bot-conversation";
 import { findBotForAgent } from "./profile-mapping";
+import { BotRoutines } from "./routines";
 
 function Page({ theme, children }: PropsWithChildren<{ theme: PluginTheme }>) {
   const styles = useProfileStyles(theme);
@@ -25,6 +26,8 @@ type BotView = z.infer<typeof BotViewSchema>;
 function canAddBackupModel(backups: BotView["backupModels"], provider: string, model: string, thinking: string) {
   return !!provider && !!model && backups.length < 20 && !backups.some((item) => item.provider === provider && item.model === model && item.thinking === thinking);
 }
+
+function saveDisabled(busy: boolean, name: string) { return busy || !name.trim(); }
 
 function profileChanged(bot: BotView, draft: { name: string; title: string; instructions: string; presetId: string; provider: string; model: string; thinking: string; backupModels: BotView["backupModels"]; notifications: BotView["notifications"] }) {
   return JSON.stringify(draft) !== JSON.stringify({ name: bot.name, title: bot.title, instructions: bot.instructions, presetId: bot.presetId ?? "", provider: bot.provider ?? "", model: bot.model ?? "", thinking: bot.thinking, backupModels: bot.backupModels, notifications: bot.notifications });
@@ -180,9 +183,9 @@ function Profile({ bot, theme, navigation, tab }: ProfileProps) {
     <SettingsSwitch label="失败时通知" value={notifications.failed} onValueChange={actions.failed} />
     {projectId ? <SettingsSwitch label="默认项目 bot" hint="环境故障通知与完成后的整理交给默认 bot；在另一个 bot 的资料里可更换。" value={bot.isDefault} disabled={busy || bot.isDefault} onValueChange={actions.setDefault} /> : null}
     </SettingsCard></SettingsSection>
-    <SettingsAction label="" actionLabel={busy ? "正在保存…" : "保存资料"} disabled={busy || !name.trim()} onPress={actions.save} />
+    <SettingsAction label="" actionLabel={busy ? "正在保存…" : "保存资料"} disabled={saveDisabled(busy, name)} onPress={actions.save} />
     <SettingsSection title="记忆"><SettingsCard><SettingsAction label={`长期记忆（${bot.memories.length}）`} actionLabel="查看" onPress={actions.memories} /></SettingsCard></SettingsSection>
-    <SettingsSection title="例程"><SettingsCard><Text style={styles.muted}>例程将在此处显示。</Text></SettingsCard></SettingsSection>
+    <SettingsSection title="例程"><SettingsCard><BotRoutines theme={theme} navigation={navigation} botId={bot.id} /></SettingsCard></SettingsSection>
     <SettingsAction label="" actionLabel={conversation.label} disabled={busy || conversation.disabled || !navigation} onPress={actions.open} />
     <Feedback theme={theme} error={conversation.error} />
     <SettingsAction label="" actionLabel="归档 bot" disabled={busy} onPress={actions.archive} />

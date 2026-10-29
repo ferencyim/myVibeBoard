@@ -118,7 +118,7 @@ const SCOPE_CHIP = (theme: PluginTheme, label: string) => (
   </View>
 );
 
-export function MaintainScreen({ theme }: PluginScreenProps) {
+export function MaintainScreen({ theme, params }: PluginScreenProps) {
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
   const runCall = useRpc(runRpc);
@@ -126,7 +126,7 @@ export function MaintainScreen({ theme }: PluginScreenProps) {
   const rulesState = useSettings(rulesSettings);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(params.rule ?? null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [creating, setCreating] = useState<{ name: string } | null>(null);
 
@@ -571,3 +571,5 @@ function MaintenanceDiagnostics({ theme }: { theme: PluginTheme }) {
     </Group>
   );
 }
+
+

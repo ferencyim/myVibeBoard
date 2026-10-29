@@ -83,4 +83,23 @@ CREATE INDEX idx_bot_thread_bot ON bot_thread(bot_id,archived_at);
 CREATE UNIQUE INDEX idx_bot_thread_agent ON bot_thread(agent_id) WHERE agent_id IS NOT NULL;
 `,
   },
+  {
+    version: 3, name: "bot_routines", sql: `
+CREATE TABLE bot_routine (
+ id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bot(id) ON DELETE CASCADE,
+ title TEXT NOT NULL, schedule_json TEXT NOT NULL, timezone TEXT NOT NULL, prompt TEXT NOT NULL,
+ target TEXT NOT NULL, quiet INTEGER NOT NULL, paused INTEGER NOT NULL,
+ missed_policy TEXT NOT NULL, last_run_at TEXT, next_run_at TEXT, last_status TEXT,
+ last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_bot_routine_due ON bot_routine(paused,next_run_at);
+CREATE TABLE bot_routine_run (
+ id TEXT PRIMARY KEY, routine_id TEXT NOT NULL REFERENCES bot_routine(id) ON DELETE CASCADE,
+ scheduled_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, status TEXT NOT NULL, error TEXT, agent_id TEXT, provider TEXT
+);
+CREATE INDEX idx_bot_routine_run ON bot_routine_run(routine_id,scheduled_at);
+`,
+  },
+
 ];
+

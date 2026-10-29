@@ -544,6 +544,15 @@ function DesktopTitlebar({ visible }: { visible: boolean }) {
   return visible ? (
     <View style={layoutStyles.windowTitlebar}>
       <TitlebarDragRegion />
+      <WindowChromeSafeArea
+        placement="inline"
+        pointerEvents="none"
+        style={layoutStyles.windowTitlebarContent}
+      >
+        <Text pointerEvents="none" style={layoutStyles.windowTitle}>
+          Paseo
+        </Text>
+      </WindowChromeSafeArea>
       {DEV_BUILD_LABEL ? (
         <Text
           pointerEvents="none"
@@ -975,7 +984,18 @@ const layoutStyles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.bgFrame,
   },
   windowTitlebar: { height: 38, position: "relative", backgroundColor: theme.colors.bgFrame },
+  windowTitlebarContent: {
+    height: "100%",
+    justifyContent: "center",
+  },
+  windowTitle: {
+    marginLeft: PAGE_RAIL_WIDTH + theme.spacing[2],
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
   devBuildLabel: {
+    position: "absolute",
+    top: theme.spacing[1],
     alignSelf: "center",
     color: theme.colors.accentForeground,
     backgroundColor: theme.colors.accent,

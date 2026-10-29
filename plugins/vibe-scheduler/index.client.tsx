@@ -7,7 +7,7 @@ export default function contribute(client: PluginClientContext) {
     id: "scheduler",
     title: "调度器",
     order: 30,
-    icon: "CalendarClock",
+    icon: "ListTodo",
     screenId: "main",
   });
   client.addSettingsScreen({

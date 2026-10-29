@@ -1,6 +1,7 @@
 import { PluginProjectSidebarItems } from "@/plugins/project-sidebar-items";
 import { PluginSidebarGroups } from "@/components/sidebar/plugin-sidebar-groups";
 import { Avatar } from "@/ui/avatar";
+import { IconButton } from "@/ui/icon-button";
 import { StatusIndicator } from "@/ui/status-indicator";
 import {
   sidebarTaskStatus,
@@ -39,7 +40,7 @@ import {
   type ActiveWorkspaceSelection,
 } from "@/stores/navigation-active-workspace-store";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { density, densityIconBox } from "@/styles/density";
+import { density } from "@/styles/density";
 import type { Theme } from "@/styles/theme";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
@@ -128,7 +129,6 @@ import {
   SidebarWorkspaceTrailingContent,
   useSidebarWorkspaceTrailing,
 } from "@/components/sidebar/workspace-trailing";
-import { DensityIcon } from "@/components/ui/density-icon";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Shortcut } from "@/components/ui/shortcut";
@@ -271,6 +271,7 @@ interface ProjectHeaderRowProps {
   onRemoveProject?: () => void;
   removeProjectStatus?: "idle" | "pending";
   dragHandleProps?: DraggableListDragHandleProps;
+  onCreateProjectBot: () => void;
 }
 
 interface WorkspaceRowInnerProps {
@@ -421,6 +422,7 @@ function ProjectRowTrailingActions({
   isMobileBreakpoint,
   isProjectActive,
   onBeginWorkspaceSetup,
+  onCreateProjectBot,
   onRemoveProject,
   removeProjectStatus,
 }: {
@@ -433,12 +435,27 @@ function ProjectRowTrailingActions({
   isMobileBreakpoint: boolean;
   isProjectActive: boolean;
   onBeginWorkspaceSetup: () => void;
+  onCreateProjectBot: () => void;
   onRemoveProject?: () => void;
   removeProjectStatus: "idle" | "pending" | "success";
 }) {
   const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint;
   return (
     <View style={styles.projectTrailingActions}>
+      <View
+        style={!actionsVisible && styles.projectKebabButtonHidden}
+        pointerEvents={actionsVisible ? "auto" : "none"}
+      >
+        <IconButton
+          label="新建项目 bot"
+          tooltip
+          icon={Plus}
+          size="xs"
+          variant="ghost"
+          onPress={onCreateProjectBot}
+          testID={`sidebar-project-new-bot-${projectViewKey}`}
+        />
+      </View>
       {worktreeTarget ? (
         <NewWorktreeButton
           displayName={displayName}
@@ -459,6 +476,8 @@ function ProjectRowTrailingActions({
             projectPath={projectPath}
             onRemoveProject={onRemoveProject}
             removeProjectStatus={removeProjectStatus}
+            onCreateProjectBot={onCreateProjectBot}
+            onBeginWorkspaceSetup={worktreeTarget ? onBeginWorkspaceSetup : undefined}
           />
         </View>
       ) : null}
@@ -487,12 +506,16 @@ function ProjectKebabMenu({
   projectPath,
   onRemoveProject,
   removeProjectStatus,
+  onCreateProjectBot,
+  onBeginWorkspaceSetup,
 }: {
   projectViewKey: string;
   settingsTarget: { serverId: string; projectId: string } | null;
   projectPath: string;
   onRemoveProject: () => void;
   removeProjectStatus: "idle" | "pending" | "success";
+  onCreateProjectBot: () => void;
+  onBeginWorkspaceSetup?: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -514,6 +537,8 @@ function ProjectKebabMenu({
           projectPath={projectPath}
           onRemoveProject={onRemoveProject}
           removeProjectStatus={removeProjectStatus}
+          onCreateProjectBot={onCreateProjectBot}
+          onBeginWorkspaceSetup={onBeginWorkspaceSetup}
         />
       </DropdownMenuContent>
     </DropdownMenu>
@@ -542,6 +567,8 @@ function ProjectMenuItems({
   projectPath,
   onRemoveProject,
   removeProjectStatus,
+  onCreateProjectBot,
+  onBeginWorkspaceSetup,
 }: {
   surface: ProjectMenuSurface;
   projectViewKey: string;
@@ -549,6 +576,8 @@ function ProjectMenuItems({
   projectPath: string;
   onRemoveProject: () => void;
   removeProjectStatus: "idle" | "pending" | "success";
+  onCreateProjectBot: () => void;
+  onBeginWorkspaceSetup?: () => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -570,6 +599,14 @@ function ProjectMenuItems({
 
   return (
     <>
+      <ProjectMenuItem surface={surface} onSelect={onCreateProjectBot}>
+        新建项目 bot
+      </ProjectMenuItem>
+      {onBeginWorkspaceSetup ? (
+        <ProjectMenuItem surface={surface} onSelect={onBeginWorkspaceSetup}>
+          {t("sidebar.workspace.actions.newWorkspace")}
+        </ProjectMenuItem>
+      ) : null}
       {settingsTarget ? (
         <ProjectMenuItem
           surface={surface}
@@ -791,73 +828,6 @@ function NewWorktreeButton({
   );
 }
 
-function NewWorkspaceGhostRow({
-  project,
-  displayName,
-  worktreeTarget,
-  onWorkspacePress,
-}: {
-  project: SidebarProjectEntry;
-  displayName: string;
-  worktreeTarget: SidebarProjectHostTarget;
-  onWorkspacePress?: () => void;
-}) {
-  const { t } = useTranslation();
-  const handlePress = useCallback(() => {
-    onWorkspacePress?.();
-    router.navigate(
-      buildNewWorkspaceRoute({
-        serverId: worktreeTarget.serverId,
-        sourceDirectory: worktreeTarget.iconWorkingDir,
-        displayName,
-        projectId: worktreeTarget.projectId,
-      }) as Href,
-    );
-  }, [displayName, onWorkspacePress, worktreeTarget]);
-  const rowStyle = useCallback(
-    ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
-      styles.newWorkspaceGhostRow,
-      hovered && !pressed && styles.newWorkspaceGhostRowHovered,
-      pressed && styles.newWorkspaceGhostRowPressed,
-    ],
-    [],
-  );
-
-  return (
-    <Pressable
-      accessibilityRole={platformIsWeb ? undefined : "button"}
-      accessibilityLabel={t("sidebar.workspace.actions.createWorkspaceFor", {
-        projectName: displayName,
-      })}
-      onPress={handlePress}
-      style={rowStyle}
-      testID={`sidebar-project-new-workspace-row-${project.viewKey}`}
-    >
-      {({ hovered, pressed }) => (
-        <>
-          <View style={styles.newWorkspaceGhostIconSlot}>
-            <DensityIcon
-              icon={Plus}
-              size="sm"
-              color={hovered || pressed ? "foreground" : "foregroundMuted"}
-            />
-          </View>
-          <Text
-            style={
-              hovered || pressed
-                ? styles.newWorkspaceGhostTextHovered
-                : styles.newWorkspaceGhostText
-            }
-            numberOfLines={1}
-          >
-            {t("sidebar.workspace.actions.newWorkspace")}
-          </Text>
-        </>
-      )}
-    </Pressable>
-  );
-}
-
 function ProjectHeaderRow({
   project,
   displayName,
@@ -879,6 +849,7 @@ function ProjectHeaderRow({
   onRemoveProject,
   removeProjectStatus = "idle",
   dragHandleProps,
+  onCreateProjectBot,
 }: ProjectHeaderRowProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isPressed, setIsPressed] = useState(false);
@@ -981,6 +952,7 @@ function ProjectHeaderRow({
         isMobileBreakpoint={isMobileBreakpoint}
         isProjectActive={isProjectActive}
         onBeginWorkspaceSetup={handleBeginWorkspaceSetup}
+        onCreateProjectBot={onCreateProjectBot}
         onRemoveProject={onRemoveProject}
         removeProjectStatus={removeProjectStatus}
       />
@@ -1052,6 +1024,8 @@ function ProjectHeaderRow({
           projectPath={projectPath}
           onRemoveProject={onRemoveProject}
           removeProjectStatus={removeProjectStatus}
+          onCreateProjectBot={onCreateProjectBot}
+          onBeginWorkspaceSetup={worktreeTarget ? handleBeginWorkspaceSetup : undefined}
         />
       </ContextMenuContent>
     </ContextMenu>
@@ -1766,6 +1740,12 @@ function ProjectBlock({
     })();
   }, [isRemovingProject, displayName, t, toast, project.hosts]);
 
+  const [createBotRequest, setCreateBotRequest] = useState(0);
+  const clearCreateBotRequest = useCallback(() => setCreateBotRequest(0), []);
+  const handleCreateProjectBot = useCallback(() => {
+    if (collapsed) onToggleCollapsed(project.viewKey);
+    setCreateBotRequest((value) => value + 1);
+  }, [collapsed, onToggleCollapsed, project.viewKey]);
   const handleToggleCollapsed = useCallback(() => {
     onToggleCollapsed(project.viewKey);
   }, [onToggleCollapsed, project.viewKey]);
@@ -1846,15 +1826,6 @@ function ProjectBlock({
           )}
         </>
       );
-    } else if (rowModel.trailingAction.kind === "new_workspace") {
-      projectChildren = (
-        <NewWorkspaceGhostRow
-          project={project}
-          displayName={displayName}
-          worktreeTarget={rowModel.trailingAction.target}
-          onWorkspacePress={onWorkspacePress}
-        />
-      );
     }
   }
 
@@ -1885,12 +1856,15 @@ function ProjectBlock({
         onRemoveProject={handleRemoveProject}
         removeProjectStatus={isRemovingProject ? "pending" : "idle"}
         dragHandleProps={dragHandleProps}
+        onCreateProjectBot={handleCreateProjectBot}
       />
 
       {!collapsed ? (
         <PluginProjectSidebarItems
           hosts={project.hosts}
           preferredServerId={activeServerId}
+          createRequest={createBotRequest}
+          onCreateHandled={clearCreateBotRequest}
           onNavigate={onWorkspacePress}
         />
       ) : null}
@@ -2646,54 +2620,9 @@ const styles = StyleSheet.create((theme) => ({
   // the rows underneath the header, so a collapsed project gives it back and a column of collapsed
   // headers closes up to the pitch of a list instead of staying spaced for content that is gone.
   projectBlockExpanded: {
-    paddingBottom: theme.spacing[3],
+    paddingBottom: theme.spacing[1.5],
   },
   workspaceListContainer: {},
-  // Kept in step with `workspaceRow` above. It stands in a project's list where a workspace row
-  // would be, so it takes that row's geometry and both of its fills.
-  //
-  // The one departure is the extra left padding: it only ever renders under its project header, so
-  // the step in reads as belonging to that project. Padding rather than margin, so the hover and
-  // pressed fills stay the same box as every other row in the sidebar.
-  newWorkspaceGhostRow: {
-    minHeight: density.rowHeight,
-    marginBottom: theme.spacing[0.5],
-    paddingVertical: theme.spacing[2],
-    paddingLeft: theme.spacing[4],
-    paddingRight: theme.spacing[3],
-    borderRadius: theme.borderRadius.lg,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-    userSelect: "none",
-  },
-  newWorkspaceGhostRowHovered: {
-    backgroundColor: theme.colors.surfaceSidebarHover,
-  },
-  newWorkspaceGhostRowPressed: {
-    backgroundColor: theme.colors.surface2,
-  },
-  // The width of a workspace row's status slot, so the label lands on the same rail as the
-  // titles above it.
-  newWorkspaceGhostIconSlot: {
-    width: densityIconBox("md"),
-    height: densityIconBox("md"),
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  newWorkspaceGhostText: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
-    minWidth: 0,
-    flexShrink: 1,
-  },
-  newWorkspaceGhostTextHovered: {
-    fontSize: theme.fontSize.base,
-    minWidth: 0,
-    flexShrink: 1,
-    color: theme.colors.foreground,
-  },
   projectRow: {
     position: "relative",
     minHeight: density.rowHeight,

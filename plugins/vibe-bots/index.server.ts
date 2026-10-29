@@ -1,6 +1,10 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import * as rpc from "./shared/rpc";
+import * as routineRpc from "./shared/routines-rpc";
+import { createRoutineStore } from "./server/vibe/db/routines";
+import { createRoutineExecution } from "./server/routine-execution";
+import { registerRoutineTools } from "./server/routine-tools";
 import { BotCreateSchema, BotPatchSchema } from "./server/vibe/contract/bots";
 import { migrateOwner } from "./server/vibe/db/migrate";
 import { openVibeDb } from "./server/vibe/db/sqlite";
@@ -16,7 +20,24 @@ export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
   migrateOwner(db, "vibe-bots");
   const service = createBotService(db, server.paseo);
+  function botForAgent(agentId: string) {
+    const main = service.bots.list({ includeArchived: true }).find((bot) => bot.mainAgentId === agentId);
+    if (main) return main;
+    const thread = db.prepare<{ bot_id: string }>("SELECT bot_id FROM bot_thread WHERE agent_id=?").get(agentId);
+    return thread ? service.bots.get(thread.bot_id) : null;
+  }
   registerVisualReply(server, service.caller);
+  const routines = createRoutineStore(db);
+  registerRoutineTools(server, service, routines);
+  const execution = createRoutineExecution(db, service, server);
+  server.handle(routineRpc.routineTickRpc, (input, ctx) => { userOnly(ctx.callerAgentId); return execution.tick(input); });
+  server.handle(routineRpc.routinesListRpc, (input, ctx) => { userOnly(ctx.callerAgentId); return { routines: routines.list(input.botId) }; });
+  server.handle(routineRpc.routinesCreateRpc, (input, ctx) => { userOnly(ctx.callerAgentId); return { routine: routines.create(input) }; });
+  server.handle(routineRpc.routinesUpdateRpc, (input, ctx) => { userOnly(ctx.callerAgentId); return { routine: routines.update(input.id, input.patch) }; });
+  server.handle(routineRpc.routinesPauseRpc, (input, ctx) => { userOnly(ctx.callerAgentId); return { routine: routines.pause(input.id) }; });
+  server.handle(routineRpc.routinesResumeRpc, (input, ctx) => { userOnly(ctx.callerAgentId); return { routine: routines.resume(input.id) }; });
+  server.handle(routineRpc.routinesDeleteRpc, (input, ctx) => { userOnly(ctx.callerAgentId); routines.delete(input.id); return { ok: true as const }; });
+  server.handle(routineRpc.routinesRunNowRpc, (input, ctx) => { userOnly(ctx.callerAgentId); routines.runNow(input.id); return { ok: true as const }; });
   const stopContinuations = registerBotContinuations(db, service);
   server.handle(rpc.threadsListRpc, async (input, ctx) => {
     userOnly(ctx.callerAgentId); await service.ready(); service.bots.require(input.botId);
@@ -206,8 +227,9 @@ export default function contribute(server: PluginServerContext) {
   const stop = [
     server.before("agent.notification", async ({ request }) => {
       await service.ready();
-      const bot = service.bots.list().find((item) => item.mainAgentId === request.agentId || service.threads.list(item.id).some((thread) => thread.agentId === request.agentId));
+      const bot = botForAgent(request.agentId);
       if (!bot) return;
+      if (request.reason === "finished" && execution.quiet(request.agentId)) return { ...request, suppressed: true };
       const disabled = !bot.notifications.enabled;
       const completedDisabled = request.reason === "finished" && !bot.notifications.completed;
       const failedDisabled = request.reason === "error" && !bot.notifications.failed;
@@ -215,7 +237,7 @@ export default function contribute(server: PluginServerContext) {
     }),
     server.before("agent.turn_context", async ({ request }) => {
       await service.ready();
-      const bot = service.bots.list().find((item) => item.mainAgentId === request.agentId || service.threads.list(item.id).some((thread) => thread.agentId === request.agentId));
+      const bot = botForAgent(request.agentId);
       if (!bot) return;
       const delivery = service.memoryDelivery.prepare(bot.id, request.agentId, service.bots.memories(bot.id), [service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n"));
       if (delivery) return { ...request, ...delivery };
@@ -226,22 +248,26 @@ export default function contribute(server: PluginServerContext) {
     server.on("agent.turn_started", ({ agent }) => {
       service.live.add(agent.id);
     }),
-    server.on("agent.turn_ended", async ({ agent, outcome }) => {
+    server.on("agent.turn_ended", async ({ agent, turnId, outcome }) => {
       service.live.delete(agent.id);
-      const bot = service.bots.list().find((item) => item.mainAgentId === agent.id);
+      let routineError: string | null = null;
+      if (outcome.kind === "failed") routineError = outcome.error.message;
+      else if (outcome.kind === "canceled") routineError = `运行已取消：${outcome.reason}`;
+      const routineRun = await execution.turnEnded(agent.id, turnId, routineError);
+      const bot = botForAgent(agent.id);
       if (!bot) return;
       const failed = outcome.kind === "failed";
       const completedNotice = outcome.kind === "completed" && bot.notifications.completed;
       const failedNotice = failed && bot.notifications.failed;
-      if (bot.notifications.enabled && (failedNotice || completedNotice)) {
+      if (!routineRun && bot.notifications.enabled && (failedNotice || completedNotice)) {
         server.notify({
           title: bot.name,
-          body: failed ? "bot 运行失败，请打开主对话查看。" : "bot 已回复。",
+          body: failed ? "bot 运行失败，请打开对话查看。" : "bot 已回复。",
           data: { agentId: agent.id, botId: bot.id },
           agentAttention: { agentId: agent.id, reason: failed ? "error" : "finished" },
         });
       }
-      if (failed && await service.failover(bot.id, new Error(outcome.error.message))) return;
+      if (failed && bot.mainAgentId === agent.id && await service.failover(bot.id, new Error(outcome.error.message))) return;
       await service.apply(bot.id);
     }),
   ];
