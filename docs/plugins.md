@@ -106,6 +106,18 @@ Plugin runtime translations follow the connected app, so never send a daemon loc
 
 The author contract is in [runtime translations](../public-docs/plugins/reference.md#runtime-translations).
 
+## Server integrations
+
+`context.paseo.plugins.invoke(pluginId, method, input)` calls another installed plugin through the
+existing daemon RPC transport. Validate the returned value with the receiving contract. This is a
+server integration call; it does not preserve an agent caller from a handler you are proxying.
+Check `callerAgentId` at the original handler before forwarding user-only operations or private
+data reads. Agent tools should keep their own scope checks at the entry point.
+
+Agent handles expose `setModel(modelOrNull)` and `setThinkingOption(optionOrNull)` using the same
+native operations as the app. A null value selects the provider default. Call them while the agent
+is idle; the plugin owns pending configuration if it needs to defer a busy agent's changes.
+
 ## Built-in plugins
 
 Built-in plugins ship from `plugins/<id>/`, with `paseo-plugin.json`, `index.server.ts`,

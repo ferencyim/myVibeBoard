@@ -43,7 +43,7 @@ export function ProjectAgentSettingsSection({ theme }: PluginProjectSettingsSect
     <SettingsCard>
       <SettingsSwitch
         label="任务完成后整理项目记忆"
-        hint="本主机的所有项目共用这些策略；各项目 agent 负责整理自己的项目。"
+        hint="本主机的所有项目共用这些策略；各项目的默认项目 bot 负责整理自己的项目。"
         disabled={settings.saving}
         value={values.projectConsolidateOnDone}
         onValueChange={consolidate}

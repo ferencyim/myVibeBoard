@@ -114,3 +114,12 @@ export const remoteHostsRpc = defineRpc({
   input: z.object({ hosts: z.array(remoteHost).max(32).optional() }),
   output: z.object({ hosts: z.array(remoteHost) }),
 });
+
+export const queueOrderRpc = defineRpc({
+  name: "scheduler.queue.order",
+  input: z.object({
+    workspaceIds: z.array(z.string().min(1)).max(1000),
+    reason: z.string().trim().min(1).max(1000),
+  }),
+  output: z.object({ workspaceIds: z.array(z.string()), reason: z.string() }),
+});

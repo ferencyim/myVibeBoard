@@ -487,40 +487,27 @@ describe("原生任务准入", () => {
     ]);
     expect(t.store.tasks.get("planner")!.phase).toBe("failed");
   });
-  it("总agent只排序已确认候选，关闭/不可用/超时退回FIFO", async () => {
+  it("忽略遗留总 agent 派发开关，直接按规则 FIFO 派发", async () => {
     const t = setup(2);
     t.task("unconfirmed", ["u"], false);
     t.task("first", ["a.ts"]);
     t.task("second", ["b.ts"]);
-    t.store.masterDispatch.publish({
-      enabled: true,
-      available: true,
-      reason: "",
-      timeoutSeconds: 10,
-    });
-    expect((await t.scheduler.tick()).admitted).toEqual([]);
-    const wanted = t.events.at(-1)!.payload;
-    expect(wanted.workspaceIds).toEqual(["first", "second"]);
-    t.scheduler.handleMasterChosen({
-      requestId: String(wanted.requestId),
-      workspaceIds: ["unconfirmed", "second", "first"],
-      reason: "先二",
-    });
-    expect((await t.scheduler.tick()).admitted.map((row) => row.workspaceId)).toEqual([
-      "second",
-      "first",
-    ]);
-    const other = setup(1);
-    other.task("fifo");
-    other.store.masterDispatch.publish({
-      enabled: true,
-      available: true,
-      reason: "",
-      timeoutSeconds: 10,
-    });
-    await other.scheduler.tick();
-    other.advance(300_000);
-    expect((await other.scheduler.tick()).admitted.map((row) => row.workspaceId)).toEqual(["fifo"]);
+    t.store.masterDispatch.publish({ enabled: true, available: true, reason: "", timeoutSeconds: 10 });
+    expect((await t.scheduler.tick()).admitted.map((row) => row.workspaceId)).toEqual(["first", "second"]);
+    expect(t.events.every((event) => event.type !== "scheduler.task_dispatch_wanted")).toBe(true);
+  });
+  it("显式调整等待队列，重启保留顺序且仍重新执行资源准入", async () => {
+    const t = setup(1);
+    t.task("first", ["a.ts"]);
+    t.task("second", ["b.ts"]);
+    t.task("draft", ["c.ts"], false);
+    await expect(t.scheduler.setQueueOrder(["draft"], "先做草稿")).rejects.toThrow("已确认");
+    await expect(t.scheduler.setQueueOrder(["first", "first"], "重复")).rejects.toThrow("重复");
+    await t.scheduler.setQueueOrder(["second"], "用户要求先做第二项");
+    const restarted = t.makeScheduler();
+    expect((await restarted.tick()).admitted.map((row) => row.workspaceId)).toEqual(["second"]);
+    expect(restarted.status().deferred.first).toMatch(/全局/);
+    expect(restarted.status().queueOrderReason).toBe("用户要求先做第二项");
   });
   it("维护只读planner和总agent也占计算名额，不授予worker执行", async () => {
     const t = setup(1);

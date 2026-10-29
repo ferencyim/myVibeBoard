@@ -53,7 +53,7 @@ export default function contribute(client: PluginClientContext) {
     contributeWorkspaceTabs(client),
     client.addProjectSidebarItem({
       id: "project-agent",
-      title: "项目 agent",
+      title: "项目 bot",
       order: -100,
       Component: ProjectAgentSidebarItem,
     }),

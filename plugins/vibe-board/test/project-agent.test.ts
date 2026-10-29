@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createProjectAgents } from "../server/project-agent/service";
 import { registerProjectAgents } from "../server/project-agent/register";
-import { UNRESOLVED_TAB_MODEL } from "../server/vibe/contract";
 
 function fixture() {
   const agents = new Map<
@@ -63,7 +62,27 @@ function fixture() {
       },
     };
   });
+  let defaultBotId = "bot_default";
+  const botAgents = new Map<string, string>();
+  const invoke = vi.fn(async (_pluginId: string, method: string, input: { projectId?: string; id?: string }) => {
+    if (method === "bots.list") return { bots: [...agents.values()].filter((agent) => agent.labels["vibe.bot"] === "bot_independent").map((agent) => ({ mainAgentId: agent.id })) };
+    if (method === "project.default_bot.get")
+      return { botId: defaultBotId, mainAgentId: botAgents.get(defaultBotId) ?? null };
+    if (method === "bots.open") {
+      const id = input.id!;
+      const previous = botAgents.get(id);
+      if (previous && !agents.get(previous)?.archivedAt)
+        return { agentId: previous, workspaceId: "root" };
+      const opened = await createAgent({ labels: {
+        "vibe.bot": id, "vibe.bot-thread": "main", "vibe.role": "project", "vibe.project_id": "p",
+      } });
+      botAgents.set(id, opened.id);
+      return { agentId: opened.id, workspaceId: "root" };
+    }
+    throw new Error("unexpected RPC: " + method);
+  });
   const api = {
+    plugins: { invoke },
     projects: { list: async () => ({ projects: [{ projectId: "p", projectRootPath: "/repo" }] }) },
     agents: {
       list: async () => ({
@@ -128,6 +147,8 @@ function fixture() {
   });
   return {
     service,
+    invoke,
+    setDefaultBot: (id: string) => { defaultBotId = id; },
     agents,
     sends,
     append,
@@ -148,104 +169,63 @@ function fixture() {
 }
 
 describe("项目 agent", () => {
-  it("状态并发单飞、项目列表共享缓存，找到 agent 后打开不再分页扫描", async () => {
-    const f = fixture();
-    const listProjects = vi.spyOn(f.api.projects, "list");
-    const listAgents = vi.spyOn(f.api.agents, "list");
-    await Promise.all(Array.from({ length: 10 }, () => f.service.state("p")));
-    expect(listProjects).toHaveBeenCalledTimes(1);
-    expect(listAgents).toHaveBeenCalledTimes(1);
-    const opened = await f.service.open("p");
-    expect((await f.service.state("p")).agentId).toBe(opened.agentId);
-    await f.service.open("p");
-    expect(listProjects).toHaveBeenCalledTimes(1);
-    expect(listAgents).toHaveBeenCalledTimes(1);
-  });
-  it("入口按需创建、并发复用，归档后重建且沿用最近 #1 模型", async () => {
+  it("项目入口委托默认 bot 服务懒创建、并发复用，状态不创建会话", async () => {
     const f = fixture();
     expect((await f.service.state("p")).agentId).toBeNull();
     expect(f.createAgent).not.toHaveBeenCalled();
     const [one, two] = await Promise.all([f.service.open("p"), f.service.open("p")]);
     expect(one.agentId).toBe(two.agentId);
     expect(f.createAgent).toHaveBeenCalledTimes(1);
-    expect(f.createAgent.mock.calls[0][0]).toMatchObject({
-      cwd: "/repo",
-      config: { provider: "codex/recent" },
-      labels: { "vibe.role": "project", "vibe.project_id": "p" },
-    });
-    f.agents.get(one.agentId!)!.archivedAt = "now";
-    expect((await f.service.open("p")).agentId).not.toBe(one.agentId);
+    expect(f.invoke).toHaveBeenCalledWith("vibe-bots", "bots.open", { id: "bot_default" });
+    expect((await f.service.state("p")).agentId).toBe(one.agentId);
   });
-  it("项目默认预设优先并保留思考、权限、指令与环境", async () => {
+  it("默认 bot 改变后入口与系统通知使用新默认，原 bot 仍可处理自己的需求", async () => {
+    const f = fixture();
+    const first = (await f.service.open("p")).agentId!;
+    await f.service.received(f.input(first) as never);
+    f.setDefaultBot("bot_other");
+    const second = (await f.service.open("p")).agentId!;
+    expect(second).not.toBe(first);
+    expect((await f.service.state("p")).agentId).toBe(second);
+    await f.service.sendProject("p", "环境通知");
+    expect(f.sends).toHaveBeenLastCalledWith("环境通知", { sourceAgentId: second });
+    await f.service.route(first, { workspaceId: "task", text: "用户原话" });
+    expect(f.sends).toHaveBeenLastCalledWith("用户原话", expect.objectContaining({ messageId: "project-route:u1" }));
+  });
+  it("bot 服务失败显示错误并允许重试，不私自创建未登记的项目 agent", async () => {
+    const f = fixture();
+    f.invoke.mockRejectedValueOnce(new Error("bot 服务暂不可用"));
+    await expect(f.service.open("p")).rejects.toThrow("bot 服务暂不可用");
+    expect(f.createAgent).not.toHaveBeenCalled();
+    expect((await f.service.state("p")).error).toBe("bot 服务暂不可用");
+    expect((await f.service.open("p")).error).toBeNull();
+  });
+  it("项目 bot 模型解析保留项目预设、权限、指令与运行环境", async () => {
     const f = fixture();
     f.defaults.project = "wrong-global";
-    f.projectConfigs.push({
-      id: "config",
-      paseoProjectId: "p",
-      repoPath: "/repo",
-      defaultPresets: { project: "preset" },
-    });
-    f.presets.set("preset", {
-      models: [{ provider: "codex", model: "chosen", thinking: "high", permissionMode: "full" }],
-      instructions: "补充",
+    f.projectConfigs.push({ id: "config", paseoProjectId: "p", repoPath: "/repo", defaultPresets: { project: "preset" } });
+    f.presets.set("preset", { models: [{ provider: "codex", model: "chosen", thinking: "high", permissionMode: "full" }], instructions: "补充", runtimeEnv: "env" });
+    expect(await f.service.resolveModel("p")).toEqual({
+      config: { provider: "codex/chosen", thinkingOptionId: "high", modeId: "full-access", systemPrompt: "补充" },
       runtimeEnv: "env",
     });
-    await f.service.open("p");
-    expect(f.createAgent.mock.calls[0][0]).toMatchObject({
-      config: {
-        provider: "codex/chosen",
-        thinkingOptionId: "high",
-        modeId: "full-access",
-        systemPrompt: "角色规则\n\n补充",
-      },
-      env: { VIBE_RUNTIME_ENV: "env" },
-    });
+    expect(f.createAgent).not.toHaveBeenCalled();
   });
-  it("最近任务没有明确模型时使用首个可用 provider 默认模型", async () => {
+  it("无预设时沿用最近任务 #1 明确模型，无任务时取 provider 目录默认", async () => {
     const f = fixture();
-    f.main.tabs[0].model = "";
-    await f.service.open("p");
-    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/default-model");
+    expect((await f.service.resolveModel("p")).config.provider).toBe("codex/recent");
+    f.taskRows.length = 0;
+    expect((await f.service.resolveModel("p")).config.provider).toBe("codex/default-model");
     expect(f.providers.listModels).toHaveBeenCalledWith("codex", { cwd: "/repo" });
   });
-  it("没有历史任务仍解析目录默认模型，并优先默认标记", async () => {
+  it("目录不可用或无模型时不创建会话，中文错误引导用户选择具体模型", async () => {
     const f = fixture();
     f.taskRows.length = 0;
-    f.providers.listModels.mockResolvedValue({
-      models: [
-        { id: "other", isDefault: false },
-        { id: "chosen", isDefault: true },
-      ],
-    });
-    await f.service.open("p");
-    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/chosen");
-  });
-  it("最近任务尚未解析模型时仍查询目录，目录失败以中文引导设置", async () => {
-    const f = fixture();
-    f.main.tabs[0].model = UNRESOLVED_TAB_MODEL;
-    f.providers.listModels.mockRejectedValueOnce(new Error("catalog unavailable"));
-    await expect(f.service.open("p")).rejects.toThrow("任务默认模型");
-    expect(f.createAgent).not.toHaveBeenCalled();
-    await f.service.open("p");
-    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/default-model");
-  });
-  it("没有可用 provider 时引导设置且不创建项目 agent", async () => {
-    const f = fixture();
-    f.taskRows.length = 0;
-    f.providers.listAvailable = async () => ({ providers: [] });
-    await expect(f.service.open("p")).rejects.toThrow("任务默认模型");
-    expect(f.providers.listModels).not.toHaveBeenCalled();
-    expect(f.createAgent).not.toHaveBeenCalled();
-  });
-  it("目录未标默认时采用目录首项，缺少模型则引导设置且不创建", async () => {
-    const f = fixture();
-    f.taskRows.length = 0;
+    f.providers.listModels.mockRejectedValueOnce(new Error("目录离线"));
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
     f.providers.listModels.mockResolvedValue({ models: [] });
-    await expect(f.service.open("p")).rejects.toThrow("任务默认模型");
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
     expect(f.createAgent).not.toHaveBeenCalled();
-    f.providers.listModels.mockResolvedValue({ models: [{ id: "first", isDefault: false }] });
-    await f.service.open("p");
-    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/first");
   });
   it("旧任务工作区失效不阻断项目入口和正常任务路由", async () => {
     const f = fixture();
@@ -263,14 +243,14 @@ describe("项目 agent", () => {
   });
   it("拒绝任务 tab 与跨项目伪标签调用", async () => {
     const f = fixture();
-    await expect(f.service.tasksFor("main")).rejects.toThrow("仅供项目 agent");
+    await expect(f.service.tasksFor("main")).rejects.toThrow("仅供 bot 主对话");
     f.agents.set("fake", {
       id: "fake",
       workspaceId: "foreign",
       labels: { "vibe.role": "project", "vibe.project_id": "p" },
       status: "idle",
     });
-    await expect(f.service.tasksFor("fake")).rejects.toThrow("仅供项目 agent");
+    await expect(f.service.tasksFor("fake")).rejects.toThrow("仅供 bot 主对话");
   });
   it("只有原生成功投递事件授予原话权限，附带附件且只消费一次", async () => {
     const f = fixture();
@@ -393,5 +373,32 @@ describe("项目 agent", () => {
     };
     registerProjectAgents(server as never, f.service);
     expect(events).toEqual(["agent.user_prompt_received"]);
+  });
+});
+
+
+describe("独立 bot 跨项目工具", () => {
+  it("只读项目任务并复用真实用户建任务路径，禁止改写与重复消费", async () => {
+    const f = fixture();
+    f.agents.set("independent", { id: "independent", workspaceId: "bot-home", labels: { "vibe.bot": "bot_independent", "vibe.bot-thread": "main" }, status: "idle" });
+    expect((await f.service.projectsFor("independent")).projects).toHaveLength(1);
+    expect((await f.service.tasksFor("independent", "p")).plans).toHaveLength(1);
+    expect(f.workspaceCreate).not.toHaveBeenCalled();
+    await expect(f.service.create("independent", { projectId: "p", text: "用户原话" })).rejects.toThrow("真实用户");
+    await f.service.received(f.input("independent") as never);
+    await expect(f.service.create("independent", { projectId: "p", text: "改写" })).rejects.toThrow("真实用户");
+    await f.service.create("independent", { projectId: "p", text: "用户原话" });
+    expect(f.workspaceCreate).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: "worktree", projectId: "p", cwd: "/repo" } }));
+    expect(f.sends).toHaveBeenCalledWith("用户原话", expect.objectContaining({ messageId: "project-route:u1", images: [{ mimeType: "image/png", data: "image" }] }));
+    await expect(f.service.create("independent", { projectId: "p", text: "用户原话" })).rejects.toThrow("真实用户");
+  });
+  it("独立 bot 需指定有效项目，项目 bot 不可越项目或读取跨项目列表", async () => {
+    const f = fixture();
+    f.agents.set("independent", { id: "independent", workspaceId: "bot-home", labels: { "vibe.bot": "bot_independent", "vibe.bot-thread": "main" }, status: "idle" });
+    await expect(f.service.tasksFor("independent")).rejects.toThrow("必须指定");
+    await expect(f.service.tasksFor("independent", "missing")).rejects.toThrow("项目不存在");
+    const own = (await f.service.open("p")).agentId!;
+    await expect(f.service.tasksFor(own, "other")).rejects.toThrow("只能操作本项目");
+    await expect(f.service.projectsFor(own)).rejects.toThrow("仅供独立 bot");
   });
 });

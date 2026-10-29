@@ -7,6 +7,11 @@ import { createMasterRuntime } from "./server/runtime";
 import { createVibeStore, migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import {
   masterSettings,
+  masterBotMigrationRpc,
+  botsListRpc,
+  botsCreateRpc,
+  botsOpenRpc,
+  botsArchiveRpc,
   permissionRpc,
   promptsClearRpc,
   promptsListRpc,
@@ -28,7 +33,7 @@ export default function contribute(server: PluginServerContext) {
   const applySettings = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
     current = state.values;
-    // Dispatch availability for the scheduler, and a newly chosen preset for a running master.
+    // Apply a newly chosen preset for a running master.
     void runtime?.onSettingsChanged();
   };
   const settingsReady = settings.read();
@@ -42,7 +47,6 @@ export default function contribute(server: PluginServerContext) {
       void startup.ready
         .then(() => master.onSettingsChanged())
         .catch((error) => console.error("[vibe-master] 设置应用失败", error));
-      master.startQuotaMonitor();
       master.sweep();
     },
     (error) => console.error("[vibe-master] 后台初始化失败", error),
@@ -73,6 +77,7 @@ export default function contribute(server: PluginServerContext) {
     settings: () => current,
     dataDir: join(resolveVibeHome(), "master"),
     promptsReady: startup.ready,
+    managedByBots: true,
   });
   runtime = master;
   const onPaseo = (api: PaseoApi) => {
@@ -100,6 +105,28 @@ export default function contribute(server: PluginServerContext) {
         );
     }),
   ];
+
+  server.handle(masterBotMigrationRpc, (_input, { callerAgentId }) => {
+    if (callerAgentId) throw new Error("旧总 bot 配置迁移仅供宿主或用户读取");
+    return master.botMigrationSnapshot();
+  });
+
+  server.handle(botsListRpc, async (input, { paseo: api, callerAgentId }) => {
+    if (callerAgentId) throw new Error("bot 请使用不含个人记忆的 vibe_bot_read 工具");
+    return botsListRpc.output.parse(await api.plugins.invoke("vibe-bots", botsListRpc.name, input));
+  });
+  server.handle(botsCreateRpc, async (input, { paseo: api, callerAgentId }) => {
+    if (callerAgentId) throw new Error("请通过 bot 的自配置工具创建 bot");
+    return botsCreateRpc.output.parse(await api.plugins.invoke("vibe-bots", botsCreateRpc.name, input));
+  });
+  server.handle(botsOpenRpc, async (input, { paseo: api, callerAgentId }) => {
+    if (callerAgentId) throw new Error("请由用户打开 bot 对话");
+    return botsOpenRpc.output.parse(await api.plugins.invoke("vibe-bots", botsOpenRpc.name, input));
+  });
+  server.handle(botsArchiveRpc, async (input, { paseo: api, callerAgentId }) => {
+    if (callerAgentId) throw new Error("请由用户归档 bot");
+    return botsArchiveRpc.output.parse(await api.plugins.invoke("vibe-bots", botsArchiveRpc.name, input));
+  });
 
   server.handle(statusRpc, async (_input, { paseo: api }) => {
     onPaseo(api);

@@ -65,7 +65,7 @@ describe("项目完成整理归属", () => {
       progress: { report: async () => {}, tabTurnEnded: async () => {} },
     });
     flow.registerPrompts();
-    expect(store.prompts.body("project.agent.role").text).toContain("长期项目 agent");
+    expect(store.prompts.body("project.agent.role").text).toContain("长期项目 bot");
     expect(store.prompts.body("project.agent.task_done").text).toBe("自定义整理 {{summary}}");
     expect(store.prompts.body("project.agent.task_done", { projectId }).text).toBe(
       "项目整理 {{summary}}",

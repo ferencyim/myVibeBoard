@@ -3,6 +3,7 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 import { PromptDefSchema } from "./vibe/contract";
+import { BotSchema, BotCreateSchema, BotMemorySchema } from "./vibe/contract/bots";
 
 const promptScope = z.string().min(1).nullable().optional();
 export const promptsListRpc = defineRpc({
@@ -54,12 +55,14 @@ export const REMOVED_SETTING_KEYS = [
   "consolidateOnDone",
   "maintainRequirements",
   "requirementsExcerptChars",
+  "dispatch",
+  "dispatchTimeoutSeconds",
 ] as const;
 
 export const masterSettings = defineSettings({
   id: "preferences",
   scope: "host",
-  version: 4,
+  version: 5,
   /** WP-105 / WP-114: remove retired card automation settings. */
   migrate: (values) => {
     if (!values || typeof values !== "object") return values;
@@ -87,13 +90,6 @@ export const masterSettings = defineSettings({
     provider: z.string().default(""),
     model: z.string().default(""),
     thinking: z.string().default(""),
-    /**
-     * Master dispatch (WP-109): when a slot is free the master decides which confirmed queued task
-     * starts first. Off = the scheduler's own rules. The master being unavailable also falls back to them.
-     */
-    dispatch: z.boolean().default(true),
-    /** How long one dispatch question to the master may take. */
-    dispatchTimeoutSeconds: z.number().int().min(10).max(600).default(120),
     /**
      * Permission mode of the master: "preset" follows the current candidate; "auto" uses the provider's automatic mode (Claude auto, Codex
      * auto-review), else a concrete Paseo modeId of the provider.
@@ -176,8 +172,6 @@ export const MasterStatusSchema = z.object({
   target: Target.nullable(),
   /** The preset the master runs on; null = none chosen (the settings page asks for one). */
   preset: z.object({ id: z.string(), name: z.string(), migrated: z.boolean() }).nullable(),
-  /** Master dispatch as the scheduler sees it. */
-  dispatch: z.object({ enabled: z.boolean(), available: z.boolean(), reason: z.string() }),
   permission: PermissionInfo.nullable(),
   session: z
     .object({
@@ -250,4 +244,31 @@ export const sessionsRpc = defineRpc({
   name: "master.sessions",
   input: z.object({ limit: z.number().int().min(1).max(100).default(30) }),
   output: z.object({ sessions: z.array(SessionRow) }),
+});
+
+const BotViewSchema = BotSchema.extend({ memories: z.array(BotMemorySchema), isDefault: z.boolean() });
+export const botsListRpc = defineRpc({
+  name: "bots.list",
+  input: z.object({ kind: z.enum(["independent", "project"]).optional(), projectId: z.string().optional(), includeArchived: z.boolean().optional() }),
+  output: z.object({ bots: z.array(BotViewSchema) }),
+});
+export const botsCreateRpc = defineRpc({ name: "bots.create", input: BotCreateSchema, output: z.object({ bot: BotViewSchema }) });
+export const botsOpenRpc = defineRpc({ name: "bots.open", input: z.object({ id: z.string() }), output: z.object({ agentId: z.string(), workspaceId: z.string().nullable() }) });
+export const botsArchiveRpc = defineRpc({ name: "bots.archive", input: z.object({ id: z.string() }), output: z.object({ ok: z.literal(true) }) });
+
+export const masterBotMigrationRpc = defineRpc({
+  name: "vibe.master.bot_migration",
+  input: z.object({}).strict(),
+  output: z.object({
+    presetId: z.string().nullable(),
+    provider: z.string().nullable(),
+    model: z.string().nullable(),
+    thinking: z.string(),
+    candidateIndex: z.number().int().min(0),
+    models: z.array(z.object({ provider: z.string(), model: z.string(), thinking: z.string(), permissionMode: z.string() })),
+    backupModels: z.array(z.object({ provider: z.string(), model: z.string(), thinking: z.string() })),
+    instructions: z.string(),
+    notifications: z.object({ enabled: z.boolean(), completed: z.boolean(), failed: z.boolean() }),
+    permissionMode: z.enum(["accept-edits", "auto", "full"]),
+  }),
 });

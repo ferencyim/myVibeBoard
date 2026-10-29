@@ -16,8 +16,9 @@ function setup(script: Script) {
   const settings = defaultSettings();
   const dataDir = tempDir();
   const writeAdmission = { allowed: true, calls: [] as string[][], released: 0 };
-  const build = () =>
+  const build = (managedByBots = false) =>
     createMasterRuntime({
+      managedByBots,
       db: board.db,
       store: board.store,
       getPaseo: () => fake.paseo,
@@ -79,7 +80,6 @@ function setup(script: Script) {
       .map((row) => Object.assign({ type: row.type }, JSON.parse(row.payload_json)));
   return { ...board, fake, settings, dataDir, build, task, answers, writeAdmission };
 }
-const reply = (value: unknown) => JSON.stringify(value);
 async function waitFor(fn: () => boolean) {
   for (let i = 0; i < 100 && !fn(); i++) await tick(10);
   expect(fn()).toBe(true);
@@ -90,53 +90,71 @@ function complete(t: ReturnType<typeof setup>, id: string) {
 }
 
 describe("task master runtime", () => {
-  it("receives task sorting events, filters unconfirmed/unknown/duplicate choices and leaves admission to scheduler", async () => {
-    const t = setup(() =>
-      reply({ order: ["b", "b", "unconfirmed", "unknown", "a"], reason: "先处理依赖" }),
-    );
+  it("ignores legacy dispatch requests and never starts a sorting turn", async () => {
+    const t = setup(() => { throw new Error("独立 bot 不应自动排序"); });
     t.task("a");
-    t.task("b");
-    t.task("unconfirmed", false);
     const runtime = t.build();
     publishEvent(t.db, {
       type: "scheduler.task_dispatch_wanted",
-      payload: { requestId: "r", slots: 1, workspaceIds: ["a", "b", "unconfirmed"] },
+      payload: { requestId: "legacy", slots: 1, workspaceIds: ["a"] },
     });
     await runtime.triggers.consumer.poll();
-    await waitFor(() => t.answers().length > 0);
-    expect(t.answers()[0]).toMatchObject({
-      type: "master.task_dispatch_chosen",
-      workspaceIds: ["b"],
-    });
-    expect(t.store.tasks.get("b")?.phase).toBe("queued");
-    expect(t.fake.agents[0]!.prompts[0]).toContain("[task_dispatch]");
-    expect(t.fake.agents[0]!.sourceAgentIds).toEqual([t.fake.agents[0]!.id]);
-    expect(t.fake.agents[0]!.prompts[0]).not.toContain("unconfirmed目标");
+    await runtime.queue.idle();
+    expect(t.fake.agents).toHaveLength(0);
+    expect(t.answers()).toEqual([]);
+    expect(t.store.prompts.list().some((prompt) => prompt.key === "master.task_dispatch")).toBe(false);
     await runtime.dispose();
   });
-  it("reports disabled/unavailable for FIFO and rechecks a changed task after the model turn", async () => {
-    const t = setup(() => {
-      t.store.tasks.setPhase("a", "paused");
-      return reply({ order: ["a"] });
+  it("bot 服务接管后，旧单例设置、权限和接续不再新建 agent", async () => {
+    const t = setup(() => "ok");
+    const original = t.build();
+    await original.session.ask("旧总 agent 历史");
+    const previous = original.session.liveSession()!;
+    await original.dispose();
+    const runtime = t.build(true);
+    await runtime.onSettingsChanged();
+    await expect(runtime.setPermission("auto")).rejects.toThrow("具体 bot");
+    publishEvent(t.db, {
+      type: "context.continuation_requested",
+      payload: { requestId: "managed", workspaceId: null, sessionId: previous.id,
+        agentId: previous.agentId, role: "master", reason: "context", message: "接续",
+        summary: "摘要", candidateIndex: 0, confirmedAt: null, prompt: "" },
     });
-    t.task("a");
-    const runtime = t.build();
-    await runtime.taskDispatcher.handle({ requestId: "changed", slots: 1, workspaceIds: ["a"] });
-    expect(t.answers()[0].type).toBe("master.task_dispatch_failed");
-    t.settings.dispatch = false;
-    await runtime.taskDispatcher.handle({ requestId: "off", slots: 1, workspaceIds: ["a"] });
-    expect(t.answers()[1].reason).toContain("关闭");
+    await runtime.triggers.consumer.poll();
+    await runtime.queue.idle();
     expect(t.fake.agents).toHaveLength(1);
+    expect(t.store.sessions.get(previous.id)?.state).not.toBe("ended");
     await runtime.dispose();
   });
-  it("honours task prompt overrides", async () => {
-    const t = setup(() => reply({ order: ["a"] }));
-    t.task("a");
-    const runtime = t.build();
-    t.store.prompts.setOverride("master.task_dispatch", "自定义排序 {{candidates}}");
-    await runtime.taskDispatcher.handle({ requestId: "r", slots: 1, workspaceIds: ["a"] });
-    expect(t.fake.agents[0]!.prompts[0]).toContain("自定义排序");
-    expect(t.fake.agents[0]!.prompts[0]).toContain("workspaceId 必须来自候选");
+  it("导出旧预设候选进度、有效说明与权限，不包含环境或工作目录", async () => {
+    const t = setup(() => "ok");
+    const models = [
+      { provider: "claude", model: "first", thinking: "high", permissionMode: "auto" as const },
+      { provider: "codex", model: "second", thinking: "xhigh", permissionMode: "full" as const },
+    ];
+    t.store.presets.update(t.presets.claude.id, { models });
+    t.settings.presetId = t.presets.claude.id;
+    const runtime = t.build(true);
+    runtime.state.update((previous) => ({ ...previous,
+      permissionMode: "full-access",
+      presetSelection: { key: JSON.stringify([t.presets.claude.id, models]), index: 1 },
+      agent: { agentId: "preserved", sessionId: "session-preserved", target: {
+        provider: "codex", model: "second", thinking: "xhigh",
+      } },
+    }));
+    t.store.prompts.setOverride("master.rules", "保留用户规则");
+    t.store.prompts.setOverride("master.rules_supplement", "保留用户补充");
+    const snapshot = runtime.botMigrationSnapshot();
+    expect(snapshot).toMatchObject({ presetId: t.presets.claude.id, provider: "codex",
+      model: "second", candidateIndex: 1, permissionMode: "full", models,
+      backupModels: [{ provider: "codex", model: "second", thinking: "xhigh" }],
+    });
+    expect(snapshot.instructions).toContain("保留用户规则");
+    expect(snapshot.instructions).toContain("保留用户补充");
+    expect(snapshot).not.toHaveProperty("workspaceDir");
+    expect(snapshot).not.toHaveProperty("env");
+    runtime.state.update((previous) => ({ ...previous, presetSelection: { key: "stale", index: 1 } }));
+    expect(runtime.botMigrationSnapshot().candidateIndex).toBe(0);
     await runtime.dispose();
   });
   it("leaves completion and manual consolidation exclusively to the project agent", async () => {

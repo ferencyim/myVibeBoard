@@ -27,7 +27,7 @@ export interface TriggersOptions {
   onScheduler?(event: SchedulerSignal): void;
   /** vibe-maintain: a rule was paused after repeated rejections (the owner is reminded). */
   onMaintenancePaused?(event: { ruleName: string; rejections: number }): void;
-  /** vibe-scheduler has free slots and asks which waiting task goes first (never awaited: it takes a model call). */
+  /** Resume a retained master session when context or provider limits require it. */
   onMasterContinuation?(request: {
     requestId: string;
     sessionId: string;
@@ -38,11 +38,6 @@ export interface TriggersOptions {
     message: string;
   }): void;
   taskConsolidated?(workspaceId: string): boolean;
-  onTaskDispatchWanted?(request: {
-    requestId: string;
-    slots: number;
-    workspaceIds: string[];
-  }): void;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -70,7 +65,6 @@ export function createTriggers(options: TriggersOptions): Triggers {
     consumer: "vibe-master",
     types: [
       "context.continuation_requested",
-      "scheduler.task_dispatch_wanted",
       "scheduler.quota_low",
       "scheduler.paused",
       "scheduler.resumed",
@@ -91,8 +85,6 @@ export function createTriggers(options: TriggersOptions): Triggers {
         options.onScheduler?.({ kind: "quota_low", provider, level, remainingPct });
         return;
       }
-      if (isEvent(event, "scheduler.task_dispatch_wanted"))
-        return options.onTaskDispatchWanted?.(event.payload);
       if (isEvent(event, "scheduler.paused")) return options.onScheduler?.({ kind: "paused" });
       if (isEvent(event, "scheduler.resumed")) return options.onScheduler?.({ kind: "resumed" });
       if (isEvent(event, "maintenance.paused")) {

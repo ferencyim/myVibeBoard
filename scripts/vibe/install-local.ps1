@@ -18,7 +18,7 @@ param(
   [string]$PushGateway = "",
   [string]$PushTokenFile = "",
   [string[]]$Plugins = @(
-    "vibe-board", "vibe-context", "vibe-master", "vibe-scheduler",
+    "vibe-board", "vibe-bots", "vibe-context", "vibe-master", "vibe-scheduler",
     "vibe-maintain", "vibe-stats", "vibe-verify", "switch-provider"
   ),
   [switch]$SkipCopy

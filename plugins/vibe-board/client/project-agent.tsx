@@ -1,64 +1,44 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { Pressable, Text, View } from "react-native";
 import { useRpc, type PluginProjectSidebarItemProps } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { projectAgentOpenRpc, projectAgentStateRpc } from "../shared/project-agent";
+import { projectBotsListRpc, projectBotsCreateRpc, projectBotsOpenRpc } from "../shared/project-bots";
 
-export function ProjectAgentSidebarItem({
-  projectId,
-  theme,
-  openAgent,
-}: PluginProjectSidebarItemProps) {
-  const openProjectAgent = useRpc(projectAgentOpenRpc);
-  const readProjectAgent = useRpc(projectAgentStateRpc);
-  const queryClient = useQueryClient();
-  const [opening, setOpening] = useState(false);
-  const [openError, setOpenError] = useState<string | null>(null);
-  const styles = useMemo(
-    () =>
-      StyleSheet.create({
-        row: { paddingHorizontal: 24, paddingVertical: 8, flexDirection: "row", gap: 8 },
-        label: { color: theme.colors.foreground },
-        error: { color: theme.colors.statusDanger },
-        detail: { color: theme.colors.statusDanger, paddingHorizontal: 24 },
-      }),
-    [theme],
-  );
-  const state = useQuery({
-    queryKey: ["vibe-board", "project-agent", projectId],
-    queryFn: () => readProjectAgent({ projectId }),
-    refetchInterval: 15_000,
-    staleTime: 15_000,
-  });
-  const open = useCallback(async () => {
-    if (opening) return;
-    setOpening(true);
-    setOpenError(null);
+export function ProjectAgentSidebarItem({ projectId, theme, openAgent }: PluginProjectSidebarItemProps) {
+  const list = useRpc(projectBotsListRpc);
+  const create = useRpc(projectBotsCreateRpc);
+  const open = useRpc(projectBotsOpenRpc);
+  const client = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const bots = useQuery({ queryKey: ["vibe-bots", "project", projectId], queryFn: () => list({ projectId }), refetchInterval: 15000 });
+  async function run(id?: string) {
+    setBusy(true);
+    setError("");
     try {
-      const result = await openProjectAgent({ projectId });
-      queryClient.setQueryData(["vibe-board", "project-agent", projectId], result);
-      if (result.agentId) openAgent(result.agentId);
-      if (result.error) setOpenError(result.error);
+      let botId = id;
+      if (!botId) {
+        const result = await create({ kind: "project", projectId, name: "项目 bot" });
+        botId = result.bot.id;
+        await client.invalidateQueries({ queryKey: ["vibe-bots"] });
+      }
+      const result = await open({ id: botId });
+      openAgent(result.agentId);
     } catch (reason) {
-      setOpenError(reason instanceof Error ? reason.message : String(reason));
+      setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setOpening(false);
+      setBusy(false);
     }
-  }, [opening, projectId, openProjectAgent, openAgent, queryClient]);
-  const error = openError ?? state.data?.error;
+  }
+  const text = { color: theme.colors.foreground };
+  const row = { paddingHorizontal: 24, paddingVertical: 8, opacity: busy ? 0.5 : 1 };
   return (
     <View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={error ? "项目 agent，环境异常" : "项目 agent"}
-        disabled={opening}
-        style={styles.row}
-        onPress={open}
-      >
-        <Text style={styles.label}>{opening ? "正在打开项目 agent…" : "项目 agent"}</Text>
-        {error ? <Text style={styles.error}>异常</Text> : null}
-      </Pressable>
-      {openError ? <Text style={styles.detail}>{openError}</Text> : null}
+      {(bots.data?.bots ?? []).map((bot) => <Pressable accessibilityRole="button" key={bot.id} disabled={busy} style={row} onPress={() => void run(bot.id)}><Text style={text}>{bot.isDefault ? "★ " : ""}{bot.name}</Text></Pressable>)}
+      <Pressable accessibilityRole="button" disabled={busy} style={row} onPress={() => void run()}><Text style={text}>{busy ? "正在打开…" : "+ 新建项目 bot"}</Text></Pressable>
+      {bots.isLoading ? <Text style={{ ...text, paddingHorizontal: 24 }}>正在加载 bot…</Text> : null}
+      {bots.error ? <Pressable accessibilityRole="button" style={row} onPress={() => void bots.refetch()}><Text style={text}>重新加载项目 bot</Text></Pressable> : null}
+      {error || bots.error ? <Text style={{ color: theme.colors.statusDanger, paddingHorizontal: 24 }}>{error || String(bots.error)}</Text> : null}
     </View>
   );
 }

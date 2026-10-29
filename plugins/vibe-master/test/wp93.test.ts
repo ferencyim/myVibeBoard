@@ -27,7 +27,6 @@ function runtimeFor(
   const settings = defaultSettings({ permissionMode: "auto", ...over });
   const runtime = createMasterRuntime({
     admitMaster: async () => async () => undefined,
-    admitMemory: async () => async () => undefined,
     db: board.db,
     store: board.store,
     getPaseo: () => fake.paseo,
@@ -49,11 +48,8 @@ describe("settings upgrade", () => {
     });
     expect(old).toMatchObject({
       provider: "codex",
-      sweepOnStart: false,
-      consolidateOnDone: true,
-      maintainRequirements: true,
       rulesSupplement: "",
-      requirementsExcerptChars: 6000,
+      permissionMode: "preset",
     });
   });
 
@@ -61,13 +57,15 @@ describe("settings upgrade", () => {
     const stored = {
       enabled: false,
       provider: "codex",
-      consolidateOnDone: false,
       ...Object.fromEntries(REMOVED_SETTING_KEYS.map((key) => [key, "old"])),
+      consolidateOnDone: false,
     };
     expect(REMOVED_SETTING_KEYS).toContain("debounceSeconds");
     expect(REMOVED_SETTING_KEYS).toContain("templateSessionHelp");
+    expect(REMOVED_SETTING_KEYS).toContain("dispatch");
+    expect(REMOVED_SETTING_KEYS).toContain("dispatchTimeoutSeconds");
     const migrated = masterSettings.migrate!(stored, 1) as Record<string, unknown>;
-    expect(migrated).toEqual({ enabled: false, provider: "codex", consolidateOnDone: false });
+    expect(migrated).toEqual({ enabled: false, provider: "codex", legacyProjectMaintenance: { consolidateOnDone: false } });
     // a non-object value passes through untouched
     expect(masterSettings.migrate!(null, 1)).toBeNull();
   });
@@ -79,9 +77,10 @@ describe("templates", () => {
       "A 1 B 2 C ",
     );
     expect(renderPromptTemplate("{{x}}", { x: "$&$1" })).toBe("$&$1");
-    const done = masterPromptDefs().find((d) => d.key === "master.wake.task_done")!;
+    expect(renderPromptTemplate("{{x}}", { x: "{{y}}", y: "nested" })).toBe("{{y}}");
+    const handoff = masterPromptDefs().find((d) => d.key === "master.handoff_summary")!;
     expect(
-      unknownPromptPlaceholders("{{workspace}} {{typo}} {{typo}}", done.placeholders ?? []),
+      unknownPromptPlaceholders("{{switches}} {{days}} {{done}} {{typo}} {{typo}}", handoff.placeholders ?? []),
     ).toEqual(["typo"]);
   });
 

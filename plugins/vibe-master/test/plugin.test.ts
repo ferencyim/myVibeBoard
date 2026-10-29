@@ -17,22 +17,22 @@ describe("rules", () => {
     expect(run.status).toBe(0);
   });
 
-  it("ships a skill with front matter and every wake reason", () => {
+  it("ships a skill that only adjusts queue order on user request", () => {
     const skill = readFileSync(
       join(pluginDir, "../../skills/vibe-master/SKILL.md"),
       "utf8",
     ).replace(/\r\n/g, "\n");
     expect(skill).toMatch(/^---\nname: vibe-master\n/);
-    expect(skill).toContain("task_done");
-    expect(skill).toContain("### task_dispatch");
+    expect(skill).toContain("仅在用户明确要求调整顺序时");
+    expect(skill).toContain("vibe_queue_reorder");
     for (const removed of ["assess_draft", "session_help", "plan_discussion"])
       expect(skill).not.toContain(removed);
-    expect(skill).toContain("绝不修改任务、方案、角色快照或验收结论");
+    expect(skill).toContain("跨项目排队派发只由调度器规则执行");
     expect(existsSync(join(pluginDir, "server/master/rules.generated.ts"))).toBe(true);
   });
 });
 
-type Handler = (input: any, context: any) => unknown;
+type Handler = (input: unknown, context: unknown) => unknown;
 
 /** Stand-in for the plugin server context: records hooks, RPC handlers and settings. */
 function fakeServer(host: Record<string, unknown> = {}) {
@@ -75,6 +75,34 @@ describe("plugin entry", () => {
   afterEach(() => {
     if (previous === undefined) delete process.env.VIBE_HOME;
     else process.env.VIBE_HOME = previous;
+  });
+
+  it("rejects agent callers before forwarding bot RPCs", async () => {
+    process.env.VIBE_HOME = tempDir("vibe-master-proxy-");
+    const { server, handlers } = fakeServer();
+    const cleanup = contribute(server);
+    const calls: unknown[] = [];
+    const context = { callerAgentId: "project-bot-agent", paseo: { plugins: {
+      invoke: async (...args: unknown[]) => { calls.push(args); return {}; },
+    } } };
+    for (const method of ["bots.list", "bots.create", "bots.open", "bots.archive", "vibe.master.bot_migration"]) {
+      await expect(handlers.get(method)!({ id: "bot_other", kind: "independent", name: "绕过" }, context)).rejects.toThrow();
+    }
+    expect(calls).toEqual([]);
+    await cleanup();
+  });
+
+  it("exposes only public legacy master configuration to the user", async () => {
+    process.env.VIBE_HOME = tempDir("vibe-master-migration-");
+    const { server, handlers } = fakeServer();
+    const cleanup = contribute(server);
+    const snapshot = await handlers.get("vibe.master.bot_migration")!({}, { callerAgentId: null });
+    expect(snapshot).toMatchObject({ presetId: null, provider: "claude", candidateIndex: 0,
+      backupModels: [], notifications: { enabled: true, completed: true, failed: true },
+    });
+    expect(snapshot).not.toHaveProperty("workspaceDir");
+    expect(snapshot).not.toHaveProperty("env");
+    await cleanup();
   });
 
   it("is idle without crashing when the board has nothing to do", async () => {

@@ -22,3 +22,4 @@ export * from "./context-state";
 export * from "./resource-samples";
 
 export * from "./resources";
+export * from "./bots";

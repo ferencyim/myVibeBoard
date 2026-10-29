@@ -1,10 +1,10 @@
-// Task dispatch, master sessions and subscription alerts.
+// Retained master sessions and subscription alerts.
 
 import { join } from "node:path";
 import type { MasterSettings, MasterStatus, MasterTarget, PresetChoice } from "../shared/rpc";
 import { systemClock, type Clock } from "./clock";
-import { createTaskDispatcher } from "./dispatch/task";
 import { MASTER_RULES } from "./master/rules.generated";
+import { presetModels } from "./vibe/contract";
 import { createMasterSession } from "./master/session";
 import { migrateLegacyPromptSettings } from "./prompts/migrate";
 import { createPromptPort, rulesFor } from "./prompts/port";
@@ -21,6 +21,12 @@ import { publishEvent, type VibeDb, type VibeStore } from "./vibe/db";
 import { createWakeQueue } from "./wake/queue";
 import { createTriggers } from "./wake/triggers";
 
+function legacyBotPermission(permission: string): "accept-edits" | "auto" | "full" {
+  if (["full", "full-access", "bypassPermissions"].includes(permission)) return "full";
+  if (["auto", "auto-review"].includes(permission)) return "auto";
+  return "accept-edits";
+}
+
 export interface RuntimeDeps {
   db: VibeDb;
   store: VibeStore;
@@ -34,6 +40,8 @@ export interface RuntimeDeps {
   rules?: string;
   pollIntervalMs?: number;
   promptsReady?: Promise<void>;
+  /** Once bot identity owns sessions, this runtime only exposes retained history and prompts. */
+  managedByBots?: boolean;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -111,40 +119,9 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   });
 
   let schedulerPaused = false;
-  // Master dispatch (WP-109): the scheduler asks, the master picks, the scheduler admits.
-  const taskDispatcher = createTaskDispatcher({
-    db,
-    store,
-    master: session,
-    exclusive: (fn) => queue.exclusive(fn),
-    prompts,
-    tuning,
-    enabled: () => deps.settings().enabled && deps.settings().dispatch,
-    timeoutSeconds: () => deps.settings().dispatchTimeoutSeconds,
-    log,
-  });
-  /** Tell the scheduler whether (and why not) it can ask the master. */
-  function publishDispatchMode(): void {
-    const s = deps.settings();
-    const { preset } = currentPreset();
-    let reason = "";
-    if (!s.enabled) reason = "总 agent 已在设置中停用";
-    else if (!preset) reason = "没有为总 agent 选择预设";
-    try {
-      store.masterDispatch.publish({
-        enabled: s.dispatch,
-        available: s.enabled && !!preset,
-        reason,
-        timeoutSeconds: s.dispatchTimeoutSeconds,
-      });
-    } catch (error) {
-      log("could not publish the dispatch mode", error);
-    }
-  }
-  publishDispatchMode();
-
   const triggers = createTriggers({
     onMasterContinuation(request) {
+      if (deps.managedByBots) return;
       void queue
         .exclusive(async () => {
           const live = session.liveSession();
@@ -197,7 +174,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
         })
         .catch((error) => log("总 agent 接续失败", error));
     },
-    onTaskDispatchWanted: (request) => void taskDispatcher.handle(request),
     onMaintenancePaused({ ruleName, rejections }) {
       alerts.raise(
         "maintenance_paused",
@@ -233,6 +209,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   });
 
   async function switchExhausted(provider: string): Promise<void> {
+    if (deps.managedByBots) return;
     try {
       await queue.exclusive(async () => {
         if (ownProvider()?.toLowerCase() !== provider.toLowerCase()) return;
@@ -336,7 +313,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       remainingPct: levels[p.provider.toLowerCase()]?.remainingPct ?? null,
       level: levels[p.provider.toLowerCase()]?.level ?? "unknown",
     }));
-    const dispatch = store.masterDispatch.get();
     const paseo = deps.getPaseo();
 
     return {
@@ -344,11 +320,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       paseoReady: paseo !== null,
       target,
       preset: preset ? { id: preset.id, name: preset.name, migrated: source === "migrated" } : null,
-      dispatch: {
-        enabled: dispatch.enabled,
-        available: dispatch.available,
-        reason: dispatch.reason,
-      },
       permission,
       session: live
         ? {
@@ -378,13 +349,41 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
   return {
     prompts,
+    /** Public configuration only: no workspace path, environment or credentials leave this RPC. */
+    botMigrationSnapshot() {
+      const settings = deps.settings();
+      const record = state.read();
+      const { preset } = currentPreset();
+      const models = preset ? presetModels(preset) : [];
+      const selectionKey = preset ? JSON.stringify([preset.id, models]) : null;
+      const progress = record.presetSelection;
+      const sameSelection = progress && progress.key === selectionKey;
+      const index = sameSelection ? progress.index : 0;
+      const candidateIndex = Math.min(index, Math.max(0, models.length - 1));
+      const selected = models[candidateIndex];
+      const target = record.agent?.target ?? selected ?? settings;
+      const requested = record.permissionMode ?? settings.permissionMode;
+      const permission = requested === "preset" ? (selected?.permissionMode ?? "accept-edits") : requested;
+      const permissionMode = legacyBotPermission(permission);
+      return {
+        presetId: preset?.id ?? null,
+        provider: target.provider || null,
+        model: target.model || null,
+        thinking: target.thinking ?? "",
+        candidateIndex,
+        models,
+        backupModels: models.slice(1).map(({ provider, model, thinking }) => ({ provider, model, thinking })),
+        instructions: rulesFor(prompts),
+        notifications: { enabled: settings.enabled, completed: true, failed: true },
+        permissionMode,
+      };
+    },
     /** Copy prompts edited in the pre-registry settings into global overrides (once). */
     migrateLegacyPrompts: () => migrateLegacyPromptSettings(db, store, deps.settings()),
     state,
     session,
     queue,
     triggers,
-    taskDispatcher,
     quota,
     alerts,
     status,
@@ -403,12 +402,10 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     sessions: (limit?: number) => session.sessions(limit),
 
     /**
-     * The settings changed (or were read for the first time): tell the scheduler whether the master
-     * can dispatch, and move a running master to a newly chosen preset. Parked jobs continue on it.
+     * Apply a changed preset to the retained master session.
      */
     async onSettingsChanged(): Promise<void> {
-      publishDispatchMode();
-      if (!deps.getPaseo()) return;
+      if (deps.managedByBots || !deps.getPaseo()) return;
       try {
         await queue.exclusive(() => session.applyPreset("切换总 agent 预设"));
       } catch (error) {
@@ -419,6 +416,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
 
     /** Manual permission switch: a running master moves to a fresh agent, parked jobs continue on it. */
     async setPermission(mode: string) {
+      if (deps.managedByBots) throw new Error("请在具体 bot 的资料页调整权限");
       const result = await queue.exclusive(() => session.setPermission(mode));
       queue.resume();
       return result;

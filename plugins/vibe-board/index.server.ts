@@ -1,3 +1,5 @@
+import { registerProjectBotRpcs } from "./server/project-agent/bots";
+import { registerBotHandoff } from "./server/project-agent/handoff";
 import { listHostProjects } from "./server/host-data";
 import { readLegacyMaintenance } from "./server/project-agent/settings-migration";
 import { createProjectAgents } from "./server/project-agent/service";
@@ -68,6 +70,8 @@ export default function contribute(server: PluginServerContext) {
     flow: tasks.flow,
   });
   const stopProjects = registerProjectAgents(server, projects);
+  registerProjectBotRpcs(server);
+  registerBotHandoff(server);
   registerProjectConfigTool(server, projects);
   const documents = createProjectDocuments({
     db: runtime.db,

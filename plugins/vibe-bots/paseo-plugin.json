@@ -1,0 +1,8 @@
+{
+  "id": "vibe-bots",
+  "name": "Vibe Bots",
+  "description": "稳定 bot 身份、主对话与个人记忆。",
+  "requirements": {
+    "paseo": ">=0.13.0 <0.14.0"
+  }
+}

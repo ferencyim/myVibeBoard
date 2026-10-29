@@ -2,7 +2,7 @@
 
 第五轮的 workspace/task 资源调度。生产运行器只扫描已确认的 queued task；WP-114 已删除旧卡片调度、推荐排序与失效设置，设备和资源入口继续服务原生任务。
 
-- 默认由总 agent 给已确认候选排序；开关关闭、不可用或超时按 confirmedAt FIFO。每次实际准入仍重新检查确认快照和资源。
+- 调度器独立按用户显式队列顺序、confirmedAt FIFO 准入，不询问总 bot。每次实际准入仍重新检查确认快照和资源。总 bot 只可读取状态、按用户要求调整队列。
 - 主代理、子代理及辅助角色共用全局/provider/原生项目并发。主代理空闲且原生 activeTurn 已结束后可 yield 让出计算名额与写锁；重新工作须再次 acquire，支持并发 1 的顺序委派。
 - Git common-dir 的真实路径决定仓库身份；规范化 files/globs 决定写锁。未知范围、目录外路径或无法保守判断的 glob 按仓库排他。同一 worktree 的主子代理也不能重叠写入。
 - verifier 在验证期间持有整个仓库的写屏障；设备由实际 evidence collector 租用，避免重复申请同一设备。其它执行角色的设备租约按 workspace 保留，父代理 yield 后子代理可顺序借用；存在活跃借用者时父代理不能恢复。
@@ -21,7 +21,7 @@
 
 响应事件 scheduler.task_resource_result 含 requestId/workspaceId/ok/reason/retryable 与可选 reservationId/presetId/provider/model/port/deviceIds。retryable=true 是资源争用，应等待后用新 requestId 重试；无效快照、错误模型或原生状态不明应停下报告。申请超时结果不明时不能直接创建会话，先 reconcile。
 
-排队事件为 scheduler.task_dispatch_wanted {requestId,workspaceIds,slots}；总 agent 回 master.task_dispatch_chosen {requestId,workspaceIds,reason} 或 master.task_dispatch_failed。实际准入发布 scheduler.task_admitted（含 workspaceId/confirmedAt/reservationId/model/port/devices），由任务流程 owner 创建主代理。
+scheduler.queue.order 接收 workspaceIds 和 reason，只调整已确认等待任务的优先顺序，空列表恢复 FIFO；顺序与理由保存在 vibe_meta。总 bot 的 vibe_scheduler_read 与 vibe_queue_reorder 使用相同调度服务，并由 vibe-bots 登记的活跃总 bot 主对话授权。调度器直接执行规则，不发送总 bot 排序事件。实际准入发布 scheduler.task_admitted（含 workspaceId/confirmedAt/reservationId/model/port/devices），由任务流程 owner 创建主代理。
 
 完成后的记忆/需求文件整理可用 master + hostLease:true + files 申请插件文件操作写锁；文件范围按项目主检出与任务同一真实仓库核对。该操作不冒充原生 anchor，不需要 bind，插件 await 文件写入完成后 release。重启后仍须核对停止状态再回收。
 

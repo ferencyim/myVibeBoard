@@ -1,4 +1,4 @@
-import { cacheHostRead, listHostProjects } from "../host-data";
+import { listHostProjects } from "../host-data";
 import { reviewActive } from "../tabs/plan-review";
 import { createInputPersistence, PROJECT_INPUT_BYTES } from "./inputs";
 import { randomUUID } from "node:crypto";
@@ -14,10 +14,10 @@ import type { VibeDb, VibeStore } from "../vibe/db";
 import {
   presetModels,
   presetModeId,
+  UNRESOLVED_TAB_MODEL,
   taskPlanStatus,
   planFiles,
   PLAN_STATUS_LABELS,
-  UNRESOLVED_TAB_MODEL,
 } from "../vibe/contract";
 import { findProjectConfig } from "../vibe/db/project-config";
 import type { TaskTabs } from "../tabs/service";
@@ -27,7 +27,7 @@ import {
   PROJECT_AGENT_PROJECT_LABEL,
   type ProjectAgentState,
 } from "../../shared/project-agent";
-import { PROJECT_AGENT_PROMPT } from "./prompts";
+import { z } from "zod";
 
 interface ProjectAgentOptions {
   db: VibeDb;
@@ -105,55 +105,37 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     await project(projectId);
     return projectId;
   }
-  const knownAgents = new Map<string, string>();
-  const discoveries = new Map<string, () => Promise<PaseoAgent | null>>();
-  async function discover(projectId: string): Promise<PaseoAgent | null> {
-    let cursor: string | undefined;
-    do {
-      const page = await paseo().agents.list({
-        filter: {
-          labels: {
-            [PROJECT_AGENT_ROLE_LABEL]: "project",
-            [PROJECT_AGENT_PROJECT_LABEL]: projectId,
-          },
-        },
-        includeBackground: true,
-        page: { limit: 200, ...(cursor ? { cursor } : {}) },
-      });
-      const found = page.entries.find(
-        ({ agent: item }) =>
-          !item.archivedAt &&
-          item.labels[PROJECT_AGENT_ROLE_LABEL] === "project" &&
-          item.labels[PROJECT_AGENT_PROJECT_LABEL] === projectId,
-      );
-      if (found) {
-        knownAgents.set(projectId, found.agent.id);
-        return found.agent;
-      }
-      cursor = page.pageInfo.nextCursor ?? undefined;
-    } while (cursor);
-    return null;
+  async function independentBot(agentId: string): Promise<boolean> {
+    const current = await agent(agentId);
+    if (!current || current.archivedAt || !current.labels["vibe.bot"] ||
+        current.labels["vibe.bot-thread"] !== "main") return false;
+    const result = z.object({ bots: z.array(z.object({ mainAgentId: z.string().nullable() })) }).parse(
+      await paseo().plugins.invoke("vibe-bots", "bots.list", { kind: "independent" }),
+    );
+    return result.bots.some((bot) => bot.mainAgentId === agentId);
   }
-  async function find(projectId: string): Promise<PaseoAgent | null> {
-    const known = knownAgents.get(projectId);
-    if (known) {
-      const current = await agent(known);
-      if (
-        current && !current.archivedAt &&
-        current.labels[PROJECT_AGENT_ROLE_LABEL] === "project" &&
-        current.labels[PROJECT_AGENT_PROJECT_LABEL] === projectId
-      ) return current;
-      knownAgents.delete(projectId);
-      discoveries.delete(projectId);
+  async function targetProject(agentId: string, requested?: string): Promise<string> {
+    const own = await projectForAgent(agentId);
+    if (own) {
+      if (requested && requested !== own) throw new Error("项目 bot 只能操作本项目");
+      await project(own);
+      return own;
     }
-    let read = discoveries.get(projectId);
-    if (!read) {
-      read = cacheHostRead(() => discover(projectId), 15_000);
-      discoveries.set(projectId, read);
-    }
-    return read();
+    if (!(await independentBot(agentId))) throw new Error("工具仅供 bot 主对话使用");
+    if (!requested) throw new Error("独立 bot 必须指定 projectId");
+    await project(requested);
+    return requested;
   }
-  const stateReads = new Map<string, () => Promise<ProjectAgentState>>();
+  async function projectsFor(agentId: string) {
+    if (!(await independentBot(agentId))) throw new Error("跨项目列表仅供独立 bot 使用");
+    return listHostProjects(paseo());
+  }
+  const defaultBotSchema = z.object({ botId: z.string().nullable(), mainAgentId: z.string().nullable() });
+  async function defaultBot(projectId: string) {
+    return defaultBotSchema.parse(
+      await paseo().plugins.invoke("vibe-bots", "project.default_bot.get", { projectId }),
+    );
+  }
   function stateOf(projectId: string, current: PaseoAgent | null): ProjectAgentState {
     return {
       agentId: current?.id ?? null,
@@ -161,16 +143,10 @@ export function createProjectAgents(options: ProjectAgentOptions) {
       error: errors.get(projectId) ?? current?.lastError ?? null,
     };
   }
-  function state(projectId: string): Promise<ProjectAgentState> {
-    let read = stateReads.get(projectId);
-    if (!read) {
-      read = cacheHostRead(async () => {
-        await project(projectId);
-        return stateOf(projectId, await find(projectId));
-      }, 15_000);
-      stateReads.set(projectId, read);
-    }
-    return read();
+  async function state(projectId: string): Promise<ProjectAgentState> {
+    await project(projectId);
+    const bot = await defaultBot(projectId);
+    return stateOf(projectId, bot.mainAgentId ? await agent(bot.mainAgentId) : null);
   }
   async function model(
     projectId: string,
@@ -234,31 +210,14 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     return { config: { provider: first.provider + "/" + selected.id } };
   }
   async function openNow(projectId: string): Promise<ProjectAgentState> {
-    const native = await project(projectId);
-    const existing = await find(projectId);
-    if (existing) return stateOf(projectId, existing);
-    const selected = await model(projectId, native.projectRootPath);
-    const prompt = store.prompts.resolve(PROJECT_AGENT_PROMPT.key, { projectId });
-    const created = await paseo().agents.create({
-      cwd: native.projectRootPath,
-      title: "项目 agent",
-      config: {
-        ...selected.config,
-        systemPrompt: [prompt, selected.config.systemPrompt].filter(Boolean).join("\n\n"),
-      },
-      env: {
-        VIBE_ROLE: "project",
-        VIBE_PROJECT_ID: projectId,
-        ...(selected.runtimeEnv ? { VIBE_RUNTIME_ENV: selected.runtimeEnv } : {}),
-      },
-      labels: { [PROJECT_AGENT_ROLE_LABEL]: "project", [PROJECT_AGENT_PROJECT_LABEL]: projectId },
-    });
-    await created.refresh();
+    await project(projectId);
+    const bot = await defaultBot(projectId);
+    if (!bot.botId) throw new Error("项目没有默认 bot");
+    const opened = z.object({ agentId: z.string(), workspaceId: z.string().nullable() }).parse(
+      await paseo().plugins.invoke("vibe-bots", "bots.open", { id: bot.botId }),
+    );
     errors.delete(projectId);
-    knownAgents.set(projectId, created.id);
-    discoveries.delete(projectId);
-    stateReads.delete(projectId);
-    return { agentId: created.id, workspaceId: created.workspaceId, error: null };
+    return { ...opened, error: null };
   }
   function open(projectId: string): Promise<ProjectAgentState> {
     const active = pending.get(projectId);
@@ -301,8 +260,8 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     );
     return all.filter((_task, index) => owners[index] === projectId);
   }
-  async function tasksFor(callerAgentId: string) {
-    const projectId = await callerProject(callerAgentId);
+  async function tasksFor(callerAgentId: string, requestedProjectId?: string) {
+    const projectId = await targetProject(callerAgentId, requestedProjectId);
     const tasks = await projectTasks(projectId);
     const plans = await Promise.all(
       tasks.map(async (task) => {
@@ -332,7 +291,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     };
   }
   async function received(input: UserInput) {
-    if (!(await projectForAgent(input.agentId))) return;
+    if (!(await projectForAgent(input.agentId)) && !(await independentBot(input.agentId))) return;
     const inputs = inputsFor(input.agentId);
     if (inputs.has(input.messageId)) return;
     const item: Grant = { input, spent: false, busy: false };
@@ -445,16 +404,16 @@ export function createProjectAgents(options: ProjectAgentOptions) {
 
   async function create(
     callerAgentId: string,
-    input: { text: string; name?: string; sourceMessageId?: string },
+    input: { text: string; name?: string; sourceMessageId?: string; projectId?: string },
   ) {
-    const projectId = await callerProject(callerAgentId);
+    const projectId = await targetProject(callerAgentId, input.projectId);
     const source = grant(callerAgentId, input.text, input.sourceMessageId);
     try {
       const native = await project(projectId);
       const selected = await model(projectId, native.projectRootPath, "main");
-      if (source.destination && source.destination !== "create")
+      if (source.destination && source.destination !== "create:" + projectId)
         throw new Error("这条消息已开始投递到现有任务");
-      source.destination = "create";
+      source.destination = "create:" + projectId;
       persist(callerAgentId);
       const workspace = source.workspaceId
         ? paseo().workspaces.ref(source.workspaceId)
@@ -495,17 +454,21 @@ export function createProjectAgents(options: ProjectAgentOptions) {
   return {
     open,
     state,
+    async resolveModel(projectId: string) {
+      const native = await project(projectId);
+      return model(projectId, native.projectRootPath);
+    },
     project,
     projectForAgent,
     callerProject,
     tasksFor,
+    projectsFor,
     received,
     route,
     create,
     sendProject,
     appendStatus,
     setError(projectId: string, error: string | null) {
-      stateReads.delete(projectId);
       if (error) errors.set(projectId, error);
       else errors.delete(projectId);
     },

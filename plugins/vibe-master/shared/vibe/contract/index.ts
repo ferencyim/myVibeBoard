@@ -19,3 +19,4 @@ export * from "./subtasks";
 export * from "./task";
 
 export * from "./resources";
+export * from "./bots";

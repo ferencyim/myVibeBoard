@@ -39,6 +39,7 @@ function adapter(snapshot: unknown, metadata = true, failure = false) {
       read: () => new Promise(() => undefined),
       subscribe: () => () => undefined,
     }),
+    registerAgentTool: () => undefined,
     on: () => () => undefined,
     handle: () => undefined,
   } as unknown as PluginServerContext);

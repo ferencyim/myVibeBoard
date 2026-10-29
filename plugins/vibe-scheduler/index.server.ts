@@ -16,9 +16,11 @@ import {
   statusRpc,
   taskResourceRpc,
   taskTickRpc,
+  queueOrderRpc,
 } from "./shared/rpc";
 import { createSchedulerRuntime, DEFAULT_SETTINGS, type RuntimeSettings } from "./server/runtime";
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
+import { registerBotTools } from "./server/bot-tools";
 
 export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
@@ -67,6 +69,8 @@ export default function contribute(server: PluginServerContext) {
     },
     fetchUsage: () => (paseo ? paseo.providers.listUsage().then((r) => r.providers) : null),
   });
+
+  registerBotTools(server, runtime, () => paseo);
 
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
@@ -130,6 +134,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(taskResourceRpc, (input, context) => {
     remember(context.paseo);
     return runtime.scheduler.requestResource(input);
+  });
+  server.handle(queueOrderRpc, ({ workspaceIds, reason }, { callerAgentId }) => {
+    if (callerAgentId) throw new Error("bot 请使用受权限限制的 vibe_queue_reorder 工具");
+    return runtime.scheduler.setQueueOrder(workspaceIds, reason);
   });
   server.handle(taskTickRpc, async (_input, context) => {
     remember(context.paseo);

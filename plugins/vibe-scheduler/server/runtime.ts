@@ -131,11 +131,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   const consumer = createEventConsumer({
     db,
     consumer: "vibe-scheduler-tasks",
-    types: [
-      "scheduler.task_resource_request",
-      "master.task_dispatch_chosen",
-      "master.task_dispatch_failed",
-    ],
+    types: ["scheduler.task_resource_request"],
     startAt: "now",
     now,
     handler: async (event) => {
@@ -149,14 +145,6 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
             dedupeKey: "task-resource-result:" + output.requestId,
           },
           now,
-        );
-      } else if (event.type === "master.task_dispatch_chosen") {
-        scheduler.handleMasterChosen(
-          event.payload as Parameters<typeof scheduler.handleMasterChosen>[0],
-        );
-      } else if (event.type === "master.task_dispatch_failed") {
-        scheduler.handleMasterFailed(
-          event.payload as Parameters<typeof scheduler.handleMasterFailed>[0],
         );
       }
     },

@@ -1,3 +1,4 @@
+import { projectBotModelRpc } from "../../shared/project-bots";
 import { z } from "zod";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { projectAgentOpenRpc, projectAgentStateRpc } from "../../shared/project-agent";
@@ -8,14 +9,28 @@ export function registerProjectAgents(server: PluginServerContext, projects: Pro
     if (context.callerAgentId) throw new Error("项目入口仅供用户打开");
     return projects.open(input.projectId);
   });
+  server.handle(projectBotModelRpc, (input, context) => {
+    if (context.callerAgentId) throw new Error("项目 bot 默认模型仅供宿主服务读取");
+    return projects.resolveModel(input.projectId);
+  });
   server.handle(projectAgentStateRpc, (input) => projects.state(input.projectId));
   const cleanups = [server.on("agent.user_prompt_received", (event) => projects.received(event))];
   server.registerAgentTool({
-    name: "vibe_project_tasks",
-    description: "读取本项目任务列表，包括目标、阶段与方案状态；仅项目 agent 可用。",
+    name: "vibe_projects",
+    description: "独立 bot 只读查看各项目；不会修改项目或派发任务。",
     handler: async (_input, { callerAgentId }) => {
-      if (!callerAgentId) throw new Error("工具仅供项目 agent 使用");
-      return projects.tasksFor(callerAgentId);
+      if (!callerAgentId) throw new Error("工具仅供 bot 使用");
+      return projects.projectsFor(callerAgentId);
+    },
+  });
+  const tasks = z.object({ projectId: z.string().min(1).optional() }).strict();
+  server.registerAgentTool({
+    name: "vibe_project_tasks",
+    description: "只读查看任务目标、阶段与方案状态；独立 bot 指定 projectId，项目 bot 只能查看本项目。",
+    input: tasks,
+    handler: async (input, { callerAgentId }) => {
+      if (!callerAgentId) throw new Error("工具仅供 bot 使用");
+      return projects.tasksFor(callerAgentId, tasks.parse(input ?? {}).projectId);
     },
   });
   const route = z
@@ -38,6 +53,7 @@ export function registerProjectAgents(server: PluginServerContext, projects: Pro
   const create = z
     .object({
       text: z.string().describe("逐字复制当前用户输入"),
+      projectId: z.string().min(1).optional(),
       name: z.string().trim().min(1).optional(),
       sourceMessageId: z.string().min(1).optional(),
     })
@@ -45,7 +61,7 @@ export function registerProjectAgents(server: PluginServerContext, projects: Pro
   server.registerAgentTool({
     name: "vibe_create_task",
     description:
-      "按普通任务路径在本项目新建任务，预建流程角色，并把真实用户原话及附件作为 #1 首消息；仅项目 agent 可用。",
+      "按普通任务路径新建任务并预建流程角色，真实用户原话及附件作为 #1 首消息；独立 bot 必须指定 projectId，项目 bot 只能在本项目创建。",
     input: create,
     handler: async (input, { callerAgentId }) => {
       if (!callerAgentId) throw new Error("工具仅供项目 agent 使用");

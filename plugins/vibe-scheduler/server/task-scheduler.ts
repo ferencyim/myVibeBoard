@@ -18,7 +18,7 @@ import {
   type Task,
   type ProviderQuota,
 } from "./vibe/contract";
-import { createTaskRuntimeCommands, type DeviceLeases, type createVibeStore } from "./vibe/db";
+import { createTaskRuntimeCommands, readResourceMeta, writeResourceMeta, type DeviceLeases, type createVibeStore } from "./vibe/db";
 import { type PortAllocator } from "./ports";
 import { findOverlap } from "./overlap";
 import { deviceKindFor, type SchedulerConfig } from "./scheduler";
@@ -180,9 +180,6 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   let startupDeferred: Record<string, string> = {};
   let serial = Promise.resolve();
   let lastDeferred: Record<string, string> = {};
-  let round: { requestId: string; at: number; workspaceIds?: string[] } | null = null;
-  let fallbackUntil = 0;
-  let sequence = 0;
   let paused = false;
   if (deps.file && existsSync(deps.file)) {
     try {
@@ -913,6 +910,38 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
       }
     });
   }
+  function waitingTasks(): Task[] {
+    const waiting = deps.store.tasks.list({ phase: "queued" }).filter(
+      (task) => ![...held.values()].some(
+        (row) => row.workspaceId === task.workspaceId && row.role === "worker",
+      ),
+    );
+    const order = z.array(z.string()).parse(
+      readResourceMeta(deps.store.db, "scheduler.queue_order", []),
+    );
+    const positions = new Map(order.map((id, index) => [id, index]));
+    return waiting.sort((a, b) =>
+      (positions.get(a.workspaceId) ?? Number.MAX_SAFE_INTEGER) -
+      (positions.get(b.workspaceId) ?? Number.MAX_SAFE_INTEGER) ||
+      (a.confirmedAt ?? "").localeCompare(b.confirmedAt ?? "") ||
+      a.workspaceId.localeCompare(b.workspaceId),
+    );
+  }
+  async function setQueueOrder(workspaceIds: string[], reason: string) {
+    return exclusive(async () => {
+      const ids = [...new Set(workspaceIds)];
+      if (ids.length !== workspaceIds.length) throw new Error("队列中不能重复指定任务");
+      const waiting = waitingTasks();
+      for (const id of ids) {
+        const task = waiting.find((entry) => entry.workspaceId === id);
+        if (!task || !validTask(task)) throw new Error("只能调整已确认且等待派发的任务：" + id);
+      }
+      // Explicit user priorities precede all unspecified tasks, which retain FIFO order.
+      writeResourceMeta(deps.store.db, "scheduler.queue_order", ids);
+      writeResourceMeta(deps.store.db, "scheduler.queue_order_reason", reason);
+      return { workspaceIds: waitingTasks().map((task) => task.workspaceId), reason };
+    });
+  }
   async function tick() {
     return exclusive(async () => {
       if (!(await recoverNativeTasks())) {
@@ -922,61 +951,13 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
       updateMemory();
       const admitted: Array<TaskResourceResult & { confirmedAt: string }> = [];
       const deferred: Record<string, string> = {};
-      const waiting = deps.store.tasks
-        .list({ phase: "queued" })
-        .filter(
-          (task) =>
-            ![...held.values()].some(
-              (row) => row.workspaceId === task.workspaceId && row.role === "worker",
-            ),
-        );
-      waiting.sort(
-        (a, b) =>
-          (a.confirmedAt ?? "").localeCompare(b.confirmedAt ?? "") ||
-          a.workspaceId.localeCompare(b.workspaceId),
-      );
+      const waiting = waitingTasks();
       const valid = waiting.filter((task) => {
         if (validTask(task)) return true;
         deferred[task.workspaceId] = "任务没有有效确认快照";
         return false;
       });
-      const mode = deps.store.masterDispatch.get();
-      let order = valid;
-      if (
-        mode.enabled &&
-        mode.available &&
-        deps.now().getTime() >= fallbackUntil &&
-        valid.length &&
-        runningCounts().total < deps.config().globalLimit
-      ) {
-        if (round?.workspaceIds) {
-          const ids = round.workspaceIds;
-          round = null;
-          order = [
-            ...ids
-              .map((id) => valid.find((task) => task.workspaceId === id))
-              .filter((task): task is Task => !!task),
-            ...valid.filter((task) => !ids.includes(task.workspaceId)),
-          ];
-        } else if (round && deps.now().getTime() - round.at > (mode.timeoutSeconds + 30) * 1000) {
-          round = null;
-          fallbackUntil = deps.now().getTime() + 300_000;
-        } else {
-          if (!round) {
-            const requestId = deps.now().getTime() + "-task-" + ++sequence;
-            round = { requestId, at: deps.now().getTime() };
-            deps.emit("scheduler.task_dispatch_wanted", {
-              requestId,
-              workspaceIds: valid.map((task) => task.workspaceId),
-              slots: Math.max(0, deps.config().globalLimit - runningCounts().total),
-            });
-          }
-          for (const task of valid) deferred[task.workspaceId] = "等待总 agent 排序";
-          lastDeferred = deferred;
-          return { admitted, deferred, paused };
-        }
-      } else if (!mode.enabled || !mode.available) round = null;
-      for (const task of order) {
+      for (const task of valid) {
         const input: TaskResourceRequest = {
           requestId: "admit:" + task.workspaceId,
           workspaceId: task.workspaceId,
@@ -1019,6 +1000,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   return {
     tick,
     requestResource,
+    setQueueOrder,
     runningCounts,
     async endNativePlanner(workspaceId: string, agentId: string) {
       const row = [...held.values()].find(
@@ -1038,23 +1020,18 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     },
     observeAgent: (workspaceId: string, agentId: string) =>
       exclusive(() => observeAgent(workspaceId, agentId)),
-    handleMasterChosen(payload: { requestId: string; workspaceIds: string[]; reason: string }) {
-      if (round?.requestId === payload.requestId)
-        round.workspaceIds = [...new Set(payload.workspaceIds)];
-    },
-    handleMasterFailed(payload: { requestId: string; reason: string }) {
-      if (round?.requestId === payload.requestId) {
-        round = null;
-        fallbackUntil = deps.now().getTime() + 300_000;
-      }
-    },
     status: () => ({
       paused,
       pending: [...held.values()],
       deferred: lastDeferred,
       running: runningCounts(),
       recoveryError,
-      masterDispatch: { ...deps.store.masterDispatch.get(), round: round ? "asking" : null },
+      queue: waitingTasks().filter(validTask).map((task) => ({
+        workspaceId: task.workspaceId,
+        goal: task.plan?.goal ?? "",
+        confirmedAt: task.confirmedAt,
+      })),
+      queueOrderReason: readResourceMeta(deps.store.db, "scheduler.queue_order_reason", ""),
     }),
     targets: () =>
       [...held.values()].map((row) => ({

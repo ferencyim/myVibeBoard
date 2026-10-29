@@ -16,24 +16,6 @@ export interface MasterDefOptions {
 export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
   return [
     {
-      key: "master.task_dispatch",
-      plugin: PLUGIN,
-      role: "master",
-      title: "任务排序",
-      description: "只为已确认排队任务建议顺序；调度器仍唯一负责准入与资源租约。",
-      whenSent: "调度器有空位并且总 agent 派发开启时。",
-      audience: "总 agent",
-      defaultText:
-        "[task_dispatch]\n调度器有 {{slots}} 个名额。以下任务已由用户确认，按确认时间 FIFO 列出。只推荐候选任务的顺序，考虑明确依赖和目标，不确认任务、不修改方案、不验收、不启动 agent。调度器会重新核对资源、文件冲突与快照。\n{{candidates}}",
-      placeholders: [
-        { name: "slots", description: "剩余计算名额" },
-        { name: "candidates", description: "已确认候选任务" },
-      ],
-      fixedSuffix:
-        '只回复一个 JSON 对象，放在 json 围栏里：{"order":["workspaceId"],"reason":"中文理由"}。workspaceId 必须来自候选，数量不超过空位，每项只出现一次，至少选一项。',
-      order: 13,
-    },
-    {
       key: "master.rules",
       plugin: PLUGIN,
       role: "master",
@@ -96,7 +78,7 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
         "更换总 agent 后，新总 agent 首条消息附带的摘要框架；各段内容由插件根据任务快照生成。",
       whenSent: "更换总 agent 预设、更换权限模式等导致新总 agent 启动，并在它收到第一条消息时。",
       audience: "新的总 agent",
-      defaultText: `[handoff] 你接替上一任总 agent。以下摘要来自任务快照，不依赖旧会话。每次排序以当前唤醒消息提供的快照为准，不凭旧会话记忆。
+      defaultText: `[handoff] 你接替上一任总 agent。以下摘要来自任务快照，不依赖旧会话。解释调度状态时先读取当前状态，不凭旧会话记忆。
 
 ## 最近的切换
 {{switches}}
@@ -117,6 +99,5 @@ export type MasterPromptKey =
   | "master.rules"
   | "master.rules_supplement"
   | "master.rules_updated"
-  | "master.task_dispatch"
   | "master.repair_json"
   | "master.handoff_summary";
