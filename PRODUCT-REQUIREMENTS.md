@@ -13,6 +13,8 @@
 
 ## 已拍板的决定
 
+- WP-138 装机反馈：新建项目 bot 的 provider 下拉须保持响应；新建和资料表单使用稳定的缓存目录选项，切换 provider 时不重复请求。
+
 - WP-138 第三轮：修复沙箱外补跑暴露的 bot 模型切换/迁移、client API 与 server 前台上下文测试失败；同时以最小改动修复 main 既有 lifecycle payload 和 master 模板测试预期。逐项区分实现错误与过时预期，保留断言强度；沙箱内仅做 typecheck、lint，不运行 Vitest、格式化或 daemon。
 
 - 2026-10-19：仓库采用 **GitHub 公开 fork**（ferencyim/myVibeBoard，upstream = getpaseo/paseo）。

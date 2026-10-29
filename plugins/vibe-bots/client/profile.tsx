@@ -23,16 +23,6 @@ function useProfileStyles(theme: PluginTheme) {
   }), [theme]);
 }
 
-function modelChoices(data: z.infer<typeof modelsListRpc.output> | undefined, provider: string, model: string) {
-  const selectedProvider = data?.providers.find((item) => item.provider === provider);
-  const selectedModel = selectedProvider?.models.find((item) => item.id === model);
-  return {
-    presets: [{ label: "直接选择模型", value: "" }, ...(data?.presets ?? []).map((item) => ({ label: item.name, value: item.id }))],
-    providers: [{ label: "请选择 provider", value: "" }, ...(data?.providers ?? []).map((item) => ({ label: item.provider, value: item.provider }))],
-    modelOptions: [{ label: "请选择模型", value: "" }, ...(selectedProvider?.models ?? []).map((item) => ({ label: item.name + (item.isDefault ? "（默认）" : ""), value: item.id }))],
-    thinkingOptions: [{ label: "默认", value: "" }, ...(selectedModel?.thinkingOptions ?? []).map((item) => ({ label: item.name, value: item.id }))],
-  };
-}
 
 export function BotProfileScreen(props: PluginScreenProps) {
   const list = useRpc(botsListRpc);
@@ -93,9 +83,14 @@ function Profile({ bot, theme, navigation }: ProfileProps) {
     open: () => { void conversation.open(); },
     archive: () => { void run(async () => { await archive({ id: bot.id }); navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "main" }); }, "bot 已归档。"); },
   }), [save, projectId, run, setDefault, bot.id, conversation, archive, navigation]);
+  const selectedProvider = models.data?.providers.find((item) => item.provider === provider);
+  const selectedModel = selectedProvider?.models.find((item) => item.id === model);
+  const presets = useMemo(() => [{ label: "直接选择模型", value: "" }, ...(models.data?.presets ?? []).map((item) => ({ label: item.name, value: item.id }))], [models.data]);
+  const providers = useMemo(() => [{ label: "请选择 provider", value: "" }, ...(models.data?.providers ?? []).map((item) => ({ label: item.provider, value: item.provider }))], [models.data]);
+  const modelOptions = useMemo(() => [{ label: "请选择模型", value: "" }, ...(selectedProvider?.models ?? []).map((item) => ({ label: item.name + (item.isDefault ? "（默认）" : ""), value: item.id }))], [selectedProvider]);
+  const thinkingOptions = useMemo(() => [{ label: "默认", value: "" }, ...(selectedModel?.thinkingOptions ?? []).map((item) => ({ label: item.name, value: item.id }))], [selectedModel]);
   if (page === "memories") return <MemoryList bot={bot} theme={theme} onBack={actions.profile} />;
   if (page === "instructions") return <Page theme={theme}><Button theme={theme} label="返回资料" onPress={actions.profile} /><Field theme={theme} label="角色说明" value={instructions} onChangeText={setInstructions} multiline /><Button theme={theme} label={busy ? "正在保存…" : "保存"} disabled={busy} onPress={actions.save} /><Feedback theme={theme} error={error} message={message} /></Page>;
-  const { presets, providers, modelOptions, thinkingOptions } = modelChoices(models.data, provider, model);
   return <Page theme={theme}>
     <Text style={styles.title}>{bot.name}</Text>
     {bot.pendingModel ? <Text style={styles.muted}>模型变更待空闲时应用。</Text> : null}
