@@ -132,7 +132,7 @@ const MutedFlowIcon = withUnistyles(FlowIcon, (theme) => ({
 }));
 const ThemedArrowLeft = withUnistyles(ArrowLeft);
 const ThemedTextInput = withUnistyles(TextInput, (theme) => ({
-  placeholderTextColor: theme.colors.foregroundMuted,
+  placeholderTextColor: theme.colors.textPlaceholder,
 }));
 
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });

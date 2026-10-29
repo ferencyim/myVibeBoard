@@ -33,7 +33,7 @@ export function SettingsTextArea({
       initialValue={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
-      placeholderTextColor={theme.colors.foregroundMuted}
+      placeholderTextColor={theme.colors.textPlaceholder}
       style={inputStyle}
     />
   );

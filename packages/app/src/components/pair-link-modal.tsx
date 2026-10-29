@@ -220,7 +220,7 @@ function PairLinkModalContent({
           accessibilityLabel={t("pairing.link.label")}
           onChangeText={handleChangeOfferUrl}
           placeholder="https://app.paseo.sh/#offer=..."
-          placeholderTextColor={theme.colors.foregroundMuted}
+          placeholderTextColor={theme.colors.textPlaceholder}
           style={styles.input}
           autoFocus
           autoCapitalize="none"

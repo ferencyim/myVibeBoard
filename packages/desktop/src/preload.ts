@@ -31,6 +31,9 @@ interface AttachedBrowserRegistration {
 
 contextBridge.exposeInMainWorld("paseoDesktop", {
   platform: process.platform,
+  windowProductName: process.argv
+    .find((argument) => argument.startsWith("--window-product-name="))
+    ?.slice("--window-product-name=".length),
   windowChromeMode: readWindowChromeMode(),
   invoke: (command: string, args?: Record<string, unknown>) =>
     ipcRenderer.invoke("paseo:invoke", command, args),

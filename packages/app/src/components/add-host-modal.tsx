@@ -467,7 +467,7 @@ function AddHostModalContent({ visible, onClose, onCancel, onSaved }: AddHostMod
             resetKey={`direct-host-${inputResetKey}`}
             onChangeText={setHost}
             placeholder="localhost"
-            placeholderTextColor={theme.colors.foregroundMuted}
+            placeholderTextColor={theme.colors.textPlaceholder}
             style={styles.input}
             autoCapitalize="none"
             autoCorrect={false}
@@ -486,7 +486,7 @@ function AddHostModalContent({ visible, onClose, onCancel, onSaved }: AddHostMod
             resetKey={`direct-port-${inputResetKey}`}
             onChangeText={setPort}
             placeholder="6767"
-            placeholderTextColor={theme.colors.foregroundMuted}
+            placeholderTextColor={theme.colors.textPlaceholder}
             style={styles.input}
             autoCapitalize="none"
             autoCorrect={false}
@@ -528,7 +528,7 @@ function AddHostModalContent({ visible, onClose, onCancel, onSaved }: AddHostMod
             resetKey={`direct-password-${inputResetKey}`}
             onChangeText={setPassword}
             placeholder={t("pairing.direct.fields.optional")}
-            placeholderTextColor={theme.colors.foregroundMuted}
+            placeholderTextColor={theme.colors.textPlaceholder}
             style={passwordInputStyle}
             autoCapitalize="none"
             autoCorrect={false}
@@ -577,7 +577,7 @@ function AddHostModalContent({ visible, onClose, onCancel, onSaved }: AddHostMod
             resetKey={`direct-host-uri-${inputResetKey}`}
             onChangeText={handleChangeAdvancedUri}
             placeholder="tcp://localhost:6767?ssl=true"
-            placeholderTextColor={theme.colors.foregroundMuted}
+            placeholderTextColor={theme.colors.textPlaceholder}
             style={styles.input}
             autoCapitalize="none"
             autoCorrect={false}

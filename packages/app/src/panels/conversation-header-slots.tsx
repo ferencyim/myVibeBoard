@@ -3,7 +3,7 @@ import { createContext, useContext, type ReactNode } from "react";
 export interface ConversationHeaderSlots {
   left?: ReactNode;
   ordinaryIdentity?: ReactNode;
-  right?: ReactNode;
+  right?: (openMode?: () => void) => ReactNode;
 }
 
 const ConversationHeaderSlotsContext = createContext<ConversationHeaderSlots>({});

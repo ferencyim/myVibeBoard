@@ -218,10 +218,10 @@ export function BotConversationHeader({
             onPress={openProfile}
           />
         ) : null}
-        {isBot ? (
+        {isBot && (!isPaneFocused || !slots.right) ? (
           <IconButton label="更多" icon={Ellipsis} size="xs" variant="ghost" onPress={openMore} />
         ) : null}
-        {isPaneFocused ? slots.right : null}
+        {isPaneFocused ? slots.right?.(isBot ? openMore : undefined) : null}
       </View>
       <AdaptiveModalSheet
         header={runtimeHeader}

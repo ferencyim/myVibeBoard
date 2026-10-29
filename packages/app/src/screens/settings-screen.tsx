@@ -1162,7 +1162,7 @@ function SettingsSidebar({
             initialValue={query}
             onChangeText={setQuery}
             placeholder={t("common.search", { defaultValue: "搜索设置" })}
-            placeholderTextColor={theme.colors.foregroundMuted}
+            placeholderTextColor={theme.colors.textPlaceholder}
             accessibilityLabel={t("common.search", { defaultValue: "搜索设置" })}
             style={sidebarStyles.search}
             testID="settings-search"

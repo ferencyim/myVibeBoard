@@ -1282,7 +1282,7 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
   },
   placeholderColor: {
-    color: theme.colors.foregroundMuted,
+    color: theme.colors.textPlaceholder,
   },
   chevronColor: {
     color: theme.colors.foregroundMuted,

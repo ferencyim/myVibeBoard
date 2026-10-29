@@ -1577,6 +1577,9 @@ function ProjectBlock({
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
   const classification = useSidebarWorkspaceClassification(project);
+  const hasOtherWorkspaces = classification.other.some((workspace) =>
+    workspaceEntriesByKey.has(workspace.workspaceKey),
+  );
   const [otherCollapsed, setOtherCollapsed] = useState(true);
   const toggleOtherCollapsed = useCallback(() => setOtherCollapsed((value) => !value), []);
   const visibilityPolicy = useMemo(
@@ -1783,14 +1786,14 @@ function ProjectBlock({
               {classification.unknown.map((workspace) => renderWorkspaceRow(workspace))}
             </>
           )}
-          {classification.other.length > 0 && (
+          {hasOtherWorkspaces && (
             <SidebarSectionHeader
               title="其他会话"
               collapsed={otherCollapsed}
               onToggle={toggleOtherCollapsed}
             />
           )}
-          {!otherCollapsed && (
+          {hasOtherWorkspaces && !otherCollapsed && (
             <>
               {manualSort ? (
                 <DraggableList

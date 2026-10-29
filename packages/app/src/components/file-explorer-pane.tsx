@@ -1789,7 +1789,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 0,
   },
   draftPlaceholder: {
-    color: theme.colors.foregroundExtraMuted,
+    color: theme.colors.textPlaceholder,
   },
   previewHeaderText: {
     flex: 1,

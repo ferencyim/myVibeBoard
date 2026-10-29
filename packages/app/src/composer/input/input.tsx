@@ -72,7 +72,7 @@ import {
 } from "@/components/ui/text-input";
 
 const ComposerTextInput = withUnistyles(EditingTextInput, (theme) => ({
-  placeholderTextColor: theme.colors.surface4,
+  placeholderTextColor: theme.colors.textPlaceholder,
 }));
 import {
   resolveSendTooltipLabel,

@@ -550,7 +550,7 @@ function DesktopTitlebar({ visible }: { visible: boolean }) {
         style={layoutStyles.windowTitlebarContent}
       >
         <Text pointerEvents="none" style={layoutStyles.windowTitle}>
-          Paseo
+          {getDesktopHost()?.windowProductName ?? "Paseo"}
         </Text>
       </WindowChromeSafeArea>
       {DEV_BUILD_LABEL ? (

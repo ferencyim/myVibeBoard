@@ -331,7 +331,7 @@ function QuestionOtherInput({
       style={otherInputStyle}
       accessibilityLabel={accessibilityLabel}
       placeholder={placeholder}
-      placeholderTextColor={theme.colors.foregroundMuted}
+      placeholderTextColor={theme.colors.textPlaceholder}
       initialValue={value}
       onChangeText={handleChange}
       onSubmitEditing={onSubmit}

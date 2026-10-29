@@ -539,7 +539,7 @@ const styles = StyleSheet.create((theme) => ({
     elevation: 10,
   },
   placeholderColor: {
-    color: theme.colors.foregroundMuted,
+    color: theme.colors.textPlaceholder,
   },
   threadContainer: {
     flex: 1,

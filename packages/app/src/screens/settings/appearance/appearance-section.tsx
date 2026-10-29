@@ -781,6 +781,6 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
   },
   placeholderColor: {
-    color: theme.colors.foregroundMuted,
+    color: theme.colors.textPlaceholder,
   },
 }));

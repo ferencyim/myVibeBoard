@@ -836,10 +836,6 @@ export const assistantMessageStylesheet = StyleSheet.create((theme) => ({
   bubble: {
     alignSelf: "flex-start",
     maxWidth: isNative ? "100%" : "80%",
-    backgroundColor: isNative ? "transparent" : theme.colors.bgSurface,
-    borderRadius: theme.borderRadius["2xl"],
-    paddingHorizontal: isNative ? 0 : theme.spacing[3],
-    paddingVertical: isNative ? 0 : theme.spacing[2],
   },
   bubbleContent: {
     maxWidth: 720,
