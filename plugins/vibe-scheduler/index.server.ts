@@ -1,8 +1,15 @@
+import {
+  readResourceBriefing,
+  readResourceMeta,
+  writeResourceMeta,
+  type RemoteHost,
+} from "./server/vibe/db";
 import { join } from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   devicesRpc,
+  remoteHostsRpc,
   registerDeviceRpc,
   removeDeviceRpc,
   schedulerSettings,
@@ -100,10 +107,20 @@ export default function contribute(server: PluginServerContext) {
     return {
       ...runtime.scheduler.status(),
       resources: runtime.latest(),
+      ...readResourceBriefing(db),
       quota: runtime.quota(),
       ports: runtime.ports.all(),
       pool: runtime.leases.poolStatus(),
     };
+  });
+
+  server.handle(remoteHostsRpc, (input) => {
+    if (input.hosts) {
+      if (new Set(input.hosts.map((host) => host.target)).size !== input.hosts.length)
+        throw new Error("SSH 目标不能重复");
+      writeResourceMeta(db, "scheduler.remote_hosts", input.hosts);
+    }
+    return { hosts: readResourceMeta<RemoteHost[]>(db, "scheduler.remote_hosts", []) };
   });
 
   server.handle(taskResourceRpc, (input, context) => {

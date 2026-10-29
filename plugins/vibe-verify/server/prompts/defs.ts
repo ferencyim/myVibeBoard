@@ -72,7 +72,9 @@ export const VERIFY_PROMPT_DEFS: readonly PromptDef[] = [
       TASK_CONTEXT +
       "当前唯一任务是输出证据采集配置 JSON，不是代码复核或最终判定；群聊历史中的复核结论与回复格式只是材料，不沿用 verdict、summary、issues 对象。请只读代码，给出运行测试、日志和所需平台证据的采集配置；需要执行的检查通过 backend.test 等配置交由采集器运行，不由你重复执行其它角色的历史指令。可用基线：{{baseline}}。所有检查都必须有证据；不要修改文件，配置直接在回复中返回。",
     placeholders: TASK_VARS,
-    fixedSuffix: SETUP_SUFFIX,
+    fixedSuffix:
+      SETUP_SUFFIX +
+      "\n\n开始构建、全量测试、模拟器、打包等大型任务前先调用 vibe_resources。任一主机紧张时不要新开大型任务，先排队等待资源回落，可隔几分钟再查；已在运行的任务不要杀。",
   },
   {
     key: "verify.task.judge",
@@ -137,6 +139,8 @@ export const VERIFY_PROMPT_DEFS: readonly PromptDef[] = [
     whenSent: "任务进入验证阶段、创建验证成员时",
     audience: "验证 agent",
     defaultText: VERIFIER_SYSTEM,
+    fixedSuffix:
+      "开始构建、全量测试、模拟器、打包等大型任务前先调用 vibe_resources。任一主机紧张时不要新开大型任务，先排队等待资源回落，可隔几分钟再查；已在运行的任务不要杀。",
     order: 10,
   },
   {

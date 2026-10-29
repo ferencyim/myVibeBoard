@@ -1,3 +1,4 @@
+import { registerResourceTool } from "./server/resource-tool";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
@@ -41,15 +42,12 @@ export default function contribute(server: PluginServerContext) {
       return tasks.tabs.vibeTabs(callerAgentId);
     },
   });
+  registerResourceTool(server, runtime.db);
   const openTabInput = z
     .object({
       role: z.enum(["scout", "plan_reviewer", "session"]),
       task: z.string().trim().min(1).describe("交给新 tab 的任务说明"),
-      provider: z
-        .string()
-        .trim()
-        .optional()
-        .describe("provider/model；省略时沿用当前 tab 的模型"),
+      provider: z.string().trim().optional().describe("provider/model；省略时沿用当前 tab 的模型"),
       presetId: z.string().trim().optional(),
     })
     .strict();

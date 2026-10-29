@@ -286,6 +286,20 @@ export function MasterScreen(props: PluginScreenProps) {
   );
 }
 
+export function PromptLibrarySidebarItem({
+  openPromptLibrary,
+  isPromptLibraryActive,
+}: PluginSidebarItemProps) {
+  return (
+    <SidebarRow
+      icon="BookOpen"
+      label="提示词仓库"
+      active={isPromptLibraryActive}
+      onPress={openPromptLibrary}
+    />
+  );
+}
+
 export function MasterSidebarItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
   return (
     <SidebarRow

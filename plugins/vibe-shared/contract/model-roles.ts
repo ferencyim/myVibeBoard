@@ -4,7 +4,7 @@ import { z } from "zod";
 import { PresetEnvironmentKindSchema, PresetPermissionModeSchema, type RoleHint } from "./enums";
 import type { Preset } from "./model";
 import { presetModels } from "./preset-models";
-import type { TaskPlan } from "./task";
+import type { TaskPlan, TaskTab } from "./task";
 
 export const MODEL_ROLES = [
   "scout",
@@ -121,7 +121,11 @@ export function resolvePlannerIds(
   if (!writer) return { ids: [], source: level };
   const review = task?.plan_reviewer;
   const reviewers =
-    review?.mode === "disabled" ? [] : review?.mode === "preset" ? [review.presetId] : list.slice(1);
+    review?.mode === "disabled"
+      ? []
+      : review?.mode === "preset"
+        ? [review.presetId]
+        : list.slice(1);
   return { ids: [writer, ...reviewers], source: own?.mode === "preset" ? "task" : level };
 }
 
@@ -156,7 +160,7 @@ export type TaskRoleSelections = z.infer<typeof TaskRoleSelectionsSchema>;
 export const TaskPresetSnapshotSchema = z
   .object({
     presetId: z.string().min(1),
-    source: z.enum(["task", "project", "global", "worker"]),
+    source: z.enum(["task", "project", "global", "worker", "main-fallback"]),
     models: z
       .array(
         z
@@ -226,12 +230,33 @@ export const TaskRoleSnapshotSchema = z
   .strict();
 export type TaskRoleSnapshot = z.infer<typeof TaskRoleSnapshotSchema>;
 
+export const MAIN_FALLBACK_PRESET_ID = "task-main-fallback";
+export type MainTabModel = Pick<TaskTab, "provider" | "model" | "thinking">;
+export function mainFallbackSnapshot(main: MainTabModel): TaskPresetSnapshot {
+  return {
+    presetId: MAIN_FALLBACK_PRESET_ID,
+    source: "main-fallback",
+    models: [
+      {
+        provider: main.provider,
+        model: main.model,
+        thinking: main.thinking ?? "",
+        permissionMode: "full",
+      },
+    ],
+    environmentKind: "project-default",
+    runtimeEnv: null,
+    instructions: "",
+  };
+}
+
 /** Does not depend on cards. An explicit unavailable preset is an error, never a silent fallback. */
 export function resolveTaskRoles(
   task: TaskRoleSelections,
   project: ModelDefaults | null | undefined,
   global: ModelDefaults | null | undefined,
   getPreset: (id: string) => Preset | undefined,
+  main?: MainTabModel,
 ): TaskRoleSnapshot {
   const selections = TaskRoleSelectionsSchema.parse(task);
   const result: Partial<Record<ModelRole, TaskPresetSnapshot | null>> = {};
@@ -256,6 +281,10 @@ export function resolveTaskRoles(
     } else {
       id = defaultPresetId(global, role);
       source = "global";
+    }
+    if (id === undefined && main && role !== "plan_reviewer") {
+      result[role] = mainFallbackSnapshot(main);
+      continue;
     }
     if (!id) {
       if (role === "subagent") {

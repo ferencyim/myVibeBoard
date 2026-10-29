@@ -1,3 +1,5 @@
+import { sampleRemoteHost } from "./remote-resources";
+import { readResourceMeta, writeResourceMeta, type RemoteHost } from "./vibe/db";
 // Wires the scheduler to the real world: timers, resource_sample persistence, the usage cache and
 // the event consumer for native task resource requests. `index.server.ts` only adds Paseo plumbing.
 
@@ -8,6 +10,7 @@ import {
   createResourceSampler,
   createSystemProbe,
   type ResourceSnapshot,
+  type CommandRunner,
   type SessionTarget,
   type SystemProbe,
 } from "./resources";
@@ -36,6 +39,7 @@ export interface RuntimeSettings extends SchedulerConfig {
   tickSeconds: number;
   sampleSeconds: number;
   sampleRetentionDays: number;
+  remoteSampleSeconds: number;
 }
 
 export const DEFAULT_SETTINGS: RuntimeSettings = {
@@ -47,6 +51,7 @@ export const DEFAULT_SETTINGS: RuntimeSettings = {
   tickSeconds: 5,
   sampleSeconds: 15,
   sampleRetentionDays: 7,
+  remoteSampleSeconds: 60,
 };
 
 export interface RuntimeOptions {
@@ -54,6 +59,7 @@ export interface RuntimeOptions {
   /** Directory for scheduler files (ports.json). */
   dataDir: string;
   probe?: SystemProbe;
+  remoteRun?: CommandRunner;
   now?: () => Date;
   isPortFree?: (port: number) => Promise<boolean>;
   /** Fetch provider usage (providers.listUsage); null when no daemon handle is known yet. */
@@ -164,6 +170,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   async function sampleNow(): Promise<ResourceSnapshot> {
     const snap = await sampler.sample(targets());
     latest = snap;
+    writeResourceMeta(db, "scheduler.local_resources", { name: "本机", ...snap });
     const perSession: Record<string, unknown> = {};
     for (const [id, u] of Object.entries(snap.perSession)) perSession[id] = u;
     resourceSamples.record({
@@ -206,6 +213,22 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     return scheduler.tick();
   }
 
+  async function sampleRemotesNow() {
+    const hosts = readResourceMeta<RemoteHost[]>(db, "scheduler.remote_hosts", []);
+    const samples = await Promise.all(
+      hosts.map((host) => sampleRemoteHost(host, options.remoteRun, now())),
+    );
+    const active = new Set(
+      readResourceMeta<RemoteHost[]>(db, "scheduler.remote_hosts", []).map((host) => host.target),
+    );
+    writeResourceMeta(
+      db,
+      "scheduler.remote_resources",
+      samples.filter((host) => active.has(host.target!)),
+    );
+    return samples;
+  }
+  let remoteTimer: ReturnType<typeof setTimeout> | null = null;
   let tickTimer: ReturnType<typeof setTimeout> | null = null;
   let sampleTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = true;
@@ -232,6 +255,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     ports,
     scheduler,
     sampleNow,
+    sampleRemotesNow,
     tickOnce,
     refreshUsage,
     latest: () => latest,
@@ -245,6 +269,12 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
       stopped = false;
       consumer.start();
       void sampleNow().catch(onError);
+      void sampleRemotesNow().catch(onError);
+      loop(
+        sampleRemotesNow,
+        () => settings.remoteSampleSeconds,
+        (t) => (remoteTimer = t),
+      );
       loop(
         sampleNow,
         () => settings.sampleSeconds,
@@ -258,6 +288,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     },
     async stop() {
       stopped = true;
+      if (remoteTimer) clearTimeout(remoteTimer);
       if (tickTimer) clearTimeout(tickTimer);
       if (sampleTimer) clearTimeout(sampleTimer);
       await consumer.stop();

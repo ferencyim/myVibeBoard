@@ -17,3 +17,5 @@ export * from "./select";
 export * from "./state-machine";
 export * from "./subtasks";
 export * from "./task";
+
+export * from "./resources";

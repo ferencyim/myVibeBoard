@@ -1,10 +1,26 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { permissionRpc, statusRpc } from "./shared/rpc";
-import { MasterScreen, MasterSettingsScreen, MasterSidebarItem } from "./client/screen";
+import {
+  MasterScreen,
+  MasterSettingsScreen,
+  MasterSidebarItem,
+  PromptLibrarySidebarItem,
+} from "./client/screen";
 
 export default function contribute(client: PluginClientContext) {
   client.addScreen({ id: "main", title: "总 agent", Component: MasterScreen });
-  client.addSidebarHeaderItem({ id: "master", title: "总 agent", Component: MasterSidebarItem });
+  client.addSidebarHeaderItem({
+    id: "master",
+    title: "总 agent",
+    order: -30,
+    Component: MasterSidebarItem,
+  });
+  client.addSidebarHeaderItem({
+    id: "prompt-library",
+    title: "提示词仓库",
+    order: -20,
+    Component: PromptLibrarySidebarItem,
+  });
   client.addSettingsScreen({
     id: "preferences",
     title: "总 agent",
