@@ -19,6 +19,7 @@ import {
   isExplorerSidebarOpen,
   openExplorerSidebarView,
   resolveExplorerSidebarPresentation,
+  shouldOpenFilesInsteadOfChanges,
   toggleExplorerSidebar,
 } from "@/workspace-tabs/explorer-sidebar";
 
@@ -104,5 +105,23 @@ describe("Explorer sidebar", () => {
     toggleExplorerSidebar(input);
 
     expect(isExplorerSidebarOpen(input)).toBe(true);
+  });
+});
+
+describe("shouldOpenFilesInsteadOfChanges", () => {
+  it("redirects a focused Changes tab only outside git checkouts", () => {
+    const changes = { kind: "changes_tree" } as const;
+    expect(shouldOpenFilesInsteadOfChanges({ isGitCheckout: false, focusedTarget: changes })).toBe(
+      true,
+    );
+    expect(shouldOpenFilesInsteadOfChanges({ isGitCheckout: true, focusedTarget: changes })).toBe(
+      false,
+    );
+    expect(
+      shouldOpenFilesInsteadOfChanges({ isGitCheckout: false, focusedTarget: { kind: "files" } }),
+    ).toBe(false);
+    expect(
+      shouldOpenFilesInsteadOfChanges({ isGitCheckout: false, focusedTarget: undefined }),
+    ).toBe(false);
   });
 });

@@ -75,6 +75,7 @@ import { toggleDesktopSidebarsWithCheckoutIntent } from "@/utils/desktop-sidebar
 import {
   isExplorerSidebarOpen,
   openExplorerSidebarView,
+  shouldOpenFilesInsteadOfChanges,
   toggleExplorerSidebar,
   useIsExplorerSidebarOpen,
 } from "@/workspace-tabs/explorer-sidebar";
@@ -1471,11 +1472,17 @@ function WorkspaceScreenContent({
   const moveWorkspaceTabToPane = useWorkspaceLayoutStore((state) => state.moveTabToPane);
   const closeWorkspacePane = useWorkspaceLayoutStore((state) => state.closePane);
   const handleToggleExplorerSidebar = useCallback(() => {
-    toggleExplorerSidebar({
-      isCompact: isMobile,
-      workspaceKey: persistenceKey,
-    });
-  }, [isMobile, persistenceKey]);
+    const query = { isCompact: isMobile, workspaceKey: persistenceKey };
+    const opening = !isExplorerSidebarOpen(query);
+    if (
+      opening &&
+      shouldOpenFilesInsteadOfChanges({ isGitCheckout, focusedTarget: explorerTarget })
+    ) {
+      openExplorerSidebarView({ ...query, view: "files" });
+      return;
+    }
+    toggleExplorerSidebar(query);
+  }, [explorerTarget, isGitCheckout, isMobile, persistenceKey]);
   const paneFocusSuppressedRef = useRef(false);
   const resizeWorkspaceSplit = useWorkspaceLayoutStore((state) => state.resizeSplit);
   const reorderWorkspaceTabsInPane = useWorkspaceLayoutStore((state) => state.reorderTabsInPane);

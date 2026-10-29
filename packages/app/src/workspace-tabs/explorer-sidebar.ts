@@ -28,6 +28,17 @@ export function resolveExplorerSidebarPresentation(
   return "dock";
 }
 
+/**
+ * A directory that is not a git checkout (a standalone bot's folder) has nothing to show under
+ * Changes. Opening the Explorer there lands on Files instead of a Changes tab that can never fill.
+ */
+export function shouldOpenFilesInsteadOfChanges(input: {
+  isGitCheckout: boolean;
+  focusedTarget: WorkspaceTabTarget | undefined;
+}): boolean {
+  return !input.isGitCheckout && input.focusedTarget?.kind === "changes_tree";
+}
+
 /** Reveals the Explorer sidebar and selects one of its navigation trees. */
 export function openExplorerSidebarView(
   input: ExplorerSidebarQuery & { view: ExplorerSidebarView },

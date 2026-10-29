@@ -22,7 +22,7 @@ export function RoutinesScreen(props: PluginScreenProps) { return <RoutineConten
 /** Embeddable body for the bot profile slot. Render within the plugin RPC context. */
 export function BotRoutines(props: Pick<PluginScreenProps, "theme" | "navigation"> & { botId: string }) { return <RoutineContent {...props} botId={props.botId} />; }
 
-function RoutineBody({ theme, embedded, children }: PropsWithChildren<{ theme: PluginScreenProps["theme"]; embedded: boolean }>) { return embedded ? <View>{children}</View> : <Page theme={theme}>{children}</Page>; }
+function RoutineBody({ theme, embedded, children }: PropsWithChildren<{ theme: PluginScreenProps["theme"]; embedded: boolean }>) { return embedded ? <View style={{ gap: 16 }}>{children}</View> : <Page theme={theme}>{children}</Page>; }
 
 function RoutineContent({ theme, navigation, botId }: Pick<PluginScreenProps, "theme" | "navigation"> & { botId?: string }) {
   const list = useRpc(routinesListRpc), botsList = useRpc(botsListRpc);
@@ -48,7 +48,7 @@ function RoutineContent({ theme, navigation, botId }: Pick<PluginScreenProps, "t
   const systemItems = systems.data?.routines ?? [];
   const text = { color: theme.colors.foreground }, muted = { color: theme.colors.foregroundMuted };
   return <RoutineBody theme={theme} embedded={!!botId}>
-    <Text style={{ ...text, fontSize: 18 }}>例程</Text>
+    {botId ? null : <Text style={{ ...text, fontSize: 18 }}>例程</Text>}
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}><Button theme={theme} label={view === "list" ? "● 列表" : "列表"} onPress={() => setView("list")} /><Button theme={theme} label={view === "week" ? "● 周历" : "周历"} onPress={() => setView("week")} /><Button theme={theme} label="新建例程" onPress={() => setEditing("new")} /></View>
     <Feedback theme={theme} error={error || routines.error || bots.error || systems.error} message={routines.isLoading ? "正在加载例程…" : undefined} />
     {view === "week" ? <WeekView theme={theme} routines={items} systems={systemItems} week={week} setWeek={setWeek} onEdit={setEditing} onSystem={(item) => navigation?.openPluginScreen?.({ pluginId: "vibe-maintain", screenId: "main", params: { rule: item.editKey } })} /> : <>
