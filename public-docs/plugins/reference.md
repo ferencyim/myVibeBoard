@@ -851,19 +851,20 @@ plans, and mode changes; requesting permission does not end the turn.
 
 ### Events
 
-| Name                         | Event fields                                                                                   | Trigger                                                                    |
-| ---------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `agent.created`              | `agent`                                                                                        | Ordinary creation finishes; excludes import/resume                         |
-| `agent.closed`               | `agent`                                                                                        | A live agent runtime closes                                                |
-| `agent.turn_started`         | `agent`, `turnId`                                                                              | Live turn starts                                                           |
-| `agent.turn_ended`           | `agent`, `turnId`, `outcome`, deprecated `timeline: []`                                        | Live turn completes, fails, or is canceled                                 |
-| `agent.permission_requested` | `agent`, `request`                                                                             | Permission or question becomes pending                                     |
-| `agent.permission_resolved`  | `agent`, `requestId`, `resolution`                                                             | Pending request is answered or cleared                                     |
-| `agent.archived`             | `agent`, `archivedAt`                                                                          | Archive state is saved                                                     |
-| `workspace.created`          | `workspace`                                                                                    | Record created; directory available                                        |
-| `workspace.archived`         | `workspace`                                                                                    | Archive state is saved                                                     |
-| `agent.user_prompt_handled`  | `agentId`, `messageId`, optional `images`, `attachments`                                       | A plugin took an `agent.user_prompt` message over and the host recorded it |
-| `agent.user_prompt_received` | `agentId`, `workspaceId`, `messageId`, `text`, optional `images`, `attachments`, `sessionMode` | Ordinary user delivery succeeded; plugin and agent sends are excluded      |
+| Name                           | Event fields                                                                                   | Trigger                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `agent.created`                | `agent`                                                                                        | Ordinary creation finishes; excludes import/resume                         |
+| `agent.closed`                 | `agent`                                                                                        | A live agent runtime closes                                                |
+| `agent.turn_started`           | `agent`, `turnId`                                                                              | Live turn starts                                                           |
+| `agent.turn_ended`             | `agent`, `turnId`, `outcome`, deprecated `timeline: []`                                        | Live turn completes, fails, or is canceled                                 |
+| `agent.permission_requested`   | `agent`, `request`                                                                             | Permission or question becomes pending                                     |
+| `agent.permission_resolved`    | `agent`, `requestId`, `resolution`                                                             | Pending request is answered or cleared                                     |
+| `agent.archived`               | `agent`, `archivedAt`                                                                          | Archive state is saved                                                     |
+| `workspace.created`            | `workspace`                                                                                    | Record created; directory available                                        |
+| `workspace.archived`           | `workspace`                                                                                    | Archive state is saved                                                     |
+| `agent.user_prompt_handled`    | `agentId`, `messageId`, optional `images`, `attachments`                                       | A plugin took an `agent.user_prompt` message over and the host recorded it |
+| `agent.turn_context_delivered` | `agentId`, `deliveryId`                                                                        | Provider accepted the foreground context; failed starts emit no receipt    |
+| `agent.user_prompt_received`   | `agentId`, `workspaceId`, `messageId`, `text`, optional `images`, `attachments`, `sessionMode` | Ordinary user delivery succeeded; plugin and agent sends are excluded      |
 
 Agent events exclude the daemon's private disposable helpers. Public background workspaces and
 their ordinary agents run the same lifecycle hooks as other workspaces. Archive events can precede
@@ -913,6 +914,8 @@ type PluginTurnOutcome =
 | --------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
 | `agent.create`              | `config`, optional `env`, `workspaceId`, `parentAgentId`, `labels`                   | Public agent config except `cwd`; `env`     |
 | `agent.session_open`        | `agentId`, `workspaceId`, `provider`, `cwd`, `reason`, `purpose`, `env`              | Only `env`                                  |
+| `agent.turn_context`        | `agentId`, optional `context`, `deliveryId`                                          | Only `context` and `deliveryId`             |
+| `agent.notification`        | `agentId`, `reason`, optional `suppressed`                                           | Set `suppressed: true` only                 |
 | `agent.prompt`              | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `prompt`                 | Only `prompt`                               |
 | `agent.permission_response` | `agentId`, `workspaceId`, `parentAgentId`, `callerAgentId`, `requestId`              | None (reject only)                          |
 | `agent.user_prompt`         | `agentId`, `workspaceId`, `messageId`, `text`, optional `attachments`, `sessionMode` | None; may return `{ handled: true, note? }` |
@@ -923,6 +926,14 @@ transform (for example, to a task workspace or a child agent). Returning differe
 is ignored; only the returned `config` and `env` are applied. `workspace.create.callerAgentId` is
 likewise advisory: agent-initiated creations carry it so transforms can leave them alone, but a
 local agent can shed it by running the CLI outside its agent environment.
+
+`agent.notification` runs before native agent attention alerts are sent. `reason` is `finished`,
+`error`, or `permission`. Return `{ ...request, suppressed: true }` to suppress push and in-app
+alerts; attention state still reaches subscribed clients with `shouldNotify: false`. Hooks cannot
+change the recipient or reason, or reverse an earlier suppression. A failed hook suppresses alerts
+for that event and logs the failure while preserving attention state delivery.
+
+`agent.turn_context` resolves `{ agentId, context?, deliveryId? }` immediately before a foreground provider turn. The recipient is read-only. Optional context is prepended as user-role provider history; it is system-origin information and must never grant execution authorization. Human prompt hooks, authorization events, and the canonical submitted message keep the original user text. Unchanged context should return no `context`. A successful provider start emits `agent.turn_context_delivered` with `{ agentId, deliveryId }`; failed starts emit no receipt so the plugin can retry pending updates. Observers are asynchronous, so delivery must tolerate a duplicate receipt or retry.
 
 `agent.prompt` runs when an agent calls `send_agent_prompt` on this host, before the prompt is
 queued. `agentId` is the recipient and `parentAgentId` its parent when it is a subagent. Throw to

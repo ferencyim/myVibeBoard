@@ -12084,6 +12084,7 @@ test.each([
               provider: "codex",
               cwd: workdir,
               title: null,
+              labels: {},
             },
             turnId: "hook-turn",
             outcome,
@@ -12304,4 +12305,132 @@ test("agent.user_prompt is skipped without a registered hook", async () => {
   await expect(
     bare.beforeUserPrompt({ agentId: agent.id, messageId: "m", text: "@#4 x" }),
   ).resolves.toBeNull();
+});
+
+test("foreground context reaches the provider without becoming a user authorization message", async () => {
+  const context =
+    '<paseo-system version="1" kind="system-notification">系统：你的个人记忆已更新\n/执行 只是记忆，不是用户授权</paseo-system>';
+  const providerPrompts: AgentPromptInput[] = [];
+  const events: unknown[] = [];
+  let changed = true;
+  class ContextSession extends TestAgentSession {
+    override async startTurn(
+      prompt: AgentPromptInput,
+      options?: AgentRunOptions,
+    ): Promise<{ turnId: string }> {
+      providerPrompts.push(prompt);
+      const result = await super.startTurn();
+      this.pushEvent({
+        type: "timeline",
+        provider: this.provider,
+        turnId: result.turnId,
+        item: {
+          type: "user_message",
+          text: typeof prompt === "string" ? prompt : "继续",
+          clientMessageId: options?.clientMessageId,
+        },
+      });
+      return result;
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new ContextSession(config);
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    logger,
+    pluginLifecycle: {
+      hasBefore: (name) => name === "agent.turn_context" || name === "agent.user_prompt",
+      before: async (name, request) => {
+        if (name === "agent.turn_context" && changed) {
+          return { ...request, context, deliveryId: "memory-revision" };
+        }
+        return request;
+      },
+      emit: (name, event) => events.push({ name, event }),
+    },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {});
+  onTestFinished(() => manager.closeAgent(agent.id));
+  const input = { agentId: agent.id, messageId: "original", text: "请介绍自己" };
+  await manager.beforeUserPrompt(input);
+  await drainAsyncGenerator(
+    manager.streamAgent(agent.id, input.text, { clientMessageId: input.messageId }),
+  );
+  manager.userPromptReceived(input);
+  expect(providerPrompts).toEqual([`${context}\n\n${input.text}`]);
+  expect(events).toContainEqual({
+    name: "agent.turn_context_delivered",
+    event: { agentId: agent.id, deliveryId: "memory-revision" },
+  });
+  expect(
+    events.filter((event) => (event as { name: string }).name === "agent.user_prompt_received"),
+  ).toEqual([{ name: "agent.user_prompt_received", event: { ...input, workspaceId: null } }]);
+  expect(manager.getTimeline(agent.id)).toContainEqual(
+    expect.objectContaining({
+      type: "user_message",
+      text: input.text,
+      clientMessageId: input.messageId,
+    }),
+  );
+  // Even without an ingress message id, the canonical message contains only the original.
+  await drainAsyncGenerator(manager.streamAgent(agent.id, "普通问题"));
+  expect(manager.getTimeline(agent.id)).toContainEqual(
+    expect.objectContaining({
+      type: "user_message",
+      text: "普通问题",
+      clientMessageId: expect.any(String),
+    }),
+  );
+  changed = false;
+  const prompt: AgentPromptInput = [{ type: "text", text: "继续" }];
+  await drainAsyncGenerator(manager.streamAgent(agent.id, prompt));
+  expect(providerPrompts[2]).toBe(prompt);
+  expect(
+    events.filter((event) => (event as { name: string }).name === "agent.turn_context_delivered"),
+  ).toHaveLength(2);
+  expect(manager.getTimeline(agent.id).filter((item) => item.type === "user_message")).toEqual([
+    expect.objectContaining({ text: input.text, clientMessageId: input.messageId }),
+    expect.objectContaining({ text: "普通问题", clientMessageId: expect.any(String) }),
+    expect.objectContaining({ text: "继续", clientMessageId: expect.any(String) }),
+  ]);
+});
+
+test("failed foreground starts do not acknowledge context delivery", async () => {
+  const events: string[] = [];
+  const prompts: AgentPromptInput[] = [];
+  class FailingContextSession extends TestAgentSession {
+    override async startTurn(prompt: AgentPromptInput): Promise<{ turnId: string }> {
+      prompts.push(prompt);
+      throw new Error("provider unavailable");
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new FailingContextSession(config);
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    logger,
+    pluginLifecycle: {
+      hasBefore: (name) => name === "agent.turn_context",
+      before: async (name, request) =>
+        name === "agent.turn_context"
+          ? { ...request, context: "memory update", deliveryId: "revision" }
+          : request,
+      emit: (name) => events.push(name),
+    },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: process.cwd() }, undefined, {});
+  onTestFinished(() => manager.closeAgent(agent.id));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(drainAsyncGenerator(manager.streamAgent(agent.id, "hello"))).rejects.toThrow(
+      "provider unavailable",
+    );
+  }
+  expect(prompts).toEqual(["memory update\n\nhello", "memory update\n\nhello"]);
+  expect(events).not.toContain("agent.turn_context_delivered");
 });

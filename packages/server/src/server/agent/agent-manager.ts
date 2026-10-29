@@ -2715,7 +2715,26 @@ export class AgentManager {
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
     try {
-      const result = await agent.session.startTurn(prompt, options);
+      // Resolve after human ingress authorization has seen only the original user message.
+      // This context belongs to provider user-role history, never to user authorization events.
+      const context =
+        !agent.internal && this.pluginLifecycle?.hasBefore?.("agent.turn_context")
+          ? await this.pluginLifecycle.before("agent.turn_context", { agentId })
+          : undefined;
+      let providerPrompt = prompt;
+      if (context?.context) {
+        providerPrompt =
+          typeof prompt === "string"
+            ? `${context.context}\n\n${prompt}`
+            : [{ type: "text", text: context.context }, ...prompt];
+      }
+      const result = await agent.session.startTurn(providerPrompt, options);
+      if (context?.context && context.deliveryId) {
+        this.pluginLifecycle?.emit("agent.turn_context_delivered", {
+          agentId,
+          deliveryId: context.deliveryId,
+        });
+      }
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
       }
@@ -2787,6 +2806,11 @@ export class AgentManager {
     }
 
     const agent = existingAgent;
+    // Keep a canonical original message even when an internal sender supplied no message id.
+    // Provider echoes may include system context and cannot stand in for user authorization.
+    if (!agent.internal && this.pluginLifecycle?.hasBefore?.("agent.turn_context")) {
+      options = { ...options, clientMessageId: options?.clientMessageId ?? randomUUID() };
+    }
     const isReplacement = agent.pendingReplacement;
     agent.lastError = undefined;
 

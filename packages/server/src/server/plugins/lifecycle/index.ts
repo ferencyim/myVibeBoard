@@ -19,6 +19,7 @@ export const lifecycleEventNames = [
   "agent.created",
   "agent.closed",
   "agent.turn_started",
+  "agent.turn_context_delivered",
   "agent.turn_ended",
   "agent.permission_requested",
   "agent.permission_resolved",
@@ -31,6 +32,8 @@ export const lifecycleEventNames = [
 export const beforeHookNames = [
   "agent.create",
   "agent.session_open",
+  "agent.turn_context",
+  "agent.notification",
   "agent.prompt",
   "agent.permission_response",
   "agent.user_prompt",
@@ -38,6 +41,20 @@ export const beforeHookNames = [
 ] as const;
 
 const beforeSchemas = {
+  "agent.notification": z
+    .object({
+      agentId: z.string(),
+      reason: z.enum(["finished", "error", "permission"]),
+      suppressed: z.boolean().optional(),
+    })
+    .strict(),
+  "agent.turn_context": z
+    .object({
+      agentId: z.string(),
+      context: z.string().optional(),
+      deliveryId: z.string().optional(),
+    })
+    .strict(),
   "agent.create": CreateAgentRequestMessageSchema.pick({
     config: true,
     env: true,
@@ -199,6 +216,12 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
     return { request: validateBeforeRequest(name, { ...input, ...handled }), stop: !!handled };
   }
   const result = validateBeforeRequest(name, output);
+  if (name === "agent.notification") {
+    validateNotificationResult(input, result);
+  }
+  if (name === "agent.turn_context") {
+    validateTurnContextResult(input, result);
+  }
   if (name === "agent.session_open") {
     const previous = beforeSchemas["agent.session_open"].parse(input);
     const next = beforeSchemas["agent.session_open"].parse(result);
@@ -240,6 +263,26 @@ export function validateBeforeResult<Name extends keyof PluginBeforeRequests>(
     }
   }
   return { request: result, stop: false };
+}
+
+function validateTurnContextResult(input: unknown, output: unknown): void {
+  const previous = beforeSchemas["agent.turn_context"].parse(input);
+  const next = beforeSchemas["agent.turn_context"].parse(output);
+  if (previous.agentId !== next.agentId) {
+    throw new Error("agent.turn_context hooks cannot change the recipient");
+  }
+}
+
+function validateNotificationResult(input: unknown, output: unknown): void {
+  const previous = beforeSchemas["agent.notification"].parse(input);
+  const next = beforeSchemas["agent.notification"].parse(output);
+  if (
+    previous.agentId !== next.agentId ||
+    previous.reason !== next.reason ||
+    (previous.suppressed === true && next.suppressed !== true)
+  ) {
+    throw new Error("agent.notification hooks can only suppress notifications");
+  }
 }
 
 /** A user_prompt hook may only take the message over (`{ handled: true, note? }`), not change it.

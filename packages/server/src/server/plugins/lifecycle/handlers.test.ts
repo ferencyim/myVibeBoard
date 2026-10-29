@@ -7,6 +7,53 @@ const paseo = createPaseoApi(
   new DaemonClient({ url: "ws://127.0.0.1:1/ws", clientId: "lifecycle-unit" }),
 );
 
+test("notification hooks can suppress but cannot redirect or reverse suppression", async () => {
+  const input = { agentId: "agent", reason: "finished" as const };
+  const hooks = new PluginHookHandlers(() => {});
+  hooks.before("agent.notification", ({ request }) => ({ ...request, suppressed: true }));
+  await expect(
+    hooks.invoke("operation", "before", "agent.notification", input, paseo),
+  ).resolves.toEqual({
+    ...input,
+    suppressed: true,
+  });
+  hooks.before("agent.notification", ({ request }) => ({ ...request, suppressed: false }));
+  await expect(
+    hooks.invoke("operation", "before", "agent.notification", input, paseo),
+  ).rejects.toThrow("agent.notification hooks can only suppress notifications");
+  const redirecting = new PluginHookHandlers(() => {});
+  redirecting.before("agent.notification", ({ request }) => ({ ...request, agentId: "other" }));
+  await expect(
+    redirecting.invoke("operation", "before", "agent.notification", input, paseo),
+  ).rejects.toThrow("agent.notification hooks can only suppress notifications");
+});
+
+test("turn context hooks compose fresh context without redirecting the agent", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  hooks.before("agent.turn_context", ({ request }) => ({ ...request, context: "memory" }));
+  hooks.before("agent.turn_context", ({ request }) => ({
+    ...request,
+    context: `${request.context}\npreferences`,
+  }));
+  const input = { agentId: "bot-agent" };
+  await expect(
+    hooks.invoke("operation", "before", "agent.turn_context", input, paseo),
+  ).resolves.toEqual({
+    agentId: "bot-agent",
+    context: "memory\npreferences",
+  });
+  expect(input).toEqual({ agentId: "bot-agent" });
+
+  const redirecting = new PluginHookHandlers(() => {});
+  redirecting.before("agent.turn_context", ({ request }) => ({
+    ...request,
+    agentId: "another-agent",
+  }));
+  await expect(
+    redirecting.invoke("operation", "before", "agent.turn_context", input, paseo),
+  ).rejects.toThrow("agent.turn_context hooks cannot change the recipient");
+});
+
 test("removing an old registration twice preserves a newer registration for the same hook", async () => {
   const hooks = new PluginHookHandlers(() => {});
   const remove = hooks.before("workspace.create", ({ request }) => {

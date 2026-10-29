@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   online: false,
   callbacks: new Set<() => void>(),
   client: { listProjects: vi.fn(), invokePluginRpc: vi.fn() },
+  plugins: ["vibe-board"],
+  receivedBots: vi.fn(),
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
@@ -15,8 +17,9 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   },
 }));
 vi.mock("@/plugins/registry", () => ({
+  botSnapshotCache: { received: mocks.receivedBots },
   pluginRegistry: {
-    getSnapshot: () => [{ id: "vibe-board", serverId: "host" }],
+    getSnapshot: () => mocks.plugins.map((id) => ({ id, serverId: "host" })),
     subscribe: (fn: () => void) => {
       mocks.callbacks.add(fn);
       return () => mocks.callbacks.delete(fn);
@@ -43,6 +46,9 @@ describe("project document background reconnect", () => {
     mocks.values.clear();
     mocks.callbacks.clear();
     mocks.online = false;
+    mocks.plugins = ["vibe-board"];
+    mocks.client.invokePluginRpc.mockReset();
+    mocks.receivedBots.mockReset();
   });
   it("delivers persisted offline edits after reconnect without opening project settings", async () => {
     const key = "project-documents:v1:host:project";
@@ -77,6 +83,27 @@ describe("project document background reconnect", () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(mocks.client.listProjects).toHaveBeenCalledTimes(discoveries);
+    } finally {
+      stop();
+    }
+  });
+  it("refreshes every bot and its personal memories after reconnect without opening a bot page", async () => {
+    mocks.plugins = ["vibe-bots"];
+    const snapshot = { bots: [{ id: "bot", memories: [{ text: "个人偏好" }] }] };
+    mocks.client.invokePluginRpc.mockResolvedValue(snapshot);
+    mocks.receivedBots.mockResolvedValue(undefined);
+    const runtime = await import("./project-documents");
+    const stop = runtime.startProjectDocumentSync();
+    try {
+      await runtime.flushProjectDocuments();
+      expect(mocks.client.invokePluginRpc).not.toHaveBeenCalled();
+      mocks.online = true;
+      for (const fn of mocks.callbacks) fn();
+      await runtime.flushProjectDocuments();
+      expect(mocks.client.invokePluginRpc).toHaveBeenCalledWith("vibe-bots", "bots.list", {
+        includeArchived: true,
+      });
+      expect(mocks.receivedBots).toHaveBeenCalledWith("host", { includeArchived: true }, snapshot);
     } finally {
       stop();
     }

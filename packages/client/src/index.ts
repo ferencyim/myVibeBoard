@@ -392,6 +392,10 @@ export interface PaseoAgentHandle {
   cancelRun(): Promise<void>;
   /** Switches the provider session mode, e.g. to a read-only planning mode. */
   setMode(modeId: string): Promise<void>;
+  /** Changes the model within the current provider; null selects its default model. */
+  setModel(model: string | null): Promise<void>;
+  /** Changes reasoning effort; null selects the provider default. */
+  setThinkingOption(id: string | null): Promise<void>;
   /** Renames the agent through the existing `update_agent_request` RPC (shown as its title). */
   setTitle(title: string): Promise<void>;
   /** Merges labels into the agent's labels. */
@@ -518,6 +522,10 @@ export interface PaseoApi {
   readonly agents: PaseoAgentActions;
   readonly providers: PaseoProviderActions;
   readonly config: PaseoConfigActions;
+  readonly plugins: {
+    /** Invokes an RPC registered by a plugin on this host. */
+    invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
+  };
 }
 
 export interface PaseoClient extends PaseoApi {
@@ -812,6 +820,9 @@ export function createPaseoApi(
       get: (requestId) => daemonClient.getDaemonConfig(requestId),
       patch: (patch, requestId) => daemonClient.patchDaemonConfig(patch, requestId),
     },
+    plugins: {
+      invoke: (pluginId, method, input) => daemonClient.invokePluginRpc(pluginId, method, input),
+    },
   };
 }
 
@@ -1048,6 +1059,12 @@ function createAgentHandleFactory(
       },
       setMode: async (modeId) => {
         await daemonClient.setAgentMode(id, modeId);
+      },
+      setModel: async (model) => {
+        await daemonClient.setAgentModel(id, model);
+      },
+      setThinkingOption: async (thinkingOptionId) => {
+        await daemonClient.setAgentThinkingOption(id, thinkingOptionId);
       },
       resume: async () => {
         await daemonClient.refreshAgent(id);

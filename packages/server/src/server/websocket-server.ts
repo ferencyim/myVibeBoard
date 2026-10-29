@@ -100,6 +100,7 @@ import {
 import {
   buildAgentAttentionNotificationPayload,
   findLatestPermissionRequest,
+  type AgentAttentionReason,
 } from "@getpaseo/protocol/agent-attention-notification";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
@@ -2842,6 +2843,21 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
+  private async isAgentNotificationSuppressed(
+    agentId: string,
+    reason: AgentAttentionReason,
+  ): Promise<boolean> {
+    if (!this.pluginRuntime) return false;
+    try {
+      const request = await this.pluginRuntime.before("agent.notification", { agentId, reason });
+      return request.suppressed === true;
+    } catch (err) {
+      // Preserve attention state without alerting when a notification policy cannot be read.
+      this.logger.warn({ err, agentId }, "Failed to resolve notification policy");
+      return true;
+    }
+  }
+
   private async broadcastAgentAttention(params: {
     agentId: string;
     provider: AgentProvider;
@@ -2851,6 +2867,7 @@ export class VoiceAssistantWebSocketServer {
     if (!agent?.workspaceId) {
       return;
     }
+    const suppressed = await this.isAgentNotificationSuppressed(params.agentId, params.reason);
     this.recentAttention.set(`${params.agentId}:${params.reason}`, Date.now());
     const clientEntries: Array<{
       ws: WebSocketLike;
@@ -2895,6 +2912,10 @@ export class VoiceAssistantWebSocketServer {
       pushEligible: isPushEligibleAttentionReason(params.reason),
       nowMs,
     });
+    if (suppressed) {
+      plan.shouldPush = false;
+      plan.inAppRecipientIndex = null;
+    }
 
     if (plan.shouldPush) {
       void this.pushNotificationSender.send(pushPayload).catch((err) => {

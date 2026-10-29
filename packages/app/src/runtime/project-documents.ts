@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
-import { pluginRegistry } from "@/plugins/registry";
+import { botSnapshotCache, pluginRegistry } from "@/plugins/registry";
 import { ProjectDocumentCache, projectDocumentCacheSchema } from "@/projects/document-cache";
 const caches = new Map<string, ProjectDocumentCache>();
 const loads = new WeakMap<ProjectDocumentCache, Promise<unknown>>();
@@ -37,6 +37,18 @@ async function flush() {
     const snapshot = store.getSnapshot(host.serverId);
     const client = snapshot?.client;
     if (snapshot?.connectionStatus !== "online" || !client) continue;
+    const plugins = pluginRegistry
+      .getSnapshot()
+      .filter((plugin) => plugin.serverId === host.serverId);
+    if (plugins.some((plugin) => plugin.id === "vibe-bots")) {
+      try {
+        const filter = { includeArchived: true };
+        const response = await client.invokePluginRpc("vibe-bots", "bots.list", filter);
+        await botSnapshotCache.received(host.serverId, filter, response);
+      } catch {
+        /* Preserve the last bot and memory snapshot until the host can refresh it. */
+      }
+    }
     if (
       !pluginRegistry
         .getSnapshot()

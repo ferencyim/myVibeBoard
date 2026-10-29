@@ -5,6 +5,7 @@ import type {
   AgentSessionConfig,
 } from "@getpaseo/protocol/agent-types";
 import type { PaseoApi } from "@getpaseo/client";
+import type { AgentAttentionReason } from "@getpaseo/protocol/agent-attention-notification";
 import type { SendAgentMessageRequest, WorkspaceCreateRequest } from "@getpaseo/protocol/messages";
 
 export interface PluginHookContext {
@@ -46,6 +47,8 @@ export type PluginTurnOutcome =
   | { kind: "canceled"; reason: string };
 
 export interface PluginLifecycleEvents {
+  /** Foreground provider accepted the context; failed starts never emit this receipt. */
+  "agent.turn_context_delivered": { agentId: string; deliveryId: string };
   "agent.turn_started": { agent: PluginHookAgent; turnId: string | null };
   "agent.turn_ended": {
     agent: PluginHookAgent;
@@ -100,6 +103,21 @@ export interface PluginBeforeRequests {
     labels?: Record<string, string>;
   };
   "agent.session_open": PluginSessionOpenRequest;
+  /** Suppress push and in-app alerts while preserving attention state delivery. */
+  "agent.notification": {
+    agentId: string;
+    reason: AgentAttentionReason;
+    /** Hooks may set true, but cannot reverse another hook's suppression. */
+    suppressed?: boolean;
+  };
+  /** Fresh, agent-scoped context resolved immediately before each foreground turn. */
+  "agent.turn_context": {
+    /** Read-only recipient; context is system-origin information in user-role history. */
+    agentId: string;
+    context?: string;
+    /** Optional receipt token, echoed only after the provider accepts the turn. */
+    deliveryId?: string;
+  };
   /**
    * An agent's send_agent_prompt to another agent, before it is queued. Throwing rejects the
    * prompt and the caller receives the error; a hook may change only the prompt text.

@@ -1,4 +1,5 @@
 import { PluginTranslationRuntime } from "@getpaseo/plugin/client/host";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { i18n } from "@/i18n/i18next";
 import type { AudioEngine } from "@/audio";
 import { useMemo, useSyncExternalStore } from "react";
@@ -10,11 +11,13 @@ import { getHostRuntimeStore, isHostRuntimeConnected } from "@/runtime/host-runt
 import { resolveAppVersion } from "@/utils/app-version";
 import { createPluginClientRuntime } from "./client-runtime";
 import { invokeConnectedPluginRpc } from "./rpc";
+import { BotSnapshotCache } from "./bot-cache";
 import { runPluginClientBundle } from "./evaluate";
 import { selectFirstMessageModelResolver } from "./first-message-model";
 import type { InstalledPlugin } from "./types";
 
 export type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
+export const botSnapshotCache = new BotSnapshotCache(AsyncStorage);
 
 export class PluginRegistry {
   private readonly byHost = new Map<string, InstalledPlugin[]>();
@@ -181,7 +184,7 @@ export class PluginRegistry {
     }
   }
 
-  private invokeRpc(
+  private async invokeRpc(
     serverId: string,
     pluginId: string,
     installClient: DaemonClient | null,
@@ -190,7 +193,15 @@ export class PluginRegistry {
   ): Promise<unknown> {
     const { getLiveClient } = this.dependencies;
     const live = getLiveClient ? getLiveClient(serverId) : installClient;
-    return invokeConnectedPluginRpc(live, pluginId, method, input);
+    const cachedRead = botSnapshotCache.supports(pluginId, method);
+    if (!live && cachedRead) return botSnapshotCache.read(serverId, pluginId, method, input);
+    const response = await invokeConnectedPluginRpc(live, pluginId, method, input);
+    if (cachedRead && method === "bots.list") {
+      await botSnapshotCache
+        .received(serverId, botSnapshotCache.filter(pluginId, input), response)
+        .catch(() => {});
+    }
+    return response;
   }
 
   removeHost(serverId: string): void {

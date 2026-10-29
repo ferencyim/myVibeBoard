@@ -13,6 +13,9 @@ import { asInternals, createStub } from "./test-utils/class-mocks.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
 import type { PushNotificationSender, PushPayload } from "./push/index.js";
 import type { WorkspaceAutoName } from "./workspace-auto-name.js";
+import type { SessionOptions } from "./session.js";
+import type { PluginLifecycle } from "./plugins/lifecycle/index.js";
+import type { AgentProvider } from "./agent/agent-sdk-types.js";
 
 const WORKSPACE_ID = "workspace-1";
 
@@ -50,6 +53,7 @@ interface WebSocketServerInternals {
   broadcastAgentAttention(params: {
     agentId: string;
     reason: string;
+    provider: AgentProvider;
     preview?: string;
     providerId?: string;
     timestamp?: string;
@@ -83,7 +87,10 @@ class RecordingPushNotificationSender implements PushNotificationSender {
   }
 }
 
-function createServer(agentManagerOverrides?: Record<string, unknown>) {
+function createServer(
+  agentManagerOverrides?: Record<string, unknown>,
+  pluginRuntime?: SessionOptions["pluginRuntime"],
+) {
   const pushNotifications = new RecordingPushNotificationSender();
   const agentManager = {
     subscribe: vi.fn(() => () => {}),
@@ -149,6 +156,12 @@ function createServer(agentManagerOverrides?: Record<string, unknown>) {
     undefined,
     pushNotifications,
     createProviderSnapshotManagerStub().manager,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    pluginRuntime,
   );
 
   return { server, agentManager, pushNotifications };
@@ -226,6 +239,61 @@ function readAttentionRequiredMessage(ws: ReturnType<typeof createOpenSocket>) {
 describe("VoiceAssistantWebSocketServer notification payloads", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("suppresses push and in-app alerts while still delivering attention state", async () => {
+    const requests: unknown[] = [];
+    const before: PluginLifecycle["before"] = async (name, request) => {
+      expect(name).toBe("agent.notification");
+      requests.push(request);
+      return { ...request, suppressed: true };
+    };
+    const pluginRuntime = createStub<NonNullable<SessionOptions["pluginRuntime"]>>({ before });
+    const { server, pushNotifications } = createServer(undefined, pluginRuntime);
+    await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+      agentId: "agent-1",
+      provider: "claude",
+      reason: "finished",
+    });
+    expect(pushNotifications.sent).toHaveLength(0);
+    const ws = connectClient(server, {
+      deviceType: "web",
+      appVisible: true,
+      focusedAgentId: "another-agent",
+      lastActivityAt: new Date(),
+    });
+    await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+      agentId: "agent-1",
+      provider: "claude",
+      reason: "finished",
+    });
+    expect(readAttentionRequiredMessage(ws).shouldNotify).toBe(false);
+    expect(pushNotifications.sent).toHaveLength(0);
+    expect(requests).toEqual([
+      { agentId: "agent-1", reason: "finished" },
+      { agentId: "agent-1", reason: "finished" },
+    ]);
+  });
+
+  it("preserves attention delivery without alerts when a notification policy fails", async () => {
+    const before: PluginLifecycle["before"] = async () => {
+      throw new Error("Notification policy unavailable");
+    };
+    const pluginRuntime = createStub<NonNullable<SessionOptions["pluginRuntime"]>>({ before });
+    const { server, pushNotifications } = createServer(undefined, pluginRuntime);
+    const ws = connectClient(server, {
+      deviceType: "web",
+      appVisible: true,
+      focusedAgentId: "another-agent",
+      lastActivityAt: new Date(),
+    });
+    await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+      agentId: "agent-1",
+      provider: "claude",
+      reason: "finished",
+    });
+    expect(readAttentionRequiredMessage(ws).shouldNotify).toBe(false);
+    expect(pushNotifications.sent).toHaveLength(0);
   });
 
   it("does not emit attention or include presence without an agent-directory subscription", async () => {

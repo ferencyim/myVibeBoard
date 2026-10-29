@@ -269,6 +269,7 @@ test("createPaseoApi borrows daemon capabilities without exposing connection own
     "dispose",
     "hosts",
     "observeEvents",
+    "plugins",
     "projects",
     "providers",
     "terminals",
@@ -1062,6 +1063,88 @@ test("agent handles list the session's own commands through the existing daemon 
       { name: "usage", kind: "command" },
     ],
   });
+  await client.close();
+});
+
+test("plugin RPC invocation preserves its target, input and output", async () => {
+  const { client, ws } = await connectClient();
+  const invocation = client.plugins.invoke("vibe-bots", "bots.open", { id: "bot_test" });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "plugin.rpc.invoke.request",
+    pluginId: "vibe-bots",
+    method: "bots.open",
+    input: { id: "bot_test" },
+  });
+  ws.message(
+    sessionMessage({
+      type: "plugin.rpc.invoke.response",
+      payload: { requestId: request.requestId, output: { agentId: "agent_sdk" } },
+    }),
+  );
+  await expect(invocation).resolves.toEqual({ agentId: "agent_sdk" });
+  await client.close();
+});
+
+test("agent handles change model and thinking effort through the existing daemon RPCs", async () => {
+  const { client, ws } = await connectClient();
+  const agent = client.agents.ref("agent_sdk");
+  for (const selection of ["selected-model", null]) {
+    const changing = agent.setModel(selection);
+    const request = parseSentSessionMessage(ws.sent.at(-1));
+    expect(request).toMatchObject({
+      type: "set_agent_model_request",
+      agentId: "agent_sdk",
+      modelId: selection,
+    });
+    ws.message(
+      sessionMessage({
+        type: "set_agent_model_response",
+        payload: {
+          requestId: request.requestId,
+          agentId: "agent_sdk",
+          accepted: true,
+          error: null,
+        },
+      }),
+    );
+    await expect(changing).resolves.toBeUndefined();
+  }
+  for (const selection of ["high", null]) {
+    const changing = agent.setThinkingOption(selection);
+    const request = parseSentSessionMessage(ws.sent.at(-1));
+    expect(request).toMatchObject({
+      type: "set_agent_thinking_request",
+      agentId: "agent_sdk",
+      thinkingOptionId: selection,
+    });
+    ws.message(
+      sessionMessage({
+        type: "set_agent_thinking_response",
+        payload: {
+          requestId: request.requestId,
+          agentId: "agent_sdk",
+          accepted: true,
+          error: null,
+        },
+      }),
+    );
+    await expect(changing).resolves.toBeUndefined();
+  }
+  const rejected = agent.setModel("unknown");
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  ws.message(
+    sessionMessage({
+      type: "set_agent_model_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "agent_sdk",
+        accepted: false,
+        error: "Unknown model",
+      },
+    }),
+  );
+  await expect(rejected).rejects.toThrow("Unknown model");
   await client.close();
 });
 
