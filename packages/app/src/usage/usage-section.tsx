@@ -44,11 +44,13 @@ export function UsageBody({
   view,
   display,
   onRefresh,
+  focusReportId,
 }: {
   serverId: string;
   view: UsageView;
   display: UsageDisplay;
   onRefresh: () => void;
+  focusReportId?: string | null;
 }) {
   const { t } = useTranslation();
   if (view.kind === "unavailable") {
@@ -78,7 +80,14 @@ export function UsageBody({
     return <UsageMessage text={t("providerUsage.empty")} />;
   }
 
-  return <UsageList serverId={serverId} reports={view.reports} display={display} />;
+  return (
+    <UsageList
+      serverId={serverId}
+      reports={view.reports}
+      display={display}
+      focusReportId={focusReportId}
+    />
+  );
 }
 
 export function UsageMessage({ text }: { text: string }) {

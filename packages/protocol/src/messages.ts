@@ -6416,6 +6416,8 @@ export const ProviderUsageWindowSchema = z.object({
   shortLabel: z.string().optional(),
   /** Shown in the usage summary until the user pins windows of their own. */
   summary: z.boolean().optional(),
+  /** The window's length in minutes, when the source reports one. Orders the account's rings. */
+  windowDurationMins: z.number().nullable().optional(),
   usedPct: z.number().nullable().optional(),
   remainingPct: z.number().nullable().optional(),
   resetsAt: z.string().nullable().optional(),

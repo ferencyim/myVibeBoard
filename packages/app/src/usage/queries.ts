@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { supportsUsageReports } from "@getpaseo/client/internal/daemon-client";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   skipToken,
   useMutation,
@@ -9,6 +9,7 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import { useShallow } from "zustand/shallow";
+import { isWeb } from "@/constants/platform";
 import { useFetchQuery } from "@/data/query";
 import {
   getHostRuntimeStore,
@@ -34,7 +35,10 @@ import type { UsageReportEntry, UsageView } from "./types";
 
 // The daemon caches each report for five minutes, so re-reading it is cheap. Only
 // an explicit refresh passes `forceRefresh` and reaches the source's API.
-const REPORTS_STALE_TIME_MS = 60_000;
+const REPORTS_STALE_TIME_MS = 5 * 60_000;
+// How often the usage rail checks whether its reports have gone stale. A check is free; a
+// refetch happens only once the reports are older than REPORTS_STALE_TIME_MS.
+const REPORTS_STALE_CHECK_MS = 30_000;
 
 /** Every report list of a host: its own and each agent's. */
 function hostUsageQueryKey(serverId: string) {
@@ -203,6 +207,26 @@ export function useAgentUsage(serverId: string, agentId: string): AgentUsageView
   });
   const { t } = useTranslation();
   return resolveAgentUsageView({ canReport, query: toQueryState(query) }, t);
+}
+
+/**
+ * Keeps a host's reports fresh while the rail that shows them is mounted: every 30 seconds, if the
+ * page is visible and the reports are over five minutes old, refetch the active query.
+ */
+export function useUsageReportsAutoRefresh(serverId: string | null): void {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!serverId) return;
+    const queryKey = usageReportsQueryKey(serverId);
+    const check = () => {
+      if (isWeb && typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt;
+      if (!updatedAt || Date.now() - updatedAt < REPORTS_STALE_TIME_MS) return;
+      void queryClient.invalidateQueries({ queryKey, refetchType: "active" });
+    };
+    const timer = setInterval(check, REPORTS_STALE_CHECK_MS);
+    return () => clearInterval(timer);
+  }, [queryClient, serverId]);
 }
 
 /** Whether a host is connected and reports usage, read without fetching anything. */

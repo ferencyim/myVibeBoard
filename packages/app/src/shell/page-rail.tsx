@@ -13,7 +13,7 @@ import { useInstalledPlugins } from "@/plugins/registry";
 import { useHosts } from "@/runtime/host-runtime";
 import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { buildPluginSurfaceRoute, hostIdFromPathname } from "@/plugins/routes";
-import { useOpenSidebarUsage } from "@/usage";
+import { UsageRings, useOpenSidebarUsage, useOpenUsageReport } from "@/usage";
 import { sortPageRailItems } from "./page-rail-model";
 import { buildSettingsHostSectionRoute, buildSettingsRoute } from "@/utils/host-routes";
 
@@ -29,6 +29,7 @@ export function PageRail({
   const hosts = useHosts();
   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
   const openUsage = useOpenSidebarUsage();
+  const openUsageReport = useOpenUsageReport();
   const hostId =
     (hostFilters.length === 1 ? hostFilters[0] : undefined) ??
     hostIdFromPathname(pathname) ??
@@ -106,6 +107,7 @@ export function PageRail({
         <RailButton key={entry.key} entry={entry} onNavigate={onNavigate} />
       ))}
       <View style={styles.spacer} />
+      <UsageRings horizontal={horizontal} onOpen={openUsageReport} />
       <RailButton entry={settings} onNavigate={onNavigate} />
     </View>
   );

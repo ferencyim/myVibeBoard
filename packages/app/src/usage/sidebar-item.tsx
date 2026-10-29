@@ -59,17 +59,22 @@ export function UsageSidebarItem() {
   return <PinnedUsageTrigger label={label} sources={sources} onPress={openUsage} />;
 }
 
-const OpenSidebarUsageContext = createContext<(() => void) | null>(null);
+/** Opens the Usage modal, with the given report first and highlighted, or with none in front. */
+type OpenUsageAt = (focusReportId: string | null) => void;
+
+const OpenSidebarUsageContext = createContext<OpenUsageAt | null>(null);
 
 /**
- * One owner for the footer icon and summary: both open the Usage modal over the current screen.
- * The modal mounts on first open and unmounts once it has finished closing, so its host's reports
- * load only while it is shown.
+ * One owner for the footer icon, summary and rail rings: each opens the Usage modal over the
+ * current screen. The modal mounts on first open and unmounts once it has finished closing, so its
+ * host's reports load only while it is shown.
  */
 export function UsageSidebarRoot({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const openUsage = useCallback(() => {
+  const [focusReportId, setFocusReportId] = useState<string | null>(null);
+  const openUsageAt = useCallback<OpenUsageAt>((reportId) => {
+    setFocusReportId(reportId);
     setMounted(true);
     setOpen(true);
   }, []);
@@ -77,18 +82,36 @@ export function UsageSidebarRoot({ children }: { children: ReactNode }) {
   const unmountUsage = useCallback(() => setMounted(false), []);
 
   return (
-    <OpenSidebarUsageContext.Provider value={openUsage}>
+    <OpenSidebarUsageContext.Provider value={openUsageAt}>
       {children}
-      {mounted ? <UsageModal visible={open} onClose={closeUsage} onDismiss={unmountUsage} /> : null}
+      {mounted ? (
+        <UsageModal
+          visible={open}
+          focusReportId={focusReportId}
+          onClose={closeUsage}
+          onDismiss={unmountUsage}
+        />
+      ) : null}
     </OpenSidebarUsageContext.Provider>
   );
 }
 
+function useOpenUsageAt(): OpenUsageAt {
+  const openUsageAt = useContext(OpenSidebarUsageContext);
+  if (!openUsageAt) throw new Error("Sidebar Usage must be inside UsageSidebarRoot.");
+  return openUsageAt;
+}
+
 /** Both sidebar entry points send the same open command. */
 export function useOpenSidebarUsage(): () => void {
-  const openUsage = useContext(OpenSidebarUsageContext);
-  if (!openUsage) throw new Error("Sidebar Usage must be inside UsageSidebarRoot.");
-  return openUsage;
+  const openUsageAt = useOpenUsageAt();
+  return useCallback(() => openUsageAt(null), [openUsageAt]);
+}
+
+/** Opens the Usage modal with one account's report first, for the rail's rings. */
+export function useOpenUsageReport(): (reportId: string) => void {
+  const openUsageAt = useOpenUsageAt();
+  return useCallback((reportId: string) => openUsageAt(reportId), [openUsageAt]);
 }
 
 function pinnedUsageLabel(label: string, sources: readonly PinnedUsageSource[]): string {

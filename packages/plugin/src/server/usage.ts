@@ -12,6 +12,8 @@ export interface UsageWindow {
   shortLabel?: string;
   /** Shown in the usage summary until the user pins windows of their own. */
   summary?: boolean;
+  /** The window's length in minutes, when known. */
+  windowDurationMins?: number | null;
   usedPct?: number | null;
   remainingPct?: number | null;
   resetsAt?: string | null;
@@ -91,6 +93,7 @@ export function windowFromUsedPct(input: {
   label: string;
   shortLabel?: string;
   summary?: boolean;
+  durationMins?: number | null;
   utilizationPct: number | null | undefined;
   resetsAt?: string | null;
   tone?: UsageWindow["tone"];
@@ -105,6 +108,7 @@ export function windowFromUsedPct(input: {
   };
   if (input.shortLabel !== undefined) window.shortLabel = input.shortLabel;
   if (input.summary) window.summary = true;
+  if (input.durationMins !== undefined) window.windowDurationMins = input.durationMins;
   if (input.tone) window.tone = input.tone;
   return window;
 }
@@ -137,6 +141,10 @@ export function windowFromReportedDuration(input: {
     shortLabel: scope
       ? `${scope.label}${name.shortLabel ? ` ${name.shortLabel}` : ""}`
       : name.shortLabel,
+    durationMins:
+      duration !== null && Number.isFinite(duration) && duration > 0
+        ? Math.round(duration / 60)
+        : null,
     utilizationPct: input.utilizationPct,
     resetsAt: input.resetsAt,
     summary: input.summary,

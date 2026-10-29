@@ -11,6 +11,8 @@ import { UsageBody, UsageMessage } from "./usage-section";
 
 interface UsageModalProps {
   visible: boolean;
+  /** The report opened from a rail ring: listed first and highlighted. */
+  focusReportId?: string | null;
   onClose: () => void;
   onDismiss: () => void;
 }
@@ -46,6 +48,7 @@ function HostUsageModal({
   serverId,
   hosts,
   onSelectHost,
+  focusReportId,
   ...props
 }: UsageModalProps & {
   serverId: string;
@@ -61,7 +64,13 @@ function HostUsageModal({
   return (
     <UsageModalFrame {...props} actions={controls}>
       <View testID={`usage-host-${serverId}`}>
-        <UsageBody serverId={serverId} view={view} display={display} onRefresh={refresh} />
+        <UsageBody
+          serverId={serverId}
+          view={view}
+          display={display}
+          onRefresh={refresh}
+          focusReportId={focusReportId}
+        />
       </View>
     </UsageModalFrame>
   );

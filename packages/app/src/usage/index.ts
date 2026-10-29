@@ -6,4 +6,6 @@ export {
   UsageSidebarRoot,
   useHasUsageSummary,
   useOpenSidebarUsage,
+  useOpenUsageReport,
 } from "./sidebar-item";
+export { UsageRings } from "./rings-view";
