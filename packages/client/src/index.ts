@@ -462,6 +462,11 @@ export interface PaseoProviderWaitOptions extends PaseoProviderListOptions {
   timeoutMs?: number;
 }
 
+export interface PaseoProviderSnapshotOptions extends PaseoProviderListOptions {
+  /** Read existing catalogs without starting provider discovery or refresh. */
+  cachedOnly?: boolean;
+}
+
 export interface PaseoProviderActions {
   listModels(
     provider: PaseoAgentProvider,
@@ -476,7 +481,7 @@ export interface PaseoProviderActions {
     options?: { requestId?: string },
   ): Promise<PaseoProviderFeaturesResult>;
   listAvailable(options?: { requestId?: string }): Promise<PaseoProviderAvailabilityResult>;
-  snapshot(options?: PaseoProviderListOptions): Promise<PaseoProviderSnapshotResult>;
+  snapshot(options?: PaseoProviderSnapshotOptions): Promise<PaseoProviderSnapshotResult>;
   /** Resolves after the daemon's lazy provider discovery has finished. */
   waitForReady(options?: PaseoProviderWaitOptions): Promise<PaseoProviderSnapshotResult>;
   refresh(options?: PaseoProviderRefreshOptions): Promise<PaseoProviderRefreshResult>;

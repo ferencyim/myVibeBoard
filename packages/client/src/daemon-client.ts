@@ -5511,6 +5511,7 @@ export class DaemonClient {
 
   async getProvidersSnapshot(options?: {
     cwd?: string;
+    cachedOnly?: boolean;
     ifNoneMatch?: string;
     requestId?: string;
   }): Promise<GetProvidersSnapshotPayload> {
@@ -5520,6 +5521,7 @@ export class DaemonClient {
 
   private requestProvidersSnapshot(options?: {
     cwd?: string;
+    cachedOnly?: boolean;
     ifNoneMatch?: string;
     requestId?: string;
   }): Promise<GetProvidersSnapshotPayload> {
@@ -5528,6 +5530,7 @@ export class DaemonClient {
       message: {
         type: "get_providers_snapshot_request",
         cwd: options?.cwd,
+        ...(options?.cachedOnly ? { cachedOnly: true } : {}),
         ifNoneMatch: options?.ifNoneMatch,
       },
       responseType: "get_providers_snapshot_response",

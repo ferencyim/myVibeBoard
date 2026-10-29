@@ -1259,12 +1259,14 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
 
   const snapshotPromise = client.providers.snapshot({
     cwd: "/repo/sdk",
+    cachedOnly: true,
     requestId: "providers-snapshot-request",
   });
   expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
     type: "get_providers_snapshot_request",
     requestId: "providers-snapshot-request",
     cwd: "/repo/sdk",
+    cachedOnly: true,
   });
   ws.message(
     sessionMessage({

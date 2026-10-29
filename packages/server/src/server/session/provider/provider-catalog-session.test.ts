@@ -84,6 +84,30 @@ function makeSubsystem(options: MakeOptions = {}) {
 }
 
 describe("ProviderCatalogSession", () => {
+  it("serves cached-only reads without starting ordinary snapshot discovery", async () => {
+    const getSnapshot = vi.fn();
+    const getCachedSnapshot = vi.fn(() => createProviderSnapshot(makeEntries()));
+    const { subsystem, emitted } = makeSubsystem({
+      snapshot: { getSnapshot, getCachedSnapshot },
+    });
+    await subsystem.handleGetProvidersSnapshotRequest({
+      type: "get_providers_snapshot_request",
+      requestId: "cached",
+      cachedOnly: true,
+    });
+    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(getCachedSnapshot).toHaveBeenCalledWith(undefined);
+    expect(findByType(emitted, "get_providers_snapshot_response")?.payload.entries).toEqual([
+      {
+        ...makeEntries()[0],
+        modes: [
+          { id: "default", label: "Default", icon: "ShieldCheck" },
+          { id: "safe", label: "Safe", icon: "ShieldCheck" },
+        ],
+      },
+    ]);
+  });
+
   it("PUSH gates invisible providers and downgrades unknown mode icons for legacy clients", () => {
     const { subsystem, emitted, pushSnapshotChange } = makeSubsystem({
       visibleProviders: new Set(["codex"]),
