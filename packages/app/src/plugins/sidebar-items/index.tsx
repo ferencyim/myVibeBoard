@@ -16,6 +16,7 @@ import {
   useSidebarPopoverAnchor,
 } from "@/components/sidebar/sidebar-popover";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
 import { useToast } from "@/contexts/toast-context";
 import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
 import type { Theme } from "@/styles/theme";
@@ -201,6 +202,15 @@ function SidebarItemContent({
     },
     [anchorToFallback, fallbackAnchorRef, showPopover],
   );
+  const openPromptLibrary = useCallback(() => {
+    rememberPluginContributionHost(pluginScreensHostKey(plugin.id), plugin.serverId);
+    showPopover(null);
+    onBeforeNavigate?.();
+    router.push(buildSettingsHostSectionRoute(plugin.serverId, "prompts"));
+  }, [onBeforeNavigate, plugin.id, plugin.serverId, showPopover]);
+  const pathname = usePathname();
+  const isPromptLibraryActive =
+    pathname === `/settings/hosts/${encodeURIComponent(plugin.serverId)}/prompts`;
   const close = useCallback(() => showPopover(null), [showPopover]);
   const frame = useMemo<SidebarItemFrame>(
     () => ({
@@ -217,8 +227,15 @@ function SidebarItemContent({
     [anchorTo, item.id, item.title, offerAnchor, plugin, releaseAnchor, section],
   );
   const itemProps = useMemo<PluginSidebarItemProps>(
-    () => ({ ...hostProps, currentScreen, openScreen, openPopover }),
-    [currentScreen, hostProps, openPopover, openScreen],
+    () => ({
+      ...hostProps,
+      currentScreen,
+      openScreen,
+      openPopover,
+      openPromptLibrary,
+      isPromptLibraryActive,
+    }),
+    [currentScreen, hostProps, openPopover, openScreen, openPromptLibrary, isPromptLibraryActive],
   );
   const Item = item.Component;
   const Popover = popover;

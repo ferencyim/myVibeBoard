@@ -89,6 +89,9 @@ export interface PluginPopoverProps extends PluginHostProps {
 }
 
 export interface PluginSidebarItemProps extends PluginHostProps {
+  /** Open the full prompt library on this item's host. */
+  openPromptLibrary(): void;
+  isPromptLibraryActive: boolean;
   /** This plugin's screen open on this item's host, with its params, else null. */
   currentScreen: PluginScreenLocation | null;
   openScreen(input: PluginOpenScreenInput): void;
@@ -100,6 +103,8 @@ export interface PluginSidebarItemContribution<Text extends PluginText = string>
   id: string;
   /** Settings row label, accessibility label, and default label for SidebarRow. */
   title: Text;
+  /** Lower values appear first; equal values retain registration order. Defaults to zero. */
+  order?: number;
   Component: ComponentType<PluginSidebarItemProps>;
 }
 
