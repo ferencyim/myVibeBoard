@@ -3,25 +3,23 @@ import { useTranslation } from "react-i18next";
 import { Keyboard, ScrollView, Text, View, type PressableStateCallbackType } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
-import type { AgentProfilePicker, AgentProfileSeed } from "@/agent-profiles";
+import type { AgentProfilePicker } from "@/agent-profiles";
 import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
 import { useProviderIcon } from "@/components/provider-icons";
-import { ModelBrowser, useModelBrowser } from "@/components/model-browser";
-import { resolveModelBrowserScrolling } from "@/components/model-browser-view";
+import { ProviderModelPanel } from "@/components/provider-model-picker/picker-panel";
 import { AgentControlTrigger } from "@/composer/agent-controls/control";
 import { ComposerToolbarGlyph } from "@/composer/agent-controls/glyph";
-import { resolveModelSheetOpening } from "@/composer/agent-controls/model-sheet-flow";
-import type { ProviderSelectorProvider } from "@/provider-selection/provider-selection";
+import {
+  resolveSelectedModelLabel,
+  type ProviderSelectorProvider,
+} from "@/provider-selection/provider-selection";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { isNative, isWeb } from "@/constants/platform";
+import { isWeb } from "@/constants/platform";
 
 const SNAP_POINTS = ["80%", "90%"];
-const MODEL_LIST_TOP_INSET = 4;
-const MODEL_ROW_STRIDE = 44;
-const MODEL_VIEWPORT_VISIBLE_ROWS = 4.5;
-const FIXED_MODEL_VIEWPORT_HEIGHT =
-  MODEL_LIST_TOP_INSET + MODEL_ROW_STRIDE * MODEL_VIEWPORT_VISIBLE_ROWS;
+const FIXED_MODEL_VIEWPORT_HEIGHT = 340;
+const MODEL_PICKER_HEADER = { title: "选择模型" };
 
 interface CompactModelSheetProps {
   providers: ProviderSelectorProvider[];
@@ -32,9 +30,6 @@ interface CompactModelSheetProps {
   isLoading: boolean;
   profiles?: AgentProfilePicker | null;
   onApplyProfile?: (profileId: string) => void;
-  onEditProfiles?: () => void;
-  onCreateProfile?: (seed: AgentProfileSeed) => void;
-  onEditProfile?: (profileId: string) => void;
   onOpen?: () => void;
   onClose?: () => void;
   onRetryProvider?: (provider: AgentProvider) => void;
@@ -51,30 +46,6 @@ function shortModelLabel(label: string): string {
   return separatorIndex === -1 ? label : label.slice(separatorIndex + 1);
 }
 
-function resolveModelSheetProfileActions(
-  onCreateProfile: ((seed: AgentProfileSeed) => void) | undefined,
-  onEditProfile: ((profileId: string) => void) | undefined,
-  close: () => void,
-): {
-  create?: (seed: AgentProfileSeed) => void;
-  edit?: (profileId: string) => void;
-} {
-  return {
-    create: onCreateProfile
-      ? (seed: AgentProfileSeed) => {
-          close();
-          onCreateProfile(seed);
-        }
-      : undefined,
-    edit: onEditProfile
-      ? (profileId: string) => {
-          close();
-          onEditProfile(profileId);
-        }
-      : undefined,
-  };
-}
-
 export function CompactModelSheet({
   providers,
   selectedProvider,
@@ -84,9 +55,6 @@ export function CompactModelSheet({
   isLoading,
   profiles = null,
   onApplyProfile,
-  onEditProfiles,
-  onCreateProfile,
-  onEditProfile,
   onOpen,
   onClose,
   onRetryProvider,
@@ -99,10 +67,6 @@ export function CompactModelSheet({
 }: CompactModelSheetProps) {
   const { t } = useTranslation();
   const usesBottomSheet = useIsCompactFormFactor();
-  const modelBrowserScrolling = resolveModelBrowserScrolling({
-    isNative,
-    isCompact: usesBottomSheet,
-  });
   const [isOpen, setIsOpen] = useState(false);
   const [isModelBrowserOpen, setIsModelBrowserOpen] = useState(false);
   const availableProviders = useMemo(() => {
@@ -111,99 +75,44 @@ export function CompactModelSheet({
       providers.find((entry) => entry.id === selectedProvider) ?? providers[0] ?? null;
     return fixedProvider ? [fixedProvider] : [];
   }, [canSwitchProvider, providers, selectedProvider]);
-  const rootBrowser = useModelBrowser({
-    providers: availableProviders,
-    selectedProvider,
-    selectedModel,
-    isLoading,
-    autoFocusSearch: isWeb && !usesBottomSheet,
-    profiles,
-    serverId,
-  });
-  const modelBrowser = useModelBrowser({
-    providers: availableProviders,
-    selectedProvider,
-    selectedModel,
-    isLoading,
-    autoFocusSearch: isWeb && !usesBottomSheet,
-    profiles,
-    serverId,
-  });
+  const selectedModelLabel = shortModelLabel(
+    resolveSelectedModelLabel({
+      providers: availableProviders,
+      selectedProvider,
+      selectedModel,
+      isLoading,
+    }),
+  );
   const ModelIcon = useProviderIcon(selectedProvider, serverId);
   const hasSelectedProvider = selectedProvider.trim().length > 0;
-  const rootHeader = useMemo(
-    () => ({
-      ...rootBrowser.header,
-      title: t("modelSelector.selectModel"),
-      search:
-        rootBrowser.header.search && !canSwitchProvider
-          ? {
-              ...rootBrowser.header.search,
-              placeholder: t("modelSelector.searchPlaceholder"),
-            }
-          : rootBrowser.header.search,
-    }),
-    [canSwitchProvider, rootBrowser.header, t],
-  );
+  const rootHeader = useMemo(() => ({ title: t("modelSelector.selectModel") }), [t]);
 
   const open = useCallback(() => {
     Keyboard.dismiss();
-    rootBrowser.showAll();
     setIsOpen(true);
     onOpen?.();
-  }, [onOpen, rootBrowser]);
+  }, [onOpen]);
 
   const close = useCallback(() => {
     setIsModelBrowserOpen(false);
     setIsOpen(false);
-    rootBrowser.reset();
-    modelBrowser.reset();
     onClose?.();
-  }, [modelBrowser, onClose, rootBrowser]);
-
-  const handleSearchSelect = useCallback(
-    (provider: string, modelId: string) => {
-      onSelect(provider, modelId);
-      Keyboard.dismiss();
-      rootBrowser.showAll();
-    },
-    [onSelect, rootBrowser],
-  );
+  }, [onClose]);
 
   const openModelBrowser = useCallback(() => {
     Keyboard.dismiss();
-    const destination = resolveModelSheetOpening({
-      canSwitchProvider,
-      providers: availableProviders,
-      selectedProvider,
-    });
-    if (destination.kind === "all") {
-      modelBrowser.showAll();
-    } else {
-      modelBrowser.drillDown(destination.providerId, destination.providerLabel);
-    }
     setIsModelBrowserOpen(true);
-  }, [availableProviders, canSwitchProvider, modelBrowser, selectedProvider]);
+  }, []);
 
-  const closeModelBrowser = useCallback(() => {
-    setIsModelBrowserOpen(false);
-    modelBrowser.reset();
-  }, [modelBrowser]);
+  const closeModelBrowser = useCallback(() => setIsModelBrowserOpen(false), []);
 
-  const handleBrowserSelect = useCallback(
+  const handlePick = useCallback(
     (provider: string, modelId: string) => {
       onSelect(provider, modelId);
-      closeModelBrowser();
+      Keyboard.dismiss();
+      setIsModelBrowserOpen(false);
     },
-    [closeModelBrowser, onSelect],
-  );
-
-  const handleDesktopSelect = useCallback(
-    (provider: string, modelId: string) => {
-      onSelect(provider, modelId);
-      close();
-    },
-    [close, onSelect],
+    [onSelect],
   );
 
   const handleApplyProfile = useCallback(
@@ -213,13 +122,6 @@ export function CompactModelSheet({
     },
     [close, onApplyProfile],
   );
-
-  const handleEditProfiles = useCallback(() => {
-    close();
-    onEditProfiles?.();
-  }, [close, onEditProfiles]);
-
-  const profileActions = resolveModelSheetProfileActions(onCreateProfile, onEditProfile, close);
 
   const toggle = useCallback(() => {
     if (isOpen) {
@@ -238,6 +140,23 @@ export function CompactModelSheet({
     ],
     [disabled, isOpen],
   );
+
+  const panel = (
+    <ProviderModelPanel
+      providers={availableProviders}
+      selectedProvider={selectedProvider}
+      selectedModel={selectedModel}
+      isLoading={isLoading}
+      profiles={profiles}
+      onPick={handlePick}
+      onApplyProfile={onApplyProfile ? handleApplyProfile : undefined}
+      onRetryProvider={onRetryProvider}
+      isRetryingProvider={isRetryingProvider}
+      serverId={serverId}
+      autoFocusSearch={isWeb && !usesBottomSheet}
+    />
+  );
+
   const mobileRootContent = useMemo(
     () => (
       <View style={styles.mobileRootContent} testID="agent-controls-settings-list">
@@ -246,19 +165,17 @@ export function CompactModelSheet({
             icon={ModelIcon}
             surface="sheet"
             label={t("modelSelector.model")}
-            value={rootBrowser.selectedModelLabel}
+            value={selectedModelLabel}
             disabled={disabled}
             onPress={openModelBrowser}
-            accessibilityLabel={t("modelSelector.selectedModel", {
-              model: rootBrowser.selectedModelLabel,
-            })}
+            accessibilityLabel={t("modelSelector.selectedModel", { model: selectedModelLabel })}
             testID="agent-controls-model"
           />
           {children}
         </View>
       </View>
     ),
-    [ModelIcon, children, disabled, openModelBrowser, rootBrowser.selectedModelLabel, t],
+    [ModelIcon, children, disabled, openModelBrowser, selectedModelLabel, t],
   );
 
   return (
@@ -269,9 +186,7 @@ export function CompactModelSheet({
         onPress={toggle}
         style={triggerStyle}
         accessibilityRole="button"
-        accessibilityLabel={t("modelSelector.selectedModel", {
-          model: rootBrowser.selectedModelLabel,
-        })}
+        accessibilityLabel={t("modelSelector.selectedModel", { model: selectedModelLabel })}
         testID="combined-model-selector"
         chevron={null}
       >
@@ -282,7 +197,7 @@ export function CompactModelSheet({
         ) : null}
         <View style={styles.triggerLabels}>
           <Text style={styles.triggerText} numberOfLines={1}>
-            {shortModelLabel(rootBrowser.triggerLabel)}
+            {selectedModelLabel}
           </Text>
           {thinkingLabel ? (
             <Text style={styles.triggerThinking} numberOfLines={1}>
@@ -301,29 +216,16 @@ export function CompactModelSheet({
         contentStyle={styles.sheetBody}
         testID="agent-controls-model-sheet"
       >
-        <View
-          style={[
-            styles.modelViewport,
-            usesBottomSheet ? styles.flexibleModelViewport : styles.fixedModelViewport,
-          ]}
-          testID="agent-controls-model-viewport"
-        >
-          <ModelBrowser
-            state={rootBrowser}
-            onSelect={usesBottomSheet ? handleSearchSelect : handleDesktopSelect}
-            onApplyProfile={handleApplyProfile}
-            onEditProfiles={onEditProfiles ? handleEditProfiles : undefined}
-            onCreateProfile={profileActions.create}
-            onEditProfile={profileActions.edit}
-            onRetryProvider={onRetryProvider}
-            isRetryingProvider={isRetryingProvider}
-            scrolling={modelBrowserScrolling}
-            searchAllOnFocus={usesBottomSheet}
-            rootBrowseContent={usesBottomSheet ? mobileRootContent : undefined}
-          />
-        </View>
-        {!usesBottomSheet ? (
+        {usesBottomSheet ? (
+          mobileRootContent
+        ) : (
           <>
+            <View
+              style={[styles.modelViewport, styles.fixedModelViewport]}
+              testID="agent-controls-model-viewport"
+            >
+              {isOpen ? panel : null}
+            </View>
             <View style={styles.modelViewportDivider} />
             <ScrollView
               style={styles.controlsScroll}
@@ -335,12 +237,12 @@ export function CompactModelSheet({
               {children}
             </ScrollView>
           </>
-        ) : null}
+        )}
       </AdaptiveModalSheet>
 
       {usesBottomSheet ? (
         <AdaptiveModalSheet
-          header={modelBrowser.header}
+          header={MODEL_PICKER_HEADER}
           visible={isModelBrowserOpen}
           onClose={closeModelBrowser}
           snapPoints={SNAP_POINTS}
@@ -353,18 +255,7 @@ export function CompactModelSheet({
             style={[styles.modelViewport, styles.flexibleModelViewport]}
             testID="agent-controls-model-browser-viewport"
           >
-            <ModelBrowser
-              state={modelBrowser}
-              onSelect={handleBrowserSelect}
-              onEditProfiles={onEditProfiles ? handleEditProfiles : undefined}
-              onCreateProfile={profileActions.create}
-              onEditProfile={profileActions.edit}
-              onRetryProvider={onRetryProvider}
-              isRetryingProvider={isRetryingProvider}
-              scrolling={modelBrowserScrolling}
-              searchAllOnFocus
-              showProfilesSection={false}
-            />
+            {isModelBrowserOpen ? panel : null}
           </View>
         </AdaptiveModalSheet>
       ) : null}

@@ -11,7 +11,6 @@ import {
   normalizePersistedState,
   type ReviewDraftComment,
   type ReviewDraftMode,
-  type ReviewDraftSide,
   type ReviewDraftStoreState,
   serializeReviewDraftState,
   SerializedReviewDraftStateSchema,

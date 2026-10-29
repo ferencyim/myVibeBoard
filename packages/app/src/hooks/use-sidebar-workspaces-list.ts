@@ -13,12 +13,10 @@ import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import {
   createSidebarWorkspacePlacementSelector,
   computeSidebarOrderUpdates,
-  createSidebarWorkspaceEntry,
   deriveProjectStatusBucket,
   deriveSidebarLoadingState,
   type ProjectStatusSession,
   type SidebarProjectEntry,
-  type SidebarWorkspaceEntry,
   type SidebarWorkspacePlacement,
 } from "./sidebar-workspaces-view-model";
 import type { SidebarStateBucket } from "@/utils/sidebar-agent-state";

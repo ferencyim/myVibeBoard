@@ -28,6 +28,11 @@ import { getAgentFeatureIcon, ThinkingIcon } from "@/agent-controls/icons";
 import { formatThinkingOptionLabel } from "@/agent-controls/labels";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
 import { CombinedModelSelector } from "@/components/combined-model-selector";
+import { NextTurnBadge } from "@/components/provider-model-picker/provider-model-picker";
+import {
+  resolveNextTurnNotice,
+  type NextTurnNotice,
+} from "@/components/provider-model-picker/next-turn";
 import {
   buildProviderSelectorProviders,
   buildSelectableProviderSelectorProviders,
@@ -130,6 +135,7 @@ interface ControlledAgentControlsProps {
   isRetryingModelProvider?: boolean;
   modeControl?: AgentModeControlValue | null;
   modelSelectorServerId?: string | null;
+  nextTurnNotice?: NextTurnNotice | null;
   isCompactLayout?: boolean;
 }
 
@@ -158,6 +164,7 @@ export interface DraftAgentControlsProps {
   isRetryingModelProvider?: boolean;
   disabled?: boolean;
   modelSelectorServerId?: string | null;
+  nextTurnNotice?: NextTurnNotice | null;
   isCompactLayout?: boolean;
 }
 
@@ -399,6 +406,7 @@ type AgentControlsSlice = {
   runtimeThinkingOptionId: string | null;
   thinkingOptionId: string | null | undefined;
   lastUsage: unknown;
+  status: string;
 } | null;
 
 function selectAgentControlsSlice(
@@ -419,6 +427,7 @@ function selectAgentControlsSlice(
     runtimeThinkingOptionId: currentAgent.runtimeInfo?.thinkingOptionId ?? null,
     thinkingOptionId: currentAgent.thinkingOptionId,
     lastUsage: currentAgent.lastUsage,
+    status: currentAgent.status,
   };
 }
 
@@ -503,6 +512,7 @@ function ControlledAgentControls({
   isRetryingModelProvider = false,
   modeControl,
   modelSelectorServerId = null,
+  nextTurnNotice = null,
   isCompactLayout,
 }: ControlledAgentControlsProps) {
   const { theme } = useUnistyles();
@@ -788,6 +798,7 @@ function ControlledAgentControls({
             handleOpenSheet={handleOpenSheet}
             handleCloseSheet={handleCloseSheet}
             modelSelectorServerId={modelSelectorServerId}
+            nextTurnNotice={nextTurnNotice}
           />
         ) : (
           <SheetAgentControlsContent
@@ -888,6 +899,7 @@ interface DesktopAgentControlsContentProps {
   handleOpenSheet: (sheet: Exclude<ActiveSheet, null>) => void;
   handleCloseSheet: () => void;
   modelSelectorServerId: string | null;
+  nextTurnNotice: NextTurnNotice | null;
 }
 
 const DESKTOP_SEARCH_THRESHOLD = 6;
@@ -905,9 +917,6 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     features,
     onSetFeature,
     onApplyAgentProfile,
-    onEditAgentProfiles,
-    onCreateAgentProfile,
-    onEditAgentProfile,
     onDropdownClose,
     onModelSelectorOpen,
     onRetryModelProvider,
@@ -945,6 +954,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     handleOpenSheet,
     handleCloseSheet,
     modelSelectorServerId,
+    nextTurnNotice,
   } = props;
   const modelToolbar = useMemo(
     () => ({ glyphSize, showCaret: presentation.showCarets }),
@@ -984,6 +994,10 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
         </>
       ) : null}
 
+      {nextTurnNotice ? (
+        <NextTurnBadge running={nextTurnNotice.running} next={nextTurnNotice.next} />
+      ) : null}
+
       {canSelectModel ? (
         <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
           <TooltipTrigger asChild triggerRefProp="ref">
@@ -995,9 +1009,6 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
                 onSelect={handleDesktopModelSelect}
                 profiles={agentProfiles}
                 onApplyProfile={onApplyAgentProfile}
-                onEditProfiles={onEditAgentProfiles}
-                onCreateProfile={onCreateAgentProfile}
-                onEditProfile={onEditAgentProfile}
                 isLoading={isModelLoading}
                 disabled={modelDisabled}
                 onOpen={onModelSelectorOpen}
@@ -1005,8 +1016,9 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
                 onRetryProvider={onRetryModelProvider}
                 isRetryingProvider={isRetryingModelProvider}
                 serverId={modelSelectorServerId}
-                desktopPlacement="top-start"
-                desktopMinWidth={360}
+                thinkingOptions={thinkingOptions}
+                selectedThinkingOptionId={selectedThinkingOptionId}
+                onSelectThinkingOption={canSelectThinking ? handleThinkingSelect : undefined}
                 toolbar={modelToolbar}
               />
             </View>
@@ -1017,7 +1029,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
         </Tooltip>
       ) : null}
 
-      {thinkingOptions && thinkingOptions.length > 0 ? (
+      {!canSelectModel && thinkingOptions && thinkingOptions.length > 0 ? (
         <>
           <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
             <TooltipTrigger asChild triggerRefProp="ref">
@@ -1159,9 +1171,6 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
     features,
     onSetFeature,
     onApplyAgentProfile,
-    onEditAgentProfiles,
-    onCreateAgentProfile,
-    onEditAgentProfile,
     onDropdownClose,
     onModelSelectorOpen,
     onRetryModelProvider,
@@ -1262,9 +1271,6 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
       onSelect={handleSheetModelSelect}
       profiles={agentProfiles}
       onApplyProfile={onApplyAgentProfile}
-      onEditProfiles={onEditAgentProfiles}
-      onCreateProfile={onCreateAgentProfile}
-      onEditProfile={onEditAgentProfile}
       isLoading={isModelLoading}
       disabled={modelDisabled}
       onOpen={onModelSelectorOpen}
@@ -1613,6 +1619,15 @@ export const AgentControls = memo(function AgentControls({
     explicitThinkingOptionId: agent?.thinkingOptionId,
   });
 
+  const nextTurnNotice = resolveNextTurnNotice({
+    isRunning: agent?.status === "running",
+    runtimeModelId: agent?.runtimeModelId,
+    configuredModelId: agent?.model,
+    runtimeThinkingId: agent?.runtimeThinkingOptionId,
+    configuredThinkingId: agent?.thinkingOptionId,
+    labelOf: (modelId) => models?.find((model) => model.id === modelId)?.label ?? modelId,
+  });
+
   const modelOptions = useMemo<AgentControlOption[]>(() => {
     return (models ?? []).map((model) => ({ id: model.id, label: model.label }));
   }, [models]);
@@ -1824,6 +1839,7 @@ export const AgentControls = memo(function AgentControls({
         disabled={!client}
         modeControl={hideModeControl ? null : modeControl}
         modelSelectorServerId={serverId}
+        nextTurnNotice={nextTurnNotice}
         isCompactLayout={isCompactLayout}
       />
     </>
