@@ -232,6 +232,18 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
         byProvider[row.provider] = (byProvider[row.provider] ?? 0) + 1;
         if (row.projectId) byProject[row.projectId] = (byProject[row.projectId] ?? 0) + 1;
       }
+    // The bots migration can run after the scheduler starts. Count durable routine runs
+    // once its tables exist, so task admission shares the same capacity.
+    if (deps.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='bot_routine_run'").get()) {
+      const routines = deps.store.db.prepare<{ provider: string | null; project_id: string | null }>(
+        "SELECT r.provider, b.project_id FROM bot_routine_run r JOIN bot_routine t ON t.id=r.routine_id JOIN bot b ON b.id=t.bot_id WHERE r.status='running'",
+      ).all();
+      for (const routine of routines) {
+        total++;
+        if (routine.provider) byProvider[routine.provider] = (byProvider[routine.provider] ?? 0) + 1;
+        if (routine.project_id) byProject[routine.project_id] = (byProject[routine.project_id] ?? 0) + 1;
+      }
+    }
     return { total, byProvider, byProject };
   }
   const result = (
@@ -999,6 +1011,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   }
   return {
     tick,
+    withAdmissionLock: <T>(run: () => Promise<T>) => exclusive(run),
     requestResource,
     setQueueOrder,
     runningCounts,
@@ -1022,6 +1035,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
       exclusive(() => observeAgent(workspaceId, agentId)),
     status: () => ({
       paused,
+      recovering: startup,
       pending: [...held.values()],
       deferred: lastDeferred,
       running: runningCounts(),

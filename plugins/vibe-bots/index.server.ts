@@ -1,8 +1,12 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import * as rpc from "./shared/rpc";
+import * as routineRpc from "./shared/routines-rpc";
+import { createRoutineStore } from "./server/vibe/db/routines";
+import { createRoutineExecution } from "./server/routine-execution";
+import { registerRoutineTools } from "./server/routine-tools";
 import { BotCreateSchema, BotPatchSchema } from "./server/vibe/contract/bots";
-import { migrateOwner } from "./server/vibe/db/migrate";
+import { getSchemaVersion, migrateOwner, migrateOwnerThrough } from "./server/vibe/db/migrate";
 import { openVibeDb } from "./server/vibe/db/sqlite";
 import { createBotService } from "./server/service";
 import { registerBotContinuations } from "./server/continuation";
@@ -13,8 +17,23 @@ function userOnly(callerAgentId: string | null | undefined) {
 
 export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
-  migrateOwner(db, "vibe-bots");
+  // WP-141 owns v2. Keep existing bot functionality available until that migration arrives.
+  if (getSchemaVersion(db, "vibe-bots") < 2) migrateOwnerThrough(db, "vibe-bots", 1);
+  else migrateOwner(db, "vibe-bots");
+  const routineAvailable = getSchemaVersion(db, "vibe-bots") >= 3;
+  const requireRoutines = () => { if (!routineAvailable) throw new Error("例程需要先合入 WP-141 的数据库迁移 v2"); };
   const service = createBotService(db, server.paseo);
+  const routines = createRoutineStore(db);
+  registerRoutineTools(server, service, routines);
+  const execution = createRoutineExecution(db, service, server);
+  server.handle(routineRpc.routineTickRpc, (input, ctx) => { userOnly(ctx.callerAgentId); return routineAvailable ? execution.tick(input) : { started: false }; });
+  server.handle(routineRpc.routinesListRpc, (input, ctx) => { userOnly(ctx.callerAgentId); requireRoutines(); return { routines: routines.list(input.botId) }; });
+  server.handle(routineRpc.routinesCreateRpc, (input, ctx) => { userOnly(ctx.callerAgentId); requireRoutines(); return { routine: routines.create(input) }; });
+  server.handle(routineRpc.routinesUpdateRpc, (input, ctx) => { userOnly(ctx.callerAgentId); requireRoutines(); return { routine: routines.update(input.id, input.patch) }; });
+  server.handle(routineRpc.routinesPauseRpc, (input, ctx) => { userOnly(ctx.callerAgentId); requireRoutines(); return { routine: routines.pause(input.id) }; });
+  server.handle(routineRpc.routinesResumeRpc, (input, ctx) => { userOnly(ctx.callerAgentId); requireRoutines(); return { routine: routines.resume(input.id) }; });
+  server.handle(routineRpc.routinesDeleteRpc, (input, ctx) => { userOnly(ctx.callerAgentId); requireRoutines(); routines.delete(input.id); return { ok: true as const }; });
+  server.handle(routineRpc.routinesRunNowRpc, (input, ctx) => { userOnly(ctx.callerAgentId); requireRoutines(); routines.runNow(input.id); return { ok: true as const }; });
   const stopContinuations = registerBotContinuations(db, service);
   server.handle(rpc.botsListRpc, async (input, ctx) => {
     userOnly(ctx.callerAgentId);
@@ -173,6 +192,7 @@ export default function contribute(server: PluginServerContext) {
       await service.ready();
       const bot = service.bots.list().find((item) => item.mainAgentId === request.agentId);
       if (!bot) return;
+      if (routineAvailable && request.reason === "finished" && execution.quiet(request.agentId)) return { ...request, suppressed: true };
       const disabled = !bot.notifications.enabled;
       const completedDisabled = request.reason === "finished" && !bot.notifications.completed;
       const failedDisabled = request.reason === "error" && !bot.notifications.failed;
@@ -191,14 +211,15 @@ export default function contribute(server: PluginServerContext) {
     server.on("agent.turn_started", ({ agent }) => {
       service.live.add(agent.id);
     }),
-    server.on("agent.turn_ended", async ({ agent, outcome }) => {
+    server.on("agent.turn_ended", async ({ agent, turnId, outcome }) => {
       service.live.delete(agent.id);
+      const routineRun = routineAvailable && await execution.turnEnded(agent.id, turnId, outcome.kind === "failed" ? outcome.error.message : null);
       const bot = service.bots.list().find((item) => item.mainAgentId === agent.id);
       if (!bot) return;
       const failed = outcome.kind === "failed";
       const completedNotice = outcome.kind === "completed" && bot.notifications.completed;
       const failedNotice = failed && bot.notifications.failed;
-      if (bot.notifications.enabled && (failedNotice || completedNotice)) {
+      if (!routineRun && bot.notifications.enabled && (failedNotice || completedNotice)) {
         server.notify({
           title: bot.name,
           body: failed ? "bot 运行失败，请打开主对话查看。" : "bot 已回复。",

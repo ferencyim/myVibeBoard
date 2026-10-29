@@ -67,6 +67,14 @@ export interface RuntimeOptions {
   settings?: RuntimeSettings;
   onError?: (error: unknown) => void;
   native?: (workspaceId: string) => Promise<NativeTaskWorkspace | null>;
+  routineTick?: (input: {
+    paused: boolean;
+    running: ReturnType<ReturnType<typeof createTaskScheduler>["runningCounts"]>;
+    globalLimit: number;
+    providerLimits: Record<string, number>;
+    projectLimits: Record<string, number>;
+    quota: Record<string, ProviderQuota>;
+  }) => Promise<unknown>;
 }
 
 export function createSchedulerRuntime(options: RuntimeOptions) {
@@ -199,7 +207,18 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   async function tickOnce() {
     await consumer.poll();
     await refreshUsage();
-    return scheduler.tick();
+    const result = await scheduler.tick();
+    if (options.routineTick) await scheduler.withAdmissionLock(() => options.routineTick!({
+      paused: result.paused || scheduler.status().recovering || !!scheduler.status().recoveryError,
+      running: scheduler.runningCounts(),
+      globalLimit: settings.globalLimit,
+      providerLimits: settings.providerLimits,
+      projectLimits: Object.fromEntries(store.projects.list(true)
+        .filter((project) => project.paseoProjectId && project.concurrencyLimit != null)
+        .map((project) => [project.paseoProjectId!, project.concurrencyLimit!])),
+      quota,
+    }));
+    return result;
   }
 
   async function sampleRemotesNow() {

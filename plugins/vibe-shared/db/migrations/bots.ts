@@ -66,4 +66,25 @@ CREATE TABLE bot_continuation_request (
 );
 `,
   },
+  // WP-141 owns v2; replace this reservation with its migration before integration.
+  { version: 2, name: "reserved_wp141", sql: "SELECT * FROM wp141_v2_migration_required" },
+  {
+    version: 3, name: "bot_routines", sql: `
+CREATE TABLE bot_routine (
+ id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bot(id) ON DELETE CASCADE,
+ title TEXT NOT NULL, schedule_json TEXT NOT NULL, timezone TEXT NOT NULL, prompt TEXT NOT NULL,
+ target TEXT NOT NULL, quiet INTEGER NOT NULL, paused INTEGER NOT NULL,
+ missed_policy TEXT NOT NULL, last_run_at TEXT, next_run_at TEXT, last_status TEXT,
+ last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_bot_routine_due ON bot_routine(paused,next_run_at);
+CREATE TABLE bot_routine_run (
+ id TEXT PRIMARY KEY, routine_id TEXT NOT NULL REFERENCES bot_routine(id) ON DELETE CASCADE,
+ scheduled_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, status TEXT NOT NULL, error TEXT, agent_id TEXT, provider TEXT
+);
+CREATE INDEX idx_bot_routine_run ON bot_routine_run(routine_id,scheduled_at);
+`,
+  },
+
 ];
+

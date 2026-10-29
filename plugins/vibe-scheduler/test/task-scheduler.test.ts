@@ -582,6 +582,33 @@ describe("原生任务准入", () => {
     expect(JSON.parse(response!.payload_json)).toMatchObject({ requestId: "bus", ok: false });
     await runtime.stop();
   });
+  it("例程运行计入任务资源并发，结束后释放", () => {
+    const t = setup();
+    t.db.exec(`CREATE TABLE bot (id TEXT, provider TEXT, project_id TEXT);
+      CREATE TABLE bot_routine (id TEXT, bot_id TEXT);
+      CREATE TABLE bot_routine_run (routine_id TEXT, status TEXT, provider TEXT);
+      INSERT INTO bot VALUES ('b', 'codex', 'p');
+      INSERT INTO bot_routine VALUES ('r', 'b');
+      INSERT INTO bot_routine_run VALUES ('r', 'running', 'codex');`);
+    expect(t.scheduler.runningCounts()).toMatchObject({ total: 1, byProvider: { codex: 1 }, byProject: { p: 1 } });
+    t.db.exec("UPDATE bot_routine_run SET status='completed'");
+    expect(t.scheduler.runningCounts().total).toBe(0);
+  });
+  it("每次调度携带当前资源状态触发例程", async () => {
+    const t = setup();
+    const calls: unknown[] = [];
+    const runtime = createSchedulerRuntime({
+      db: t.db, dataDir: join(t.dir, "routine-runtime"), probe: fakeMachine(),
+      settings: DEFAULT_SETTINGS, native: async (id) => t.native.get(id) ?? null,
+      routineTick: async (input) => { calls.push(input); },
+    });
+    await runtime.tickOnce();
+    expect(calls).toEqual([expect.objectContaining({
+      paused: false, globalLimit: DEFAULT_SETTINGS.globalLimit,
+      running: expect.objectContaining({ total: 0 }),
+    })]);
+    await runtime.stop();
+  });
   it("同workspace不同设备kind各持正确设备，不借错设备", async () => {
     const t = setup(3);
     t.roles.worker.runtimeEnv = "android";
