@@ -343,6 +343,21 @@ describe("translation resources", () => {
     expect(en.shell.commandCenter.settingOff).toBe("Off");
   });
 
+  it("localizes agent timeline events and composer hints in Chinese", () => {
+    expect(zhCN.toolCallDetails.agentMessage).toEqual({
+      message: "已收到消息",
+      finished: "助手已完成",
+      errored: "助手出错",
+      "permission-required": "助手需要授权",
+      closed: "助手已关闭",
+      from: "来自助手：{{id}}",
+    });
+    expect(zhCN.composer.placeholders.desktop).toBe(
+      "给助手发消息，使用 @ 引用文件，或使用 / 选择命令和技能",
+    );
+    expect(zhCN.composer.placeholders.mobile).toBe("发消息，使用 @ 引用文件或 / 选择命令");
+  });
+
   it("includes composer and agent workflow keys for the Batch 2 migration", () => {
     expect(en.composer.placeholders.desktop).toBe(
       "Message the agent, tag @files, or use /commands and /skills",

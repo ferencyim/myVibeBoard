@@ -2081,6 +2081,7 @@ export const ar: TranslationResources = {
     },
   },
   toolCallDetails: {
+    agentMessage: en.toolCallDetails.agentMessage,
     error: "خطأ",
     empty: "لا توجد تفاصيل إضافية متاحة",
     subAgentActivity: "نشاط الوكيل الفرعي",

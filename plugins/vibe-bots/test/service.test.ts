@@ -251,7 +251,8 @@ describe("bot 服务主对话与模型变更", () => {
     expect(f.createAgent.mock.calls[1][0].idempotencyKey).not.toBe(f.createAgent.mock.calls[0][0].idempotencyKey);
     expect(f.agents.get(previous.agentId)?.archivedAt).toBe("2026-10-29T01:00:00.000Z");
     expect(f.invoke).toHaveBeenCalledWith("vibe-board", "vibe.bot.handoff", { agentId: previous.agentId });
-    expect(f.send).toHaveBeenCalledWith(rebuilt.agentId, "交接包：未决问题与下一步", { sourceAgentId: rebuilt.agentId });
+    expect(f.createAgent.mock.calls[1][0].config.systemPrompt).toContain("交接包：未决问题与下一步");
+    expect(f.send).not.toHaveBeenCalled();
   });
 
   it("同 provider 换模型调用宿主 setModel，保留 bot、主会话、记忆与历史入口", async () => {
@@ -314,7 +315,8 @@ describe("bot 服务主对话与模型变更", () => {
     expect(updated.mainAgentId).not.toBe(before.agentId);
     expect(updated).toMatchObject({ id: bot.id, pendingModel: false });
     expect(updated.memories).toEqual([memory]);
-    expect(f.send).toHaveBeenCalledWith(updated.mainAgentId, "交接包：未决问题与下一步", { sourceAgentId: updated.mainAgentId });
+    expect(f.createAgent.mock.calls[1][0].config.systemPrompt).toContain("交接包：未决问题与下一步");
+    expect(f.send).not.toHaveBeenCalled();
     expect(f.agents.get(before.agentId)).toMatchObject({ provider: "codex", archivedAt: null });
     expect(f.agents.get(updated.mainAgentId!)).toMatchObject({ provider: "claude", labels: expect.objectContaining({ "vibe.bot": bot.id }) });
     expect((await f.service.waitOpen(bot.id)).agentId).toBe(updated.mainAgentId);
@@ -383,7 +385,8 @@ it("归档的权威旧总 agent 在重启后补迁，打开时交接到新主对
   const opened = await f.service.waitOpen(bot.id);
   expect(opened.agentId).not.toBe("archived-master");
   expect(f.createAgent).toHaveBeenCalledWith(expect.objectContaining({ title: "新助手" }));
-  expect(f.send).toHaveBeenCalledWith(opened.agentId, "交接包：未决问题与下一步", { sourceAgentId: opened.agentId });
+  expect(f.createAgent.mock.calls[0][0].config.systemPrompt).toContain("交接包：未决问题与下一步");
+  expect(f.send).not.toHaveBeenCalled();
   await f.service.close();
   const restarted = f.start();
   await restarted.ready();
