@@ -4,6 +4,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   taskPanelRpc,
+  taskFlowSetRpc,
   taskTabCommandRpc,
   type ProjectPlanData,
   type TaskBoardItemData,
@@ -40,13 +41,14 @@ function TaskFlowPanelBody({
   const { theme } = useHost();
   const panel = useRpc(taskPanelRpc);
   const command = useRpc(taskTabCommandRpc);
+  const setFlow = useRpc(taskFlowSetRpc);
   const query = useQuery({
     queryKey: ["vibe-board", "task-panel", workspaceId],
     queryFn: () => panel({ workspaceId }),
     refetchInterval: 3_000,
     retry: false,
   });
-  const [pending, setPending] = useState<TaskTabCommand["action"] | "refresh" | null>(null);
+  const [pending, setPending] = useState<TaskTabCommand["action"] | "refresh" | "flow" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
@@ -77,6 +79,23 @@ function TaskFlowPanelBody({
       }
     },
     [command, query, task, workspaceId],
+  );
+  const changeFlow = useCallback(
+    async (level: "simple" | "medium" | "full") => {
+      setError(null);
+      setMessage(null);
+      setPending("flow");
+      try {
+        await setFlow({ workspaceId, level });
+        await query.refetch();
+        setMessage("流程档位已更新。");
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        setPending(null);
+      }
+    },
+    [query, setFlow, workspaceId],
   );
   if (query.isLoading)
     return (
@@ -137,6 +156,21 @@ function TaskFlowPanelBody({
           </View>
         </View>
         {task.summary ? <Muted size={13}>{task.summary}</Muted> : null}
+      </View>
+
+      <View style={{ gap: 6 }}>
+        <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>流程档位</Text>
+        <Text style={heading}>
+          {`${{ simple: "简单", medium: "中等", full: "完整" }[task.flowLevel]} · ${task.flowSource === "user" ? "用户选择" : "项目 bot 评估"}`}
+        </Text>
+        {task.flowReason ? <Muted size={13}>{task.flowReason}</Muted> : null}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+          {([["simple", "简单"], ["medium", "中等"], ["full", "完整"]] as const).map(([level, label]) => (
+            <Btn key={level} label={label} small variant={task.flowLevel === level ? "primary" : "default"}
+              disabled={disabled || task.flowLevel === level} onPress={() => void changeFlow(level)}
+              testID={`task-flow-level-${level}`} />
+          ))}
+        </View>
       </View>
 
       {data.blockingReason ? (

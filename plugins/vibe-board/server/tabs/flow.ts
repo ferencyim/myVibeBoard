@@ -48,6 +48,7 @@ import {
   TASK_TAB_GUIDE_PROMPT,
 } from "./prompts";
 import { createPlanReview, reviewActive, reviewState } from "./plan-review";
+import { collectSelfTest, matchesVerifiedCommit, parseSelfTestCommands, type SelfTestCommand } from "./self-test";
 import type { PluginTurnOutcome } from "@getpaseo/plugin/server";
 import type { GroupChat } from "./group-chat";
 import {
@@ -118,13 +119,13 @@ function rolePromptKey(role: TaskTab["role"]): string | undefined {
 
 function parseDelivery(
   text: string,
-): { status: "completed" | "blocked"; summary: string } | undefined {
+): { status: "completed" | "blocked"; summary: string; selfTestCommands?: SelfTestCommand[] } | undefined {
   const match = DELIVERY.exec(text);
   if (!match) return undefined;
   try {
-    const value = JSON.parse(match[1]!) as { status?: unknown; summary?: unknown };
+    const value = JSON.parse(match[1]!) as { status?: unknown; summary?: unknown; selfTestCommands?: unknown };
     if (value.status !== "completed" && value.status !== "blocked") return undefined;
-    return { status: value.status, summary: String(value.summary ?? "") };
+    return { status: value.status, summary: String(value.summary ?? ""), selfTestCommands: parseSelfTestCommands(value.selfTestCommands) };
   } catch {
     return undefined;
   }
@@ -416,6 +417,7 @@ export function createTaskFlow(options: {
   function rereview(input: { workspaceId: string; agentId: string }) {
     return queue(input.workspaceId, async () => {
       const task = requireTask(input.workspaceId);
+      if (task.flowLevel !== "full") throw new Error("当前流程不启用方案互审，请先切换完整流程");
       const caller = tabFor(task, input.agentId);
       if (!caller || (caller.role !== "main" && caller.role !== "planner"))
         throw new Error("请在主会话或方案 tab（或任务流程面板）发送 /重新审阅");
@@ -451,6 +453,9 @@ export function createTaskFlow(options: {
     if (main && Array.isArray(enabled)) {
       for (const role of ["scout", "reviewer"] as const)
         if (enabled.includes(role) && !resolved[role]) resolved[role] = mainFallbackSnapshot(main);
+    }
+    for (const role of ["scout", "reviewer"] as const) {
+      if (roleTabDisabled(store, role, { task, projectId })) resolved[role] = null;
     }
     return resolved;
   }
@@ -586,7 +591,7 @@ export function createTaskFlow(options: {
   }
   async function provisionTabsNow(workspaceId: string) {
     let task = store.tasks.get(workspaceId);
-    if (!task || !PROVISION_PHASES.has(task.phase)) return;
+    if (!task || task.control?.flowEvaluationPending === true || !PROVISION_PHASES.has(task.phase)) return;
     const placement = await tabs.workspace(workspaceId);
     if (!task.tabs.some((tab) => tab.role === "main")) {
       const main = await tabs.ensureTab(task.anchorAgentId, { role: "main" });
@@ -595,7 +600,7 @@ export function createTaskFlow(options: {
     }
     for (const role of PREBUILT_ROLES) {
       task = store.tasks.get(workspaceId);
-      if (!task || !PROVISION_PHASES.has(task.phase)) return;
+      if (!task || task.control?.flowEvaluationPending === true || !PROVISION_PHASES.has(task.phase)) return;
       const key = workspaceId + ":" + role;
       if (task.tabs.some((tab) => tab.role === role)) {
         orphanTabs.delete(key);
@@ -638,6 +643,17 @@ export function createTaskFlow(options: {
   }
   async function ensureRoleTabNow(input: EnsureRoleInput): Promise<{ agentId: string }> {
     const task = requireTask(input.workspaceId);
+    const placement = await tabs.workspace(input.workspaceId);
+    const disabled = roleTabDisabled(store, input.role, { task, projectId: placement.projectId });
+    if (disabled && !input.enable) throw new Error("本流程未启用，请先启用该 tab");
+    if (disabled && input.enable) {
+      store.tasks.updateControl(input.workspaceId, {
+        enabledRoles: [...new Set([
+          ...(Array.isArray(task.control?.enabledRoles) ? task.control.enabledRoles : []),
+          input.role,
+        ])],
+      });
+    }
     const existing = task.tabs.find((tab) => tab.role === input.role);
     if (existing && (!input.provider || input.provider.split("/")[0] === existing.provider))
       return { agentId: existing.agentId };
@@ -657,8 +673,7 @@ export function createTaskFlow(options: {
       orphanTabs.delete(key);
       return { agentId: orphan.agentId };
     }
-    const placement = await tabs.workspace(input.workspaceId);
-    const { snapshot, model } = resolveEnsureModel(task, input, placement.projectId);
+    const { snapshot, model } = resolveEnsureModel(requireTask(input.workspaceId), input, placement.projectId);
     const modeId = taskRoleModeId(input.role, model.provider, model.permissionMode);
     const handle = await paseo()
       .workspaces.ref(input.workspaceId)
@@ -715,7 +730,7 @@ export function createTaskFlow(options: {
       );
       preset = { snapshot, model: snapshot.models[0]! };
     }
-    if (!preset && input.enable && ["scout", "reviewer"].includes(input.role)) {
+    if (!preset && input.enable) {
       const main = task.tabs.find((tab) => tab.role === "main");
       if (!main) throw new Error("主会话模型尚未就绪，请到「任务默认模型」设置选择模型");
       const snapshot = mainFallbackSnapshot(main);
@@ -966,6 +981,7 @@ export function createTaskFlow(options: {
     tab: TaskTab,
     page: TimelinePage,
     turnId: string | null,
+    turn?: TaskTurnToken,
   ) {
     const entry = lastAssistant(page, turnId);
     if (!entry || entry.item.type !== "assistant_message") return;
@@ -985,6 +1001,56 @@ export function createTaskFlow(options: {
       });
     }
     if (delivery?.status === "completed") {
+      if (task.flowLevel === "simple") {
+        await releaseIdle(task.workspaceId, tab.agentId, turn);
+        let result: Awaited<ReturnType<typeof collectSelfTest>> | undefined;
+        let reason = "执行者没有提供完整的 typecheck、lint 和相关测试命令";
+        let reservationId: string | undefined;
+        try {
+          if (!delivery.selfTestCommands) throw new Error(reason);
+          const lease = await resources.request({ workspaceId: task.workspaceId, action: "acquire", role: "verifier", hostLease: true });
+          if (!lease.ok || !lease.reservationId) throw new Error(lease.reason || "无法取得自测写屏障");
+          reservationId = lease.reservationId;
+          result = await collectSelfTest(directory, delivery.selfTestCommands);
+          reason = result.voided ? "自测期间代码状态变化，证据作废" : "自测命令未全部通过";
+          const current = requireTask(task.workspaceId);
+          if (current.confirmedAt !== task.confirmedAt || current.phase !== "executing") {
+            result = { ...result, conclusion: "doubt", voided: true };
+            reason = "自测期间任务状态或确认轮次变化，证据作废";
+          }
+        } catch (error) {
+          reason = error instanceof Error ? error.message : String(error);
+        }
+        try {
+          store.taskArtifacts.record({
+            workspaceId: task.workspaceId,
+            kind: "verification",
+            sourceKey: `self-test:${source.sourceKey}`,
+            confirmedAt: task.confirmedAt,
+            source,
+            summary: result?.conclusion === "pass" ? "执行者自测通过" : `执行者自测未通过：${reason}`,
+            data: result ?? { conclusion: "doubt", voided: true, commitHash, reason },
+          });
+        } finally {
+          if (reservationId) {
+            const released = await resources.request({ workspaceId: task.workspaceId, action: "release", reservationId });
+            if (!released.ok) throw new Error("自测写屏障释放未确认：" + released.reason);
+          }
+        }
+        if (requireTask(task.workspaceId).phase === "executing") {
+          if (result?.conclusion === "pass") {
+            store.tasks.setPhase(task.workspaceId, "verifying");
+            store.tasks.setPhase(task.workspaceId, "awaiting_acceptance");
+            store.tasks.setSummary(task.workspaceId, "执行者自测通过，等待用户验收。");
+          } else {
+            store.tasks.setPhase(task.workspaceId, "paused");
+            store.tasks.updateControl(task.workspaceId, { blockingReason: reason });
+            store.tasks.setSummary(task.workspaceId, "执行者自测未通过，任务暂停：" + reason);
+          }
+        }
+        await tabs.appendStatus(tab.agentId, result?.conclusion === "pass" ? "自测通过，等待用户验收。" : "自测未通过：" + reason);
+        return;
+      }
       const target = task.rolesSnapshot?.reviewer ? "reviewing" : "verifying";
       const current = requireTask(task.workspaceId);
       if (current.phase === "executing") store.tasks.setPhase(task.workspaceId, target);
@@ -1031,6 +1097,13 @@ export function createTaskFlow(options: {
     await queue(workspaceId, async () => {
       const task = store.tasks.get(workspaceId);
       if (!task || !tabFor(task, tab.agentId)) return;
+      if (task.flowLevel === "medium") {
+        if (["planning", "awaiting_confirmation"].includes(task.phase)) {
+          store.tasks.savePlan(workspaceId, plan);
+          store.tasks.setSummary(workspaceId, `#${tab.number} 方案已更新：${plan.goal}。请确认执行。`);
+        }
+        return;
+      }
       await review.onPlannerPlan(task, tab, { plan, text, source: sourceFor(tab, page, entry) });
     });
   }
@@ -1038,10 +1111,21 @@ export function createTaskFlow(options: {
     if (!["planning", "awaiting_confirmation"].includes(task.phase)) return;
     const found = planMessage(page);
     if (!found) return;
-    const current = requireTask(task.workspaceId);
-    if (JSON.stringify(current.plan) === JSON.stringify(found.plan)) return;
-    store.tasks.savePlan(task.workspaceId, found.plan);
-    store.tasks.setSummary(task.workspaceId, `主会话已更新方案：${found.plan.goal}`);
+    await queue(task.workspaceId, async () => {
+      const current = requireTask(task.workspaceId);
+      if (!["planning", "awaiting_confirmation"].includes(current.phase)) return;
+      if (JSON.stringify(current.plan) !== JSON.stringify(found.plan)) {
+        store.tasks.savePlan(task.workspaceId, found.plan);
+        store.tasks.setSummary(task.workspaceId, `主会话已更新方案：${found.plan.goal}`);
+      }
+      // Only the creation-time choice grants this authorization. Changing the level later
+      // cannot create it, and the confirmation consumes it before subsequent rounds.
+      if (tab.role === "main" && current.flowLevel === "simple" && current.control?.simpleAutoExecute === true) {
+        const source = sourceFor(tab, page, found.entry);
+        await confirmWith(requireTask(task.workspaceId), found.plan, source, `simple:${source.sourceKey}`, tab);
+        store.tasks.updateControl(task.workspaceId, { simpleAutoExecute: null });
+      }
+    });
   }
   /** The latest verification of this confirmation round must itself have passed. */
   async function latestVerification(task: Task) {
@@ -1050,6 +1134,28 @@ export function createTaskFlow(options: {
       .at(-1);
     if (!latest || latest.data?.conclusion !== "pass" || latest.data?.voided === true)
       return undefined;
+    if (task.flowLevel === "simple" && latest.sourceKey.startsWith("self-test:")) {
+      const { directory } = await projectFor(task.workspaceId);
+      if (!(await matchesVerifiedCommit(directory, String(latest.data.commitHash ?? "")))) {
+        const sourceKey = "self-test:invalidated:" + latest.sourceKey;
+        if (!store.taskArtifacts.get(task.workspaceId, "verification", sourceKey)) {
+          store.taskArtifacts.record({
+            workspaceId: task.workspaceId,
+            kind: "verification",
+            sourceKey,
+            confirmedAt: task.confirmedAt,
+            source: { ...latest.source, sourceKey },
+            summary: "验证后代码发生变化，自测证据作废",
+            data: { ...latest.data, conclusion: "doubt", voided: true },
+          });
+        }
+        if (requireTask(task.workspaceId).phase === "awaiting_acceptance") {
+          store.tasks.setPhase(task.workspaceId, "paused");
+          store.tasks.updateControl(task.workspaceId, { blockingReason: "验证后代码状态变化，自测证据作废" });
+        }
+        return undefined;
+      }
+    }
     return latest;
   }
   async function accept(input: {
@@ -2075,7 +2181,7 @@ export function createTaskFlow(options: {
       if (tab.role === "planner") await plannerTurnEnded(workspaceId, tab, page, event.turnId);
       await recordConclusion(task, tab, page, event.turnId);
       if (tab.role === "worker") {
-        await workerCompleted(task, tab, page, event.turnId);
+        await workerCompleted(task, tab, page, event.turnId, turn);
         await releaseIdle(workspaceId, tab.agentId, turn);
       }
       await standaloneAccept(tab.agentId, workspaceId, page, event.turnId);
@@ -2135,7 +2241,7 @@ export function createTaskFlow(options: {
   }
   /** Return the complete flow immediately while missing native tabs recover in the background. */
   async function panel(workspaceId: string) {
-    const task = store.tasks.get(workspaceId);
+    let task = store.tasks.get(workspaceId);
     if (!task)
       return {
         isTask: false,
@@ -2145,6 +2251,10 @@ export function createTaskFlow(options: {
         tabs: [],
         steps: [],
       };
+    if (task.flowLevel === "simple" && task.phase === "awaiting_acceptance") {
+      await latestVerification(task);
+      task = store.tasks.get(workspaceId)!;
+    }
     if (needsProvision(task))
       void provisionTabs(workspaceId).catch((error) => log("流程 tab 预建失败", error));
     const views = await tabs.tabsFor(task, true);

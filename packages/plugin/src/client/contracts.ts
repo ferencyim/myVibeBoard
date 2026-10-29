@@ -290,6 +290,7 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   addTimelineTransformer<ItemType extends AgentTimelineItem["type"]>(
     contribution: PluginTimelineTransformerContribution<ItemType>,
   ): PluginCleanup;
+  addConversationHeaderAccessory(contribution: PluginConversationHeaderAccessory): PluginCleanup;
   addTimelineRenderer<Schema extends ZodType>(
     contribution: PluginTimelineRendererContribution<Schema>,
   ): PluginCleanup;
@@ -533,3 +534,18 @@ export type SettingsState<Schema extends ZodType> = (
   reset(): Promise<boolean>;
   reload(): Promise<void>;
 };
+
+/** A surface displayed below an agent conversation header. */
+export interface PluginConversationHeaderAccessory {
+  id: string;
+  Component: ComponentType<PluginConversationHeaderAccessoryProps>;
+}
+export interface PluginConversationHeaderAccessoryProps extends PluginSurfaceProps {
+  agentId: string;
+  tokens: {
+    spacing: { 2: number; 3: number };
+    borderWidth: { 1: number; 2: number };
+    opacity: { disabled: number; 100: number };
+    fontSize: { md: number };
+  };
+}

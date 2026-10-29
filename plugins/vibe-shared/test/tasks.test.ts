@@ -144,6 +144,9 @@ describe("workspace task commands", () => {
       workspaceId: "workspace-1",
       anchorAgentId: "anchor-1",
       phase: "planning",
+      flowLevel: "full",
+      flowSource: "user",
+      flowReason: "",
       plan: null,
       confirmedAt: null,
       rolesSnapshot: null,
@@ -396,5 +399,20 @@ describe("workspace task commands", () => {
     expect(() => s.tasks.savePlan("workspace-1", plan())).toThrow(/synthetic bus failure/);
     expect(s.tasks.get("workspace-1")).toMatchObject({ phase: "planning", plan: null });
     s.db.close();
+  });
+});
+
+
+describe("task flow levels", () => {
+  it("persists changes and clears earlier local and creation authorizations", () => {
+    const state = tasks();
+    state.tasks.setControl("workspace-1", { enabledRoles: ["reviewer"], simpleAutoExecute: true });
+    const changed = state.tasks.setFlow("workspace-1", { level: "medium", source: "user", reason: "调整" });
+    expect(changed).toMatchObject({ flowLevel: "medium", flowSource: "user", flowReason: "调整" });
+    expect(changed.control).not.toHaveProperty("enabledRoles");
+    expect(changed.control).not.toHaveProperty("simpleAutoExecute");
+    state.tasks.updateControl("workspace-1", { highRiskFlow: true });
+    expect(() => state.tasks.setFlow("workspace-1", { level: "simple", source: "user", reason: "调整" })).toThrow("高风险任务不得使用简单流程");
+    state.db.close();
   });
 });

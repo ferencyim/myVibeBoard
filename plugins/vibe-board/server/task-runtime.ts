@@ -1,5 +1,6 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { z } from "zod";
 import { EVENT_PAYLOADS } from "./vibe/contract";
 import {
   createEventConsumer,
@@ -16,6 +17,7 @@ import {
   groupSelectRpc,
   groupTargetsRpc,
   taskPanelRpc,
+  taskFlowSetRpc,
   taskWorkspaceTabsRpc,
   taskTabCommandRpc,
   taskTabEnsureRpc,
@@ -205,6 +207,32 @@ export function registerTaskRuntime(
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
     return flow.ensureRoleTab(input);
   });
+  const suggestionInput = z.object({
+    level: z.enum(["medium", "full"]),
+    reason: z.string().trim().min(1),
+  }).strict();
+  server.registerAgentTool({
+    name: "vibe_suggest_flow",
+    description: "建议用户升高当前任务流程档位，并说明理由；建议发送到 #1，由用户确认后生效。",
+    input: suggestionInput,
+    handler: async (input, { callerAgentId }) => {
+      if (!callerAgentId) throw new Error("只有任务 tab 可以建议升档");
+      const paseo = options.getPaseo();
+      if (!paseo) throw new Error("任务宿主连接尚未就绪");
+      const handle = paseo.agents.ref(callerAgentId);
+      await handle.refresh();
+      const agent = handle.current();
+      const task = agent?.workspaceId ? options.store.tasks.get(agent.workspaceId) : undefined;
+      if (!task || !task.tabs.some((tab) => tab.agentId === callerAgentId))
+        throw new Error("只有任务 tab 可以建议升档");
+      const suggestion = suggestionInput.parse(input);
+      const ranks = { simple: 0, medium: 1, full: 2 } as const;
+      if (ranks[suggestion.level] <= ranks[task.flowLevel ?? "full"])
+        throw new Error("建议的档位必须高于当前档位");
+      await tabs.appendStatus(task.anchorAgentId, `建议将流程升为${suggestion.level === "medium" ? "中等" : "完整"}：${suggestion.reason}。请用户在流程面板确认。`);
+      return { sent: true };
+    },
+  });
   server.handle(groupTargetsRpc, async (input, context) => {
     options.onPaseo(context.paseo);
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
@@ -219,6 +247,12 @@ export function registerTaskRuntime(
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
     const task = options.store.tasks.get(input.workspaceId);
     return task ? tabs.tabsFor(task, false) : [];
+  });
+  server.handle(taskFlowSetRpc, async (input, context) => {
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    options.store.tasks.setFlow(input.workspaceId, { level: input.level, source: "user", reason: "用户调整流程" });
+    await flow.provisionTabs(input.workspaceId);
+    return { task: options.store.tasks.get(input.workspaceId)! };
   });
   server.handle(taskPanelRpc, async (input, context) => {
     options.onPaseo(context.paseo);

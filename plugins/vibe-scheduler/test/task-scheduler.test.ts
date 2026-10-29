@@ -48,6 +48,7 @@ function setup(limit = 2) {
   const db = openVibeDb({ path: ":memory:" });
   closers.push(() => db.close());
   migrateOwner(db, "scheduler");
+  migrateOwner(db, "vibe-board");
   let time = Date.parse("2026-01-01T00:00:00Z");
   const now = () => new Date(time);
   const store = createVibeStore(db, { now });
@@ -620,6 +621,27 @@ describe("原生任务准入", () => {
       await t.request("a", { action: "release", reservationId: host.reservationId }),
     ).toMatchObject({ ok: true });
     expect((await t.request("b", { action: "acquire", role: "worker" })).ok).toBe(true);
+  });
+  it("宿主验证屏障与全仓库写入互斥，重启后保留直到明确释放", async () => {
+    const t = setup(4);
+    t.task("a", ["src/a.ts"], false);
+    t.store.tasks.setFlow("a", { level: "simple", source: "user", reason: "小改动" });
+    confirmTask(t.store, "a", t.roles);
+    t.store.tasks.setPhase("a", "executing");
+    t.task("b", ["src/b.ts"]);
+    const writer = await t.request("b", { action: "acquire", role: "worker" });
+    expect(writer.ok).toBe(true);
+    const barrier = { action: "acquire" as const, role: "verifier" as const, hostLease: true };
+    expect(await t.request("a", barrier)).toMatchObject({ ok: false, retryable: true });
+    await t.request("b", { action: "release", reservationId: writer.reservationId });
+    const acquired = await t.request("a", barrier);
+    expect(acquired.ok).toBe(true);
+    expect(await t.request("b", { action: "acquire", role: "worker" })).toMatchObject({ ok: false, retryable: true });
+    const restarted = t.makeScheduler();
+    await restarted.tick();
+    expect(restarted.runningCounts().total).toBe(1);
+    expect(await restarted.requestResource({ requestId: "release-host-verify", workspaceId: "a", action: "release", reservationId: acquired.reservationId })).toMatchObject({ ok: true });
+    expect(restarted.runningCounts().total).toBe(0);
   });
   it("忙碌资源明确可重试，无效确认不可重试，端口范围在线变更影响新分配", async () => {
     const t = setup(1);

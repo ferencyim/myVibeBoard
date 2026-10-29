@@ -132,7 +132,7 @@ function fixture() {
   const projectConfigs: object[] = [];
   const taskRows = [main];
   const store = {
-    tasks: { list: () => taskRows, markTaskWorkspace: vi.fn() },
+    tasks: { list: () => taskRows, get: (id: string) => taskRows.find((task) => task.workspaceId === id), markTaskWorkspace: vi.fn() },
     projects: { list: () => projectConfigs },
     modelDefaults: { global: () => defaults },
     presets: { get: (id: string) => presets.get(id) },
@@ -140,6 +140,7 @@ function fixture() {
   };
   const tabs = {
     workspace: async () => ({ projectId: "p", name: "已有任务" }),
+    setInitialFlow: vi.fn(),
     ensureTab: async () => {
       order.push("ensure");
     },
@@ -472,7 +473,7 @@ describe("项目 agent", () => {
     await f.service.received(f.input(id) as never);
     const outcomes = await Promise.allSettled([
       f.service.route(id, { workspaceId: "task", text: "用户原话" }),
-      f.service.create(id, { text: "用户原话" }),
+      f.service.create(id, { text: "用户原话", flowLevel: "full", flowReason: "需要完整流程" }),
     ]);
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     expect(f.sends).toHaveBeenCalledTimes(1);
@@ -511,9 +512,10 @@ describe("项目 agent", () => {
     const id = (await openReady(f.service)).agentId!;
     await f.service.received(f.input(id) as never);
     f.sends.mockRejectedValueOnce(new Error("超时"));
-    await expect(f.service.create(id, { text: "用户原话" })).rejects.toThrow("超时");
-    await f.build().create(id, { text: "用户原话" });
+    await expect(f.service.create(id, { text: "用户原话", flowLevel: "full", flowReason: "需要完整流程" })).rejects.toThrow("超时");
+    await f.build().create(id, { text: "用户原话", flowLevel: "full", flowReason: "需要完整流程" });
     expect(f.workspaceCreate).toHaveBeenCalledTimes(1);
+    expect(f.tabs.setInitialFlow).toHaveBeenCalledWith("new", { level: "full", reason: "需要完整流程" });
     expect(f.order).toEqual(["workspace", "main", "ensure", "roles", "ensure", "roles"]);
     expect(f.workspaceCreate.mock.calls[0][0]).toMatchObject({
       idempotencyKey: "project-task:u1",
@@ -545,13 +547,13 @@ describe("独立 bot 跨项目工具", () => {
     expect((await f.service.projectsFor("independent")).projects).toHaveLength(1);
     expect((await f.service.tasksFor("independent", "p")).plans).toHaveLength(1);
     expect(f.workspaceCreate).not.toHaveBeenCalled();
-    await expect(f.service.create("independent", { projectId: "p", text: "用户原话" })).rejects.toThrow("真实用户");
+    await expect(f.service.create("independent", { projectId: "p", text: "用户原话", flowLevel: "full", flowReason: "需要完整流程" })).rejects.toThrow("真实用户");
     await f.service.received(f.input("independent") as never);
-    await expect(f.service.create("independent", { projectId: "p", text: "改写" })).rejects.toThrow("真实用户");
-    await f.service.create("independent", { projectId: "p", text: "用户原话" });
+    await expect(f.service.create("independent", { projectId: "p", text: "改写", flowLevel: "full", flowReason: "需要完整流程" })).rejects.toThrow("真实用户");
+    await f.service.create("independent", { projectId: "p", text: "用户原话", flowLevel: "full", flowReason: "需要完整流程" });
     expect(f.workspaceCreate).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: "worktree", projectId: "p", cwd: "/repo" } }));
     expect(f.sends).toHaveBeenCalledWith("用户原话", expect.objectContaining({ messageId: "project-route:u1", images: [{ mimeType: "image/png", data: "image" }] }));
-    await expect(f.service.create("independent", { projectId: "p", text: "用户原话" })).rejects.toThrow("真实用户");
+    await expect(f.service.create("independent", { projectId: "p", text: "用户原话", flowLevel: "full", flowReason: "需要完整流程" })).rejects.toThrow("真实用户");
   });
   it("独立 bot 需指定有效项目，项目 bot 不可越项目或读取跨项目列表", async () => {
     const f = fixture();

@@ -50,12 +50,28 @@ export function registerProjectAgents(server: PluginServerContext, projects: Pro
       return projects.route(callerAgentId, route.parse(input));
     },
   });
+  const setFlow = z.object({
+    workspaceId: z.string().min(1),
+    flowLevel: z.enum(["simple", "medium", "full"]),
+    flowReason: z.string().trim().min(1),
+  }).strict();
+  server.registerAgentTool({
+    name: "vibe_set_task_flow",
+    description: "为等待自动评估的本项目新任务设置流程档位和理由。",
+    input: setFlow,
+    handler: async (input, { callerAgentId }) => {
+      if (!callerAgentId) throw new Error("工具仅供项目 bot 使用");
+      return projects.setTaskFlow(callerAgentId, setFlow.parse(input));
+    },
+  });
   const create = z
     .object({
       text: z.string().describe("逐字复制当前用户输入"),
       projectId: z.string().min(1).optional(),
       name: z.string().trim().min(1).optional(),
       sourceMessageId: z.string().min(1).optional(),
+      flowLevel: z.enum(["simple", "medium", "full"]),
+      flowReason: z.string().trim().min(1),
     })
     .strict();
   server.registerAgentTool({

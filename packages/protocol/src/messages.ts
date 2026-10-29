@@ -2595,6 +2595,7 @@ export const PaseoWorktreeArchiveRequestSchema = z.object({
 });
 
 export const FirstAgentContextSchema = z.object({
+  flowLevel: z.enum(["simple", "medium", "full"]).optional(),
   prompt: z.string().optional(),
   attachments: AgentAttachmentsSchema,
 });
@@ -3764,6 +3765,8 @@ export const ServerInfoStatusPayloadSchema = z
         checkoutRefresh: z.boolean().optional(),
         // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
         workspaceMultiplicity: z.boolean().optional(),
+        // COMPAT(taskFlowChoice): added in v0.13.2, remove after 2027-02-01.
+        taskFlowChoice: z.boolean().optional(),
         // COMPAT(projectRemove): added in v0.1.97, drop the gate when floor >= v0.1.97.
         projectRemove: z.boolean().optional(),
         // COMPAT(projectAdd): added in v0.1.97, drop the gate when floor >= v0.1.97.

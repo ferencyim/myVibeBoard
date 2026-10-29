@@ -154,6 +154,7 @@ export function runPluginClientBundle(
     themes: [],
     timelineTransformers: [],
     timelineRenderers: [],
+    conversationHeaderAccessories: [],
   };
   const surfaceIds = new Set<string>();
   const settingsScreenIds = new Set<string>();
@@ -608,6 +609,15 @@ export function runPluginClientBundle(
         timelineTransformerIds.delete(normalizedId),
       );
     },
+    addConversationHeaderAccessory(contribution) {
+      const accessoryId = requireId(contribution.id, "conversation header accessory id");
+      const items = collector.conversationHeaderAccessories!;
+      if (items.some((item) => item.id === accessoryId))
+        throw new Error(`Duplicate conversation header accessory: ${accessoryId}`);
+      if (typeof contribution.Component !== "function")
+        throw new Error(`Invalid conversation header accessory: ${accessoryId}`);
+      return register(items, contribution, () => {});
+    },
     addTimelineRenderer(contribution: PluginTimelineRendererContribution) {
       const kind = requireId(contribution.kind, "timeline renderer kind");
       if (!Number.isInteger(contribution.version) || contribution.version < 1) {
@@ -731,5 +741,6 @@ export function runPluginClientBundle(
     themes: collector.themes,
     timelineTransformers: collector.timelineTransformers,
     timelineRenderers: collector.timelineRenderers,
+    conversationHeaderAccessories: collector.conversationHeaderAccessories,
   };
 }

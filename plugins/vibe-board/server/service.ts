@@ -15,7 +15,7 @@ export interface BoardRuntime {
 }
 export function openBoardRuntime(options: { path?: string; now?: () => Date } = {}): BoardRuntime {
   const db = openVibeDb(options.path ? { path: options.path } : {});
-  migrateOwner(db, "core");
+  migrateOwner(db, "vibe-board");
   const store = createVibeStore(db, options.now ? { now: options.now } : {});
   return { db, store, close: () => db.close() };
 }
