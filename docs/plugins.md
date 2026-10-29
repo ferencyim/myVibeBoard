@@ -12,6 +12,12 @@ Default first-message models can be resolved online with
 [resolver contract](../public-docs/plugins/reference.md#first-message-model-resolver).
 Keep project/global precedence in the plugin and durable intent/retry in the core outbox.
 
+Project document entries and child pages are host-owned so offline cold starts can read cached
+Markdown and queue brief edits without executing cached plugin code. The vibe-board plugin owns
+snapshot RPCs and merge delivery; this flow does not require a project settings routing extension.
+The brief, document list, and document reader use distinct sibling routes with matched host and
+project params. See [Expo Router](expo-router.md) for the route-name and Back constraints.
+
 > **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugins are unsandboxed: server code and preparation commands run with the daemon user's access on the daemon host, and client contributions run inside Paseo. The repository's dependencies and future updates are part of that trust decision. With `--host`, preparation runs on that remote daemon host.
 
 ## Install a directory source
@@ -729,9 +735,17 @@ on several hosts are not coalesced. The selected snapshot submits as a text atta
 external-resource presentation, so it remains readable if the plugin is removed or an older peer
 drops the optional presentation fields.
 
+## Workspace tab providers
+
+The fork exposes `client.addWorkspaceTabProvider({ id, resolve, create, enable? })` for workspace roles whose agent does not exist yet. `resolve({ workspaceId })` returns ordered descriptors: `{ id, title, order, agentId?, disabled?, setup? }`. `setup` contains the resolved provider, model, mode and thinking option. Return an empty list for unrelated workspaces. The host merges placeholders with real agent tabs, preserves pane placement and focus, and uses the same numeric order as `paseo.tab-order`.
+
+Opening a placeholder uses the native draft composer and does not create an agent. The first submission calls `create({ workspaceId, tabId, provider, model?, modeId?, thinkingOptionId? })`, which returns `{ agentId }`; the host then sends the original message and attachments through its native user path with the original message ID. Plugin code must only create the agent here, never send an initialization prompt or substitute an agent-origin message. `enable` handles a disabled role explicitly. Providers own role prompts and permissions; the host owns composer controls, errors and message delivery.
+
+A provider registration belongs to its installation and host, and is removed on teardown. Desktop, Web and native clients share the merge and composer path. The first successful resolve populates placeholders; retained layouts keep their descriptors across reconnects. This is a fork SDK/host extension and requires deploying both together.
+
 ## Contribute settings
 
-Register ordinary components with `client.addSettingsScreen` and open them with `openSettings`.
+Register ordinary components with `client.addSettingsScreen` and open them with `openSettings`. Screens also appear directly in the host settings sidebar on desktop and mobile, with their icon and title. The optional `order` sorts ascending (default 0), with plugin and screen IDs breaking ties so reload order cannot shuffle the sidebar. The Plugins row menu remains available.
 The host settings shell owns navigation and layout; plugin content must not add another page
 scroll view or header. See the [author contract](../public-docs/plugins/reference.md#settings-screens)
 and `plugin-examples/settings` for the named UI components and persistence API.
@@ -787,4 +801,4 @@ attachment-source example, `plugin-examples/timeline-items` for timeline project
 
 Plugins may register client.addProjectSidebarItem({ id, title, order, Component }). The host renders these fixed rows immediately below an expanded project heading and before its reorderable workspace list, on desktop and compact mobile layouts. The component receives projectId, serverId, theme, compact and openAgent(agentId); openAgent uses the existing agent navigation owner and closes the compact sidebar. The selected project host remains authoritative when offline; another host must not silently handle its row. Rows run inside the installation RPC/query/translation context and an error boundary.
 
-The project sidebar API is a myVibeBoard fork extension shipped with the fork’s 0.13.2 SDK and host. Plugins using it must upgrade their host and SDK together; vibe-board requires >=0.13.2 <0.14.0. This does not imply upstream Paseo exposes the same extension.
+The project sidebar API is a myVibeBoard fork extension shipped with the fork’s 0.13.2 SDK and host. Plugins using it must upgrade their host and SDK together; the installer validates vibe plugin manifests against >=0.13.0 <0.14.0. This does not imply upstream Paseo exposes the same extension.

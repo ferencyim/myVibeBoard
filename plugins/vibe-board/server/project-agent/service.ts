@@ -16,6 +16,7 @@ import {
   taskPlanStatus,
   planFiles,
   PLAN_STATUS_LABELS,
+  UNRESOLVED_TAB_MODEL,
 } from "../vibe/contract";
 import { findProjectConfig } from "../vibe/db/project-config";
 import type { TaskTabs } from "../tabs/service";
@@ -166,7 +167,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
       const tasks = await projectTasks(projectId);
       const latest = tasks.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
       const main = latest?.tabs.find((tab) => tab.number === 1);
-      if (main?.provider && main.model)
+      if (main?.provider && main.model && main.model !== UNRESOLVED_TAB_MODEL)
         return {
           config: {
             provider: main.provider + "/" + main.model,
@@ -174,10 +175,30 @@ export function createProjectAgents(options: ProjectAgentOptions) {
           },
         };
     }
-    const available = await paseo().providers.listAvailable();
+    return defaultProviderModel(root);
+  }
+  async function defaultProviderModel(root: string): Promise<SelectedModel> {
+    const available = await paseo()
+      .providers.listAvailable()
+      .catch((cause: unknown) => {
+        throw new Error("无法取得主机可用 provider，请到「任务默认模型」设置可用模型", {
+          cause,
+        });
+      });
     const first = available.providers.find((provider) => provider.available);
-    if (!first) throw new Error("主机没有可用 provider");
-    return { config: { provider: first.provider } };
+    if (!first) throw new Error("主机没有可用 provider，请到「任务默认模型」设置可用模型");
+    const catalog = await paseo()
+      .providers.listModels(first.provider, { cwd: root })
+      .catch((cause: unknown) => {
+        throw new Error("无法取得主机 provider 的模型目录，请到「任务默认模型」选择具体模型", {
+          cause,
+        });
+      });
+    const models = catalog.models ?? [];
+    const selected = models.find((candidate) => candidate.isDefault) ?? models[0];
+    if (!selected?.id.trim())
+      throw new Error("无法取得主机 provider 的默认模型，请到「任务默认模型」选择具体模型");
+    return { config: { provider: first.provider + "/" + selected.id } };
   }
   async function openNow(projectId: string): Promise<ProjectAgentState> {
     const native = await project(projectId);

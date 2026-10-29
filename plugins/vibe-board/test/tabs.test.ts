@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createEventConsumer,
   createTaskRuntimeCommands,
@@ -47,8 +47,11 @@ import {
 } from "../server/vibe/contract";
 
 const handles: VibeDb[] = [];
-afterEach(() => {
+const flows: ReturnType<typeof createTaskFlow>[] = [];
+afterEach(async () => {
+  await Promise.all(flows.splice(0).map((flow) => flow.close()));
   for (const db of handles.splice(0)) db.close();
+  vi.useRealTimers();
 });
 
 interface FakeAgent {
@@ -322,6 +325,7 @@ function setup(
     getPaseo: () => fake.paseo as never,
     reportIntervalMs: 0,
     log: () => {},
+    ensureRoleTab: (input) => flow.ensureRoleTab(input),
   });
   const flow = createTaskFlow({
     db,
@@ -335,6 +339,7 @@ function setup(
     log: () => {},
   });
   flow.registerPrompts();
+  flows.push(flow);
   return { db, store, fake, tabs, flow, runtime, group };
 }
 
@@ -415,6 +420,8 @@ describe("提示词注册表", () => {
         .sort(),
     ).toEqual(
       [
+        "project.agent.role",
+        "project.agent.task_done",
         "task.plan_format",
         "task.role.main",
         "task.role.planner",
@@ -465,8 +472,8 @@ describe("任务 tab 编号与标题", () => {
 
     fake.addAgent({ id: "agent-2", model: "second" });
     const second = await tabs.ensureTab("agent-2");
-    expect(second).toMatchObject({ number: 2, agentId: "agent-2", role: "session" });
-    expect(tabTitle(second!)).toBe("#2 会话 · second");
+    expect(second).toMatchObject({ number: 7, agentId: "agent-2", role: "session" });
+    expect(tabTitle(second!)).toBe("#7 会话 · second");
 
     const again = await tabs.ensureTab("agent-1");
     expect(again?.number).toBe(1);
@@ -485,10 +492,10 @@ describe("任务 tab 编号与标题", () => {
     fake.agents.get("agent-2")!.status = "closed";
     fake.addAgent({ id: "agent-4" });
     const fourth = await tabs.ensureTab("agent-4");
-    expect(fourth?.number).toBe(3);
-    expect(store.tasks.get("ws")!.nextTabNumber).toBe(4);
+    expect(fourth?.number).toBe(8);
+    expect(store.tasks.get("ws")!.nextTabNumber).toBe(9);
     expect(formatTabs(await tabs.tabsFor(store.tasks.get("ws")!, false))).toContain(
-      "#3 会话 · first",
+      "#8 会话 · first",
     );
   });
 
@@ -503,12 +510,12 @@ describe("任务 tab 编号与标题", () => {
 
     fake.addAgent({ id: "agent-2", provider: "qoder", model: "unknown-id" });
     const second = await tabs.ensureTab("agent-2");
-    expect(second).toMatchObject({ number: 2, model: "unknown-id" });
+    expect(second).toMatchObject({ number: 7, model: "unknown-id" });
     expect(second!.modelLabel).toBeUndefined();
-    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-2", title: "#2 会话 · unknown-id" });
+    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-2", title: "#7 会话 · unknown-id" });
   });
 
-  it("快速结束的首回合在 tab 尚未登记时补登记并保存方案", async () => {
+  it("快速结束的首回合在 tab 尚未登记时补登记、保存方案并后台补齐流程 tab", async () => {
     const { store, fake, flow } = setup();
     store.tasks.create({ workspaceId: "ws", anchorAgentId: "agent-1" });
     fake.addAgent({ id: "agent-1" });
@@ -524,23 +531,36 @@ describe("任务 tab 编号与标题", () => {
       turnId: "turn-fast",
       outcome: { kind: "completed" },
     });
+    // Drain the provisioning already started by turnEnded before inspecting its final roster.
+    await flow.close();
     const task = store.tasks.get("ws")!;
     expect(task.plan?.goal).toBe("快速方案");
-    expect(task.tabs).toMatchObject([{ number: 1, agentId: "agent-1", role: "main" }]);
+    expect(task.tabs.map((tab) => [tab.number, tab.agentId, tab.role])).toEqual([
+      [1, "agent-1", "main"],
+      [2, "worker-1", "planner"],
+      [3, "worker-2", "scout"],
+      [4, "worker-3", "worker"],
+      [5, "worker-4", "reviewer"],
+      [6, "worker-5", "verifier"],
+    ]);
+    for (const tab of task.tabs)
+      expect(tab).toMatchObject({ provider: "codex", model: "first", thinking: "high" });
+    expect(fake.created).toHaveLength(5);
+    expect(fake.sends).toEqual([]);
   });
 
-  it("agent 自带角色标签不能授予角色，只有插件声明生效且不改写编号", async () => {
+  it("agent 自带角色标签不能授予角色，只有插件声明生效并使用固定角色编号", async () => {
     const { store, fake, tabs } = setup();
     fake.addAgent({ id: "agent-1" });
     await tabs.ensureTab("agent-1");
     fake.addAgent({ id: "fake-1", labels: { [TASK_TAB_ROLE_LABEL]: "scout" } });
     const plain = await tabs.ensureTab("fake-1");
-    expect(plain).toMatchObject({ number: 2, role: "session" });
+    expect(plain).toMatchObject({ number: 7, role: "session" });
     const claimed = await tabs.ensureTab("fake-1", { role: "scout" });
-    expect(claimed).toMatchObject({ number: 2, role: "scout" });
-    expect(fake.titles.at(-1)?.title).toBe("#2 探路 · first");
+    expect(claimed).toMatchObject({ number: 3, role: "scout" });
+    expect(fake.titles.at(-1)?.title).toBe("#3 探路 · first");
     fake.agents.get("fake-1")!.labels = { [TASK_TAB_ROLE_LABEL]: "worker" };
-    expect((await tabs.ensureTab("fake-1"))?.number).toBe(2);
+    expect((await tabs.ensureTab("fake-1"))?.number).toBe(3);
     expect(store.tasks.get("ws")!.tabs[1]!.role).toBe("scout");
   });
 
@@ -638,7 +658,7 @@ describe("任务 workspace 标记", () => {
     fake.addAgent({ id: "legacy-1", workspaceId: "legacy" });
     fake.addAgent({ id: "legacy-2", workspaceId: "legacy", model: "second" });
     const second = await tabs.ensureTab("legacy-2");
-    expect(second).toMatchObject({ number: 2, role: "session" });
+    expect(second).toMatchObject({ number: 7, role: "session" });
     expect(store.tasks.get("legacy")!.tabs[0]).toMatchObject({
       number: 1,
       agentId: "legacy-1",
@@ -653,7 +673,7 @@ describe("插件打开 tab", () => {
     fake.addAgent({ id: "agent-1" });
     await tabs.ensureTab("agent-1");
     const opened = await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
-    expect(opened).toMatchObject({ number: 2, role: "scout", title: "#2 探路 · first" });
+    expect(opened).toMatchObject({ number: 3, role: "scout", title: "#3 探路 · first" });
     expect(fake.created[0]!.config).toEqual({ provider: "codex/first" });
     expect(fake.created[0]).not.toHaveProperty("prompt");
     expect(fake.created[0]!.labels).toEqual({ [TASK_TAB_ROLE_LABEL]: "scout" });
@@ -802,15 +822,15 @@ describe("任务 tab 交流说明注入", () => {
     expect(prompt).not.toContain("vibe-plan");
     expect(prompt).toContain("#6 验证");
     expect(prompt).toContain("沿用 #1 模型");
-    expect(prompt).not.toContain("未启用");
+    expect(prompt).not.toMatch(/^#\d+ .*（未启用）$/m);
     const planner = (await tabs.injectGuide({
       config: {},
       workspaceId: "ws",
       env: { VIBE_ROLE: "planner" },
     } as never)) as { config: { systemPrompt?: string } };
     // No task row yet: the planner is the first tab, and the prompt names the real number.
-    expect(planner.config.systemPrompt).toContain("你是 #1 方案");
-    expect(planner.config.systemPrompt).not.toContain("#2 方案");
+    expect(planner.config.systemPrompt).toContain("你是 #2 方案");
+    expect(planner.config.systemPrompt).toContain("#1 主会话");
     expect(planner.config.systemPrompt).toContain("vibe_project_plans");
     expect(planner.config.systemPrompt).toContain("vibe-plan");
     expect(prompt).toContain("vibe_tabs");
@@ -875,27 +895,30 @@ describe("vibe_tabs", () => {
     await tabs.ensureTab("agent-2");
     fake.agents.get("agent-2")!.activeTurn = { id: "turn" };
     const result = await tabs.vibeTabs("agent-2");
-    expect(result).toMatchObject({ workspaceId: "ws", phase: "planning", self: 2 });
-    expect(result.tabs).toEqual([
-      {
-        number: 1,
-        agentId: "agent-1",
-        role: "main",
-        roleLabel: "主会话",
-        provider: "codex",
-        model: "first",
-        status: "空闲",
-      },
-      {
-        number: 2,
-        agentId: "agent-2",
-        role: "session",
-        roleLabel: "会话",
-        provider: "codex",
-        model: "second",
-        status: "运行中",
-      },
-    ]);
+    expect(result).toMatchObject({ workspaceId: "ws", phase: "planning", self: 7 });
+    expect(result.tabs).toEqual(
+      expect.arrayContaining([
+        {
+          number: 1,
+          agentId: "agent-1",
+          role: "main",
+          roleLabel: "主会话",
+          provider: "codex",
+          model: "first",
+          status: "空闲",
+        },
+        {
+          number: 7,
+          agentId: "agent-2",
+          role: "session",
+          roleLabel: "会话",
+          provider: "codex",
+          model: "second",
+          status: "运行中",
+        },
+      ]),
+    );
+    expect(result.tabs.filter((tab) => tab.status === "未启动")).toHaveLength(5);
   });
 });
 
@@ -943,7 +966,7 @@ describe("WP132 未配置角色沿用主会话", () => {
     } as never);
     expect(request.config.systemPrompt).toContain("#2 方案");
     expect(request.config.systemPrompt).toContain("#6 验证");
-    expect(request.config.systemPrompt).not.toContain("未启用");
+    expect(request.config.systemPrompt).not.toMatch(/^#\d+ .*（未启用）$/m);
   });
 });
 
@@ -1273,7 +1296,7 @@ describe("接手 tab", () => {
       workspaceId: "ws",
       agentId: "agent-2",
       requestId: "h-3",
-      reason: "#2 接手调查",
+      reason: "#3 接手调查",
     });
     const cancelled = fake.operations.indexOf("cancel:agent-2");
     const sent = fake.operations.indexOf("send:agent-2");
@@ -1291,7 +1314,7 @@ describe("接手 tab", () => {
       workspaceId: "ws",
       agentId: "agent-2",
       requestId: "h-ro",
-      reason: "#2 接手调查",
+      reason: "#3 接手调查",
     });
     const task = store.tasks.get("ws")!;
     expect(task.tabs.find((tab) => tab.agentId === "worker-1")!.role).toBe("session");
@@ -2110,15 +2133,15 @@ describe("预建流程 tab", () => {
     expect(fake.created).toHaveLength(5);
   });
 
-  it("探路或复核默认不启用时不建对应 tab，编号仍连续", async () => {
+  it("探路或复核默认不启用时不建对应 tab，编号保持固定", async () => {
     const { store, fake, flow } = await projectTask();
     configurePresets(store, { scout: false, reviewer: false });
     await flow.provisionTabs("ws");
     expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.number, tab.role])).toEqual([
       [1, "main"],
       [2, "planner"],
-      [3, "worker"],
-      [4, "verifier"],
+      [4, "worker"],
+      [6, "verifier"],
     ]);
     expect(fake.created).toHaveLength(3);
   });
@@ -2131,12 +2154,12 @@ describe("预建流程 tab", () => {
       workspaceId: "ws",
     } as never)) as { config: { systemPrompt?: string } };
     const prompt = result.config.systemPrompt ?? "";
-    expect(prompt).toContain("你的身份：#2 会话");
-    expect(prompt).toContain("#3 方案");
-    expect(prompt).toContain("#4 探路");
-    expect(prompt).toContain("#5 执行");
-    expect(prompt).toContain("#6 复核");
-    expect(prompt).toContain("#7 验证");
+    expect(prompt).toContain("你的身份：#7 会话");
+    expect(prompt).toContain("#2 方案");
+    expect(prompt).toContain("#3 探路");
+    expect(prompt).toContain("#4 执行");
+    expect(prompt).toContain("#5 复核");
+    expect(prompt).toContain("#6 验证");
     expect(prompt).toContain("send_agent_prompt");
     expect(prompt).toContain("get_agent_activity");
   });
@@ -2327,7 +2350,7 @@ describe("状态行与流程面板", () => {
     });
     const view = await flow.panel("ws");
     expect(view.isTask).toBe(true);
-    expect(view.tabs.find((tab) => tab.number === 2)).toMatchObject({
+    expect(view.tabs.find((tab) => tab.number === 3)).toMatchObject({
       role: "scout",
       roleLabel: "探路",
     });
@@ -2633,16 +2656,23 @@ describe("预建 tab 的边界", () => {
     ]);
   });
 
-  it("暂停的任务不补建 tab；面板与 /状态 只读，不补建", async () => {
+  it("打开任务面板触发后台补建，暂停非终态也补建，已完成不补建", async () => {
     const { store, fake, flow } = await projectTask();
     configurePresets(store);
     await flow.panel("ws");
-    await flow.status({ workspaceId: "ws", agentId: "agent-1" });
-    await Promise.resolve();
-    expect(fake.created).toHaveLength(0);
-    store.tasks.setPhase("ws", "paused");
     await flow.provisionTabs("ws");
-    expect(fake.created).toHaveLength(0);
+    expect(fake.created).toHaveLength(5);
+    const other = await projectTask();
+    configurePresets(other.store);
+    other.store.tasks.setPhase("ws", "paused");
+    await other.flow.provisionMissing();
+    expect(other.fake.created).toHaveLength(5);
+    const finished = await acceptanceTask();
+    finished.store.tasks.setPhase("ws", "completed");
+    await finished.flow.panel("ws");
+    await finished.flow.provisionMissing();
+    await finished.flow.provisionTabs("ws");
+    expect(finished.fake.created).toHaveLength(0);
   });
 
   it("预建复核/验证 tab 与按需打开时使用同一权限模式", async () => {
@@ -2779,7 +2809,7 @@ describe("结构化交接包", () => {
     const after = await captureCheckpoint(dir);
     expect(after?.dirtyHash).not.toBe(before?.dirtyHash);
     expect(await captureCheckpoint(mkdtempSync(join(tmpdir(), "vibe-nogit-")))).toBeNull();
-  });
+  }, 20_000);
 
   it("回合结束刷新存档（每 tab 一份最新），含 git 检查点", async () => {
     const { store, fake, flow, dir } = await repoTask();
@@ -2988,7 +3018,7 @@ describe("WP-127 任务看板与子代理协调", () => {
     await expect(board.claim("sub-b", { id: "B" })).rejects.toThrow(/src\/a\/b\.ts.*A/);
     await expect(board.claim("exec", { id: "C" })).rejects.toThrow("A（进行中");
     await expect(board.claim("sub-b", { id: "A" })).rejects.toThrow("已被 #");
-    expect((await board.list("exec")).progress).toBe("看板：完成 0/3，进行中 A（#2）");
+    expect((await board.list("exec")).progress).toBe("看板：完成 0/3，进行中 A（#4）");
   });
 
   it("create_agent 派发前必须带看板子任务标签；冲突时拒绝，通过后认领移交给子代理", async () => {
@@ -3017,7 +3047,7 @@ describe("WP-127 任务看板与子代理协调", () => {
       title: null,
       labels: { [SUBTASK_LABEL]: "A" },
     });
-    expect(store.taskBoard.get("ws", "A")).toMatchObject({ claimedBy: "sub-a", claimedTab: 2 });
+    expect(store.taskBoard.get("ws", "A")).toMatchObject({ claimedBy: "sub-a", claimedTab: 4 });
     sub("sub-b");
     await expect(board.guardCreate(request({ [SUBTASK_LABEL]: "B" }))).rejects.toThrow("重叠");
     // A sub-agent of a non-executor tab is not gated.
@@ -3525,7 +3555,7 @@ describe("WP-130 tab 新顺序与旧任务补 tab", () => {
     expect(fake.titles.map((title) => title.title)).toContain("#2 方案 · planner-model");
   });
 
-  it("第八轮之前的任务保持原编号，下一个回合只补缺的方案 tab，编号接着往后排", async () => {
+  it("第八轮之前登记的任务回合补缺并规范为固定流程编号", async () => {
     const { store, fake, flow } = await projectTask();
     configurePresets(store);
     // The round-7 layout: #1 主会话, then 探路, 执行, 复核, 验证.
@@ -3552,11 +3582,11 @@ describe("WP-130 tab 新顺序与旧任务补 tab", () => {
     await flow.provisionTabs("ws");
     expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.number, tab.role, tab.agentId])).toEqual([
       [1, "main", "agent-1"],
-      [2, "scout", "old-scout"],
-      [3, "worker", "old-worker"],
-      [4, "reviewer", "old-reviewer"],
-      [5, "verifier", "old-verifier"],
-      [6, "planner", "worker-1"],
+      [3, "scout", "old-scout"],
+      [4, "worker", "old-worker"],
+      [5, "reviewer", "old-reviewer"],
+      [6, "verifier", "old-verifier"],
+      [2, "planner", "worker-1"],
     ]);
     expect(fake.created).toHaveLength(1);
     // Nothing is missing any more: later turns create nothing.
@@ -4063,19 +4093,19 @@ describe("WP-130 复核修复：提示词编号占位", () => {
     expect(task.tabs.map((item) => `#${item.number} ${item.role}`)).toEqual([
       "#1 main",
       "#2 planner",
-      "#3 worker",
-      "#4 reviewer",
-      "#5 verifier",
+      "#4 worker",
+      "#5 reviewer",
+      "#6 verifier",
     ]);
     const main = store.prompts.resolve("task.role.main", { vars: roleVars(task.tabs) });
     expect(main).toContain("交给 #2 方案 出方案");
     expect(main).toContain("交给 探路（未启用）");
-    expect(main).toContain("直接在 #3 执行 发消息");
+    expect(main).toContain("直接在 #4 执行 发消息");
     expect(main).not.toContain("{{");
     // #1 群主的授权措辞。
     expect(main).toContain("执行只能由用户授权");
-    expect(main).toContain("用户确认后插件会通知 #3 执行");
-    expect(main).toContain("不要自己给 #3 执行 发执行指令");
+    expect(main).toContain("用户确认后插件会通知 #4 执行");
+    expect(main).toContain("不要自己给 #4 执行 发执行指令");
     expect(main).toContain("不能替用户确认方案或回答审批");
 
     const reviewer = (await tabs.injectGuide({
@@ -4091,7 +4121,7 @@ describe("WP-130 复核修复：提示词编号占位", () => {
       parentAgentId: tab("worker").agentId,
       labels: { [PARENT_AGENT_ID_LABEL]: tab("worker").agentId },
     } as never)) as { config: { systemPrompt?: string } };
-    expect(sub.config.systemPrompt).toContain("由 #3 执行 派发");
+    expect(sub.config.systemPrompt).toContain("由 #4 执行 派发");
     expect(sub.config.systemPrompt).not.toContain("{{");
   });
 });
@@ -4237,17 +4267,28 @@ describe("WP-131 #1 群聊", () => {
 
   it("钩子立即返回：慢转发不阻塞钩子，宿主确认接管后才转发，只转一次", async () => {
     const { group, fake, hook, tab } = await groupTask();
+    vi.useFakeTimers();
     let release!: () => void;
-    fake.setSendHook(() => new Promise<void>((resolve) => (release = resolve)));
+    let markSending!: () => void;
+    const sending = new Promise<void>((resolve) => {
+      markSending = resolve;
+    });
+    fake.setSendHook(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+          markSending();
+        }),
+    );
     const before = fake.sends.length;
     // The hook answers synchronously even though the delivery will be slow.
     const result = hook("@#2 写个方案");
     expect(result).toEqual({ handled: true, note: "正在转给 #2 方案。" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.advanceTimersByTimeAsync(20);
     // Nothing goes out before the host has recorded the takeover.
     expect(fake.sends.length).toBe(before);
     group.userPromptHandled({ agentId: "agent-1", messageId: "msg-1" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await sending;
     release();
     await group.settle();
     fake.setSendHook(null);
@@ -4262,8 +4303,14 @@ describe("WP-131 #1 群聊", () => {
 
   it("宿主没确认接管（钩子超时、消息已交给 #1）时不转发，#1 提示请重发", async () => {
     const { group, fake, hook, rows } = await groupTask({ handoffWaitMs: 30 });
+    vi.useFakeTimers();
     const before = fake.sends.length;
+    const beforeRows = rows().length;
     expect(hook("@#4 开始执行")?.handled).toBe(true);
+    await vi.advanceTimersByTimeAsync(29);
+    expect(fake.sends.length).toBe(before);
+    expect(rows()).toHaveLength(beforeRows);
+    await vi.advanceTimersByTimeAsync(1);
     await group.settle();
     expect(fake.sends.length).toBe(before);
     expect(rows().at(-1)!.data.text).toBe(
@@ -4442,6 +4489,7 @@ describe("WP-131 #1 群聊", () => {
   it("只有进度行原位替换；重要提示新增一行；同类同文 30 秒去重；同类连发合并成最新一条", async () => {
     let clock = 1_000_000;
     const context = await provisionedTask();
+    vi.useFakeTimers();
     const tabs = createTaskTabs({
       store: context.store,
       getPaseo: () => context.fake.paseo as never,
@@ -4489,7 +4537,13 @@ describe("WP-131 #1 群聊", () => {
         .slice(burst)
         .map((row) => row.data.text),
     ).toEqual(["第 1 轮"]);
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await vi.advanceTimersByTimeAsync(39);
+    expect(
+      rows()
+        .slice(burst)
+        .map((row) => row.data.text),
+    ).toEqual(["第 1 轮"]);
+    await vi.advanceTimersByTimeAsync(1);
     expect(
       rows()
         .slice(burst)
@@ -4581,11 +4635,11 @@ describe("WP-131 #1 群聊", () => {
     await board.claim("exec", { id: "A", assignee: "sub-a" });
     expect(reports.at(-1)).toEqual([
       "board:A",
-      "#2 执行看板：子任务 A 已认领（子代理 sub-a）\n改 A",
+      "#4 执行看板：子任务 A 已认领（子代理 sub-a）\n改 A",
     ]);
     await board.complete("sub-a", { id: "A", summary: "改好了", changedFiles: ["docs/x.md"] });
     expect(reports.at(-1)![0]).toBe("board:A");
-    expect(reports.at(-1)![1]).toContain("子任务 A 已完成，越界告警 · 查看 #2");
+    expect(reports.at(-1)![1]).toContain("子任务 A 已完成，越界告警 · 查看 #4");
     expect(reports.at(-1)![1]).toContain("docs/x.md");
   });
 
@@ -4658,5 +4712,225 @@ describe("WP-131 #1 群聊", () => {
     });
     expect(rendered).toContain("@#编号 点名 #4 执行");
     expect(outputDigest("```vibe-plan\n{}\n```\n方案已写好")).toEqual(["方案已写好"]);
+  });
+});
+
+describe("WP136 完整流程 tab 与懒创建", () => {
+  it("旧会话移到 #7 后推进编号，下一会话使用 #8 而不覆盖 #7", async () => {
+    const { store, fake, tabs } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    fake.addAgent({ id: "old-session" });
+    store.tasks.allocateTab("ws", {
+      agentId: "old-session",
+      number: 2,
+      role: "session",
+      provider: "codex",
+      model: "first",
+    });
+    expect(store.tasks.get("ws")!.nextTabNumber).toBe(3);
+    const roster = await tabs.tabsFor(store.tasks.get("ws")!, true);
+    expect(roster.find((tab) => tab.agentId === "old-session")?.number).toBe(7);
+    expect(store.tasks.get("ws")!.nextTabNumber).toBe(8);
+    fake.addAgent({ id: "new-session" });
+    expect(await tabs.ensureTab("new-session")).toMatchObject({ number: 8, role: "session" });
+    expect(store.tasks.get("ws")!.tabs.map((tab) => tab.number)).toEqual([1, 7, 8]);
+  });
+  it("已登记但名册为空的旧任务先登记主会话，后台补齐六角色且不发消息", async () => {
+    const { store, fake, tabs, flow } = setup();
+    fake.addAgent({ id: "legacy-main" });
+    store.tasks.create({ workspaceId: "ws", anchorAgentId: "legacy-main" });
+    expect(store.tasks.get("ws")!.tabs).toHaveLength(0);
+    await flow.provisionMissing();
+    expect(store.tasks.get("ws")!.tabs.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(fake.created).toHaveLength(5);
+    expect(fake.sends).toHaveLength(0);
+    expect((await tabs.tabsFor(store.tasks.get("ws")!, true))[0]).toMatchObject({
+      number: 1,
+      role: "main",
+      agentId: "legacy-main",
+      model: "first",
+    });
+  });
+  it("旧任务主会话登记失败时面板仍返回六角色，并保留主会话默认模型和锚点", async () => {
+    const { store, fake, flow } = setup();
+    store.tasks.create({ workspaceId: "ws", anchorAgentId: "missing-main" });
+    store.presets.create({
+      id: "main-default",
+      name: "默认主会话",
+      provider: "codex",
+      model: "chosen",
+    });
+    store.modelDefaults.setGlobal({ main: "main-default" });
+    const view = await flow.panel("ws");
+    expect(view.tabs.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(view.tabs[0]).toMatchObject({
+      role: "main",
+      agentId: "missing-main",
+      provider: "codex",
+      modelId: "chosen",
+      status: "未启动",
+    });
+    expect(view.tabs[3]).toMatchObject({ role: "worker", modelId: "chosen", status: "未启动" });
+    await flow.close();
+    expect(fake.created).toHaveLength(0);
+    expect(fake.sends).toHaveLength(0);
+  });
+  it("无预设且后台预建失败时仍列出六个固定编号 tab", async () => {
+    const { store, fake, tabs, flow } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    fake.failCreate("codex/first");
+    await flow.provisionTabs("ws");
+    const roster = await tabs.tabsFor(store.tasks.get("ws")!, true);
+    expect(roster.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(roster.slice(1).every((tab) => tab.agentId === "" && tab.status === "未启动")).toBe(
+      true,
+    );
+    expect(roster[3]).toMatchObject({
+      role: "worker",
+      provider: "codex",
+      model: "first",
+      source: "main-fallback",
+    });
+  });
+  it("只懒建目标角色，重复首消息准备不重复建，且用户原生消息直接送到该角色", async () => {
+    const { store, fake, tabs, flow } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    const created = await flow.ensureRoleTab({
+      workspaceId: "ws",
+      role: "worker",
+      provider: "codex/chosen",
+      thinkingOptionId: "low",
+    });
+    expect(await flow.ensureRoleTab({ workspaceId: "ws", role: "worker" })).toEqual(created);
+    expect(fake.created).toHaveLength(1);
+    expect(fake.created[0]).toMatchObject({
+      config: { provider: "codex/chosen", thinkingOptionId: "low" },
+      env: { VIBE_ROLE: "worker" },
+      labels: { [TASK_TAB_ROLE_LABEL]: "worker" },
+    });
+    expect(fake.sends).toHaveLength(0);
+    await fake.paseo.agents.ref(created.agentId).send("请执行这条任务");
+    expect(fake.sends.at(-1)).toMatchObject({ agentId: created.agentId, text: "请执行这条任务" });
+    expect(fake.sends.at(-1)?.options?.sourceAgentId).toBeUndefined();
+    expect(store.tasks.get("ws")!.tabs.find((tab) => tab.role === "worker")?.number).toBe(4);
+  });
+  it("显式不启用仍占位，启用后恢复固定编号且不改变其它角色编号", async () => {
+    const { store, fake, tabs, flow } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    store.tasks.setRoleSelections("ws", {
+      scout: { mode: "disabled" },
+      reviewer: { mode: "disabled" },
+    });
+    const before = await tabs.tabsFor(store.tasks.get("ws")!, true);
+    expect(before[2]).toMatchObject({ number: 3, role: "scout", status: "未启用" });
+    expect(before[4]).toMatchObject({ number: 5, role: "reviewer", status: "未启用" });
+    await expect(flow.ensureRoleTab({ workspaceId: "ws", role: "scout" })).rejects.toThrow(
+      "未启用",
+    );
+    await flow.ensureRoleTab({ workspaceId: "ws", role: "scout", enable: true });
+    const after = await tabs.tabsFor(store.tasks.get("ws")!, true);
+    expect(after[2]).toMatchObject({ number: 3, role: "scout", status: "空闲" });
+    expect(after.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+  it("后台恢复主动为旧任务补建流程 tab", async () => {
+    const { store, fake, tabs, flow } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    await flow.provisionMissing();
+    expect(store.tasks.get("ws")!.tabs.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(fake.sends).toHaveLength(0);
+  });
+  it("#1 点名尚未创建的 #4 时先建再按用户身份投递，「发给」也列出未启动角色", async () => {
+    const { store, fake, tabs, group } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    const targets = await group.targetsFor("ws", "main");
+    expect(targets.options).toHaveLength(5);
+    expect(targets.options.find((target) => target.number === 4)?.open).toBe(true);
+    expect((await group.select("ws", "main", 4)).selected).toBe(4);
+    expect(
+      group.userPrompt({
+        agentId: "main",
+        workspaceId: "ws",
+        messageId: "lazy",
+        text: "@#4 现在开始实现",
+      }),
+    ).toEqual({ handled: true, note: "正在转给 #4 执行。" });
+    group.userPromptHandled({ agentId: "main", messageId: "lazy" });
+    await group.settle();
+    const worker = store.tasks.get("ws")!.tabs.find((tab) => tab.role === "worker")!;
+    expect(worker.number).toBe(4);
+    expect(fake.created).toHaveLength(1);
+    expect(fake.sends).toEqual([{ agentId: worker.agentId, text: "现在开始实现", options: {} }]);
+    group.close();
+  });
+  it("后台预建抢先完成时，首消息的另一个 provider 选择安全替换空 agent", async () => {
+    const { store, fake, tabs, flow } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    await flow.provisionTabs("ws");
+    const old = store.tasks.get("ws")!.tabs.find((tab) => tab.role === "worker")!;
+    const next = await flow.ensureRoleTab({
+      workspaceId: "ws",
+      role: "worker",
+      provider: "claude/chosen",
+    });
+    expect(next.agentId).not.toBe(old.agentId);
+    expect(fake.agents.get(old.agentId)?.archivedAt).toBeTruthy();
+    expect(store.tasks.get("ws")!.tabs.filter((tab) => tab.role === "worker")).toMatchObject([
+      { agentId: next.agentId, number: 4, provider: "claude", model: "chosen" },
+    ]);
+    await fake.paseo.agents.ref(next.agentId).send("用户首条消息");
+    await expect(
+      flow.ensureRoleTab({ workspaceId: "ws", role: "worker", provider: "codex/another" }),
+    ).rejects.toThrow("已有对话");
+    expect(fake.sends.at(-1)?.agentId).toBe(next.agentId);
+  });
+  it("无可用默认预设时可用用户在占位composer选择的完整模型启动", async () => {
+    const { store, fake, tabs, flow } = setup();
+    fake.addAgent({ id: "main", model: null });
+    await tabs.ensureTab("main");
+    store.tasks.setRoleSelections("ws", { worker: { mode: "preset", presetId: "missing" } });
+    const next = await flow.ensureRoleTab({
+      workspaceId: "ws",
+      role: "worker",
+      provider: "codex/chosen",
+    });
+    expect(fake.agents.get(next.agentId)?.model).toBe("chosen");
+    expect(store.tasks.get("ws")!.tabs.find((tab) => tab.role === "worker")?.number).toBe(4);
+  });
+  it("runtime ready之后后台补建旧任务，不阻塞初始化", async () => {
+    const { store, fake, tabs, db } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    vi.useFakeTimers();
+    let ready!: () => void;
+    const promptsReady = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const server = { before: () => () => {}, on: () => () => {}, handle: () => {} };
+    const runtime = registerTaskRuntime(server as never, {
+      db,
+      store,
+      getPaseo: () => fake.paseo as never,
+      onPaseo: () => {},
+      promptsReady,
+    });
+    try {
+      expect(fake.created).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fake.created).toHaveLength(0);
+      ready();
+      await vi.advanceTimersByTimeAsync(0);
+      await runtime.flow.provisionTabs("ws");
+      expect(fake.created).toHaveLength(5);
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
   });
 });

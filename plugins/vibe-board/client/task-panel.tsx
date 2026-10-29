@@ -205,7 +205,7 @@ function TaskFlowPanelBody({
 
       <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>流程 tab</Text>
       {data.tabs.map((tab) => (
-        <TabRow key={tab.agentId} tab={tab} openAgent={openAgent} />
+        <TabRow key={tab.agentId || tab.role} tab={tab} openAgent={openAgent} />
       ))}
       {!openAgent ? (
         <Muted>当前宿主不支持从面板切换 tab；请使用顶部 tab 打开。</Muted>
@@ -321,7 +321,7 @@ function TabRow({
       accessibilityRole="button"
       accessibilityLabel={`#${tab.number} ${tab.roleLabel} ${tab.model} ${tab.status}`}
       testID={`task-flow-tab-${tab.number}`}
-      disabled={!openAgent}
+      disabled={!openAgent || !tab.agentId}
       onPress={open}
       style={{
         flexDirection: "row",

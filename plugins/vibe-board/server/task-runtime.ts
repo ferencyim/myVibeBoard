@@ -17,6 +17,7 @@ import {
   groupTargetsRpc,
   taskPanelRpc,
   taskTabCommandRpc,
+  taskTabEnsureRpc,
 } from "../shared/task-tabs";
 
 const AGENT_CALLER_ERROR = "agent 消息不能授权任务命令；请由用户在原生输入框发送斜杠命令或「通过」";
@@ -49,6 +50,7 @@ export function registerTaskRuntime(
     tabs,
     getPaseo: options.getPaseo,
     log,
+    ensureRoleTab: (input) => flow.ensureRoleTab(input),
   });
   const flow = createTaskFlow({
     db: options.db,
@@ -197,6 +199,11 @@ export function registerTaskRuntime(
   } catch (error) {
     log("宿主不支持 agent.user_prompt 钩子，#1 不能用 @#n 直接转给其它 tab", error);
   }
+  server.handle(taskTabEnsureRpc, async (input, context) => {
+    options.onPaseo(context.paseo);
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    return flow.ensureRoleTab(input);
+  });
   server.handle(groupTargetsRpc, async (input, context) => {
     options.onPaseo(context.paseo);
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
@@ -280,7 +287,8 @@ export function registerTaskRuntime(
   const recover = () =>
     void Promise.resolve(options.promptsReady)
       .then(() => {
-        return closed ? undefined : flow.recoverReviews();
+        if (closed) return;
+        return Promise.all([flow.recoverReviews(), flow.provisionMissing()]);
       })
       .catch((error) => log("方案审阅恢复失败", error));
   const startRecovery = setTimeout(recover, 5_000);

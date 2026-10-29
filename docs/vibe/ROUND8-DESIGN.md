@@ -14,8 +14,8 @@
 | #6 验证   | verifier      | 测试与证据，验证作废规则不变                                               |
 
 - 原「方案复核」角色（plan_reviewer）并入 #2：#2 的模型设置从单个模型改为模型列表（至少 1 个）。旧设置迁移为「planner 模型 + plan_reviewer 模型（若启用）」。
-- 编号在任务内固定。第八轮之前创建的任务保持原编号，只补缺的角色 tab，编号接着往后排。
-- 新任务（含维护任务）默认建齐 #1–#6，建 tab 不发送提示词。角色在任务、项目、全局均未配置时，沿用任务主会话 tab 的 provider/model/thinking，权限仍按该角色规则，来源显示「沿用 #1 模型」。仅用户显式将探路、复核设为「不启用」才省略对应 tab。
+- 编号在任务内固定为 #1–#6；WP-136 读取已登记旧任务时归一化角色编号，额外会话从 #7 起，避免缺省角色与旧编号冲突。
+- 新任务（含维护任务）默认建齐 #1–#6，建 tab 不发送提示词。角色在任务、项目、全局均未配置时，沿用任务主会话 tab 的 provider/model/thinking，权限仍按该角色规则，来源显示「沿用 #1 模型」。显式将探路、复核设为「不启用」时仍保留置灰占位。界面完整与首消息懒创建规则见 [第九轮设计](ROUND9-DESIGN.md#完整流程-tab)。
 - 回退贯穿方案模型列表、确认快照、执行准入、复核和验证；未配置方案模型列表时，仅以 #1 模型写作，不创建审阅者。流程面板、vibe_tabs 和主会话 roster 采用同一解析结果，不能将未配置误报为未启用。
 
 ## 2. #1 群聊
@@ -98,7 +98,7 @@ vibe_resources 对任一任务 tab 及其子代理提供一行简报和紧张原
 ## 7. 维护任务与旧任务
 
 - vibe-maintain 创建维护任务时就按第 1 节建齐 tab。
-- 已登记的旧任务在下一个回合补齐缺的 tab。
+- 已登记的旧任务在 daemon ready 后后台、打开 workspace 时及下一个回合补齐缺的 tab；后台失败仍显示占位。
 - 未登记的旧会话不处理。
 
 ## 8. 工作包
@@ -114,7 +114,7 @@ vibe_resources 对任一任务 tab 及其子代理提供一行简报和紧张原
 
 没有改 `packages/`。
 
-- **角色与编号**：tab 角色新增 `planner`（标签「方案」）；预建顺序 `FLOW_ROLE_ORDER` 为方案、探路、执行、复核、验证，不启用的可选角色跳过、编号顺延。`#1` 注入 `task.role.main`（群主），`#2` 注入 `task.role.planner` 加 `task.plan_format`。旧任务在活动阶段的任一回合发现缺角色 tab（`needsProvision`，按快照或当前默认判断）就补建，编号接在已有 tab 之后。旧任务的 `#1` 仍是创建时注入的规划规则，它输出的方案照旧保存。
+- **角色与编号**：tab 角色新增 `planner`（标签「方案」）；预建顺序 `FLOW_ROLE_ORDER` 为方案、探路、执行、复核、验证，不启用的可选角色跳过、编号顺延。`#1` 注入 `task.role.main`（群主），`#2` 注入 `task.role.planner` 加 `task.plan_format`。WP-136 将旧任务补建触发扩展至 ready 后后台及打开 workspace，并固定角色编号；未创建角色由宿主占位兜底，详见第九轮设计。旧任务的 `#1` 仍是创建时注入的规划规则，它输出的方案照旧保存。
 - **模型列表**：`ModelDefaults.planners` 是有序 preset 列表；旧键 `planner`/`plan_reviewer` 由 core 迁移 19 改写为 `planners: [planner, plan_reviewer?]`，`cleanDefaults` 对读入的旧形状做同样转换（标 `COMPAT(planner-list)`）。只设了 `plan_reviewer`、没设 `planner` 的项目层无法表达成列表，迁移后沿用全局；但项目层显式 `plan_reviewer: null`（关闭审阅）迁移为只含全局 planner 的单元素列表，审阅保持关闭（全局也没有 planner 时只删旧键）。项目层列表整体覆盖全局列表；任务层 `planner` 选择只替换写作模型，`plan_reviewer: disabled` 关闭审阅。确认快照保持原形状（`planner` 为第 1 个，`plan_reviewer` 为第 2 个或 null）。
 - **互审编排**（`vibe-board/server/tabs/plan-review.ts`）：`#2` 回合结束且有完整方案时，列表长度为 1 直接保存方案；否则开一个审阅周期，状态存 `task.control.planReview`（`planningControl` 保留此键），初稿和每条意见存 `plan_review` 沉淀（sourceKey `review:<cycle>:draft|<n>`）。审阅者是 `parent=#2` 的原生子代理，带 `vibe.plan_review` 标签，注入 `task.role.plan_reviewer`；按顺序一个接一个，每个拿到初稿和前面所有意见。启动失败或回合失败记为失败并跳过；全部失败时沿用初稿；否则把全部意见发给 `#2`，它的下一个方案即定稿，并在 `#2` 与 `#1` 追加「已定稿」状态。审阅期间初稿不保存为任务方案（阶段仍是规划）；审阅中 `#2` 又出新稿时周期不重开，后续审阅者读新稿。用户在审阅中 `/执行`（或在执行 tab 直接授权）会中止周期、停止审阅者并确认当前方案；`/停止任务` 同样中止。
 - **只审一次**：一个确认轮次（`state.round` = 任务 `confirmedAt`）只自动审第一份完整方案；修订稿和之后的方案直接保存，面板标「修订稿（未再审阅）」，之后再改会提示可 `/重新审阅`。`/重新审阅` 是 RPC 命令（拒绝 agent 调用方），只接受主会话或方案 tab（面板按钮以 #1 身份发），对方案 tab 最新的完整方案开一个 `manual` 周期。

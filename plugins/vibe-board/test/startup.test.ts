@@ -5,11 +5,21 @@ const state = vi.hoisted(() => ({
   initialize: vi.fn(),
   close: vi.fn(),
   closeTasks: vi.fn(),
+  rpc: {},
+  respond: vi.fn(() => "response"),
 }));
-vi.mock("../server/service", () => ({
-  openBoardRuntime: () => ({ db: {}, store: {}, close: state.close }),
-  createBoardService: () => ({}),
-}));
+vi.mock("../server/service", async () => {
+  const { openBoardRuntime } =
+    await vi.importActual<typeof import("../server/service")>("../server/service");
+  return {
+    openBoardRuntime: () => {
+      const runtime = openBoardRuntime({ path: ":memory:" });
+      state.close.mockImplementation(() => runtime.close());
+      return { ...runtime, close: state.close };
+    },
+    createBoardService: () => ({}),
+  };
+});
 vi.mock("../server/task-runtime", () => ({
   registerTaskRuntime: () => ({
     flow: { registerPrompts: state.initialize },
@@ -17,11 +27,14 @@ vi.mock("../server/task-runtime", () => ({
   }),
 }));
 vi.mock("../server/rpc", () => ({
-  registerBoardRpcs: (server: PluginServerContext) => server.handle({} as never, () => "response"),
+  registerBoardRpcs: (server: PluginServerContext) => server.handle(state.rpc as never, state.respond),
 }));
 vi.mock("../server/evidence", () => ({ createTaskEvidenceReader: () => ({}) }));
 vi.mock("../server/resource-tool", () => ({ registerResourceTool: vi.fn() }));
 vi.mock("../server/tabs/board-tools", () => ({ registerBoardTools: vi.fn() }));
+vi.mock("../server/project-agent/completion", () => ({
+  createProjectCompletion: () => ({ close: async () => {} }),
+}));
 import contribute from "../index.server";
 
 afterEach(() => {
@@ -31,7 +44,7 @@ afterEach(() => {
 
 it("reports ready without waiting for background recovery and protects an early RPC", async () => {
   vi.useFakeTimers();
-  let finish!: () => void;
+  let finish: (() => void) | undefined;
   state.initialize.mockImplementation(
     () =>
       new Promise<void>((resolve) => {
@@ -45,24 +58,34 @@ it("reports ready without waiting for background recovery and protects an early 
       read: async () => ({ status: "ready", values: {} }),
       subscribe: () => () => {},
     }),
-    handle: (_rpc: unknown, handler: () => Promise<unknown>) => handlers.push(handler),
+    handle: (rpc: unknown, handler: () => Promise<unknown>) => {
+      if (rpc === state.rpc) handlers.push(handler);
+    },
+    on: () => () => {},
     registerAgentTool: vi.fn(),
   } as unknown as PluginServerContext;
   const close = contribute(server);
-  expect(typeof close).toBe("function");
-  await Promise.resolve();
-  expect(state.initialize).not.toHaveBeenCalled();
-  let answered = false;
-  const request = handlers[0]!().then((value) => {
-    answered = true;
-    return value;
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(state.initialize).toHaveBeenCalledOnce();
-  expect(answered).toBe(false);
-  finish();
-  await expect(request).resolves.toBe("response");
-  await close();
+  try {
+    expect(typeof close).toBe("function");
+    await Promise.resolve();
+    expect(state.initialize).not.toHaveBeenCalled();
+    expect(handlers).toHaveLength(1);
+    let answered = false;
+    const request = handlers[0]!().then((value) => {
+      answered = true;
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.initialize).toHaveBeenCalledOnce();
+    expect(answered).toBe(false);
+    expect(state.respond).not.toHaveBeenCalled();
+    finish!();
+    await expect(request).resolves.toBe("response");
+    expect(state.respond).toHaveBeenCalledOnce();
+  } finally {
+    finish?.();
+    await close();
+  }
   expect(state.closeTasks).toHaveBeenCalledOnce();
   expect(state.close).toHaveBeenCalledOnce();
 });

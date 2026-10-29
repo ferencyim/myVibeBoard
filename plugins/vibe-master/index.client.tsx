@@ -22,6 +22,7 @@ export default function contribute(client: PluginClientContext) {
     Component: PromptLibrarySidebarItem,
   });
   client.addSettingsScreen({
+    order: -30,
     id: "preferences",
     title: "总 agent",
     icon: "Bot",

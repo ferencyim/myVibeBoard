@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createProjectAgents } from "../server/project-agent/service";
 import { registerProjectAgents } from "../server/project-agent/register";
+import { UNRESOLVED_TAB_MODEL } from "../server/vibe/contract";
 
 function fixture() {
   const agents = new Map<
@@ -82,6 +83,7 @@ function fixture() {
     },
     providers: {
       listAvailable: async () => ({ providers: [{ provider: "codex", available: true }] }),
+      listModels: vi.fn(async () => ({ models: [{ id: "default-model", isDefault: true }] })),
     },
   };
   const presets = new Map<string, object>();
@@ -140,6 +142,7 @@ function fixture() {
     build,
     taskRows,
     tabs,
+    providers: api.providers,
   };
 }
 
@@ -188,7 +191,47 @@ describe("项目 agent", () => {
     const f = fixture();
     f.main.tabs[0].model = "";
     await f.service.open("p");
-    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex");
+    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/default-model");
+    expect(f.providers.listModels).toHaveBeenCalledWith("codex", { cwd: "/repo" });
+  });
+  it("没有历史任务仍解析目录默认模型，并优先默认标记", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.listModels.mockResolvedValue({
+      models: [
+        { id: "other", isDefault: false },
+        { id: "chosen", isDefault: true },
+      ],
+    });
+    await f.service.open("p");
+    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/chosen");
+  });
+  it("最近任务尚未解析模型时仍查询目录，目录失败以中文引导设置", async () => {
+    const f = fixture();
+    f.main.tabs[0].model = UNRESOLVED_TAB_MODEL;
+    f.providers.listModels.mockRejectedValueOnce(new Error("catalog unavailable"));
+    await expect(f.service.open("p")).rejects.toThrow("任务默认模型");
+    expect(f.createAgent).not.toHaveBeenCalled();
+    await f.service.open("p");
+    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/default-model");
+  });
+  it("没有可用 provider 时引导设置且不创建项目 agent", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.listAvailable = async () => ({ providers: [] });
+    await expect(f.service.open("p")).rejects.toThrow("任务默认模型");
+    expect(f.providers.listModels).not.toHaveBeenCalled();
+    expect(f.createAgent).not.toHaveBeenCalled();
+  });
+  it("目录未标默认时采用目录首项，缺少模型则引导设置且不创建", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.listModels.mockResolvedValue({ models: [] });
+    await expect(f.service.open("p")).rejects.toThrow("任务默认模型");
+    expect(f.createAgent).not.toHaveBeenCalled();
+    f.providers.listModels.mockResolvedValue({ models: [{ id: "first", isDefault: false }] });
+    await f.service.open("p");
+    expect(f.createAgent.mock.calls[0][0].config.provider).toBe("codex/first");
   });
   it("旧任务工作区失效不阻断项目入口和正常任务路由", async () => {
     const f = fixture();

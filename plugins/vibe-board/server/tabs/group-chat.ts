@@ -16,11 +16,12 @@ import {
 } from "../vibe/contract";
 import type { GroupTargets } from "../../shared/task-tabs";
 import { parseSections } from "./handoff";
-import type { TaskTabs, TaskTabView } from "./service";
+import { FLOW_ROLE_ORDER, type FlowRole, type TaskTabs, type TaskTabView } from "./service";
 
 /** `@#n` / `＠＃n` (full-width digits too, at most 3 digits) at the start of a message; the
  *  punctuation and spaces after it are dropped. */
-const MENTION = /^\s*[@＠]\s*[#＃]\s*([0-9０-９]{1,3})(?![0-9０-９])[\s。，、,.．:：;；!！?？~～\-—]*/;
+const MENTION =
+  /^\s*[@＠]\s*[#＃]\s*([0-9０-９]{1,3})(?![0-9０-９])[\s。，、,.．:：;；!！?？~～\-—]*/;
 /** A picked target applies to the next message only; an old pick must not authorize anything. */
 const TARGET_TTL_MS = 3 * 60_000;
 /** How long a forward waits for the host to confirm it recorded the takeover. */
@@ -51,7 +52,10 @@ export function outputDigest(text: string, maxLines = 3, maxChars = 120): string
       continue;
     }
     if (fenced) continue;
-    const line = raw.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+•]\s+|\d+[.、)]\s+)/, "").replace(/\*\*/g, "").trim();
+    const line = raw
+      .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+•]\s+|\d+[.、)]\s+)/, "")
+      .replace(/\*\*/g, "")
+      .trim();
     if (!line) continue;
     if (/^(未决问题|下一步)\s*[:：]?$/.test(line)) break;
     lines.push(line.length > maxChars ? line.slice(0, maxChars) + "…" : line);
@@ -75,6 +79,7 @@ export function createGroupChat(options: {
   store: VibeStore;
   tabs: TaskTabs;
   getPaseo(): PaseoApi | null;
+  ensureRoleTab?: (input: { workspaceId: string; role: FlowRole }) => Promise<{ agentId: string }>;
   now?: () => number;
   log?: (message: string, error?: unknown) => void;
   handoffWaitMs?: number;
@@ -82,7 +87,8 @@ export function createGroupChat(options: {
 }) {
   const { store, tabs } = options;
   const now = options.now ?? (() => Date.now());
-  const log = options.log ?? ((message, error) => console.error("[vibe-board]", message, error ?? ""));
+  const log =
+    options.log ?? ((message, error) => console.error("[vibe-board]", message, error ?? ""));
   const handoffWaitMs = options.handoffWaitMs ?? HANDOFF_WAIT_MS;
   const reportIntervalMs = options.reportIntervalMs ?? REPORT_INTERVAL_MS;
   /** Picked「发给」target per #1 agent. In memory: a plugin restart falls back to 群主. */
@@ -113,7 +119,7 @@ export function createGroupChat(options: {
     return task.tabs.find((tab) => tab.agentId === task.anchorAgentId)?.number ?? 1;
   }
   function open(view: TaskTabView): boolean {
-    return !CLOSED.has(view.status);
+    return !CLOSED.has(view.status) && view.status !== "未启用";
   }
   function label(view: TaskTabView): string {
     return `#${view.number} ${view.roleLabel} · ${view.model}`;
@@ -139,7 +145,12 @@ export function createGroupChat(options: {
       selected: currentTarget(agentId)?.number ?? null,
       options: views
         .filter((view) => view.number !== self)
-        .map((view) => ({ number: view.number, label: label(view), role: view.role, open: open(view) })),
+        .map((view) => ({
+          number: view.number,
+          label: label(view),
+          role: view.role,
+          open: open(view),
+        })),
     };
   }
   async function select(workspaceId: string, agentId: string, number: number | null) {
@@ -147,7 +158,7 @@ export function createGroupChat(options: {
     if (!task) throw new Error("只有任务的主会话可以选择发送对象");
     if (number === null || number === selfNumber(task)) targets.delete(agentId);
     else {
-      if (!task.tabs.some((tab) => tab.number === number))
+      if (!(await tabs.tabsFor(task, true)).some((tab) => tab.number === number))
         throw new Error(`任务没有 #${number}`);
       targets.set(agentId, { number, at: now() });
     }
@@ -187,7 +198,13 @@ export function createGroupChat(options: {
       targets.delete(request.agentId);
       return undefined;
     }
-    const others = task.tabs.filter((tab) => tab.number !== self);
+    const others: Pick<TaskTab, "number" | "role">[] = task.tabs.filter(
+      (tab) => tab.number !== self,
+    );
+    for (const role of FLOW_ROLE_ORDER) {
+      if (!others.some((tab) => tab.role === role))
+        others.push({ number: FLOW_ROLE_ORDER.indexOf(role) + 2, role });
+    }
     const tab = others.find((candidate) => candidate.number === number);
     if (!tab) {
       const available = others.map(tabName).join("、");
@@ -238,8 +255,10 @@ export function createGroupChat(options: {
       const task = store.tasks.get(job.workspaceId);
       if (!task) throw new Error("任务已不存在");
       const views = await tabs.tabsFor(task, true);
-      const target = views.find((view) => view.number === job.number);
-      if (!target || !open(target)) throw new Error(`${job.name}${target ? target.status : "不存在"}`);
+      let target = views.find((view) => view.number === job.number);
+      if (!target || !open(target))
+        throw new Error(`${job.name}${target ? target.status : "不存在"}`);
+      target = await startTarget(job.workspaceId, target);
       const anchor = views.find((view) => view.agentId === job.anchorId);
       // Mode ids belong to a provider: only pass one on to the same kind of agent.
       const modeApplies = !!job.sessionMode && anchor?.provider === target.provider;
@@ -268,6 +287,13 @@ export function createGroupChat(options: {
     }
   }
 
+  async function startTarget(workspaceId: string, target: TaskTabView): Promise<TaskTabView> {
+    if (target.agentId) return target;
+    const role = FLOW_ROLE_ORDER.find((candidate) => candidate === target.role);
+    if (!role || !options.ensureRoleTab) throw new Error("当前宿主暂不支持启动未创建的流程 tab");
+    const created = await options.ensureRoleTab({ workspaceId, role });
+    return { ...target, agentId: created.agentId };
+  }
   async function writeRow(anchor: string, key: string, text: string, mode: ReportMode) {
     const slot = anchor + "\0" + key;
     const at = now();
@@ -294,7 +320,12 @@ export function createGroupChat(options: {
 
   /** One row in #1. The same text of the same kind within 30 seconds is dropped; `append` rows of
    *  one kind closer than the interval are coalesced so a busy tab cannot flood #1. */
-  async function report(workspaceId: string, key: string, text: string, mode: ReportMode = "append") {
+  async function report(
+    workspaceId: string,
+    key: string,
+    text: string,
+    mode: ReportMode = "append",
+  ) {
     const anchor = store.tasks.get(workspaceId)?.anchorAgentId;
     if (!anchor) return;
     const slot = anchor + "\0" + key;
@@ -312,7 +343,7 @@ export function createGroupChat(options: {
           pending.delete(slot);
           if (queued) void writeRow(anchor, key, queued.text, mode);
         }, wait);
-          pending.set(slot, { text, timer });
+        pending.set(slot, { text, timer });
         return;
       }
     }
@@ -372,7 +403,9 @@ export function createGroupChat(options: {
       sub = true;
     }
     if (!tab) return;
-    const who = sub ? `${tabName(tab)} 的子代理${agent.title ? `「${agent.title}」` : ""}` : tabName(tab);
+    const who = sub
+      ? `${tabName(tab)} 的子代理${agent.title ? `「${agent.title}」` : ""}`
+      : tabName(tab);
     await report(
       task.workspaceId,
       "perm:" + agent.id,
@@ -389,7 +422,12 @@ export function createGroupChat(options: {
     phases.set(workspaceId, task.phase);
     if (previous === task.phase) return;
     const from = previous ? TASK_PHASE_LABELS[previous] + " → " : "";
-    await report(workspaceId, "phase", `任务阶段：${from}${TASK_PHASE_LABELS[task.phase]}`, "progress");
+    await report(
+      workspaceId,
+      "phase",
+      `任务阶段：${from}${TASK_PHASE_LABELS[task.phase]}`,
+      "progress",
+    );
   }
 
   return {

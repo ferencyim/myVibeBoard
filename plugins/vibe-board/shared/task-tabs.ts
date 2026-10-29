@@ -23,7 +23,7 @@ export const taskStatusDataSchema = z.object({ text: z.string() });
 
 export const TaskTabViewSchema = z.object({
   number: z.number().int().positive(),
-  agentId: z.string().min(1),
+  agentId: z.string(),
   role: TaskTabRoleSchema,
   roleLabel: z.string(),
   provider: z.string(),
@@ -31,6 +31,9 @@ export const TaskTabViewSchema = z.object({
   status: z.string(),
   title: z.string().nullable(),
   busy: z.boolean(),
+  thinking: z.string().optional(),
+  modelId: z.string().optional(),
+  source: z.string().optional(),
 });
 export type TaskTabViewData = z.infer<typeof TaskTabViewSchema>;
 
@@ -122,4 +125,16 @@ export const groupSelectRpc = defineRpc({
     number: z.number().int().positive().nullable(),
   }),
   output: GroupTargetsSchema,
+});
+
+export const taskTabEnsureRpc = defineRpc({
+  name: "vibe.task.tabs.ensure",
+  input: z.object({
+    workspaceId: z.string().min(1),
+    role: z.enum(["planner", "scout", "worker", "reviewer", "verifier"]),
+    enable: z.boolean().optional(),
+    provider: z.string().regex(/^[^/]+\/.+$/, "请选择完整的 provider/model 模型").optional(),
+    thinkingOptionId: z.string().optional(),
+  }),
+  output: z.object({ agentId: z.string().min(1) }),
 });

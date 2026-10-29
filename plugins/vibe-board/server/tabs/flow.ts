@@ -1,12 +1,12 @@
 import { PROJECT_COMPLETION_PROMPT } from "../project-agent/completion-prompt";
 import { PROJECT_AGENT_PROMPT } from "../project-agent/prompts";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { PaseoAgent, PaseoApi, PaseoAgentHandle } from "@getpaseo/client";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import {
   TaskRoleSnapshotSchema,
+  mainFallbackSnapshot,
   TASK_PHASE_LABELS,
   TASK_TAB_PRESET_LABEL,
   TASK_TAB_ROLE_LABEL,
@@ -63,6 +63,7 @@ import {
   FLOW_ROLE_ORDER,
   HANDOFF_PATTERN,
   roleTabPreset,
+  roleTabDisabled,
   roleVars,
   tabTitle,
   type FlowRole,
@@ -154,9 +155,9 @@ function sourceFor(tab: TaskTab, page: TimelinePage, entry: TimelineEntry): Task
 
 const PREBUILT_ROLES = FLOW_ROLE_ORDER;
 type PrebuiltRole = FlowRole;
-/** Phases in which a task still runs and may need its role tabs; a paused, finished or failed
- *  task is never given new agents. */
+/** Nonterminal tasks keep their complete flow available, including while paused. */
 const PROVISION_PHASES = new Set<TaskPhase>([
+  "paused",
   "planning",
   "awaiting_confirmation",
   "queued",
@@ -418,11 +419,18 @@ export function createTaskFlow(options: {
   }
   async function rolesFor(task: Task, _tab: TaskTab): Promise<TaskRoleSnapshot> {
     const { projectId } = await projectFor(task.workspaceId);
-    return store.modelDefaults.resolveTask(
+    const resolved = store.modelDefaults.resolveTask(
       task.roleSelections ?? {},
       projectId,
       task.tabs.find((candidate) => candidate.role === "main"),
     );
+    const main = task.tabs.find((candidate) => candidate.role === "main");
+    const enabled = task.control?.enabledRoles;
+    if (main && Array.isArray(enabled)) {
+      for (const role of ["scout", "reviewer"] as const)
+        if (enabled.includes(role) && !resolved[role]) resolved[role] = mainFallbackSnapshot(main);
+    }
+    return resolved;
   }
   async function execute(input: {
     workspaceId: string;
@@ -554,7 +562,12 @@ export function createTaskFlow(options: {
   }
   async function provisionTabsNow(workspaceId: string) {
     let task = store.tasks.get(workspaceId);
-    if (!task || task.tabs.length === 0 || !PROVISION_PHASES.has(task.phase)) return;
+    if (!task || !PROVISION_PHASES.has(task.phase)) return;
+    if (!task.tabs.some((tab) => tab.role === "main")) {
+      const main = await tabs.ensureTab(task.anchorAgentId, { role: "main" });
+      if (!main) throw new Error("旧任务主会话尚不可用，暂缓流程 tab 补建");
+      task = requireTask(workspaceId);
+    }
     let placement;
     try {
       placement = await tabs.workspace(workspaceId);
@@ -563,7 +576,6 @@ export function createTaskFlow(options: {
       return;
     }
     if (placement.current()?.archivingAt) return;
-    const projectId = placement.projectId;
     for (const role of PREBUILT_ROLES) {
       task = store.tasks.get(workspaceId);
       if (!task || !PROVISION_PHASES.has(task.phase)) return;
@@ -572,6 +584,7 @@ export function createTaskFlow(options: {
         orphanTabs.delete(key);
         continue;
       }
+      if (roleTabDisabled(store, role, { task, projectId: placement.projectId })) continue;
       // A tab created earlier whose registration failed: register it instead of creating
       // another agent; if it still cannot be registered, archive it so it does not linger.
       const orphan = orphanTabs.get(key);
@@ -584,42 +597,149 @@ export function createTaskFlow(options: {
           .catch((error) => log("未登记的预建 " + role + " tab 归档失败", error));
         continue;
       }
-      const preset = roleTabPreset(store, role, { task, projectId }, (error) =>
-        log("流程 " + role + " tab 的默认模型不可用，跳过预建", error),
-      );
-      if (!preset) continue;
-      const { snapshot, model } = preset;
-      const modeId = taskRoleModeId(role, model.provider, model.permissionMode);
-      let agentId: string;
       try {
-        const handle = await paseo()
-          .workspaces.ref(workspaceId)
-          .agents.create({
-            config: {
-              provider: `${model.provider}/${model.model}`,
-              ...(modeId ? { modeId } : {}),
-              ...(model.thinking && model.thinking !== "default"
-                ? { thinkingOptionId: model.thinking }
-                : {}),
-              ...(snapshot.instructions ? { systemPrompt: snapshot.instructions } : {}),
-            },
-            env: {
-              VIBE_ROLE: role,
-              VIBE_WORKSPACE_ID: workspaceId,
-              ...(snapshot.runtimeEnv ? { VIBE_RUNTIME_ENV: snapshot.runtimeEnv } : {}),
-            },
-            labels: {
-              [TASK_TAB_ROLE_LABEL]: role,
-              [TASK_TAB_PRESET_LABEL]: snapshot.presetId,
-            },
-          });
-        agentId = handle.id;
+        await ensureRoleTabNow({ workspaceId, role });
       } catch (error) {
         log("预建 " + role + " tab 失败", error);
-        continue;
       }
-      if (!(await registerRoleTab(agentId, role, snapshot.presetId)))
-        orphanTabs.set(key, { agentId, presetId: snapshot.presetId });
+    }
+  }
+  interface EnsureRoleInput {
+    workspaceId: string;
+    role: FlowRole;
+    enable?: boolean;
+    provider?: string;
+    thinkingOptionId?: string;
+  }
+  function ensureRoleTab(input: EnsureRoleInput): Promise<{ agentId: string }> {
+    return queue(input.workspaceId, () => ensureRoleTabNow(input));
+  }
+  async function ensureRoleTabNow(input: EnsureRoleInput): Promise<{ agentId: string }> {
+    const task = requireTask(input.workspaceId);
+    const existing = task.tabs.find((tab) => tab.role === input.role);
+    if (existing && (!input.provider || input.provider.split("/")[0] === existing.provider))
+      return { agentId: existing.agentId };
+    if (existing) {
+      const handle = paseo().agents.ref(existing.agentId);
+      await handle.refresh();
+      const current = handle.current();
+      const history = await handle.timeline.refetch({ direction: "tail", limit: 1 });
+      if (current?.activeTurn || history.entries.length)
+        throw new Error("该 tab 已有对话，无法自动更换 agent 类型；请先在该 tab 切换模型后再发送");
+    }
+    const key = input.workspaceId + ":" + input.role;
+    const orphan = orphanTabs.get(key);
+    if (orphan) {
+      if (!(await registerRoleTab(orphan.agentId, input.role, orphan.presetId)))
+        throw new Error("流程 tab 登记失败，请重试");
+      orphanTabs.delete(key);
+      return { agentId: orphan.agentId };
+    }
+    const placement = await tabs.workspace(input.workspaceId);
+    const { snapshot, model } = resolveEnsureModel(task, input, placement.projectId);
+    const modeId = taskRoleModeId(input.role, model.provider, model.permissionMode);
+    const handle = await paseo()
+      .workspaces.ref(input.workspaceId)
+      .agents.create({
+        config: {
+          provider: model.provider + "/" + model.model,
+          ...(modeId ? { modeId } : {}),
+          ...(model.thinking && model.thinking !== "default"
+            ? { thinkingOptionId: model.thinking }
+            : {}),
+          ...(snapshot.instructions ? { systemPrompt: snapshot.instructions } : {}),
+        },
+        env: {
+          VIBE_ROLE: input.role,
+          VIBE_WORKSPACE_ID: input.workspaceId,
+          ...(snapshot.runtimeEnv ? { VIBE_RUNTIME_ENV: snapshot.runtimeEnv } : {}),
+        },
+        labels: { [TASK_TAB_ROLE_LABEL]: input.role, [TASK_TAB_PRESET_LABEL]: snapshot.presetId },
+      });
+    if (existing) {
+      store.tasks.updateTab(input.workspaceId, existing.agentId, {
+        replacementAgentId: handle.id,
+        provider: model.provider,
+        model: model.model,
+        thinking: model.thinking,
+        presetId: snapshot.presetId,
+      });
+    }
+    if (!(await registerRoleTab(handle.id, input.role, snapshot.presetId))) {
+      orphanTabs.set(input.workspaceId + ":" + input.role, {
+        agentId: handle.id,
+        presetId: snapshot.presetId,
+      });
+      throw new Error("流程 tab 已创建但登记失败，请重试");
+    }
+    if (existing)
+      await paseo()
+        .agents.ref(existing.agentId)
+        .archive()
+        .catch((error) => log("旧空流程 tab 归档失败", error));
+    return { agentId: handle.id };
+  }
+  function resolveEnsureModel(task: Task, input: EnsureRoleInput, projectId: string | null) {
+    let preset = roleTabPreset(store, input.role, { task, projectId: projectId });
+    const disabled = roleTabDisabled(store, input.role, { task, projectId: projectId });
+    if (!preset && input.provider && !disabled) {
+      const main = task.tabs.find((tab) => tab.role === "main");
+      const slash = input.provider.indexOf("/");
+      const snapshot = mainFallbackSnapshot(
+        main ?? {
+          provider: input.provider.slice(0, slash),
+          model: input.provider.slice(slash + 1),
+        },
+      );
+      preset = { snapshot, model: snapshot.models[0]! };
+    }
+    if (!preset && input.enable && ["scout", "reviewer"].includes(input.role)) {
+      const main = task.tabs.find((tab) => tab.role === "main");
+      if (!main) throw new Error("主会话模型尚未就绪，请到「任务默认模型」设置选择模型");
+      const snapshot = mainFallbackSnapshot(main);
+      const model = snapshot.models[0]!;
+      preset = { snapshot, model };
+      store.tasks.setRoleSelections(input.workspaceId, {
+        ...task.roleSelections,
+        [input.role]: { mode: "inherit" },
+      });
+      store.tasks.updateControl(input.workspaceId, {
+        enabledRoles: [
+          ...new Set([
+            ...(Array.isArray(task.control?.enabledRoles) ? task.control.enabledRoles : []),
+            input.role,
+          ]),
+        ],
+      });
+    }
+    if (!preset)
+      throw new Error(
+        "该流程角色未启用或默认模型不可用；请到「任务默认模型」设置选择模型，或先启用该 tab",
+      );
+    const { snapshot } = preset;
+    let model = preset.model;
+    if (input.provider !== undefined) {
+      const slash = input.provider.indexOf("/");
+      if (slash <= 0 || slash === input.provider.length - 1)
+        throw new Error("请选择完整的 provider/model 模型");
+      model = {
+        ...model,
+        provider: input.provider.slice(0, slash),
+        model: input.provider.slice(slash + 1),
+      };
+    }
+    if (input.thinkingOptionId !== undefined)
+      model = { ...model, thinking: input.thinkingOptionId };
+    if (!model.provider || !model.model || model.model === UNRESOLVED_TAB_MODEL)
+      throw new Error("主会话模型尚未解析，请到「任务默认模型」设置选择模型");
+    return { snapshot, model };
+  }
+  async function provisionMissing() {
+    for (const task of store.tasks.list()) {
+      if (needsProvision(task))
+        await provisionTabs(task.workspaceId).catch((error) =>
+          log("旧任务流程 tab 补建失败", error),
+        );
     }
   }
   /** The scheduler admitted a queued task. The phase check runs inside the workspace queue, so a
@@ -1831,11 +1951,10 @@ export function createTaskFlow(options: {
       );
     }
   }
-  /** A task in an active phase that lacks a role tab its defaults (or snapshot) would create.
-   *  Tasks from before round 8 get their #方案 tab this way, numbered after the existing tabs. */
+  /** A nonterminal task that lacks a role tab its defaults (or snapshot) would create. */
   function needsProvision(task: Task): boolean {
-    if (!PROVISION_PHASES.has(task.phase) || task.tabs.length === 0) return false;
-    if (task.tabs.length === 1) return true;
+    if (!PROVISION_PHASES.has(task.phase)) return false;
+    if (task.tabs.length <= 1) return true;
     const projectId = typeof task.control?.projectId === "string" ? task.control.projectId : null;
     return PREBUILT_ROLES.some(
       (role) =>
@@ -1992,7 +2111,7 @@ export function createTaskFlow(options: {
     const raw = typeof value.text === "string" ? value.text : JSON.stringify(value, null, 2);
     return raw.length > 8_000 ? raw.slice(0, 8_000) + "\n…" : raw;
   }
-  /** Read-only view for the flow panel. Reads never create tabs. */
+  /** Return the complete flow immediately while missing native tabs recover in the background. */
   async function panel(workspaceId: string) {
     const task = store.tasks.get(workspaceId);
     if (!task)
@@ -2004,6 +2123,8 @@ export function createTaskFlow(options: {
         tabs: [],
         steps: [],
       };
+    if (needsProvision(task))
+      void provisionTabs(workspaceId).catch((error) => log("流程 tab 预建失败", error));
     const views = await tabs.tabsFor(task, true);
     const steps: Array<{
       kind: string;
@@ -2088,6 +2209,8 @@ export function createTaskFlow(options: {
     status,
     panel,
     provisionTabs,
+    provisionMissing,
+    ensureRoleTab,
     workerAdmitted,
     turnStarted,
     turnEnded,
@@ -2097,6 +2220,7 @@ export function createTaskFlow(options: {
     releaseAgent: resources.releaseAgent,
     close: async () => {
       for (const active of accepting.values()) active.cancelled = true;
+      await Promise.allSettled(serial.values());
     },
     resources,
     runtime,

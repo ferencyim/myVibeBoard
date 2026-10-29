@@ -8,6 +8,7 @@ import { BehaviourSidebarItem, BoardSettingsScreen } from "./client/sidebar";
 import { TaskFlowPanel } from "./client/task-panel";
 import { TaskStatusItem } from "./client/task-status";
 import { contributeGroupTarget } from "./client/group-target";
+import { contributeWorkspaceTabs } from "./client/workspace-tabs";
 import { taskStatusDataSchema, taskTabCommandRpc, type TaskTabCommand } from "./shared/task-tabs";
 
 let requestCounter = 0;
@@ -49,6 +50,7 @@ const COMMANDS: readonly {
 
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
+    contributeWorkspaceTabs(client),
     client.addProjectSidebarItem({
       id: "project-agent",
       title: "项目 agent",
@@ -118,12 +120,14 @@ export default function contribute(client: PluginClientContext) {
       Component: ProjectTaskDefaultsSection,
     }),
     client.addSettingsScreen({
+      order: -50,
       id: "task-default-models",
       title: "任务默认模型",
       icon: "Bot",
       Component: TaskDefaultsScreen,
     }),
     client.addSettingsScreen({
+      order: -40,
       id: "preferences",
       title: "任务设置",
       icon: "Settings",

@@ -5,6 +5,7 @@ export default function contribute(client: PluginClientContext) {
   client.addScreen({ id: "main", title: "自动维护", Component: MaintainScreen });
   client.addSidebarHeaderItem({ id: "maintain", title: "自动维护", Component: MaintainSidebarItem });
   client.addSettingsScreen({
+    order: -10,
     id: "preferences",
     title: "自动维护",
     icon: "Wrench",

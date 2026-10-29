@@ -45,6 +45,7 @@ export interface ConfirmTaskInput {
   requestId?: string;
 }
 export interface AllocateTaskTabInput {
+  number?: number;
   agentId: string;
   role: TaskTabRole;
   provider: string;
@@ -54,6 +55,8 @@ export interface AllocateTaskTabInput {
   presetId?: string;
 }
 export interface UpdateTaskTabInput {
+  replacementAgentId?: string;
+  number?: number;
   role?: TaskTabRole;
   provider?: string;
   model?: string;
@@ -114,12 +117,10 @@ function assertTabSource(task: Task, source: TaskPlanSource): void {
     return;
   }
   if (source.conversationId && task.conversationId === source.conversationId) return;
-  if (task.conversationId)
-    throw new TaskCommandError("invalid", "方案来源与任务会话不一致");
+  if (task.conversationId) throw new TaskCommandError("invalid", "方案来源与任务会话不一致");
 }
 function assertConfirmationSource(task: Task, source: TaskPlanSource | null): void {
-  if (!source?.sourceKey)
-    throw new TaskCommandError("invalid", "执行确认需要最新完整方案来源");
+  if (!source?.sourceKey) throw new TaskCommandError("invalid", "执行确认需要最新完整方案来源");
   assertTabSource(task, source);
   if (task.planSource && JSON.stringify(task.planSource) !== JSON.stringify(source))
     throw new TaskCommandError("conflict", "方案来源已变化，请重新读取最新方案");
@@ -156,10 +157,9 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
     return task;
   };
   const touch = (workspaceId: string) =>
-    db.prepare("UPDATE task SET updated_at = ? WHERE workspace_id = ?").run(
-      now().toISOString(),
-      workspaceId,
-    );
+    db
+      .prepare("UPDATE task SET updated_at = ? WHERE workspace_id = ?")
+      .run(now().toISOString(), workspaceId);
   const changed = (workspaceId: string, fields: string[]) => {
     touch(workspaceId);
     publishEvent(db, { type: "task.updated", payload: { workspaceId, fields } }, now);
@@ -182,7 +182,9 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
       ).run(workspaceId, now().toISOString());
     },
     isTaskWorkspace(workspaceId: string): boolean {
-      return !!db.prepare("SELECT 1 AS x FROM task_workspace WHERE workspace_id = ?").get(workspaceId);
+      return !!db
+        .prepare("SELECT 1 AS x FROM task_workspace WHERE workspace_id = ?")
+        .get(workspaceId);
     },
     list(filter: { phase?: TaskPhase } = {}): Task[] {
       const rows = filter.phase
@@ -310,7 +312,11 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).run(workspaceId);
         db.prepare("DELETE FROM task WHERE workspace_id = ?").run(workspaceId);
         db.prepare("DELETE FROM task_workspace WHERE workspace_id = ?").run(workspaceId);
-        publishEvent(db, { type: "task.updated", payload: { workspaceId, fields: ["deleted"] } }, now);
+        publishEvent(
+          db,
+          { type: "task.updated", payload: { workspaceId, fields: ["deleted"] } },
+          now,
+        );
       });
     },
     setPlanSource(workspaceId: string, input: TaskPlanSource): Task {
@@ -327,13 +333,11 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
       });
     },
     /** Allocates the next immutable tab number; re-registering the same agent is idempotent. */
-    allocateTab(
-      workspaceId: string,
-      input: AllocateTaskTabInput,
-    ): { task: Task; tab: TaskTab } {
+    allocateTab(workspaceId: string, input: AllocateTaskTabInput): { task: Task; tab: TaskTab } {
       const parsed = z
         .object({
           agentId: z.string().trim().min(1),
+          number: z.number().int().positive().optional(),
           role: TaskTabRoleSchema,
           provider: z.string().trim().min(1),
           model: z.string().trim().min(1),
@@ -348,7 +352,7 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
         const existing = task.tabs.find((tab) => tab.agentId === parsed.agentId);
         if (existing) return { task, tab: existing };
         const tab = TaskTabSchema.parse({
-          number: task.nextTabNumber,
+          number: parsed.number ?? task.nextTabNumber,
           agentId: parsed.agentId,
           role: parsed.role,
           provider: parsed.provider,
@@ -358,9 +362,11 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           presetId: parsed.presetId,
           createdAt: now().toISOString(),
         });
-        db.prepare(
-          "UPDATE task SET tabs_json = ?, next_tab_number = ? WHERE workspace_id = ?",
-        ).run(JSON.stringify([...task.tabs, tab]), tab.number + 1, workspaceId);
+        db.prepare("UPDATE task SET tabs_json = ?, next_tab_number = ? WHERE workspace_id = ?").run(
+          JSON.stringify([...task.tabs, tab]),
+          Math.max(task.nextTabNumber, tab.number + 1),
+          workspaceId,
+        );
         return { task: changed(workspaceId, ["tabs"]), tab };
       });
     },
@@ -368,6 +374,8 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
     updateTab(workspaceId: string, agentId: string, input: UpdateTaskTabInput): TaskTab {
       const patch = z
         .object({
+          replacementAgentId: z.string().trim().min(1).optional(),
+          number: z.number().int().positive().optional(),
           role: TaskTabRoleSchema.optional(),
           provider: z.string().trim().min(1).optional(),
           model: z.string().trim().min(1).optional(),
@@ -383,6 +391,8 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
         if (!existing) throw new TaskCommandError("not_found", "任务没有该 tab：" + agentId);
         const tab = TaskTabSchema.parse({
           ...existing,
+          ...(patch.replacementAgentId ? { agentId: patch.replacementAgentId } : {}),
+          ...(patch.number !== undefined ? { number: patch.number } : {}),
           ...(patch.role !== undefined ? { role: patch.role } : {}),
           ...(patch.provider !== undefined ? { provider: patch.provider } : {}),
           ...(patch.model !== undefined ? { model: patch.model } : {}),
@@ -408,8 +418,13 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
               ? { presetId: existing.presetId }
               : {}),
         });
-        db.prepare("UPDATE task SET tabs_json = ? WHERE workspace_id = ?").run(
-          JSON.stringify(task.tabs.map((item) => (item.agentId === agentId ? tab : item))),
+        db.prepare("UPDATE task SET tabs_json = ?, next_tab_number = ? WHERE workspace_id = ?").run(
+          JSON.stringify(
+            task.tabs
+              .filter((item) => item.agentId !== patch.replacementAgentId)
+              .map((item) => (item.agentId === agentId ? tab : item)),
+          ),
+          Math.max(task.nextTabNumber, tab.number + 1),
           workspaceId,
         );
         touch(workspaceId);

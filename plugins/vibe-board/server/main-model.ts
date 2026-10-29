@@ -5,11 +5,13 @@ import { presetModels } from "./vibe/contract";
 /** Explicit task model choices are already on the creation request. Default intents resolve live. */
 export function resolveMainConfig(
   store: Pick<VibeStore, "projects" | "modelDefaults" | "presets">,
-  projectId: string,
+  projectId: string | null,
   rootPath?: string,
 ) {
   const id =
-    findProjectConfig(store.projects.list(true), projectId, rootPath)?.defaultPresets.main ??
+    (projectId
+      ? findProjectConfig(store.projects.list(true), projectId, rootPath)?.defaultPresets.main
+      : undefined) ??
     store.modelDefaults.global().main;
   if (!id) return {};
   const preset = store.presets.get(id);

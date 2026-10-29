@@ -30,6 +30,7 @@ import type { TaskRuntimeCommands } from "../vibe/db";
 import type { SessionRole } from "../vibe/contract";
 import { TASK_TAB_GUIDE_PROMPT } from "./prompts";
 import { boardProgress } from "./board";
+import { resolveMainConfig } from "../main-model";
 
 export { tabTitle };
 
@@ -43,6 +44,9 @@ export interface TaskTabView {
   status: string;
   title: string | null;
   busy: boolean;
+  thinking?: string;
+  modelId?: string;
+  source?: string;
 }
 
 /** The whole message must be one of the two user-native handoff forms. */
@@ -194,6 +198,12 @@ export function roleTabPreset(
 ): { snapshot: TaskPresetSnapshot; model: TaskPresetSnapshot["models"][number] } | null {
   let snapshot: TaskPresetSnapshot | null;
   try {
+    const enabled = input.task?.control?.enabledRoles;
+    const main = input.task?.tabs.find((tab) => tab.role === "main");
+    if (main && Array.isArray(enabled) && enabled.includes(role)) {
+      const fallback = mainFallbackSnapshot(main);
+      return { snapshot: fallback, model: fallback.models[0]! };
+    }
     snapshot = input.task?.rolesSnapshot
       ? (input.task.rolesSnapshot[role] ?? null)
       : resolveRolePreset(store, role, {
@@ -207,6 +217,29 @@ export function roleTabPreset(
   }
   const model = snapshot?.models[0];
   return snapshot && model ? { snapshot, model } : null;
+}
+
+export function roleTabDisabled(
+  store: DefaultsStore,
+  role: FlowRole,
+  input: { task?: Task; projectId?: string | null; main?: MainTabModel },
+): boolean {
+  const task = input.task;
+  if (Array.isArray(task?.control?.enabledRoles) && task.control.enabledRoles.includes(role))
+    return false;
+  if (task?.rolesSnapshot && OPTIONAL_TASK_ROLES.includes(role))
+    return task.rolesSnapshot[role] === null;
+  try {
+    return (
+      resolveRolePreset(store, role, {
+        selections: task?.roleSelections,
+        projectId: input.projectId,
+        main: task?.tabs.find((tab) => tab.role === "main") ?? input.main,
+      }) === null
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** The roster a new tab should see: live tabs plus the role tabs the plugin is about to create.
@@ -226,25 +259,30 @@ export function plannedTaskTabs(input: {
     provider: tab.provider,
     model: tab.modelLabel || tab.model,
   }));
-  const selfNumber = input.task?.nextTabNumber ?? (existing.at(-1)?.number ?? 0) + 1;
-  const present = new Set<TaskTabRole>(existing.map((tab) => tab.role));
-  present.add(input.selfRole);
-  let next = selfNumber + 1;
-  for (const role of FLOW_ROLE_ORDER) {
-    if (present.has(role)) continue;
-    const preset = roleTabPreset(input.store, role, input);
-    if (!preset) continue;
+  const fixed = ["main", ...FLOW_ROLE_ORDER].indexOf(input.selfRole);
+  const selfNumber = fixed >= 0 ? fixed + 1 : Math.max(7, input.task?.nextTabNumber ?? 7);
+  if (input.selfRole !== "main" && !existing.some((tab) => tab.role === "main"))
     tabs.push({
-      number: next++,
+      number: 1,
+      role: "main",
+      roleLabel: TASK_TAB_ROLE_LABELS.main,
+      provider: input.main?.provider ?? "",
+      model: input.main?.model ?? "沿用 #1 模型",
+      status: "未启动",
+    });
+  for (const role of FLOW_ROLE_ORDER) {
+    if (role === input.selfRole || existing.some((tab) => tab.role === role)) continue;
+    const preset = roleTabPreset(input.store, role, input);
+    tabs.push({
+      number: FLOW_ROLE_ORDER.indexOf(role) + 2,
       role,
       roleLabel: TASK_TAB_ROLE_LABELS[role],
-      provider: preset.model.provider,
-      model:
-        preset.model.model + (preset.snapshot.source === "main-fallback" ? " · 沿用 #1 模型" : ""),
+      provider: preset?.model.provider ?? "",
+      model: preset?.model.model || "沿用 #1 模型",
+      status: roleTabDisabled(input.store, role, input) ? "未启用" : "未启动",
     });
-    present.add(role);
   }
-  return { tabs, selfNumber };
+  return { tabs: tabs.sort((a, b) => a.number - b.number), selfNumber };
 }
 
 /** The roles task prompts name through `{{main}}`, `{{planner}}` … placeholders. */
@@ -445,6 +483,24 @@ export function createTaskTabs(options: {
   }
   /** Allocates a number once per agent; subagents and archived agents stay out of the tab list.
    *  A role claim is accepted only from plugin code, never from agent-supplied labels. */
+  function normalizeNumbers(task: Task): Task {
+    const fixedRoles: readonly TaskTabRole[] = ["main", ...FLOW_ROLE_ORDER];
+    const seen = new Set<TaskTabRole>();
+    const used = new Set<number>();
+    let extra = 7;
+    for (const tab of [...task.tabs].sort((a, b) => a.number - b.number)) {
+      const fixed = fixedRoles.indexOf(tab.role);
+      let number = fixed >= 0 && !seen.has(tab.role) ? fixed + 1 : Math.max(7, tab.number);
+      if (used.has(number)) {
+        while (used.has(extra)) extra++;
+        number = extra++;
+      }
+      seen.add(tab.role);
+      used.add(number);
+      if (tab.number !== number) store.tasks.updateTab(task.workspaceId, tab.agentId, { number });
+    }
+    return store.tasks.get(task.workspaceId)!;
+  }
   async function ensureTab(
     agentId: string,
     claim: { role?: TaskTabRole; presetId?: string } = {},
@@ -471,16 +527,22 @@ export function createTaskTabs(options: {
       });
       task = store.tasks.get(workspaceId)!;
     }
+    task = normalizeNumbers(task);
     const existing = task.tabs.find((tab) => tab.agentId === agentId);
     if (existing) {
       const updates: {
+        number?: number;
         role?: TaskTabRole;
         presetId?: string;
         model?: string;
         modelLabel?: string | null;
         provider?: string;
       } = {};
-      if (claim.role && claim.role !== existing.role) updates.role = claim.role;
+      if (claim.role && claim.role !== existing.role) {
+        updates.role = claim.role;
+        const fixed = ["main", ...FLOW_ROLE_ORDER].indexOf(claim.role);
+        if (fixed >= 0) updates.number = fixed + 1;
+      }
       if (claim.presetId && claim.presetId !== existing.presetId) updates.presetId = claim.presetId;
       const resolved = agent.model?.trim();
       if (resolved) {
@@ -502,6 +564,7 @@ export function createTaskTabs(options: {
         return existing;
       }
       const updated = store.tasks.updateTab(workspaceId, agentId, updates);
+      await syncTabOrder(handle, agent, updated);
       await handle.setTitle(tabTitle(updated)).catch((error) => {
         log("任务 tab 标题更新失败", error);
       });
@@ -510,7 +573,13 @@ export function createTaskTabs(options: {
     }
     const role = claim.role ?? (agentId === task.anchorAgentId ? "main" : "session");
     const model = agent.model?.trim() || UNRESOLVED_TAB_MODEL;
+    const fixed = ["main", ...FLOW_ROLE_ORDER].indexOf(role);
+    const number =
+      fixed >= 0 && !task.tabs.some((tab) => tab.role === role)
+        ? fixed + 1
+        : Math.max(7, task.nextTabNumber);
     const { tab } = store.tasks.allocateTab(workspaceId, {
+      number,
       agentId,
       role,
       provider: agent.provider,
@@ -536,7 +605,16 @@ export function createTaskTabs(options: {
     return resolved;
   }
   async function tabsFor(task: Task, refresh: boolean): Promise<TaskTabView[]> {
-    return Promise.all(
+    if (!task.tabs.some((tab) => tab.role === "main")) {
+      try {
+        await ensureTab(task.anchorAgentId, { role: "main" });
+        task = store.tasks.get(task.workspaceId) ?? task;
+      } catch (error) {
+        log("旧任务主会话登记失败，保留完整流程占位", error);
+      }
+    }
+    task = normalizeNumbers(task);
+    const views: TaskTabView[] = await Promise.all(
       task.tabs.map(async (tab) => {
         let agent: PaseoAgent | undefined;
         let handle: PaseoAgentHandle | undefined;
@@ -561,12 +639,63 @@ export function createTaskTabs(options: {
             (current.presetId === MAIN_FALLBACK_PRESET_ID ? " · 沿用 #1 模型" : ""),
           provider: agent?.provider ?? current.provider,
           model: agent?.model ?? current.model,
+          modelId: agent?.model ?? current.model,
           status: agent ? statusOf(agent) : "已关闭",
           title: agent?.title ?? tabTitle(current),
           busy: !!agent?.activeTurn,
+          thinking: current.thinking,
         };
       }),
     );
+    const projectId = typeof task.control?.projectId === "string" ? task.control.projectId : null;
+    if (!views.some((view) => view.role === "main")) views.push(missingMainTab(task, projectId));
+    const main = views.find((view) => view.role === "main");
+    for (const role of FLOW_ROLE_ORDER) {
+      if (views.some((view) => view.role === role)) continue;
+      const preset = roleTabPreset(store, role, { task, projectId, main });
+      const disabled = roleTabDisabled(store, role, { task, projectId, main });
+      const source = preset?.snapshot.source;
+      const roleLabel =
+        TASK_TAB_ROLE_LABELS[role] + (source === "main-fallback" ? " · 沿用 #1 模型" : "");
+      const model = preset?.model.model || "沿用 #1 模型";
+      views.push({
+        number: FLOW_ROLE_ORDER.indexOf(role) + 2,
+        agentId: "",
+        role,
+        roleLabel,
+        provider: preset?.model.provider ?? "",
+        model,
+        modelId: preset?.model.model,
+        thinking: preset?.model.thinking,
+        source,
+        status: disabled ? "未启用" : "未启动",
+        title: `#${FLOW_ROLE_ORDER.indexOf(role) + 2} ${roleLabel} · ${model}`,
+        busy: false,
+      });
+    }
+    return views.sort((a, b) => a.number - b.number);
+  }
+  function missingMainTab(task: Task, projectId: string | null): TaskTabView {
+    let config: { provider?: string; model?: string; thinkingOptionId?: string } = {};
+    try {
+      config = resolveMainConfig(store, projectId).config ?? {};
+    } catch (error) {
+      log("旧任务主会话默认模型解析失败", error);
+    }
+    const model = config.model ?? "默认模型";
+    return {
+      number: 1,
+      agentId: task.anchorAgentId,
+      role: "main",
+      roleLabel: TASK_TAB_ROLE_LABELS.main,
+      provider: config.provider ?? "",
+      model,
+      modelId: config.model,
+      thinking: config.thinkingOptionId,
+      status: "未启动",
+      title: `#1 主会话 · ${model}`,
+      busy: false,
+    };
   }
   function rolePromptKey(role: TaskTabRole): string | undefined {
     if (role === "main" || role === "planner" || role === "scout" || role === "plan_reviewer")

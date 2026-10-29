@@ -10,6 +10,7 @@ export default function contribute(client: PluginClientContext) {
     Component: SchedulerSidebarItem,
   });
   client.addSettingsScreen({
+    order: -20,
     id: "preferences",
     title: "调度器",
     icon: "Cpu",
