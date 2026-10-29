@@ -4,6 +4,6 @@
   "description": "原生任务会话、七角色流程、方案确认、复核验证与 Git 收尾，保留 Agent 行为和项目模型设置。",
   "icon": "assets/icon.png",
   "requirements": {
-    "paseo": ">=0.13.2 <0.14.0"
+    "paseo": ">=0.13.0 <0.14.0"
   }
 }

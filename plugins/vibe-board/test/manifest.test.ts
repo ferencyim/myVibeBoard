@@ -7,11 +7,13 @@ const pluginDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file: string) => JSON.parse(readFileSync(join(pluginDir, file), "utf8"));
 
 describe("plugin manifest", () => {
-  it("requires this fork’s project sidebar and lifecycle APIs from 0.13.2", () => {
+  // scripts/vibe/check-plugins.mjs requires every vibe plugin to declare the checkout's minor range;
+  // the installer refuses anything else. Fork-only host APIs are gated at runtime instead.
+  it("declares the checkout's paseo minor range", () => {
     const [major, minor] = read("../../package.json").version.split(".");
-    const range = read("paseo-plugin.json").requirements.paseo;
-    expect(range).toBe(">=0.13.2 <0.14.0");
-    expect(range.endsWith(`<${major}.${Number(minor) + 1}.0`)).toBe(true);
+    expect(read("paseo-plugin.json").requirements.paseo).toBe(
+      `>=${major}.${minor}.0 <${major}.${Number(minor) + 1}.0`,
+    );
   });
 
   it("uses the vibe-board id and ships its entry points", () => {
