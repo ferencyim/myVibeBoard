@@ -31,8 +31,18 @@ export function BehaviourSidebarItem({ currentScreen, openScreen }: PluginSideba
 }
 export function BoardSettingsScreen(props: PluginSurfaceProps) {
   const host = useMemo(
-    () => ({ theme: props.theme, compact: props.layout.compact }),
-    [props.theme, props.layout.compact],
+    () => ({
+      theme: props.theme,
+      compact: props.layout.compact,
+      openTaskDefaults: props.navigation?.openPluginSettings
+        ? () =>
+            props.navigation?.openPluginSettings?.({
+              pluginId: "vibe-board",
+              screenId: "task-default-models",
+            })
+        : undefined,
+    }),
+    [props.theme, props.layout.compact, props.navigation],
   );
   return (
     <HostProvider value={host}>
@@ -57,7 +67,7 @@ function SettingsContent() {
   const closeManager = useCallback(() => setOpen(false), []);
   return (
     <ScrollView contentContainerStyle={SETTINGS_STYLE}>
-      <Text>配置项目扩展、角色默认模型和有序模型预设。新任务请在原生工作区发送需求。</Text>
+      <Text>配置项目扩展和有序模型预设。新任务请在原生工作区发送需求。</Text>
       <Btn label="管理项目与 Agent 预设" onPress={openManager} />
       <ReviewTimeoutField />
       <ManageModal

@@ -4,6 +4,7 @@ import React, { createContext, useContext, type ReactNode } from "react";
 export interface HostValue {
   theme: PluginTheme;
   compact: boolean;
+  openTaskDefaults?: () => void;
   openAgent?: (input: { readonly agentId: string }) => void;
 }
 

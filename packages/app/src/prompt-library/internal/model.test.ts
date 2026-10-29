@@ -178,6 +178,26 @@ describe("PromptLibraryModel", () => {
     expect(snapshot.pendingCount).toBe(1);
   });
 
+  test("restores synced prompt bodies for offline insertion after restart and isolates hosts", async () => {
+    const remote = new FakeRemote();
+    const prompt = remoteEntry({
+      body: "Full prompt body to insert into a new task.",
+      tags: ["planning"],
+    });
+    remote.entries.set(prompt.id, prompt);
+    const { model, storage } = createModel();
+    await model.connect({ serverId: "srv_1", client: remote, supported: true });
+    model.disconnect("srv_1");
+    remote.failSync = true;
+
+    const restarted = new PromptLibraryModel({ storage });
+    await restarted.ensureHydrated("srv_1");
+    await restarted.ensureHydrated("srv_2");
+    expect(restarted.getSnapshot("srv_1").entries).toEqual([prompt]);
+    expect(restarted.getSnapshot("srv_1").pendingCount).toBe(0);
+    expect(restarted.getSnapshot("srv_2").entries).toEqual([]);
+  });
+
   test("syncs pending writes and remote entries on connect", async () => {
     const remote = new FakeRemote();
     remote.entries.set("remote_1", remoteEntry());

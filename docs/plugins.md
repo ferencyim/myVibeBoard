@@ -7,6 +7,10 @@ Paseo executes `index.server.ts` in a subprocess and `index.client.tsx` in every
 Task plugins opt into new-workspace first messages with
 [`client.addFirstMessageOutboxOwner({ initialRole })`](../public-docs/plugins/reference.md#first-message-outbox-owner).
 The core never assumes a plugin ID; disabling the owner restores ordinary agent creation.
+Default first-message models can be resolved online with
+`client.addFirstMessageModelResolver({ resolve })`; see the
+[resolver contract](../public-docs/plugins/reference.md#first-message-model-resolver).
+Keep project/global precedence in the plugin and durable intent/retry in the core outbox.
 
 > **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugins are unsandboxed: server code and preparation commands run with the daemon user's access on the daemon host, and client contributions run inside Paseo. The repository's dependencies and future updates are part of that trust decision. With `--host`, preparation runs on that remote daemon host.
 
@@ -731,6 +735,15 @@ Register ordinary components with `client.addSettingsScreen` and open them with 
 The host settings shell owns navigation and layout; plugin content must not add another page
 scroll view or header. See the [author contract](../public-docs/plugins/reference.md#settings-screens)
 and `plugin-examples/settings` for the named UI components and persistence API.
+
+Project settings can host plugin sections beside the core worktree scripts form. Register
+`client.addProjectSettingsSection({ id, title, order?, Component })` in the client entry.
+The component receives `projectId`, `serverId`, `theme`, and `compact`; the host owns the
+`SettingsSection` heading, so render only the section body. Registration and teardown follow
+the settings-screen lifetime. Sections are scoped to the project's host, sorted by ascending
+`order` (default 0), preserving registration order for ties. Keep plugin loading and saving
+inside its component; do not couple it to the core scripts draft. See the
+[public section contract](../public-docs/plugins/reference.md#project-settings-sections).
 
 Settings storage is scoped to the runtime installation ID, never the source path or manifest ID.
 Its writer lives with the plugin subprocess, while its directory lives outside managed sources,

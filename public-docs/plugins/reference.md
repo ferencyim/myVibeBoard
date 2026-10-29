@@ -1694,6 +1694,31 @@ scrolling, and the centered settings column. Compact windows push a full-screen 
 windows keep the settings sidebar. Render content inside that frame using React Native components.
 A disabled or removed plugin leaves an unavailable screen with working Back navigation.
 
+### First-message model resolver
+
+Register `client.addFirstMessageModelResolver({ resolve })` to resolve a queued first message's
+default model when its host reconnects. `resolve({ projectId })` returns a provider config or
+`null` when no model is configured. Each installation may register one resolver; multiple
+resolvers on the same host are an error. Registration returns an idempotent remover.
+
+The callback runs online, in the installation's client entry, and may use `client.rpc` to read
+host-owned defaults. Core keeps the queue and freezes the resolved configuration before creating
+the workspace; the plugin owns project/global precedence. Explicit model selections bypass the
+resolver. Only first messages use this hook.
+
+### Project settings sections
+
+Register `client.addProjectSettingsSection({ id, title, order?, Component })` to place a section
+in the core project settings page, below worktree scripts. `id` is unique per installation;
+`order` defaults to 0 and sorts ascending. Equal orders retain registration order. The registration returns an idempotent remover and is removed on plugin teardown.
+
+The component receives `PluginProjectSettingsSectionProps`: `projectId` is the native project ID,
+`serverId` identifies its host, and `theme` and `compact` describe the current presentation.
+Only the selected project's host contributes sections. The host owns the section heading,
+plugin runtime contexts, and error boundary. Render the body with the named settings components;
+do not add another page header or scroll view. Use the installation's SDK and RPC hooks for data
+and keep its draft independent of the core project settings form.
+
 ### Named UI components
 
 Import settings components from `@getpaseo/plugin/client/ui`. They work with your own state and RPCs;

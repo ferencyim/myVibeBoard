@@ -8,6 +8,8 @@ export function useBoardApi() {
     projectsCreate: useRpc(rpc.projectsCreateRpc),
     projectsUpdate: useRpc(rpc.projectsUpdateRpc),
     paseoProjectsList: useRpc(rpc.paseoProjectsListRpc),
+    projectDefaultsGet: useRpc(rpc.projectDefaultsGetRpc),
+    projectDefaultsSet: useRpc(rpc.projectDefaultsSetRpc),
     defaultsGet: useRpc(rpc.defaultsGetRpc),
     defaultsSet: useRpc(rpc.defaultsSetRpc),
     requirementsGet: useRpc(rpc.requirementsGetRpc),

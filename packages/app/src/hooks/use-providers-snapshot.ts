@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { AgentProvider, ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
@@ -15,6 +15,8 @@ import {
   fetchProvidersSnapshot,
   refreshAndApplyProvidersSnapshot,
 } from "@/data/providers-snapshot";
+
+import { providerSnapshotCache, type CachedProviderSnapshot } from "@/data/provider-snapshot-cache";
 
 export {
   providersSnapshotQueryKey,
@@ -46,6 +48,7 @@ export function selectorOpenRefetchDecision(input: {
 
 interface UseProvidersSnapshotResult {
   entries: ProviderSnapshotEntry[] | undefined;
+  lastSyncedAt?: string;
   isLoading: boolean;
   isFetching: boolean;
   isRefreshing: boolean;
@@ -58,6 +61,44 @@ interface UseProvidersSnapshotResult {
 interface UseProvidersSnapshotOptions {
   enabled?: boolean;
   cwd?: string | null;
+}
+
+function useOfflineProviderSnapshot(
+  serverId: string | null,
+  cwd: string | null,
+  isConnected: boolean,
+) {
+  const [offlineSnapshot, setOfflineSnapshot] = useState<{
+    serverId: string;
+    cwd: string | null;
+    snapshot: CachedProviderSnapshot | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!serverId || isConnected) return;
+    let active = true;
+    void (async () => {
+      const snapshot =
+        (await providerSnapshotCache.read(serverId, cwd)) ??
+        (await providerSnapshotCache.readLatest(serverId));
+      if (active) setOfflineSnapshot({ serverId, cwd, snapshot });
+    })();
+    return () => {
+      active = false;
+    };
+  }, [serverId, cwd, isConnected]);
+  return offlineSnapshot && offlineSnapshot.serverId === serverId && offlineSnapshot.cwd === cwd
+    ? offlineSnapshot.snapshot
+    : null;
+}
+
+function providerSnapshotData(
+  live: { entries: ProviderSnapshotEntry[]; generatedAt: string } | undefined,
+  cached: CachedProviderSnapshot | null,
+) {
+  return {
+    entries: live?.entries ?? cached?.entries,
+    lastSyncedAt: cached?.syncedAt ?? live?.generatedAt ?? cached?.generatedAt,
+  };
 }
 
 export function useProvidersSnapshot(
@@ -90,6 +131,8 @@ export function useProvidersSnapshot(
       return fetchProvidersSnapshot({ client, serverId, cwd, queryClient, signal });
     },
   });
+
+  const cached = useOfflineProviderSnapshot(serverId, cwd, isConnected);
 
   const refreshMutation = useMutation({
     mutationFn: async (providers?: AgentProvider[]) => {
@@ -130,7 +173,7 @@ export function useProvidersSnapshot(
   );
 
   return {
-    entries: snapshotQuery.data?.entries ?? undefined,
+    ...providerSnapshotData(snapshotQuery.data, cached),
     isLoading: snapshotQuery.isLoading,
     isFetching: snapshotQuery.isFetching,
     isRefreshing,

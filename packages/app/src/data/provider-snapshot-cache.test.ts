@@ -130,6 +130,43 @@ function writeSnapshot(
 }
 
 describe("provider snapshot cache", () => {
+  it("cold-start reads latest successful catalog per host across project directories", async () => {
+    const storage = createStorage();
+    const cache = createProviderSnapshotCache(storage);
+    await writeSnapshot(cache, { cwd: "/old", label: "old", generatedAt: "2026-01-01T00:00:00Z" });
+    await writeSnapshot(cache, {
+      cwd: "/latest",
+      label: "latest",
+      generatedAt: "2026-01-02T00:00:00Z",
+    });
+    const restarted = createProviderSnapshotCache(storage);
+    await expect(restarted.readLatest("server-1")).resolves.toMatchObject({
+      hash: "latest",
+      generatedAt: "2026-01-02T00:00:00Z",
+    });
+    await expect(restarted.readLatest("another-host")).resolves.toBeNull();
+  });
+  it("latest host catalog follows successful sync time rather than unchanged generation time", async () => {
+    const storage = createStorage();
+    const cache = createProviderSnapshotCache(storage);
+    await cache.write({
+      serverId: "server-1",
+      cwd: "/synced-last",
+      hash: "old-body",
+      generatedAt: "2026-01-01T00:00:00Z",
+      syncedAt: "2026-01-03T00:00:00Z",
+      compactSnapshot: compactProviderSnapshot(snapshotEntries("old-body")),
+    });
+    await writeSnapshot(cache, {
+      cwd: "/new-body",
+      label: "new-body",
+      generatedAt: "2026-01-02T00:00:00Z",
+    });
+    await expect(
+      createProviderSnapshotCache(storage).readLatest("server-1"),
+    ).resolves.toMatchObject({ hash: "old-body", syncedAt: "2026-01-03T00:00:00Z" });
+  });
+
   it("normalizes duplicate model identities in live, legacy and persisted catalogs", async () => {
     const storage = createStorage();
     const entries = snapshotEntries("shared");

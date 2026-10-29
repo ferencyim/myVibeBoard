@@ -16,6 +16,8 @@ import type {
   PluginSidebarItemContribution as SDKPluginSidebarItemContribution,
   PluginScreenContribution as SDKPluginScreenContribution,
   PluginSettingsScreenContribution as SDKPluginSettingsScreenContribution,
+  PluginProjectSettingsSectionContribution as SDKPluginProjectSettingsSectionContribution,
+  PluginFirstMessageModelResolver,
   PluginTimelineRendererContribution,
   PluginTimelineTransformerContribution,
   PluginPanelLocation,
@@ -31,6 +33,8 @@ type PluginComposerPillContribution = SDKPluginComposerPillContribution<PluginTe
 type PluginSidebarContribution = SDKPluginSidebarContribution<PluginText>;
 type PluginSidebarItemContribution = SDKPluginSidebarItemContribution<PluginText>;
 type PluginScreenContribution = SDKPluginScreenContribution<PluginText>;
+type PluginProjectSettingsSectionContribution =
+  SDKPluginProjectSettingsSectionContribution<PluginText>;
 type PluginSettingsScreenContribution = SDKPluginSettingsScreenContribution<PluginText>;
 type WorkspacePanelInput = SDKPluginWorkspacePanelContribution<PluginText>;
 type PluginWorkspacePanelContribution =
@@ -48,6 +52,8 @@ export interface EvaluatedPlugin {
   cleanup: PluginCleanup;
   surfaces: PluginScreenContribution[];
   settingsScreens: PluginSettingsScreenContribution[];
+  projectSettingsSections: PluginProjectSettingsSectionContribution[];
+  firstMessageModelResolvers: PluginFirstMessageModelResolver[];
   sidebarItems: Record<PluginSidebarSection, PluginSidebarItemContribution[]>;
   // COMPAT(pluginSidebarAliases): added in v0.11.0, remove after 2027-03-29
   /** `addSidebarItem` registrations, so `/plugin/<id>/sidebar/<item>` routes keep resolving. */
@@ -87,6 +93,7 @@ export type {
   PluginSidebarItemContribution,
   PluginScreenContribution,
   PluginSettingsScreenContribution,
+  PluginProjectSettingsSectionContribution,
   PluginThemeContribution,
   PluginTimelineRendererContribution,
   PluginTimelineTransformerContribution,

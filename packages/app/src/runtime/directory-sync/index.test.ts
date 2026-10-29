@@ -5,7 +5,9 @@ import {
   type ReplicaSqliteConnection,
   type SqliteValue,
 } from "@/runtime/replica-cache/row-store-sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("expo-crypto", () => ({ randomUUID: () => "test-id" }));
 import type {
   DaemonClient,
   WorkspaceLabelListPayload,
@@ -1873,3 +1875,55 @@ it.each(["before", "during", "before-metadata", "damaged"] as const)(
     }
   },
 );
+
+it("restores projects without workspaces from SQLite on offline directory demand", async () => {
+  const serverId = "offline-empty-project";
+  serverIds.add(serverId);
+  const { cache, database, reopen } = createSqliteCache();
+  const project = normalizeProjectDescriptor({
+    projectId: "empty-project",
+    projectDisplayName: "Empty Git project",
+    projectRootPath: "/repo/empty",
+    projectKind: "git",
+  });
+  cache.setHosts([serverId]);
+  cache.commitDirectoryMutations(serverId, [
+    { kind: "project", type: "upsert", id: project.projectId, value: project },
+  ]);
+  await cache.flush();
+  const restartedCache = reopen();
+  restartedCache.setHosts([serverId]);
+  const client = new FakeDirectoryClient();
+  useSessionStore.getState().initializeSession(serverId, client as unknown as DaemonClient, 1);
+  const directory = new DirectorySync(
+    serverId,
+    {
+      onAgentStoppedRunning: () => {},
+      markAgentLoading: () => {},
+      markAgentReady: () => {},
+      markAgentError: () => {},
+    },
+    restartedCache,
+  );
+  try {
+    directory.connectionChanged({
+      client: null,
+      status: "offline",
+      source: { clientGeneration: 1, connectionEpoch: 0 },
+    });
+    directory.setDemand({}, true);
+    await expect
+      .poll(() => useSessionStore.getState().sessions[serverId]?.projects.get(project.projectId))
+      .toEqual(project);
+    expect(selectWorkspaceDirectoryServerIds(useSessionStore.getState(), [serverId])).toEqual([
+      serverId,
+    ]);
+    expect(client.listProjectsCalls).toBe(0);
+    expect(client.fetchWorkspacesCalls).toBe(0);
+    expect(useSessionStore.getState().sessions[serverId]?.workspaces.size).toBe(0);
+  } finally {
+    directory.dispose();
+    await restartedCache.flush();
+    database.close();
+  }
+});

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { compactProviderSnapshot } from "@getpaseo/protocol/provider-snapshot-codec";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import { FIRST_MESSAGE_OUTBOX_STORAGE_KEY, FirstMessageOutbox } from "@/composer/outbox/queue";
 
@@ -11,6 +12,7 @@ const host = vi.hoisted(() => {
     getLastServerInfoMessage: vi.fn(() => ({ features: { creationLifecycle: true } })),
     getWorkspaceCreation: vi.fn<(key: string) => Promise<CreationSnapshot | null>>(),
     createWorkspace: vi.fn(),
+    getProvidersSnapshot: vi.fn(),
   };
   return {
     connection,
@@ -34,6 +36,12 @@ const host = vi.hoisted(() => {
 });
 
 // Exercise the real durable queue and startup loop without native attachment or host bootstrapping.
+const resolveModel = vi.hoisted(() => vi.fn());
+const catalog = vi.hoisted(() => ({ installed: true, resolver: true }));
+vi.mock("@/plugins/registry", () => ({
+  getFirstMessageModelResolver: () => (catalog.resolver ? resolveModel : null),
+  hasInstalledPluginCatalog: () => catalog.installed,
+}));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "unused-new-intent" }));
 vi.mock("@/runtime/host-runtime", () => ({ getHostRuntimeStore: () => host.store }));
 vi.mock("@/composer/outbox/attachments", () => ({
@@ -78,6 +86,10 @@ let stop: (() => void) | undefined;
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  resolveModel.mockReset();
+  catalog.installed = true;
+  catalog.resolver = true;
+  host.client.getProvidersSnapshot.mockReset().mockResolvedValue({ entries: [] });
   host.connection.online = true;
   host.client.isConnected = true;
   host.client.getLastServerInfoMessage.mockReturnValue({ features: { creationLifecycle: true } });
@@ -92,6 +104,144 @@ afterEach(() => {
 });
 
 describe("首消息 outbox 冷重启自动恢复", () => {
+  it.each([true, false])(
+    "unconfigured defaults use the first enabled ready provider without fixing a model (plugin resolver: %s)",
+    async (hasResolver) => {
+      const { default: storage } = await import("@react-native-async-storage/async-storage");
+      await storage.clear();
+      const runtime = await import("./first-message-outbox");
+      catalog.resolver = hasResolver;
+      resolveModel.mockResolvedValue(null);
+      host.client.getProvidersSnapshot.mockResolvedValue({
+        entries: [
+          { provider: "disabled", enabled: false, status: "ready" },
+          { provider: "loading", enabled: true, status: "loading" },
+          { provider: "codex", enabled: true, status: "ready" },
+        ],
+      });
+      host.client.createWorkspace.mockImplementation(async (input) => ({
+        creation: { ...completed, idempotencyKey: input.idempotencyKey },
+      }));
+      await runtime.firstMessageOutbox.enqueue({
+        id: "default-draft",
+        hostId: "host-one",
+        projectId: "project-one",
+        source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+        modelSelection: "default",
+        text: "离线首消息",
+        attachments: [],
+      });
+      await runtime.flushFirstMessageOutbox();
+      expect(host.client.createWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: expect.objectContaining({ config: { provider: "codex", cwd: "/repo" } }),
+        }),
+      );
+    },
+  );
+
+  it("expands compact provider snapshots before selecting the fallback provider", async () => {
+    const { default: storage } = await import("@react-native-async-storage/async-storage");
+    await storage.clear();
+    const runtime = await import("./first-message-outbox");
+    resolveModel.mockResolvedValue(null);
+    host.client.getProvidersSnapshot.mockResolvedValue({
+      entries: [],
+      snapshotHash: "compact-fallback",
+      generatedAt: "2026-01-01T00:00:00Z",
+      compactSnapshot: compactProviderSnapshot([
+        { provider: "codex", enabled: true, status: "ready" },
+      ]),
+    });
+    host.client.createWorkspace.mockImplementation(async (input) => ({
+      creation: { ...completed, idempotencyKey: input.idempotencyKey },
+    }));
+    await runtime.firstMessageOutbox.enqueue({
+      id: "default-draft",
+      hostId: "host-one",
+      projectId: "project-one",
+      source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+      modelSelection: "default",
+      text: "离线首消息",
+      attachments: [],
+    });
+    await runtime.flushFirstMessageOutbox();
+    expect(host.client.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({ config: { provider: "codex", cwd: "/repo" } }),
+      }),
+    );
+  });
+
+  it("waits for a plugin catalog and then a ready provider before automatically sending", async () => {
+    const { default: storage } = await import("@react-native-async-storage/async-storage");
+    await storage.clear();
+    const runtime = await import("./first-message-outbox");
+    catalog.installed = false;
+    catalog.resolver = false;
+    await runtime.firstMessageOutbox.enqueue({
+      id: "default-draft",
+      hostId: "host-one",
+      projectId: "project-one",
+      source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+      modelSelection: "default",
+      text: "离线首消息",
+      attachments: [],
+    });
+    await runtime.flushFirstMessageOutbox();
+    expect(host.client.getProvidersSnapshot).not.toHaveBeenCalled();
+    catalog.installed = true;
+    await runtime.flushFirstMessageOutbox();
+    expect(runtime.firstMessageOutbox.getSnapshot()[0]).toMatchObject({
+      status: "queued",
+      submitted: false,
+    });
+    host.client.getProvidersSnapshot.mockResolvedValue({
+      entries: [{ provider: "codex", enabled: true, status: "ready" }],
+    });
+    host.client.createWorkspace.mockImplementation(async (input) => ({
+      creation: { ...completed, idempotencyKey: input.idempotencyKey },
+    }));
+    await runtime.flushFirstMessageOutbox();
+    expect(runtime.firstMessageOutbox.getSnapshot()[0].status).toBe("sent");
+  });
+
+  it("flush uses the current project default for a saved default model intent", async () => {
+    const { default: storage } = await import("@react-native-async-storage/async-storage");
+    await storage.clear();
+    const runtime = await import("./first-message-outbox");
+    resolveModel.mockResolvedValue({
+      provider: "claude",
+      model: "current-project-model",
+      thinkingOptionId: "high",
+    });
+    host.client.createWorkspace.mockImplementation(async (input) => ({
+      creation: { ...completed, idempotencyKey: input.idempotencyKey },
+    }));
+    await runtime.firstMessageOutbox.enqueue({
+      id: "default-draft",
+      hostId: "host-one",
+      projectId: "project-one",
+      source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+      modelSelection: "default",
+      text: "离线首消息",
+      attachments: [],
+    });
+    await runtime.flushFirstMessageOutbox();
+    expect(resolveModel).toHaveBeenCalledExactlyOnceWith({ projectId: "project-one" });
+    expect(host.client.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          config: {
+            provider: "claude",
+            model: "current-project-model",
+            thinkingOptionId: "high",
+            cwd: "/repo",
+          },
+        }),
+      }),
+    );
+  });
   it.each(["sending", "unknown"] as const)(
     "启动自动查询持久化的 %s 并保存成功结果，不重新创建",
     async (status) => {

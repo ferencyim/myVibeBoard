@@ -19,6 +19,8 @@ function installation(): InstalledPlugin {
     invoke: async () => undefined,
     cleanup: () => undefined,
     settingsScreens: [],
+    projectSettingsSections: [],
+    firstMessageModelResolvers: [],
     surfaces: [],
     sidebarItems: { header: [], footer: [] },
     legacySidebarItems: [],

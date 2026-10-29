@@ -99,6 +99,9 @@ function FirstMessageOutboxRow({
       <Text style={styles.body} selectable>
         {entry.text || "（仅附件）"}
       </Text>
+      {entry.modelSelection === "default" ? (
+        <Text style={styles.context}>默认模型（联网后按项目设置）</Text>
+      ) : null}
       {entry.attachments.length > 0 ? (
         <Text style={styles.context}>附件：{entry.attachments.length}</Text>
       ) : null}
