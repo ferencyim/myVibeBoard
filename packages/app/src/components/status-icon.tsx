@@ -102,6 +102,7 @@ const styles = StyleSheet.create((theme) => ({
   surface0: { borderColor: theme.colors.surface0 },
   surface1: { borderColor: theme.colors.surface1 },
   surface2: { borderColor: theme.colors.surface2 },
+  surface4: { borderColor: theme.colors.surface4 },
   surfaceSidebar: { borderColor: theme.colors.surfaceSidebar },
   surfaceSidebarHover: { borderColor: theme.colors.surfaceSidebarHover },
   surfaceSidebarSelected: { borderColor: theme.colors.surfaceSidebarSelected },

@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import { Plus } from "lucide-react-native";
 import { IconButton } from "@/ui/icon-button";
 import { isNative } from "@/constants/platform";
 import { withUnistyles } from "react-native-unistyles";
-import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
+import type { PluginSidebarListItem, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useHosts } from "@/runtime/host-runtime";
 import { useSidebarViewStore } from "@/stores/sidebar-view-store";
@@ -29,6 +29,8 @@ function Group({
   onNavigate,
   theme,
   sidebarCompact,
+  onItemsChange,
+  externalCreateRequest,
 }: {
   plugin: InstalledPlugin;
   item: NonNullable<InstalledPlugin["sidebarGroups"]>[number];
@@ -36,6 +38,8 @@ function Group({
   onNavigate?: () => void;
   theme: PluginSurfaceProps["theme"];
   sidebarCompact: boolean;
+  onItemsChange?: (key: string, items: readonly PluginSidebarListItem[]) => void;
+  externalCreateRequest?: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -67,28 +71,51 @@ function Group({
     setCollapsed(false);
     setCreateRequest((value) => value + 1);
   }, []);
+  useEffect(() => {
+    if (externalCreateRequest) create();
+  }, [externalCreateRequest, create]);
+  const publish = useCallback(
+    (items: readonly PluginSidebarListItem[]) => {
+      onItemsChange?.(
+        `${plugin.serverId}:${plugin.id}:${item.id}`,
+        items.map((entry) => ({
+          ...entry,
+          render: (options) => (
+            <PluginInstallationProvider plugin={plugin}>
+              {entry.render(options)}
+            </PluginInstallationProvider>
+          ),
+        })),
+      );
+    },
+    [onItemsChange, plugin, item.id],
+  );
+  useEffect(() => () => publish([]), [publish]);
   const Component = item.Component;
   return (
     <View onPointerEnter={enter} onPointerLeave={leave}>
-      <SidebarSectionHeader
-        title={plugin.i18n.resolve(item.title, plugin.locale)}
-        collapsed={collapsed}
-        onToggle={toggle}
-      >
-        {item.createLabel && (hovered || isNative || compact) ? (
-          <IconButton
-            label={plugin.i18n.resolve(item.createLabel, plugin.locale)}
-            icon={Plus}
-            size="xs"
-            variant="ghost"
-            onPress={create}
-          />
-        ) : null}
-      </SidebarSectionHeader>
-      {!collapsed && (
+      {!onItemsChange && (
+        <SidebarSectionHeader
+          title={plugin.i18n.resolve(item.title, plugin.locale)}
+          collapsed={collapsed}
+          onToggle={toggle}
+        >
+          {item.createLabel && (hovered || isNative || compact) ? (
+            <IconButton
+              label={plugin.i18n.resolve(item.createLabel, plugin.locale)}
+              icon={Plus}
+              size="xs"
+              variant="ghost"
+              onPress={create}
+            />
+          ) : null}
+        </SidebarSectionHeader>
+      )}
+      {(!collapsed || onItemsChange) && (
         <SurfaceErrorBoundary installation={plugin} Surface={Component}>
           <PluginInstallationProvider plugin={plugin}>
             <Component
+              onItemsChange={onItemsChange ? publish : undefined}
               theme={theme}
               host={host}
               layout={layout}
@@ -113,15 +140,19 @@ const themeMapping = (theme: Theme) => ({ theme: toPluginTheme(theme) });
 export function PluginSidebarGroups({
   onNavigate,
   sidebarCompact = false,
+  onItemsChange,
+  createRequest,
 }: {
   onNavigate?: () => void;
   sidebarCompact?: boolean;
+  createRequest?: number;
+  onItemsChange?: (key: string, items: readonly PluginSidebarListItem[]) => void;
 }) {
   const plugins = useInstalledPlugins();
   const hosts = useHosts();
   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
   const groups = collectSidebarGroups(plugins, hostFilters);
-  return groups.map(({ plugin, item }) => (
+  return groups.map(({ plugin, item }, index) => (
     <ThemedGroup
       key={`${plugin.serverId}:${plugin.id}:${item.id}`}
       plugin={plugin}
@@ -129,6 +160,8 @@ export function PluginSidebarGroups({
       label={hosts.find((host) => host.serverId === plugin.serverId)?.label ?? plugin.serverId}
       onNavigate={onNavigate}
       sidebarCompact={sidebarCompact}
+      onItemsChange={onItemsChange}
+      externalCreateRequest={index === 0 ? createRequest : undefined}
       uniProps={themeMapping}
     />
   ));

@@ -1,3 +1,4 @@
+import { presentWorkspaceFlowTab } from "@/screens/workspace/workspace-flow-tab-presentation";
 import type { Theme } from "@/styles/theme";
 import { StatusIcon } from "@/components/status-icon";
 import { useCallback, useMemo, type ReactElement, type ReactNode } from "react";
@@ -81,21 +82,21 @@ function WorkspaceTabPresentationResolverInner({
   if (tab.target.kind === "draft" && tab.target.placeholder?.providerId === "task-flow") {
     flowTab = tab.target.placeholder;
   }
-  let flowStatus: string | null = null;
-  if (descriptor.statusBucket === "needs_input") flowStatus = "待审批";
-  else if (descriptor.statusBucket === "running") flowStatus = "忙碌";
-  const flowLabel =
-    flowTab && tab.target.kind === "agent" && flowStatus
-      ? `${flowTab.title.replace(/ · [^·]+$/, "")} · ${flowStatus}`
-      : flowTab?.title;
+  const flowPresentation = flowTab
+    ? presentWorkspaceFlowTab(
+        flowTab.title,
+        tab.target.kind === "draft" && tab.target.placeholder?.disabled === true,
+        descriptor.statusBucket,
+      )
+    : null;
   const presentation = useMemo(
     () => ({
-      disabled: tab.target.kind === "draft" && tab.target.placeholder?.disabled === true,
+      disabled: flowPresentation?.disabled ?? false,
       key: tab.key,
       kind: tab.kind,
-      label: flowLabel ?? descriptor.label,
+      label: flowPresentation?.label ?? descriptor.label,
       subtitle: descriptor.subtitle,
-      tooltip: descriptor.tooltip,
+      tooltip: flowPresentation?.tooltip ?? descriptor.tooltip,
       modified: attributes.modified,
       showCloseButton: !flowTab && registration.showCloseButton,
       titleState: descriptor.titleState,
@@ -105,14 +106,15 @@ function WorkspaceTabPresentationResolverInner({
     }),
     [
       flowTab,
-      flowLabel,
+      flowPresentation?.label,
+      flowPresentation?.disabled,
+      flowPresentation?.tooltip,
       descriptor.icon,
       descriptor.label,
       descriptor.tooltip,
       descriptor.statusBucket,
       descriptor.subtitle,
       descriptor.titleState,
-      tab.target,
       tab.key,
       tab.kind,
       attributes.modified,

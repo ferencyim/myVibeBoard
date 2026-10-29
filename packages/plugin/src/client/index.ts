@@ -21,6 +21,7 @@ export type {
   PluginPageRailItemContribution,
   PluginSidebarGroupContribution,
   PluginSidebarGroupProps,
+  PluginSidebarListItem,
   PluginSidebarWorkspaceProvider,
   PluginSidebarAgentActivity,
   PluginProjectSidebarGroupProps,

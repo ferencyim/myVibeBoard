@@ -94,8 +94,11 @@ export function useSidebarWorkspaceClassification(project: SidebarProjectEntry) 
       };
     }),
   );
-  return classifySidebarWorkspaces(
-    project.workspaces,
-    requests.map(({ host }, index) => ({ serverId: host.serverId, data: queries[index]?.data })),
-  );
+  return {
+    ...classifySidebarWorkspaces(
+      project.workspaces,
+      requests.map(({ host }, index) => ({ serverId: host.serverId, data: queries[index]?.data })),
+    ),
+    loading: queries.some((query) => query.isPending),
+  };
 }

@@ -3,8 +3,6 @@ import { ChevronDown, ChevronRight } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { DensityIcon } from "@/components/ui/density-icon";
-import { useIsCompactFormFactor } from "@/constants/layout";
-import { isNative } from "@/constants/platform";
 import { density } from "@/styles/density";
 
 /** A sidebar section label such as "Pinned" or "Workspaces". A section with `onToggle`
@@ -52,7 +50,6 @@ function CollapsibleTitle({
   onToggle: () => void;
   testID?: string;
 }) {
-  const isCompact = useIsCompactFormFactor();
   const accessibilityState = useMemo(() => ({ expanded: !collapsed }), [collapsed]);
 
   return (
@@ -63,16 +60,14 @@ function CollapsibleTitle({
       style={styles.toggle}
       testID={testID}
     >
-      {({ hovered }) => (
+      {() => (
         <>
           <Text style={styles.title}>{title}</Text>
-          {hovered || isNative || isCompact ? (
-            <DensityIcon
-              icon={collapsed ? ChevronRight : ChevronDown}
-              size="xs"
-              color="foregroundMuted"
-            />
-          ) : null}
+          <DensityIcon
+            icon={collapsed ? ChevronRight : ChevronDown}
+            size="xs"
+            color="foregroundMuted"
+          />
         </>
       )}
     </Pressable>
