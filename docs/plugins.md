@@ -12,6 +12,11 @@ Default first-message models can be resolved online with
 [resolver contract](../public-docs/plugins/reference.md#first-message-model-resolver).
 Keep project/global precedence in the plugin and durable intent/retry in the core outbox.
 
+Use `paseo.providers.snapshot({ cachedOnly: true })` for latency-sensitive model fallback.
+This reads existing catalogs without starting discovery, including when the cache is cold.
+Ordinary snapshot reads may start background refreshes. Keep slow creation outside plugin RPC
+requests and expose pending, success, and retryable failure through a status RPC.
+
 Project document entries and child pages are host-owned so offline cold starts can read cached
 Markdown and queue brief edits without executing cached plugin code. The vibe-board plugin owns
 snapshot RPCs and merge delivery; this flow does not require a project settings routing extension.

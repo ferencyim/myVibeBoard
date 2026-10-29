@@ -1,8 +1,16 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRpc, type PluginProjectSidebarItemProps } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { projectAgentOpenRpc, projectAgentStateRpc } from "../shared/project-agent";
+import {
+  createProjectAgentRequest,
+  deactivateProjectAgentRequest,
+  openProjectAgentRequest,
+  projectAgentPollInterval,
+  projectAgentPresentation,
+  receiveProjectAgentState,
+} from "./project-agent-sidebar";
 
 export function ProjectAgentSidebarItem({
   projectId,
@@ -14,6 +22,15 @@ export function ProjectAgentSidebarItem({
   const queryClient = useQueryClient();
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
+  const request = useMemo(() => createProjectAgentRequest(projectId), [projectId]);
+  useEffect(() => {
+    request.active = true;
+    setOpening(false);
+    setOpenError(null);
+    return () => {
+      deactivateProjectAgentRequest(request);
+    };
+  }, [request]);
   const styles = useMemo(
     () =>
       StyleSheet.create({
@@ -27,38 +44,41 @@ export function ProjectAgentSidebarItem({
   const state = useQuery({
     queryKey: ["vibe-board", "project-agent", projectId],
     queryFn: () => readProjectAgent({ projectId }),
-    refetchInterval: 15_000,
+    refetchInterval: (query) => projectAgentPollInterval(query.state.data),
     staleTime: 15_000,
   });
-  const open = useCallback(async () => {
-    if (opening) return;
-    setOpening(true);
-    setOpenError(null);
-    try {
-      const result = await openProjectAgent({ projectId });
-      queryClient.setQueryData(["vibe-board", "project-agent", projectId], result);
-      if (result.agentId) openAgent(result.agentId);
-      if (result.error) setOpenError(result.error);
-    } catch (reason) {
-      setOpenError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setOpening(false);
-    }
-  }, [opening, projectId, openProjectAgent, openAgent, queryClient]);
-  const error = openError ?? state.data?.error;
+  useEffect(() => {
+    receiveProjectAgentState(request, state.data, openAgent);
+  }, [state.data, request, openAgent]);
+  const open = useCallback(
+    () => openProjectAgentRequest(request, {
+      cancelQueries: () => queryClient.cancelQueries({
+        queryKey: ["vibe-board", "project-agent", projectId],
+      }),
+      open: (id) => openProjectAgent({ projectId: id }),
+      setState: (result) => queryClient.setQueryData(
+        ["vibe-board", "project-agent", projectId], result,
+      ),
+      setOpening,
+      setError: setOpenError,
+      openAgent,
+    }),
+    [request, projectId, openProjectAgent, openAgent, queryClient],
+  );
+  const { label, error, disabled } = projectAgentPresentation(state.data, opening, openError);
   return (
     <View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={error ? "项目 agent，环境异常" : "项目 agent"}
-        disabled={opening}
+        accessibilityLabel={label}
+        disabled={disabled}
         style={styles.row}
         onPress={open}
       >
-        <Text style={styles.label}>{opening ? "正在打开项目 agent…" : "项目 agent"}</Text>
+        <Text style={styles.label}>{label}</Text>
         {error ? <Text style={styles.error}>异常</Text> : null}
       </Pressable>
-      {openError ? <Text style={styles.detail}>{openError}</Text> : null}
+      {error ? <Text style={styles.detail}>{error}</Text> : null}
     </View>
   );
 }
