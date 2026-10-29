@@ -85,7 +85,7 @@ describe("plugin entry", () => {
     const context = { callerAgentId: "project-bot-agent", paseo: { plugins: {
       invoke: async (...args: unknown[]) => { calls.push(args); return {}; },
     } } };
-    for (const method of ["bots.list", "bots.create", "bots.open", "bots.archive", "vibe.master.bot_migration"]) {
+    for (const method of ["bots.list", "bots.create", "bots.open", "bots.state", "bots.archive", "vibe.master.bot_migration"]) {
       await expect(handlers.get(method)!({ id: "bot_other", kind: "independent", name: "绕过" }, context)).rejects.toThrow();
     }
     expect(calls).toEqual([]);

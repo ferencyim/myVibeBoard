@@ -142,6 +142,36 @@ async function runTestCatalogActivities(
 }
 
 describe("ProviderSnapshotManager public surface", () => {
+  test("cached-only reads neither discover cold providers nor refresh warm catalogs", async () => {
+    const isAvailable = vi.fn(async () => true);
+    const fetchCatalog = vi.fn(async () => ({
+      models: [{ provider: "codex", id: "cached", label: "Cached", isDefault: true }],
+      modes: [],
+    }));
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      extraClients: { codex: createExtraClient("codex", { isAvailable, fetchCatalog }) },
+    });
+    try {
+      manager.getCachedSnapshot();
+      manager.getCachedSnapshot("/repo/cold");
+      expect(isAvailable).not.toHaveBeenCalled();
+      expect(fetchCatalog).not.toHaveBeenCalled();
+      await manager.getProvider({ provider: "codex", wait: true });
+      const availabilityCalls = isAvailable.mock.calls.length;
+      const catalogCalls = fetchCatalog.mock.calls.length;
+      const snapshot = manager.getCachedSnapshot();
+      expect(
+        snapshot.records.find(({ entry }) => entry.provider === "codex")?.entry.models,
+      ).toEqual([{ provider: "codex", id: "cached", label: "Cached", isDefault: true }]);
+      manager.getCachedSnapshot();
+      expect(isAvailable).toHaveBeenCalledTimes(availabilityCalls);
+      expect(fetchCatalog).toHaveBeenCalledTimes(catalogCalls);
+    } finally {
+      manager.destroy();
+    }
+  });
+
   test("publishes one model per provider identity and retains the first definition", async () => {
     const first = { provider: "codex", id: "shared", label: "First", isDefault: true };
     const manager = new ProviderSnapshotManager({

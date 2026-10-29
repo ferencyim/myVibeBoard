@@ -39,6 +39,10 @@ export default function contribute(server: PluginServerContext) {
     userOnly(ctx.callerAgentId);
     return service.open(input.id);
   });
+  server.handle(rpc.botsStateRpc, (input, ctx) => {
+    userOnly(ctx.callerAgentId);
+    return service.state(input.id);
+  });
   server.handle(rpc.projectDefaultBotGetRpc, (input, ctx) => {
     userOnly(ctx.callerAgentId);
     return service.defaultBot(input.projectId);

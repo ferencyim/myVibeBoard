@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import type { PaseoApi, PaseoAgentCreateOptions, PaseoAgentSendOptions } from "@getpaseo/client";
 import { createProjectAgents } from "../server/project-agent/service";
 import { registerProjectAgents } from "../server/project-agent/register";
+import { UNRESOLVED_TAB_MODEL } from "../server/vibe/contract";
 
 function fixture() {
   const agents = new Map<
@@ -15,7 +17,7 @@ function fixture() {
       provider?: string;
     }
   >();
-  const sends = vi.fn(async () => {});
+  const sends = vi.fn(async (_text: string, _options: PaseoAgentSendOptions) => {});
   const append = vi.fn(async () => {});
   const order: string[] = [];
   const main = {
@@ -38,12 +40,12 @@ function fixture() {
       timeline: { append },
     };
   }
-  const createAgent = vi.fn(async (input) => {
+  const createAgent = vi.fn(async (input: Pick<PaseoAgentCreateOptions, "labels">) => {
     const id = "project-" + agents.size;
-    agents.set(id, { id, workspaceId: "root", labels: input.labels, status: "idle" });
+    agents.set(id, { id, workspaceId: "root", labels: input.labels ?? {}, status: "idle" });
     return handle(id);
   });
-  const workspaceCreate = vi.fn(async () => {
+  const workspaceCreate = vi.fn(async (_input: Parameters<PaseoApi["workspaces"]["create"]>[0]) => {
     order.push("workspace");
     return {
       id: "new",
@@ -64,20 +66,37 @@ function fixture() {
   });
   let defaultBotId = "bot_default";
   const botAgents = new Map<string, string>();
+  const botPending = new Map<string, Promise<void>>();
+  const botErrors = new Map<string, string>();
+  function botState(id: string) {
+    const agentId = botAgents.get(id);
+    if (botPending.has(id)) return { status: "creating", agentId: null, workspaceId: null, error: null };
+    if (botErrors.has(id)) return { status: "failed", agentId: null, workspaceId: null, error: botErrors.get(id) };
+    if (agentId && !agents.get(agentId)?.archivedAt) return { status: "ready", agentId, workspaceId: "root", error: null };
+    return { status: "idle", agentId: null, workspaceId: null, error: null };
+  }
   const invoke = vi.fn(async (_pluginId: string, method: string, input: { projectId?: string; id?: string }) => {
     if (method === "bots.list") return { bots: [...agents.values()].filter((agent) => agent.labels["vibe.bot"] === "bot_independent").map((agent) => ({ mainAgentId: agent.id })) };
     if (method === "project.default_bot.get")
       return { botId: defaultBotId, mainAgentId: botAgents.get(defaultBotId) ?? null };
+    if (method === "bots.state") return botState(input.id!);
     if (method === "bots.open") {
       const id = input.id!;
-      const previous = botAgents.get(id);
-      if (previous && !agents.get(previous)?.archivedAt)
-        return { agentId: previous, workspaceId: "root" };
-      const opened = await createAgent({ labels: {
-        "vibe.bot": id, "vibe.bot-thread": "main", "vibe.role": "project", "vibe.project_id": "p",
-      } });
-      botAgents.set(id, opened.id);
-      return { agentId: opened.id, workspaceId: "root" };
+      const current = botState(id);
+      if (current.status === "ready" || current.status === "creating") return { status: "creating", agentId: null, workspaceId: null, error: null };
+      botErrors.delete(id);
+      const pending = Promise.resolve().then(async () => {
+        const opened = await createAgent({ labels: {
+          "vibe.bot": id, "vibe.bot-thread": "main", "vibe.role": "project", "vibe.project_id": "p",
+        } });
+        botAgents.set(id, opened.id);
+        return;
+      }).catch((error: unknown) => {
+        botErrors.set(id, "创建项目 bot 失败：" + (error instanceof Error ? error.message : String(error)));
+      }).finally(() => { botPending.delete(id); });
+      botPending.set(id, pending);
+      await pending;
+      return botState(id);
     }
     throw new Error("unexpected RPC: " + method);
   });
@@ -101,7 +120,10 @@ function fixture() {
       create: workspaceCreate,
     },
     providers: {
-      listAvailable: async () => ({ providers: [{ provider: "codex", available: true }] }),
+      listAvailable: vi.fn(async () => ({ providers: [{ provider: "codex", available: true }] })),
+      snapshot: vi.fn(async (_options?: unknown) => ({
+        entries: [{ provider: "codex", enabled: true, status: "ready", models: [{ id: "default-model", isDefault: true }] }],
+      })),
       listModels: vi.fn(async () => ({ models: [{ id: "default-model", isDefault: true }] })),
     },
   };
@@ -168,23 +190,68 @@ function fixture() {
   };
 }
 
+async function openReady(service: ReturnType<typeof createProjectAgents>, open = true) {
+  if (open) await service.open("p");
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const result = await service.state("p");
+    if (result.status === "failed") throw new Error(result.error ?? "创建失败");
+    if (result.status === "ready") return result;
+    await Promise.resolve();
+  }
+  throw new Error("测试中项目 agent 未完成创建");
+}
+
 describe("项目 agent", () => {
   it("项目入口委托默认 bot 服务懒创建、并发复用，状态不创建会话", async () => {
     const f = fixture();
     expect((await f.service.state("p")).agentId).toBeNull();
     expect(f.createAgent).not.toHaveBeenCalled();
-    const [one, two] = await Promise.all([f.service.open("p"), f.service.open("p")]);
+    const [one, two] = await Promise.all([openReady(f.service), openReady(f.service)]);
     expect(one.agentId).toBe(two.agentId);
     expect(f.createAgent).toHaveBeenCalledTimes(1);
     expect(f.invoke).toHaveBeenCalledWith("vibe-bots", "bots.open", { id: "bot_default" });
     expect((await f.service.state("p")).agentId).toBe(one.agentId);
   });
+  it("内部发送等待同一后台创建，不丢失系统通知", async () => {
+    const f = fixture();
+    expect((await f.service.open("p")).status).toBe("creating");
+    await f.service.sendProject("p", "系统通知");
+    expect(f.createAgent).toHaveBeenCalledTimes(1);
+    expect(f.sends).toHaveBeenCalledWith("系统通知", expect.objectContaining({ sourceAgentId: expect.any(String) }));
+  });
+  it("bot 返回创建中时继续轮询，内部通知等就绪后仅发送一次", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      const invoke = f.invoke.getMockImplementation()!;
+      let ready = false;
+      f.invoke.mockImplementation(async (pluginId, method, input) => {
+        if (method === "bots.open") return { status: "creating", agentId: null, workspaceId: null, error: null };
+        if (method === "bots.state") return ready
+          ? { status: "ready", agentId: "background-main", workspaceId: "root", error: null }
+          : { status: "creating", agentId: null, workspaceId: null, error: null };
+        return invoke(pluginId, method, input);
+      });
+      expect((await f.service.open("p")).status).toBe("creating");
+      const sending = f.service.sendProject("p", "后台通知");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await f.service.state("p")).status).toBe("creating");
+      expect(f.sends).not.toHaveBeenCalled();
+      ready = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await sending;
+      expect(f.sends).toHaveBeenCalledExactlyOnceWith("后台通知", { sourceAgentId: "background-main" });
+      expect(f.invoke.mock.calls.filter(([, method]) => method === "bots.open")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("默认 bot 改变后入口与系统通知使用新默认，原 bot 仍可处理自己的需求", async () => {
     const f = fixture();
-    const first = (await f.service.open("p")).agentId!;
+    const first = (await openReady(f.service)).agentId!;
     await f.service.received(f.input(first) as never);
     f.setDefaultBot("bot_other");
-    const second = (await f.service.open("p")).agentId!;
+    const second = (await openReady(f.service)).agentId!;
     expect(second).not.toBe(first);
     expect((await f.service.state("p")).agentId).toBe(second);
     await f.service.sendProject("p", "环境通知");
@@ -194,11 +261,12 @@ describe("项目 agent", () => {
   });
   it("bot 服务失败显示错误并允许重试，不私自创建未登记的项目 agent", async () => {
     const f = fixture();
-    f.invoke.mockRejectedValueOnce(new Error("bot 服务暂不可用"));
-    await expect(f.service.open("p")).rejects.toThrow("bot 服务暂不可用");
+    f.invoke.mockRejectedValueOnce(new Error("项目 bot 服务暂不可用"));
+    expect((await f.service.open("p")).status).toBe("creating");
+    await expect(openReady(f.service, false)).rejects.toThrow("项目 bot 服务暂不可用");
     expect(f.createAgent).not.toHaveBeenCalled();
-    expect((await f.service.state("p")).error).toBe("bot 服务暂不可用");
-    expect((await f.service.open("p")).error).toBeNull();
+    expect((await f.service.state("p")).error).toContain("项目 bot 服务暂不可用");
+    expect((await openReady(f.service)).error).toBeNull();
   });
   it("项目 bot 模型解析保留项目预设、权限、指令与运行环境", async () => {
     const f = fixture();
@@ -216,16 +284,109 @@ describe("项目 agent", () => {
     expect((await f.service.resolveModel("p")).config.provider).toBe("codex/recent");
     f.taskRows.length = 0;
     expect((await f.service.resolveModel("p")).config.provider).toBe("codex/default-model");
-    expect(f.providers.listModels).toHaveBeenCalledWith("codex", { cwd: "/repo" });
+    expect(f.providers.snapshot).toHaveBeenCalledWith({ cwd: "/repo", cachedOnly: true });
+    expect(f.providers.listModels).not.toHaveBeenCalled();
   });
   it("目录不可用或无模型时不创建会话，中文错误引导用户选择具体模型", async () => {
     const f = fixture();
     f.taskRows.length = 0;
-    f.providers.listModels.mockRejectedValueOnce(new Error("目录离线"));
+    f.providers.snapshot.mockRejectedValueOnce(new Error("目录离线")).mockRejectedValueOnce(new Error("目录离线"));
     await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
-    f.providers.listModels.mockResolvedValue({ models: [] });
+    f.providers.snapshot.mockResolvedValue({ entries: [] });
     await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
     expect(f.createAgent).not.toHaveBeenCalled();
+  });
+  it("跳过正在初始化或失败 provider，只用缓存目录且不启动慢 provider 查询", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.listAvailable.mockImplementation(() => new Promise(() => {}));
+    f.providers.listModels.mockImplementation(() => new Promise(() => {}));
+    f.providers.snapshot.mockResolvedValue({ entries: [
+      { provider: "slow", enabled: true, status: "loading", models: [] },
+      { provider: "failed", enabled: true, status: "error", models: [] },
+      { provider: "disabled", enabled: false, status: "ready", models: [{ id: "unused", isDefault: true }] },
+      { provider: "codex", enabled: true, status: "ready", models: [{ id: "cached", isDefault: true }] },
+    ] });
+    const selected = await f.service.resolveModel("p");
+    expect(selected.config.provider).toBe("codex/cached");
+    expect(f.providers.listAvailable).not.toHaveBeenCalled();
+    expect(f.providers.listModels).not.toHaveBeenCalled();
+    expect(f.providers.snapshot).toHaveBeenCalledWith({ cachedOnly: true });
+  });
+  it("缓存 scope 查询超时后使用另一 scope，所有 scope 超时则失败且可重试", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.taskRows.length = 0;
+      f.providers.snapshot.mockImplementationOnce(() => new Promise(() => {}));
+      const selection = f.service.resolveModel("p");
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect((await selection).config.provider).toBe("codex/default-model");
+      const failed = fixture();
+      failed.taskRows.length = 0;
+      failed.providers.snapshot.mockImplementation(() => new Promise(() => {}));
+      const failure = expect(failed.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+      await vi.advanceTimersByTimeAsync(1_500);
+      await failure;
+      failed.providers.snapshot.mockResolvedValue({ entries: [{ provider: "codex", enabled: true, status: "loading", models: [{ id: "stale", isDefault: true }] }] });
+      expect((await failed.service.resolveModel("p")).config.provider).toBe("codex/stale");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("缓存按 provider 顺序合并，优先采用该 provider 的项目目录缓存", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.snapshot.mockImplementation(async (options) => ({ entries: (options as { cwd?: string }).cwd ? [
+      { provider: "first", enabled: true, status: "loading", models: [] },
+      { provider: "second", enabled: true, status: "ready", models: [{ id: "scoped", isDefault: true }] },
+    ] : [
+      { provider: "first", enabled: true, status: "ready", models: [{ id: "global", isDefault: true }] },
+      { provider: "second", enabled: true, status: "ready", models: [{ id: "other", isDefault: true }] },
+    ] }));
+    expect((await f.service.resolveModel("p")).config.provider).toBe("first/global");
+    const scoped = fixture();
+    scoped.taskRows.length = 0;
+    scoped.providers.snapshot.mockImplementation(async (options) => ({ entries: [{
+      provider: "codex", enabled: true, status: "ready", models: [{ id: (options as { cwd?: string }).cwd ? "scoped" : "global", isDefault: true }],
+    }] }));
+    expect((await scoped.service.resolveModel("p")).config.provider).toBe("codex/scoped");
+  });
+  it("没有历史任务仍解析目录默认模型，并优先默认标记", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.snapshot.mockResolvedValue({
+      entries: [{ provider: "codex", enabled: true, status: "ready", models: [
+        { id: "other", isDefault: false },
+        { id: "chosen", isDefault: true },
+      ] }],
+    });
+    expect((await f.service.resolveModel("p")).config.provider).toBe("codex/chosen");
+  });
+  it("最近任务尚未解析模型时仍查询目录，目录失败以中文引导设置", async () => {
+    const f = fixture();
+    f.main.tabs[0].model = UNRESOLVED_TAB_MODEL;
+    f.providers.snapshot.mockRejectedValueOnce(new Error("catalog unavailable")).mockRejectedValueOnce(new Error("catalog unavailable"));
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    expect(f.createAgent).not.toHaveBeenCalled();
+    expect((await f.service.resolveModel("p")).config.provider).toBe("codex/default-model");
+  });
+  it("没有可用 provider 时引导设置且不创建项目 agent", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.snapshot.mockResolvedValue({ entries: [] });
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    expect(f.providers.listModels).not.toHaveBeenCalled();
+    expect(f.createAgent).not.toHaveBeenCalled();
+  });
+  it("目录未标默认时采用目录首项，缺少模型则引导设置且不创建", async () => {
+    const f = fixture();
+    f.taskRows.length = 0;
+    f.providers.snapshot.mockResolvedValue({ entries: [] });
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    expect(f.createAgent).not.toHaveBeenCalled();
+    f.providers.snapshot.mockResolvedValue({ entries: [{ provider: "codex", enabled: true, status: "ready", models: [{ id: "first", isDefault: false }] }] });
+    expect((await f.service.resolveModel("p")).config.provider).toBe("codex/first");
   });
   it("旧任务工作区失效不阻断项目入口和正常任务路由", async () => {
     const f = fixture();
@@ -235,7 +396,7 @@ describe("项目 agent", () => {
       if (id === "missing") throw new Error("workspace missing");
       return normal();
     };
-    const id = (await f.service.open("p")).agentId!;
+    const id = (await openReady(f.service)).agentId!;
     expect((await f.service.tasksFor(id)).plans).toHaveLength(1);
     await f.service.received(f.input(id) as never);
     await f.service.route(id, { workspaceId: "task", text: "用户原话" });
@@ -254,7 +415,7 @@ describe("项目 agent", () => {
   });
   it("只有原生成功投递事件授予原话权限，附带附件且只消费一次", async () => {
     const f = fixture();
-    const opened = await f.service.open("p");
+    const opened = await openReady(f.service);
     const id = opened.agentId!;
     await expect(f.service.route(id, { workspaceId: "task", text: "用户原话" })).rejects.toThrow(
       "真实用户",
@@ -288,7 +449,7 @@ describe("项目 agent", () => {
   });
   it("澄清答复与系统通知不冒充用户，重启后仍路由原始需求", async () => {
     const f = fixture();
-    const id = (await f.service.open("p")).agentId!;
+    const id = (await openReady(f.service)).agentId!;
     await f.service.received(f.input(id) as never);
     await f.service.received(f.input(id, "续接已有任务", "u2") as never);
     await f.service.sendProject("p", "系统通知");
@@ -307,7 +468,7 @@ describe("项目 agent", () => {
   });
   it("同一输入并发 route 与 create 只准一个操作，验证失败释放临界区", async () => {
     const f = fixture();
-    const id = (await f.service.open("p")).agentId!;
+    const id = (await openReady(f.service)).agentId!;
     await f.service.received(f.input(id) as never);
     const outcomes = await Promise.allSettled([
       f.service.route(id, { workspaceId: "task", text: "用户原话" }),
@@ -324,7 +485,7 @@ describe("项目 agent", () => {
   });
   it("同文需求需明确来源，超过缓存上限显示重发原因", async () => {
     const f = fixture();
-    const id = (await f.service.open("p")).agentId!;
+    const id = (await openReady(f.service)).agentId!;
     await f.service.received(f.input(id) as never);
     await f.service.received(f.input(id, "用户原话", "u2") as never);
     await expect(f.service.route(id, { workspaceId: "task", text: "用户原话" })).rejects.toThrow(
@@ -347,7 +508,7 @@ describe("项目 agent", () => {
   });
   it("任务创建先预建流程角色再投递，重试复用工作区与主会话", async () => {
     const f = fixture();
-    const id = (await f.service.open("p")).agentId!;
+    const id = (await openReady(f.service)).agentId!;
     await f.service.received(f.input(id) as never);
     f.sends.mockRejectedValueOnce(new Error("超时"));
     await expect(f.service.create(id, { text: "用户原话" })).rejects.toThrow("超时");
@@ -397,7 +558,7 @@ describe("独立 bot 跨项目工具", () => {
     f.agents.set("independent", { id: "independent", workspaceId: "bot-home", labels: { "vibe.bot": "bot_independent", "vibe.bot-thread": "main" }, status: "idle" });
     await expect(f.service.tasksFor("independent")).rejects.toThrow("必须指定");
     await expect(f.service.tasksFor("independent", "missing")).rejects.toThrow("项目不存在");
-    const own = (await f.service.open("p")).agentId!;
+    const own = (await openReady(f.service)).agentId!;
     await expect(f.service.tasksFor(own, "other")).rejects.toThrow("只能操作本项目");
     await expect(f.service.projectsFor(own)).rejects.toThrow("仅供独立 bot");
   });

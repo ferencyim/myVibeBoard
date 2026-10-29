@@ -4,6 +4,7 @@ import { z } from "zod";
 export const PROJECT_AGENT_ROLE_LABEL = "vibe.role";
 export const PROJECT_AGENT_PROJECT_LABEL = "vibe.project_id";
 export const ProjectAgentStateSchema = z.object({
+  status: z.enum(["idle", "creating", "ready", "failed"]),
   agentId: z.string().nullable(),
   workspaceId: z.string().nullable(),
   error: z.string().nullable(),

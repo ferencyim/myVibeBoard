@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PaseoAgentCreateOptions, PaseoAgentSendOptions } from "@getpaseo/client";
+import type { PaseoAgentCreateOptions, PaseoAgentSendOptions, PaseoProviderSnapshotResult } from "@getpaseo/client";
 import { createBotService, type BotService } from "../server/service";
 import { createVibeStore } from "../server/vibe/db/commands";
 import { migrateOwner } from "../server/vibe/db/migrate";
@@ -84,12 +84,23 @@ function fixture() {
     },
     plugins: { invoke },
     providers: {
-      listAvailable: async () => ({ providers: [{ provider: "codex", available: true }, { provider: "claude", available: true }] }),
-      listModels: async (_provider: string) => ({ models: [
+      listAvailable: vi.fn(async () => ({ providers: [{ provider: "codex", available: true }, { provider: "claude", available: true }] })),
+      listModels: vi.fn(async (_provider: string) => ({ models: [
         { id: "initial", label: "初始模型", isDefault: true, thinkingOptions: [{ id: "high", label: "高" }] },
         { id: "replacement", label: "替换模型", isDefault: false, thinkingOptions: [{ id: "high", label: "高" }] },
-      ] }),
-      listModes: async (_provider: string) => ({ modes: [{ id: "accept-edits", label: "允许编辑" }] }),
+      ] })),
+      listModes: vi.fn(async (_provider: string) => ({ modes: [{ id: "accept-edits", label: "允许编辑" }] })),
+      snapshot: vi.fn(async (_options?: unknown): Promise<PaseoProviderSnapshotResult> => ({
+        generatedAt: "2026-10-29T00:00:00.000Z", requestId: "cached-models",
+        entries: ["codex", "claude"].map(provider => ({
+          provider, enabled: true, status: "ready" as const,
+          models: [
+            { provider, id: "initial", label: "初始模型", isDefault: true, thinkingOptions: [{ id: "high", label: "高" }] },
+            { provider, id: "replacement", label: "替换模型", isDefault: false, thinkingOptions: [{ id: "high", label: "高" }] },
+          ],
+          modes: [{ id: "accept-edits", label: "允许编辑" }],
+        })),
+      })),
     },
   };
   function start() {
@@ -102,34 +113,109 @@ function fixture() {
   function seedLegacy(id: string, labels: Record<string, string>) {
     agents.set(id, { id, workspaceId: "project-root", cwd: "/project-repo", provider: "codex", model: "initial", thinkingOptionId: "high", status: "idle", labels, updatedAt: "2026-10-28T00:00:00.000Z", archivedAt: null });
   }
-  return { db, service, start, createProjectBot, agents, createAgent, setModel, setThinking, send, setLabels, invoke, seedLegacy };
+  return { api, db, service, start, createProjectBot, agents, createAgent, setModel, setThinking, send, setLabels, invoke, seedLegacy };
 }
 
 describe("bot 服务主对话与模型变更", () => {
+  it("慢创建立即返回创建中，同 bot 单飞且同项目其他 bot 独立创建", async () => {
+    const f = fixture();
+    const one = await f.createProjectBot();
+    const two = await f.createProjectBot();
+    const create = f.createAgent.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    f.createAgent.mockImplementationOnce(async (input) => { await gate; return create(input); });
+    try {
+      const creating = { status: "creating", agentId: null, workspaceId: null, error: null };
+      expect(await f.service.open(one.id)).toEqual(creating);
+      expect(await f.service.open(one.id)).toEqual(creating);
+      for (let attempt = 0; attempt < 100; attempt++) await Promise.resolve();
+      expect(f.createAgent).toHaveBeenCalledTimes(1);
+      expect(await f.service.state(one.id)).toEqual(creating);
+      const other = await f.service.waitOpen(two.id);
+      expect(f.createAgent).toHaveBeenCalledTimes(2);
+      expect(await f.service.defaultBot("p")).toEqual({ botId: one.id, mainAgentId: null });
+      release();
+      const ready = await f.service.waitOpen(one.id);
+      expect(ready.agentId).not.toBe(other.agentId);
+      expect(await f.service.state(one.id)).toEqual({ status: "ready", ...ready, error: null });
+      expect(f.createAgent).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+    }
+  });
+
+  it("后台创建失败保留中文原因，状态轮询不重建，显式重试成功", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    f.createAgent.mockRejectedValueOnce(new Error("provider unavailable"));
+    expect((await f.service.open(bot.id)).status).toBe("creating");
+    let failed = await f.service.state(bot.id);
+    for (let attempt = 0; attempt < 200 && failed.status === "creating"; attempt++) {
+      await Promise.resolve();
+      failed = await f.service.state(bot.id);
+    }
+    expect(failed).toMatchObject({ status: "failed", agentId: null, error: expect.stringContaining("创建") });
+    expect(await f.service.state(bot.id)).toEqual(failed);
+    expect(f.createAgent).toHaveBeenCalledTimes(1);
+    const ready = await f.service.waitOpen(bot.id);
+    expect(await f.service.state(bot.id)).toEqual({ status: "ready", ...ready, error: null });
+    expect(f.createAgent).toHaveBeenCalledTimes(2);
+    expect(f.createAgent.mock.calls[1][0]).toEqual(f.createAgent.mock.calls[0][0]);
+  });
+
+  it("打开只读缓存模型和权限目录，不启动慢 provider 探测", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    f.api.providers.listAvailable.mockClear().mockImplementation(() => new Promise(() => {}));
+    f.api.providers.listModels.mockClear().mockImplementation(() => new Promise(() => {}));
+    f.api.providers.listModes.mockClear().mockImplementation(() => new Promise(() => {}));
+    expect((await f.service.open(bot.id)).status).toBe("creating");
+    const ready = await f.service.waitOpen(bot.id);
+    expect(await f.service.state(bot.id)).toEqual({ status: "ready", ...ready, error: null });
+    expect(f.api.providers.snapshot).toHaveBeenCalledWith(expect.objectContaining({ cachedOnly: true }));
+    expect(f.api.providers.listAvailable).not.toHaveBeenCalled();
+    expect(f.api.providers.listModels).not.toHaveBeenCalled();
+    expect(f.api.providers.listModes).not.toHaveBeenCalled();
+  });
+
   it("创建资料不创建会话，首次并发打开只创建一次并复用主对话", async () => {
     const f = fixture();
     const bot = await f.createProjectBot();
     expect(bot.mainAgentId).toBeNull();
     expect(f.createAgent).not.toHaveBeenCalled();
-    const [first, concurrent] = await Promise.all([f.service.open(bot.id), f.service.open(bot.id)]);
+    const [first, concurrent] = await Promise.all([f.service.waitOpen(bot.id), f.service.waitOpen(bot.id)]);
     expect(first).toEqual(concurrent);
-    expect(await f.service.open(bot.id)).toEqual(first);
+    expect(await f.service.waitOpen(bot.id)).toEqual(first);
     expect(f.createAgent).toHaveBeenCalledTimes(1);
     expect(f.createAgent).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/project-repo", labels: { "vibe.bot": bot.id, "vibe.bot-thread": "main", "vibe.role": "project", "vibe.project_id": "p" } }));
     expect(f.service.bots.require(bot.id).mainAgentId).toBe(first.agentId);
   });
 
+  it("主对话归档后同 bot 重建，新的创建代次不复用旧幂等键", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    const previous = await f.service.waitOpen(bot.id);
+    f.agents.get(previous.agentId)!.archivedAt = "2026-10-29T01:00:00.000Z";
+    expect((await f.service.open(bot.id)).status).toBe("creating");
+    const rebuilt = await f.service.waitOpen(bot.id);
+    expect(rebuilt.agentId).not.toBe(previous.agentId);
+    expect(f.service.bots.require(bot.id).mainAgentId).toBe(rebuilt.agentId);
+    expect(f.createAgent.mock.calls[1][0].idempotencyKey).not.toBe(f.createAgent.mock.calls[0][0].idempotencyKey);
+    expect(f.agents.get(previous.agentId)?.archivedAt).toBe("2026-10-29T01:00:00.000Z");
+  });
+
   it("同 provider 换模型调用宿主 setModel，保留 bot、主会话、记忆与历史入口", async () => {
     const f = fixture();
     const bot = await f.createProjectBot();
-    const opened = await f.service.open(bot.id);
+    const opened = await f.service.waitOpen(bot.id);
     const memory = f.service.bots.memoryAdd(bot.id, "先解释原因", true);
     const updated = await f.service.update(bot.id, { model: "replacement", thinking: "high" });
     expect(f.setModel).toHaveBeenCalledWith(opened.agentId, "replacement");
     expect(f.setThinking).toHaveBeenCalledWith(opened.agentId, "high");
     expect(updated).toMatchObject({ id: bot.id, mainAgentId: opened.agentId, provider: "codex", model: "replacement", thinking: "high", pendingModel: false });
     expect(updated.memories).toEqual([memory]);
-    expect(await f.service.open(bot.id)).toEqual(opened);
+    expect(await f.service.waitOpen(bot.id)).toEqual(opened);
     expect(f.createAgent).toHaveBeenCalledTimes(1);
     expect(f.invoke).not.toHaveBeenCalled();
   });
@@ -137,7 +223,7 @@ describe("bot 服务主对话与模型变更", () => {
   it("已关闭的主对话先恢复再换模型，保留原 agent", async () => {
     const f = fixture();
     const bot = await f.createProjectBot();
-    const opened = await f.service.open(bot.id);
+    const opened = await f.service.waitOpen(bot.id);
     f.agents.get(opened.agentId)!.status = "closed";
     const updated = await f.service.update(bot.id, { model: "replacement" });
     expect(f.agents.get(opened.agentId)?.status).toBe("idle");
@@ -149,11 +235,11 @@ describe("bot 服务主对话与模型变更", () => {
   it("忙碌期间仅保存待应用设置，空闲后应用并清除 pending", async () => {
     const f = fixture();
     const bot = await f.createProjectBot();
-    const opened = await f.service.open(bot.id);
+    const opened = await f.service.waitOpen(bot.id);
     f.agents.get(opened.agentId)!.status = "running";
     expect(await f.service.update(bot.id, { model: "replacement" })).toMatchObject({ mainAgentId: opened.agentId, pendingModel: true });
     expect(f.setModel).not.toHaveBeenCalled();
-    expect(await f.service.open(bot.id)).toEqual(opened);
+    expect(await f.service.waitOpen(bot.id)).toEqual(opened);
     expect(f.setModel).not.toHaveBeenCalled();
     f.agents.get(opened.agentId)!.status = "idle";
     await f.service.apply(bot.id);
@@ -165,7 +251,7 @@ describe("bot 服务主对话与模型变更", () => {
   it("换 provider 向 board 读取交接包，创建新主对话并保留旧会话和 bot 记忆", async () => {
     const f = fixture();
     const bot = await f.createProjectBot();
-    const before = await f.service.open(bot.id);
+    const before = await f.service.waitOpen(bot.id);
     const memory = f.service.bots.memoryAdd(bot.id, "使用中文");
     const updated = await f.service.update(bot.id, { provider: "claude", model: "replacement" });
     expect(f.invoke).toHaveBeenCalledWith("vibe-board", "vibe.bot.handoff", { agentId: before.agentId });
@@ -176,7 +262,7 @@ describe("bot 服务主对话与模型变更", () => {
     expect(f.send).toHaveBeenCalledWith(updated.mainAgentId, "交接包：未决问题与下一步", { sourceAgentId: updated.mainAgentId });
     expect(f.agents.get(before.agentId)).toMatchObject({ provider: "codex", archivedAt: null });
     expect(f.agents.get(updated.mainAgentId!)).toMatchObject({ provider: "claude", labels: expect.objectContaining({ "vibe.bot": bot.id }) });
-    expect((await f.service.open(bot.id)).agentId).toBe(updated.mainAgentId);
+    expect((await f.service.waitOpen(bot.id)).agentId).toBe(updated.mainAgentId);
     expect(f.setModel).not.toHaveBeenCalled();
   });
 });
@@ -194,8 +280,8 @@ it("真实旧总 agent 与项目 agent 无损迁移，重启不重复建 bot 且
   expect(f.service.prompt(master)).toContain("按需使用");
   expect(project).toMatchObject({ name: "项目 bot", mainAgentId: "legacy-project" });
   expect(await f.service.defaultBot("p")).toEqual({ botId: project.id, mainAgentId: "legacy-project" });
-  expect(await f.service.open(master.id)).toEqual({ agentId: "legacy-master", workspaceId: "project-root" });
-  expect(await f.service.open(project.id)).toEqual({ agentId: "legacy-project", workspaceId: "project-root" });
+  expect(await f.service.waitOpen(master.id)).toEqual({ agentId: "legacy-master", workspaceId: "project-root" });
+  expect(await f.service.waitOpen(project.id)).toEqual({ agentId: "legacy-project", workspaceId: "project-root" });
   await f.service.update(master.id, { name: "我的总助理", instructions: "保留说明" });
   const memory = f.service.bots.memoryAdd(master.id, "保留经验");
   await f.service.close();
@@ -216,7 +302,7 @@ describe("个人记忆送达", () => {
     const f = fixture();
     const bot = await f.createProjectBot();
     f.service.bots.memoryAdd(bot.id, "回答优先使用中文", true);
-    const first = await f.service.open(bot.id);
+    const first = await f.service.waitOpen(bot.id);
     expect(f.createAgent.mock.calls[0][0].config.systemPrompt).toContain("回答优先使用中文");
     expect(f.service.memoryDelivery.prepare(bot.id, first.agentId, f.service.bots.memories(bot.id), [f.service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n"))).toBeUndefined();
     await f.service.update(bot.id, { provider: "claude", model: "replacement" });
@@ -231,7 +317,7 @@ describe("个人记忆送达", () => {
     const keep = f.service.bots.memoryAdd(bot.id, "不变的条目");
     const edit = f.service.bots.memoryAdd(bot.id, "旧内容");
     const remove = f.service.bots.memoryAdd(bot.id, "将删除");
-    const opened = await f.service.open(bot.id);
+    const opened = await f.service.waitOpen(bot.id);
     f.service.bots.memoryAdd(bot.id, "新内容");
     f.service.bots.memoryUpdate(bot.id, edit.id, { text: "修改后" });
     f.service.bots.memoryRemove(bot.id, remove.id);
@@ -255,8 +341,8 @@ describe("个人记忆送达", () => {
     const f = fixture();
     const one = await f.createProjectBot();
     const two = await f.createProjectBot();
-    const first = await f.service.open(one.id);
-    const second = await f.service.open(two.id);
+    const first = await f.service.waitOpen(one.id);
+    const second = await f.service.waitOpen(two.id);
     f.service.bots.memoryAdd(one.id, "超长".repeat(4000), true);
     const delivery = f.service.memoryDelivery.prepare(one.id, first.agentId, f.service.bots.memories(one.id), f.service.prompt(one))!;
     expect(delivery.context).toContain("[记忆超出预算，已截断]");
@@ -277,7 +363,6 @@ it("旧调度提示词不迁入独立 bot，模型通知权限仍迁移", async 
   const bot = f.service.bots.list({ kind: "independent" })[0]!;
   expect(bot.name).toBe("助手");
   expect(bot.instructions).toBe("");
-  expect(bot.instructions).toBe("按我写的角色说明回答");
   expect(bot).toMatchObject({
     provider: "codex", model: "initial", thinking: "high", permissionMode: "full",
     notifications: { enabled: false, completed: false, failed: true },

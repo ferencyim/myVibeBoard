@@ -20,6 +20,7 @@ it.each([
   ["bots.list", { projectId: "other-project" }],
   ["bots.create", { kind: "project", projectId: "other-project", name: "越权 bot" }],
   ["bots.open", { id: "bot_other" }],
+  ["bots.state", { id: "bot_other" }],
   ["bots.archive", { id: "bot_other" }],
 ])("项目 bot RPC 代理 %s 拒绝 agent 调用并且不转发", async (method, input) => {
   const f = fixture();

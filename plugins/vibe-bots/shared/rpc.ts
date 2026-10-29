@@ -35,10 +35,21 @@ export const botsArchiveRpc = defineRpc({
   input: z.object({ id: z.string() }),
   output: z.object({ ok: z.literal(true) }),
 });
+export const BotOpenStateSchema = z.object({
+  status: z.enum(["idle", "creating", "ready", "failed"]),
+  agentId: z.string().nullable(),
+  workspaceId: z.string().nullable(),
+  error: z.string().nullable(),
+});
 export const botsOpenRpc = defineRpc({
   name: "bots.open",
   input: z.object({ id: z.string() }),
-  output: z.object({ agentId: z.string(), workspaceId: z.string().nullable() }),
+  output: BotOpenStateSchema,
+});
+export const botsStateRpc = defineRpc({
+  name: "bots.state",
+  input: z.object({ id: z.string() }),
+  output: BotOpenStateSchema,
 });
 export const projectDefaultBotGetRpc = defineRpc({
   name: "project.default_bot.get",

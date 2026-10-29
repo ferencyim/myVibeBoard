@@ -3,7 +3,8 @@ import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View, StyleSheet } from "react-native";
-import { botsListRpc, botsCreateRpc, botsOpenRpc, botsArchiveRpc } from "../shared/rpc";
+import { botsListRpc, botsCreateRpc, botsArchiveRpc } from "../shared/rpc";
+import { useBotConversation } from "./use-bot-conversation";
 
 export function MasterScreen({ theme, navigation }: PluginScreenProps) {
   const list = useRpc(botsListRpc);
@@ -57,7 +58,8 @@ interface BotRowProps extends Pick<PluginScreenProps, "theme" | "navigation"> {
   busy: boolean;
 }
 function BotRow({ bot, theme, navigation, busy }: BotRowProps) {
-  const open = useRpc(botsOpenRpc);
+  const openAgent = useCallback((id: string) => navigation?.openAgent({ agentId: id }), [navigation]);
+  const conversation = useBotConversation(bot.id, openAgent);
   const archive = useRpc(botsArchiveRpc);
   const client = useQueryClient();
   const [working, setWorking] = useState(false);
@@ -76,7 +78,7 @@ function BotRow({ bot, theme, navigation, busy }: BotRowProps) {
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setWorking(false); }
   }, [client]);
-  const openBot = useCallback(() => { void act(async () => { const result = await open({ id: bot.id }); navigation?.openAgent({ agentId: result.agentId }); }); }, [act, open, bot.id, navigation]);
+  const openBot = useCallback(() => { void conversation.open(); }, [conversation]);
   const profile = useCallback(() => { navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "profile", params: { botId: bot.id } }); }, [navigation, bot.id]);
   const archiveBot = useCallback(() => { void act(() => archive({ id: bot.id })); }, [act, archive, bot.id]);
   return <View style={styles.card}>
@@ -85,11 +87,12 @@ function BotRow({ bot, theme, navigation, busy }: BotRowProps) {
       <View style={styles.names}><Text style={styles.text}>{bot.name}</Text><Text style={styles.muted}>{bot.title}</Text></View>
     </View>
     <View style={styles.actions}>
-      <Pressable accessibilityRole="button" disabled={busy || working || !navigation} style={styles.button} onPress={openBot}><Text style={styles.text}>打开对话</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={busy || working || conversation.disabled || !navigation} style={styles.button} onPress={openBot}><Text style={styles.text}>{conversation.label}</Text></Pressable>
       {navigation?.openPluginScreen ? <Pressable accessibilityRole="button" disabled={busy || working} style={styles.button} onPress={profile}><Text style={styles.text}>资料 / 改名 / 记忆</Text></Pressable> : null}
       <Pressable accessibilityRole="button" disabled={busy || working} style={styles.button} onPress={archiveBot}><Text style={styles.danger}>归档</Text></Pressable>
     </View>
     {error ? <Text style={styles.danger}>{error}</Text> : null}
+    {conversation.error ? <Text style={styles.danger}>{conversation.error}</Text> : null}
   </View>;
 }
 

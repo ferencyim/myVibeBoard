@@ -288,6 +288,11 @@ export class ProviderSnapshotManager {
     return this.getSnapshotForTarget(target);
   }
 
+  getCachedSnapshot(cwd?: string): ProviderSnapshot {
+    const target = resolveProviderSnapshotTarget(cwd);
+    return this.getOrCreateTarget(target.snapshotCwd).snapshot;
+  }
+
   async refreshSnapshotForCwd(options: ProviderSnapshotRefreshOptions): Promise<void> {
     const snapshotCwd = resolveSnapshotCwd(options.cwd);
     const target = createWorkspaceSnapshotTarget(snapshotCwd);

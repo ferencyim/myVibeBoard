@@ -1,6 +1,7 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { BotCreateSchema, BotMemorySchema, BotSchema } from "./vibe/contract/bots";
+import { ProjectAgentStateSchema } from "./project-agent";
 
 const BotViewSchema = BotSchema.extend({
   memories: z.array(BotMemorySchema),
@@ -19,7 +20,12 @@ export const projectBotsCreateRpc = defineRpc({
 export const projectBotsOpenRpc = defineRpc({
   name: "bots.open",
   input: z.object({ id: z.string().min(1) }),
-  output: z.object({ agentId: z.string(), workspaceId: z.string().nullable() }),
+  output: ProjectAgentStateSchema,
+});
+export const projectBotsStateRpc = defineRpc({
+  name: "bots.state",
+  input: z.object({ id: z.string().min(1) }),
+  output: ProjectAgentStateSchema,
 });
 export const projectBotsArchiveRpc = defineRpc({
   name: "bots.archive",

@@ -420,7 +420,10 @@ export class ProviderCatalogSession {
     msg: Extract<SessionInboundMessage, { type: "get_providers_snapshot_request" }>,
   ): Promise<void> {
     const cwd = msg.cwd?.trim() ? resolveSnapshotCwd(expandTilde(msg.cwd)) : undefined;
-    const snapshot = this.visibleSnapshot(this.providerSnapshotManager.getSnapshot(cwd));
+    const cached = msg.cachedOnly
+      ? this.providerSnapshotManager.getCachedSnapshot(cwd)
+      : this.providerSnapshotManager.getSnapshot(cwd);
+    const snapshot = this.visibleSnapshot(cached);
     this.host.emit({
       type: "get_providers_snapshot_response",
       payload: {

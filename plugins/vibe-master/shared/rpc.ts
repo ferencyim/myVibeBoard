@@ -253,7 +253,14 @@ export const botsListRpc = defineRpc({
   output: z.object({ bots: z.array(BotViewSchema) }),
 });
 export const botsCreateRpc = defineRpc({ name: "bots.create", input: BotCreateSchema, output: z.object({ bot: BotViewSchema }) });
-export const botsOpenRpc = defineRpc({ name: "bots.open", input: z.object({ id: z.string() }), output: z.object({ agentId: z.string(), workspaceId: z.string().nullable() }) });
+const BotConversationStateSchema = z.object({
+  status: z.enum(["idle", "creating", "ready", "failed"]),
+  agentId: z.string().nullable(),
+  workspaceId: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export const botsOpenRpc = defineRpc({ name: "bots.open", input: z.object({ id: z.string() }), output: BotConversationStateSchema });
+export const botsStateRpc = defineRpc({ name: "bots.state", input: z.object({ id: z.string() }), output: BotConversationStateSchema });
 export const botsArchiveRpc = defineRpc({ name: "bots.archive", input: z.object({ id: z.string() }), output: z.object({ ok: z.literal(true) }) });
 
 export const masterBotMigrationRpc = defineRpc({

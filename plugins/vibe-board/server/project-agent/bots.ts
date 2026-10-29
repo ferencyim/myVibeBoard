@@ -4,6 +4,7 @@ import {
   projectBotsCreateRpc,
   projectBotsListRpc,
   projectBotsOpenRpc,
+  projectBotsStateRpc,
 } from "../../shared/project-bots";
 
 export function registerProjectBotRpcs(server: PluginServerContext) {
@@ -30,6 +31,12 @@ export function registerProjectBotRpcs(server: PluginServerContext) {
     if (context.callerAgentId) throw new Error("项目 bot 入口仅供用户使用");
     return projectBotsArchiveRpc.output.parse(
       await context.paseo.plugins.invoke("vibe-bots", "bots.archive", input),
+    );
+  });
+  server.handle(projectBotsStateRpc, async (input, context) => {
+    if (context.callerAgentId) throw new Error("项目 bot 入口仅供用户使用");
+    return projectBotsStateRpc.output.parse(
+      await context.paseo.plugins.invoke("vibe-bots", "bots.state", input),
     );
   });
 }

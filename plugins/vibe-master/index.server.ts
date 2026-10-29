@@ -11,6 +11,7 @@ import {
   botsListRpc,
   botsCreateRpc,
   botsOpenRpc,
+  botsStateRpc,
   botsArchiveRpc,
   permissionRpc,
   promptsClearRpc,
@@ -126,6 +127,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(botsArchiveRpc, async (input, { paseo: api, callerAgentId }) => {
     if (callerAgentId) throw new Error("请由用户归档 bot");
     return botsArchiveRpc.output.parse(await api.plugins.invoke("vibe-bots", botsArchiveRpc.name, input));
+  });
+  server.handle(botsStateRpc, async (input, { paseo: api, callerAgentId }) => {
+    if (callerAgentId) throw new Error("请由用户查看 bot 对话创建状态");
+    return botsStateRpc.output.parse(await api.plugins.invoke("vibe-bots", botsStateRpc.name, input));
   });
 
   server.handle(statusRpc, async (_input, { paseo: api }) => {

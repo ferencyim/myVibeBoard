@@ -1,8 +1,9 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import type {
-  PaseoAgent, PaseoAgentCreateOptions, PaseoAgentListOptions, PaseoAgentSendOptions,
+  PaseoAgent, PaseoAgentCreateOptions, PaseoAgentListOptions, PaseoAgentSendOptions, PaseoProviderSnapshotResult,
 } from "@getpaseo/client";
 import { z } from "zod";
 import {
@@ -17,6 +18,13 @@ import { resolveVibeHome, type VibeDb } from "./vibe/db/sqlite";
 
 import { createMemoryDelivery, memoryContext } from "./memory";
 export { memoryContext } from "./memory";
+
+export interface BotOpenState {
+  status: "idle" | "creating" | "ready" | "failed";
+  agentId: string | null;
+  workspaceId: string | null;
+  error: string | null;
+}
 
 interface OpenedBot {
   agentId: string;
@@ -59,6 +67,7 @@ export interface BotHost {
     list(): Promise<{ projects: Array<{ projectId: string; projectRootPath: string }> }>;
   };
   providers: {
+    snapshot(options?: { cwd?: string; cachedOnly?: boolean }): Promise<PaseoProviderSnapshotResult>;
     listAvailable(): Promise<{ providers: Array<{ provider: string; available: boolean }> }>;
     listModels(provider: string): Promise<{
       models?: Array<{
@@ -119,6 +128,8 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
   let migration: Promise<void> | null = null;
   let settingsMigration: Promise<void> | null = null;
   let lastSettingsAttempt = 0;
+  const openStates = new Map<string, BotOpenState>();
+  const creationRequests = new Map<string, PaseoAgentCreateOptions>();
   const openings = new Map<string, Promise<OpenedBot>>();
   const defaults = new Map<string, Promise<{ botId: string; mainAgentId: string | null }>>();
   const updates = new Map<string, Promise<void>>();
@@ -161,11 +172,11 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     const entries = await allAgents();
     const masters = store.sessions.list({ role: "master" }).toReversed();
     const statePath = join(resolveVibeHome(), "master", "state.json");
-    const state = existsSync(statePath)
+    const savedState = existsSync(statePath)
       ? z.object({ agent: z.object({ agentId: z.string() }).optional() })
           .parse(JSON.parse(readFileSync(statePath, "utf8")))
       : null;
-    const authoritativeId = state?.agent?.agentId ?? masters[0]?.agentId;
+    const authoritativeId = savedState?.agent?.agentId ?? masters[0]?.agentId;
     const migratedMaster = db.prepare<{ bot_id: string }>(
       "SELECT bot_id FROM bot_legacy_migration WHERE source='master'",
     ).get();
@@ -282,7 +293,47 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     return record;
   }
 
-  async function models(query = "") {
+  async function cachedEntries(cwd?: string) {
+    async function read(root?: string) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          paseo.providers.snapshot({ ...(root ? { cwd: root } : {}), cachedOnly: true }),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("缓存模型目录查询超时")), 1_500);
+          }),
+        ]);
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    const [local, global] = await Promise.all([cwd ? read(cwd) : null, read()]);
+    const entries = new Map((global?.entries ?? []).map((entry) => [entry.provider, entry]));
+    for (const entry of local?.entries ?? []) {
+      const usable = entry.enabled && ["ready", "loading"].includes(entry.status) &&
+        entry.models?.some((model) => model.isSelectable !== false && model.id.trim());
+      if (usable || !entries.has(entry.provider)) entries.set(entry.provider, entry);
+    }
+    return [...entries.values()].filter((entry) => entry.enabled && ["ready", "loading"].includes(entry.status));
+  }
+
+  async function models(query = "", cachedOnly = false, cwd?: string) {
+    if (cachedOnly) {
+      const entries = await cachedEntries(cwd);
+      return {
+        providers: entries.map((entry) => {
+          const values = (entry.models ?? []).filter((model) => model.isSelectable !== false && model.id.trim())
+            .map((model) => ({ id: model.id, name: model.label, isDefault: !!model.isDefault,
+              thinkingOptions: (model.thinkingOptions ?? []).map((option) => ({ id: option.id, name: option.label })) }));
+          return { provider: entry.provider,
+            defaultModel: values.find((model) => model.isDefault)?.id ?? values[0]?.id ?? null,
+            models: values.filter((model) => (entry.provider + " " + model.id + " " + model.name).toLowerCase().includes(query.toLowerCase())) };
+        }),
+        presets: store.presets.list().map((preset) => ({ id: preset.id, name: preset.name })),
+      };
+    }
     const available = await paseo.providers.listAvailable();
     const providers = await Promise.all(available.providers.filter((entry) => entry.available)
       .map(async (entry) => {
@@ -333,7 +384,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         runtimeEnv: selection.runtimeEnv ?? null,
       };
     }
-    const catalog = await models();
+    const catalog = await models("", true);
     const first = catalog.providers.find((entry) => entry.defaultModel);
     if (!first?.defaultModel) throw new Error("主机没有可用默认模型，请先配置 provider");
     return {
@@ -376,7 +427,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     const target = chain[reset ? 0 : candidateIndex(bot.id)];
     if (!target) throw new Error("bot 所有候选模型均不可用，请重新选择模型");
     if (!target.model) {
-      const catalog = await models();
+      const catalog = await models("", true);
       const provider = catalog.providers.find((entry) => entry.provider === target.provider);
       if (!provider?.defaultModel) throw new Error("provider 没有可用默认模型：" + target.provider);
       return { ...target, model: provider.defaultModel };
@@ -398,15 +449,16 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     return true;
   }
 
-  async function validate(bot: Bot, all = true, reset = false) {
+  async function validate(bot: Bot, all = true, reset = false, cachedOnly = false) {
     if (bot.avatarPath) validateAvatar(bot.avatarPath);
     if (!!bot.provider !== !!bot.model) throw new Error("provider 与模型必须同时指定，或同时清空以使用默认模型");
     const active = await selected(bot, reset);
-    const catalog = await models();
+    const catalog = await models("", cachedOnly, bot.projectId ? (await project(bot.projectId)).projectRootPath : undefined);
     for (const candidate of all ? await candidates(bot) : [active]) {
       const provider = catalog.providers.find((entry) => entry.provider === candidate.provider);
       const model = provider?.models.find((entry) => entry.id === candidate.model);
       if (!candidate.model && provider?.defaultModel) continue;
+      if (!model && cachedOnly) continue;
       if (!model) {
         const choices = provider?.models.map((entry) => entry.id) ??
           catalog.providers.flatMap((entry) => entry.models.map((item) => entry.provider + "/" + item.id));
@@ -449,7 +501,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
       let id = bots.defaultGet(projectId);
       if (!id) {
         id = bots.list({ kind: "project", projectId })[0]?.id ??
-          (await create({ kind: "project", projectId, name: "项目 bot" })).id;
+          bots.create({ kind: "project", projectId, name: "项目 bot" }).id;
         bots.defaultSet(projectId, id);
       }
       return { botId: id, mainAgentId: bots.require(id).mainAgentId };
@@ -469,14 +521,17 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     return `你是独立 bot「${bot.name}」${bot.title ? `，头衔是「${bot.title}」` : ""}。遵循用户填写的角色说明。当前提供的工具均可按需使用。不得写入密钥等敏感信息。派发只由调度器规则执行，你不自动派发。`;
   }
 
-  async function mode(provider: string, permission: Bot["permissionMode"]) {
-    const catalog = await paseo.providers.listModes(provider);
-    const modes = catalog.modes ?? [];
+  async function mode(provider: string, permission: Bot["permissionMode"], cachedOnly = false, cwd?: string) {
+    const catalog = cachedOnly
+      ? (await cachedEntries(cwd)).find((entry) => entry.provider === provider)
+      : await paseo.providers.listModes(provider);
+    const modes = catalog?.modes ?? [];
     const requested = presetModeId(provider, permission);
     if (requested) {
       const actual = modes.find((entry) => entry.id === requested) ??
         (permission === "auto" ? modes.find((entry) => entry.id === "auto-review") : undefined);
-      if (!actual) throw new Error("provider 不支持所选权限模式：" + permission);
+      if (!actual && !cachedOnly) throw new Error("provider 不支持所选权限模式：" + permission);
+      if (!actual) return requested;
       return actual.id;
     }
     const fallback = modes.find((entry) => ["default", "acceptEdits", "accept-edits"].includes(entry.id)) ??
@@ -488,20 +543,29 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     try {
       return await spawnOnce(bot, handoff);
     } catch (error) {
-      if (await advance(bot.id, error)) return spawn(bots.require(bot.id), handoff);
+      if (await advance(bot.id, error)) {
+        creationRequests.delete(bot.id);
+        return spawn(bots.require(bot.id), handoff);
+      }
       throw error;
     }
   }
 
+  async function botDirectory(bot: Bot): Promise<string> {
+    if (bot.projectId) return (await project(bot.projectId)).projectRootPath;
+    const cwd = join(resolveVibeHome(), "bots", bot.id);
+    mkdirSync(cwd, { recursive: true });
+    return cwd;
+  }
+
   async function spawnOnce(bot: Bot, handoff?: string): Promise<OpenedBot> {
-    const target = await validate(bot, false);
-    const cwd = bot.projectId
-      ? (await project(bot.projectId)).projectRootPath
-      : join(resolveVibeHome(), "bots", bot.id);
-    if (!bot.projectId) mkdirSync(cwd, { recursive: true });
-    const permission = await mode(target.provider, bot.permissionMode);
+    const target = await validate(bot, false, false, true);
+    const cwd = await botDirectory(bot);
+    const permission = await mode(target.provider, bot.permissionMode, true, cwd);
     const memories = bots.memories(bot.id);
-    const created = await paseo.agents.create({
+    let request = handoff ? undefined : creationRequests.get(bot.id);
+    if (!request) request = {
+      idempotencyKey: "bot:" + bot.id + ":" + randomUUID(),
       cwd, title: bot.name,
       labels: {
         "vibe.bot": bot.id, "vibe.bot-thread": "main",
@@ -518,9 +582,12 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
         ...(permission ? { modeId: permission } : {}),
       },
-    });
+    };
+    if (!handoff) creationRequests.set(bot.id, request);
+    const created = await paseo.agents.create(request);
+    bots.setMain(bot.id, created.id);
+    creationRequests.delete(bot.id);
     memoryDelivery.record(bot.id, created.id, memories, [prompt(bot), bot.instructions].filter(Boolean).join("\n\n"));
-    await created.refresh();
     if (bot.kind === "independent") {
       const previous = bot.mainAgentId ? store.sessions.getByAgent(bot.mainAgentId) : undefined;
       createTaskRuntimeCommands(db).registerSession({
@@ -532,7 +599,6 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         store.sessions.setState(previous.id, "ended", { outcome: "bot_main_replaced" });
       }
     }
-    bots.setMain(bot.id, created.id);
     if (handoff) {
       try {
         await created.send(handoff, { sourceAgentId: created.id });
@@ -562,7 +628,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         await spawn(bot);
         return;
       }
-      const target = await validate(bot, false);
+      const target = await validate(bot, false, false, true);
       if (current.provider === target.provider) {
         await changeModel(bot, current, target);
       } else {
@@ -623,7 +689,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     retryTimers.set(id, timer);
   }
 
-  async function open(id: string) {
+  async function openNow(id: string) {
     await ready();
     const existing = openings.get(id);
     if (existing) return existing;
@@ -650,6 +716,48 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     } finally {
       openings.delete(id);
     }
+  }
+
+  function creatingState(): BotOpenState {
+    return { status: "creating", agentId: null, workspaceId: null, error: null };
+  }
+
+  const pendingOpens = new Map<string, Promise<OpenedBot>>();
+  function waitOpen(id: string): Promise<OpenedBot> {
+    const pending = pendingOpens.get(id);
+    if (pending) return pending;
+    openStates.set(id, creatingState());
+    const job = Promise.resolve().then(() => openNow(id)).then((opened) => {
+      openStates.set(id, { status: "ready", ...opened, error: null });
+      return opened;
+    }).catch((cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      let error = "创建 bot 失败，请检查 provider 是否可用后重试";
+      if (/[\u4e00-\u9fff]/.test(message)) error = message;
+      if (/timeout|timed out|超时/i.test(message)) error = "创建 bot 超时，请稍后重试";
+      openStates.set(id, { status: "failed", agentId: null, workspaceId: null, error });
+      throw new Error(error, { cause });
+    }).finally(() => { pendingOpens.delete(id); });
+    pendingOpens.set(id, job);
+    return job;
+  }
+
+  function open(id: string): Promise<BotOpenState> {
+    void waitOpen(id).catch(() => {});
+    return Promise.resolve(creatingState());
+  }
+
+  async function state(id: string): Promise<BotOpenState> {
+    if (pendingOpens.has(id)) return creatingState();
+    await ready();
+    const bot = bots.require(id);
+    if (bot.archivedAt) return { status: "failed", agentId: null, workspaceId: null, error: "bot 已归档" };
+    const previous = openStates.get(id);
+    if (previous?.status === "failed") return previous;
+    if (!bot.mainAgentId) return { status: "idle", agentId: null, workspaceId: null, error: null };
+    if (previous?.agentId === bot.mainAgentId) return previous;
+    const current = await agent(bot.mainAgentId);
+    return { status: "ready", agentId: bot.mainAgentId, workspaceId: current?.workspaceId ?? null, error: null };
   }
 
   async function update(id: string, patch: BotPatch, actor?: Bot) {
@@ -750,14 +858,14 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     for (const timer of retryTimers.values()) clearTimeout(timer);
     retryTimers.clear();
     await Promise.allSettled([
-      ...updates.values(), ...openings.values(), ...defaults.values(), ...continuations.values(),
+      ...updates.values(), ...pendingOpens.values(), ...openings.values(), ...defaults.values(), ...continuations.values(),
       ...(migration ? [migration] : []),
       ...(settingsMigration ? [settingsMigration] : []),
     ]);
   }
 
   return {
-    bots, memoryDelivery, ready, view, caller, models, create, defaultBot, open, update, apply, prompt,
+    bots, memoryDelivery, ready, view, caller, models, create, defaultBot, open, state, waitOpen, update, apply, prompt,
     live, failover, close, continueConversation,
   };
 }

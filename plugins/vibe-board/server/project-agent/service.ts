@@ -8,6 +8,7 @@ import type {
   PaseoProject,
   PaseoAgentSendOptions,
   PaseoAgentConfig,
+  PaseoProviderSnapshotResult,
 } from "@getpaseo/client";
 import type { PluginLifecycleEvents } from "@getpaseo/plugin/server";
 import type { VibeDb, VibeStore } from "../vibe/db";
@@ -26,6 +27,7 @@ import {
   PROJECT_AGENT_ROLE_LABEL,
   PROJECT_AGENT_PROJECT_LABEL,
   type ProjectAgentState,
+  ProjectAgentStateSchema,
 } from "../../shared/project-agent";
 import { z } from "zod";
 
@@ -136,17 +138,15 @@ export function createProjectAgents(options: ProjectAgentOptions) {
       await paseo().plugins.invoke("vibe-bots", "project.default_bot.get", { projectId }),
     );
   }
-  function stateOf(projectId: string, current: PaseoAgent | null): ProjectAgentState {
-    return {
-      agentId: current?.id ?? null,
-      workspaceId: current?.workspaceId ?? null,
-      error: errors.get(projectId) ?? current?.lastError ?? null,
-    };
-  }
   async function state(projectId: string): Promise<ProjectAgentState> {
+    if (pending.has(projectId)) return creatingState();
     await project(projectId);
     const bot = await defaultBot(projectId);
-    return stateOf(projectId, bot.mainAgentId ? await agent(bot.mainAgentId) : null);
+    if (!bot.botId) return { status: "idle", agentId: null, workspaceId: null, error: null };
+    const result = ProjectAgentStateSchema.parse(
+      await paseo().plugins.invoke("vibe-bots", "bots.state", { id: bot.botId }),
+    );
+    return errors.has(projectId) ? { ...result, status: "failed", error: errors.get(projectId)! } : result;
   }
   async function model(
     projectId: string,
@@ -186,53 +186,74 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     }
     return defaultProviderModel(root);
   }
+  async function cachedSnapshot(cwd?: string): Promise<PaseoProviderSnapshotResult | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        paseo().providers.snapshot({ ...(cwd ? { cwd } : {}), cachedOnly: true }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("缓存模型目录查询超时")), 1_500);
+        }),
+      ]);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   async function defaultProviderModel(root: string): Promise<SelectedModel> {
-    const available = await paseo()
-      .providers.listAvailable()
-      .catch((cause: unknown) => {
-        throw new Error("无法取得主机可用 provider，请到「任务默认模型」设置可用模型", {
-          cause,
-        });
-      });
-    const first = available.providers.find((provider) => provider.available);
-    if (!first) throw new Error("主机没有可用 provider，请到「任务默认模型」设置可用模型");
-    const catalog = await paseo()
-      .providers.listModels(first.provider, { cwd: root })
-      .catch((cause: unknown) => {
-        throw new Error("无法取得主机 provider 的模型目录，请到「任务默认模型」选择具体模型", {
-          cause,
-        });
-      });
-    const models = catalog.models ?? [];
-    const selected = models.find((candidate) => candidate.isDefault) ?? models[0];
-    if (!selected?.id.trim())
-      throw new Error("无法取得主机 provider 的默认模型，请到「任务默认模型」选择具体模型");
-    return { config: { provider: first.provider + "/" + selected.id } };
+    // Neither read starts provider discovery. An initializing provider must not hide
+    // the usable cached catalog of another provider or the global scope.
+    const snapshots = await Promise.all([cachedSnapshot(root), cachedSnapshot()]);
+    const entries = new Map((snapshots[1]?.entries ?? []).map((entry) => [entry.provider, entry]));
+    for (const entry of snapshots[0]?.entries ?? []) {
+      const usable = entry.enabled && (entry.status === "ready" || entry.status === "loading") &&
+        entry.models?.some((candidate) => candidate.isSelectable !== false && candidate.id.trim());
+      if (usable || !entries.has(entry.provider)) entries.set(entry.provider, entry);
+    }
+    for (const entry of entries.values()) {
+      if (!entry.enabled || (entry.status !== "ready" && entry.status !== "loading")) continue;
+      const models = (entry.models ?? []).filter(
+        (candidate) => candidate.isSelectable !== false && candidate.id.trim(),
+      );
+      const selected = models.find((candidate) => candidate.isDefault) ?? models[0];
+      if (selected) return { config: { provider: entry.provider + "/" + selected.id } };
+    }
+    throw new Error("缓存中没有可用 provider 的模型，请到「任务默认模型」选择具体模型后重试");
   }
   async function openNow(projectId: string): Promise<ProjectAgentState> {
     await project(projectId);
     const bot = await defaultBot(projectId);
     if (!bot.botId) throw new Error("项目没有默认 bot");
-    const opened = z.object({ agentId: z.string(), workspaceId: z.string().nullable() }).parse(
+    const opened = ProjectAgentStateSchema.parse(
       await paseo().plugins.invoke("vibe-bots", "bots.open", { id: bot.botId }),
     );
     errors.delete(projectId);
-    return { ...opened, error: null };
+    return opened;
   }
-  function open(projectId: string): Promise<ProjectAgentState> {
+  function creatingState(): ProjectAgentState {
+    return { status: "creating", agentId: null, workspaceId: null, error: null };
+  }
+  function startOpen(projectId: string): Promise<ProjectAgentState> {
     const active = pending.get(projectId);
     if (active) return active;
-    const job = openNow(projectId).catch((error: unknown) => {
-      errors.set(projectId, error instanceof Error ? error.message : String(error));
-      throw error;
+    errors.delete(projectId);
+    const job = Promise.resolve().then(() => openNow(projectId)).catch((cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      let error = "创建项目 agent 失败，请检查 provider 是否可用后重试";
+      if (/^(项目|主机|缓存|无法取得)/.test(message)) error = message;
+      if (/timeout|timed out|超时/i.test(message)) error = "创建项目 agent 超时，请稍后重试";
+      errors.set(projectId, error);
+      return { status: "failed" as const, agentId: null, workspaceId: null, error };
+    }).finally(() => {
+      if (pending.get(projectId) === job) pending.delete(projectId);
     });
     pending.set(projectId, job);
-    void job
-      .finally(() => {
-        if (pending.get(projectId) === job) pending.delete(projectId);
-      })
-      .catch(() => {});
     return job;
+  }
+  function open(projectId: string): Promise<ProjectAgentState> {
+    void startOpen(projectId);
+    return Promise.resolve(creatingState());
   }
   async function placement(workspaceId: string) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -447,8 +468,12 @@ export function createProjectAgents(options: ProjectAgentOptions) {
   }
 
   async function sendProject(projectId: string, text: string): Promise<void> {
-    const opened = await open(projectId);
-    if (!opened.agentId) throw new Error("未能打开项目 agent");
+    let opened = await startOpen(projectId);
+    while (opened.status === "creating") {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      opened = await state(projectId);
+    }
+    if (!opened.agentId) throw new Error(opened.error ?? "未能打开项目 agent");
     await paseo().agents.ref(opened.agentId).send(text, { sourceAgentId: opened.agentId });
   }
   return {
