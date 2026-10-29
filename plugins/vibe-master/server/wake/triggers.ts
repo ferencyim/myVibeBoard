@@ -7,11 +7,9 @@ import { createEventConsumer, type EventConsumer, type VibeDb, type VibeStore } 
 import type { WakeQueue } from "./queue";
 
 /** Owner switches (settings). */
-export interface TriggerFlags {
-  consolidateOnDone: boolean;
-}
+export type TriggerFlags = Record<string, never>;
 
-export const DEFAULT_TRIGGER_FLAGS: TriggerFlags = { consolidateOnDone: true };
+export const DEFAULT_TRIGGER_FLAGS: TriggerFlags = {};
 
 export interface TriggersOptions {
   db: VibeDb;
@@ -65,23 +63,12 @@ export interface Triggers {
 }
 
 export function createTriggers(options: TriggersOptions): Triggers {
-  const { store, queue } = options;
   const log = options.log ?? (() => undefined);
-  const flags = () => options.flags?.() ?? DEFAULT_TRIGGER_FLAGS;
-
-  function onCompletedTask(workspaceId: string) {
-    if (!options.enabled() || !flags().consolidateOnDone) return;
-    const task = store.tasks.get(workspaceId);
-    if (task?.phase === "completed" && !options.taskConsolidated?.(workspaceId)) {
-      queue.enqueue({ kind: "task_done", workspaceId });
-    }
-  }
 
   const consumer = createEventConsumer({
     db: options.db,
     consumer: "vibe-master",
     types: [
-      "task.updated",
       "context.continuation_requested",
       "scheduler.task_dispatch_wanted",
       "scheduler.quota_low",
@@ -117,9 +104,6 @@ export function createTriggers(options: TriggersOptions): Triggers {
           `maintenance rule ${event.payload.ruleId} triggered (run ${event.payload.runId})`,
         );
       }
-      if (isEvent(event, "task.updated") && event.payload.fields.includes("phase")) {
-        onCompletedTask(event.payload.workspaceId);
-      }
     },
   });
   consumer.start();
@@ -128,15 +112,7 @@ export function createTriggers(options: TriggersOptions): Triggers {
     consumer,
 
     sweep() {
-      let queued = 0;
-      for (const task of flags().consolidateOnDone
-        ? store.tasks.list({ phase: "completed" })
-        : []) {
-        if (!task.confirmedAt || options.taskConsolidated?.(task.workspaceId)) continue;
-        queue.enqueue({ kind: "task_done", workspaceId: task.workspaceId });
-        queued++;
-      }
-      return queued;
+      return 0;
     },
 
     async stop() {

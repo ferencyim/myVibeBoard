@@ -108,6 +108,17 @@ Permission requests are notification checkpoints, not the end of that subscripti
 The permission notification includes the normalized request plus the child and request IDs, so the caller can inspect it and respond without fetching agent status.
 A watched child that closes before its finish event also notifies the caller so delegated work cannot disappear silently during archive or workspace teardown.
 
+## Trusted user prompt observation
+
+`agent.user_prompt_received` is an internal daemon plugin event for an ordinary user message after
+successful delivery. It carries the original text, images, attachments, session mode, message ID,
+and recipient agent/workspace IDs. The normal request path waits for turn startup before emitting it;
+failed dispatch never grants forwarding authority. Plugin sessions, agent-originated messages,
+creation-time initial prompts, and messages taken over by `agent.user_prompt` do not emit it.
+Consumers that forward as the user must bind this observation to the recipient role and message ID;
+a model-supplied text or source claim alone does not establish user origin. This is an additive
+plugin lifecycle contract and introduces no WebSocket message or protocol change.
+
 ## Provider-managed child agents
 
 Some providers can create their own child sessions inside one provider runtime. OMP's task tool reports these with `child_session` events; `AgentManager` imports the live provider handle, stamps `paseo.parent-agent-id`, and surfaces the result as a normal subagent in the parent's subagents track.

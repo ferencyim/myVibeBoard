@@ -1,15 +1,10 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { MasterError } from "../server/types";
 import { createMasterRuntime } from "../server/runtime";
-import { createFileMemoryPort } from "../server/memory/files";
-import { createStateFile } from "../server/subscription/state";
 import { TaskRoleSnapshotSchema } from "../server/vibe/contract";
-import { publishEvent, type GitRunner } from "../server/vibe/db";
+import { publishEvent } from "../server/vibe/db";
 import { defaultSettings, fakePaseo, setupBoard, tempDir, tick, type Script } from "./helpers";
 
-function setup(script: Script, git?: GitRunner) {
+function setup(script: Script) {
   const board = setupBoard();
   board.store.projects.update(board.project.id, { paseoProjectId: "native-project" });
   const fake = fakePaseo(script);
@@ -28,14 +23,6 @@ function setup(script: Script, git?: GitRunner) {
       getPaseo: () => fake.paseo,
       settings: () => settings,
       dataDir,
-      git,
-      admitMemory: async (_id, files) => {
-        writeAdmission.calls.push(files);
-        if (!writeAdmission.allowed) throw new MasterError("unavailable", "文件冲突");
-        return async () => {
-          writeAdmission.released++;
-        };
-      },
       admitMaster: async () => async () => undefined,
       pollIntervalMs: 3600000,
       log: () => undefined,
@@ -152,93 +139,24 @@ describe("task master runtime", () => {
     expect(t.fake.agents[0]!.prompts[0]).toContain("workspaceId 必须来自候选");
     await runtime.dispose();
   });
-  it("consolidates completion events and restart sweep without duplicate memory or requirements commits", async () => {
-    const calls: string[][] = [];
-    const git: GitRunner = async (args) => {
-      calls.push(args);
-      if (args[0] === "check-ignore") return { code: 1, stdout: "", stderr: "" };
-      let stdout = "";
-      if (args[0] === "status") stdout = " M PRODUCT-REQUIREMENTS.md";
-      if (args[0] === "rev-parse") stdout = args[1] === "HEAD" ? "abc123" : ".git";
-      return { code: 0, stdout, stderr: "" };
-    };
-    const t = setup(
-      () =>
-        reply({
-          summary: "记录可靠做法",
-          lessons: [{ tag: "test", body: "验证当前提交" }],
-          requirementsUpdate: { content: "# 新需求", summary: "更新任务要求" },
-        }),
-      git,
-    );
-    writeFileSync(join(t.repoPath, "PRODUCT-REQUIREMENTS.md"), "# 旧需求");
+  it("leaves completion and manual consolidation exclusively to the project agent", async () => {
+    const t = setup(() => {
+      throw new Error("总 agent 不应收到任务完成整理");
+    });
     t.task("a");
     const runtime = t.build();
     complete(t, "a");
     await runtime.triggers.consumer.poll();
-    await runtime.queue.idle();
-    expect(readFileSync(join(t.repoPath, "PRODUCT-REQUIREMENTS.md"), "utf8")).toBe("# 新需求\n");
-    expect(calls.filter((args) => args[0] === "commit")).toEqual([
-      ["commit", "-m", "文档：更新任务要求", "--", "PRODUCT-REQUIREMENTS.md"],
-    ]);
-    expect(calls.some((args) => args[0] === "push")).toBe(false);
-    expect(createFileMemoryPort().snapshot(t.repoPath)["LESSONS.md"]).toHaveLength(1);
-    expect(t.store.tasks.get("a")!.summary).toContain("项目记忆已整理");
-    expect(t.writeAdmission.calls).toEqual([[".vibe/**", "PRODUCT-REQUIREMENTS.md"]]);
-    expect(t.writeAdmission.released).toBe(1);
-    await runtime.dispose();
-    const again = t.build();
-    expect(again.sweep()).toBe(0);
-    await again.queue.idle();
-    expect(t.fake.agents[0]!.prompts).toHaveLength(1);
-    expect(calls.filter((args) => args[0] === "commit")).toHaveLength(1);
-    await again.dispose();
-  });
-  it("resumes a persisted pending memory answer after restart without asking the model again", async () => {
-    const t = setup(() => {
-      throw new Error("不得再次调用模型");
+    expect(runtime.sweep()).toBe(0);
+    expect(runtime.wake("a", true)).toMatchObject({
+      queued: false,
+      message: expect.stringContaining("项目 agent"),
     });
-    const task = t.task("a");
-    complete(t, "a");
-    createStateFile(t.dataDir).update((state) => ({
-      ...state,
-      taskConsolidations: {
-        ["a:" + task.confirmedAt]: {
-          status: "pending",
-          update: {
-            summary: "恢复整理",
-            lessons: [{ tag: "r", body: "持久保存结果" }],
-            decisions: [],
-            index: [],
-            archive: [],
-          },
-          repoPath: t.repoPath,
-          requirementsPath: "PRODUCT-REQUIREMENTS.md",
-          requirementsAllowed: false,
-        },
-      },
-    }));
-    const runtime = t.build();
-    runtime.sweep();
     await runtime.queue.idle();
-    expect(createFileMemoryPort().snapshot(t.repoPath)["LESSONS.md"]).toHaveLength(1);
     expect(t.fake.agents).toHaveLength(0);
-    await runtime.dispose();
-  });
-  it("keeps the validated memory answer pending until the file writer is admitted", async () => {
-    const t = setup(() =>
-      reply({ summary: "等待文件锁", lessons: [{ tag: "lock", body: "写入先准入" }] }),
+    expect(t.store.prompts.list().some((prompt) => prompt.key === "master.wake.task_done")).toBe(
+      false,
     );
-    t.task("a");
-    complete(t, "a");
-    t.writeAdmission.allowed = false;
-    const runtime = t.build();
-    await expect(runtime.taskConsolidator.consolidate("a")).rejects.toThrow("文件冲突");
-    expect(createFileMemoryPort().snapshot(t.repoPath)["LESSONS.md"]).toHaveLength(0);
-    t.writeAdmission.allowed = true;
-    await runtime.taskConsolidator.consolidate("a");
-    expect(createFileMemoryPort().snapshot(t.repoPath)["LESSONS.md"]).toHaveLength(1);
-    expect(t.fake.agents[0]!.prompts).toHaveLength(1);
     await runtime.dispose();
   });
   it("records the actual master model and continues context on the same candidate while preserving native history", async () => {

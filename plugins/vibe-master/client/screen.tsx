@@ -527,45 +527,8 @@ function MasterConfiguration(props: PluginSurfaceProps) {
         <SettingsCard>
           <Muted theme={theme}>
             方案、执行与验收由原生任务的对应角色负责。总 agent
-            只推荐已确认任务的派发顺序，并在任务完成后整理项目记忆。
+            只推荐已确认任务的派发顺序。项目简介、记忆和需求文档由项目 agent 维护。
           </Muted>
-          <SettingsSwitch
-            label="启动时补扫未整理的完成任务"
-            value={values.sweepOnStart}
-            onValueChange={(sweepOnStart: boolean) => save({ ...values, sweepOnStart })}
-          />
-          <SettingsSwitch
-            label="任务完成后整理项目记忆"
-            value={values.consolidateOnDone}
-            onValueChange={(consolidateOnDone: boolean) => save({ ...values, consolidateOnDone })}
-          />
-          <SettingsSwitch
-            label="维护需求文档（任务完成时允许总 agent 更新并提交）"
-            hint="只提交需求文档这一个文件，不推送；仓库忙或文件被忽略时只在任务摘要中记录并提醒。"
-            value={values.maintainRequirements}
-            onValueChange={(maintainRequirements: boolean) =>
-              save({ ...values, maintainRequirements })
-            }
-          />
-        </SettingsCard>
-      </Group>
-
-      <Group theme={theme} title="项目上下文">
-        <SettingsCard>
-          <SettingsInput
-            label="需求文档摘录的最大字符数（0 为不附带，默认 6000）"
-            hint="超长会截断并注明；被截断时总 agent 不会改写需求文档。"
-            initialValue={String(values.requirementsExcerptChars)}
-            onChangeText={(text) => {
-              const n = Number(text);
-              save({
-                ...values,
-                requirementsExcerptChars: Number.isFinite(n)
-                  ? Math.round(Math.min(50_000, Math.max(0, n)))
-                  : 6000,
-              });
-            }}
-          />
         </SettingsCard>
       </Group>
 
@@ -616,7 +579,7 @@ function MasterConfiguration(props: PluginSurfaceProps) {
             }
           />
           <SettingsInput
-            label="维护暂停 / 需求文档失败提醒的冷却（分钟，1-1440）"
+            label="维护暂停提醒的冷却（分钟，1-1440）"
             initialValue={String(values.alertCooldownRoutineMinutes)}
             onChangeText={(text) =>
               save({ ...values, alertCooldownRoutineMinutes: integer(text, 60, 1, 1440) })

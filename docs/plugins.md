@@ -782,3 +782,9 @@ Existing plugin authors should follow the standalone [v0.8 runtime-entry migrati
 See `plugin-examples/local-plugin` for a native surface, `plugin-examples/linear` for a complete
 attachment-source example, `plugin-examples/timeline-items` for timeline projection, and
 `plugin-examples/catppuccin` for a theme.
+
+## Project sidebar rows
+
+Plugins may register client.addProjectSidebarItem({ id, title, order, Component }). The host renders these fixed rows immediately below an expanded project heading and before its reorderable workspace list, on desktop and compact mobile layouts. The component receives projectId, serverId, theme, compact and openAgent(agentId); openAgent uses the existing agent navigation owner and closes the compact sidebar. The selected project host remains authoritative when offline; another host must not silently handle its row. Rows run inside the installation RPC/query/translation context and an error boundary.
+
+The project sidebar API is a myVibeBoard fork extension shipped with the fork’s 0.13.2 SDK and host. Plugins using it must upgrade their host and SDK together; vibe-board requires >=0.13.2 <0.14.0. This does not imply upstream Paseo exposes the same extension.

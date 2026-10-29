@@ -1,4 +1,4 @@
-// Task dispatch, completion memory, master sessions and subscription alerts.
+// Task dispatch, master sessions and subscription alerts.
 
 import { join } from "node:path";
 import type { MasterSettings, MasterStatus, MasterTarget, PresetChoice } from "../shared/rpc";
@@ -6,8 +6,6 @@ import { systemClock, type Clock } from "./clock";
 import { createTaskDispatcher } from "./dispatch/task";
 import { MASTER_RULES } from "./master/rules.generated";
 import { createMasterSession } from "./master/session";
-import { createFileMemoryPort, type MemoryPort } from "./memory/files";
-import { createTaskConsolidator } from "./memory/task";
 import { migrateLegacyPromptSettings } from "./prompts/migrate";
 import { createPromptPort, rulesFor } from "./prompts/port";
 import { createAlerts } from "./subscription/alerts";
@@ -19,7 +17,7 @@ import { createStateFile } from "./subscription/state";
 import { tuningOf } from "./tuning";
 import type { MasterAgentHandle } from "./types";
 import { MasterError, wakeTarget, type MasterPaseo, type WakeJob } from "./types";
-import { publishEvent, type GitRunner, type VibeDb, type VibeStore } from "./vibe/db";
+import { publishEvent, type VibeDb, type VibeStore } from "./vibe/db";
 import { createWakeQueue } from "./wake/queue";
 import { createTriggers } from "./wake/triggers";
 
@@ -32,12 +30,8 @@ export interface RuntimeDeps {
   dataDir: string;
   clock?: Clock;
   /** Tests may supply an admission port; production always asks the scheduler. */
-  admitMemory?(workspaceId: string, files: string[]): Promise<() => Promise<void>>;
   admitMaster?(agent: MasterAgentHandle, target: MasterTarget): Promise<() => Promise<void>>;
-  memory?: MemoryPort;
   rules?: string;
-  /** Injectable git for requirements commits (tests use a real temp repo by default). */
-  git?: GitRunner;
   pollIntervalMs?: number;
   promptsReady?: Promise<void>;
   log?: (message: string, error?: unknown) => void;
@@ -52,7 +46,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   // Every prompt text goes through the shared registry, so the owner's overrides apply everywhere.
   const prompts = createPromptPort(store, () => ({
     rules: deps.rules ?? MASTER_RULES,
-    maintainRequirements: deps.settings().maintainRequirements,
   }));
   if (!deps.promptsReady) prompts.register();
 
@@ -69,8 +62,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     tuning,
     log: (m) => log(m),
   });
-  const resources =
-    deps.admitMaster && deps.admitMemory ? null : createMasterResources({ db, log });
+  const resources = deps.admitMaster ? null : createMasterResources({ db, log });
   const session = createMasterSession({
     db,
     admit: deps.admitMaster ?? ((agent, target) => resources!.acquire(agent, target)),
@@ -89,47 +81,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   const currentPreset = () => resolveMasterPreset(deps.settings(), store.presets.list());
   /** Provider the master runs on: the live agent, else the chosen preset. */
   const ownProvider = () => session.activeProvider() ?? currentPreset().preset?.provider ?? null;
-  const memory = deps.memory ?? createFileMemoryPort();
-  const taskConsolidator = createTaskConsolidator({
-    db,
-    store,
-    master: session,
-    memory,
-    prompts,
-    state,
-    async withWrite(task, files, action) {
-      const release = deps.admitMemory
-        ? await deps.admitMemory(task.workspaceId, files)
-        : await resources!.acquireFiles(task.workspaceId, files, await session.currentTarget());
-      try {
-        return await action();
-      } finally {
-        await release();
-      }
-    },
-    options: {
-      tuning,
-      requirementsChars: () => deps.settings().requirementsExcerptChars,
-      maintainRequirements: () => deps.settings().maintainRequirements,
-    },
-    async project(workspaceId) {
-      const workspace = await deps.getPaseo()?.workspaces?.ref(workspaceId).refresh();
-      return workspace ? store.projectConfigs.get(workspace.projectId) : undefined;
-    },
-    onRequirementsFailure: (key, message) => alerts.raise("requirements_failed", key, message),
-    git: deps.git,
-    log,
-  });
-  async function run(job: WakeJob): Promise<void> {
-    if (!deps.settings().enabled) return;
-    const outcome = await taskConsolidator.consolidate(job.workspaceId, { force: job.force });
-    log(`memory ${wakeTarget(job)}: ${outcome.status}`);
-    if (outcome.status === "failed") {
-      const task = store.tasks.get(job.workspaceId);
-      const text = "项目记忆整理失败：" + outcome.error;
-      if (task && !task.summary.includes(text))
-        store.tasks.setSummary(task.workspaceId, [task.summary, text].filter(Boolean).join("\n\n"));
-    }
+  async function run(_job: WakeJob): Promise<void> {
+    // WP-134: completion consolidation belongs exclusively to the project agent.
   }
 
   const resourceRetries = new Set<() => void>();
@@ -137,16 +90,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     run,
     onFailure(job, error) {
       log(`${job.kind} ${wakeTarget(job)} failed`, error);
-      if (job.kind === "task_done") {
-        const task = store.tasks.get(job.workspaceId);
-        const text =
-          "项目记忆整理暂未完成：" + (error instanceof Error ? error.message : String(error));
-        if (task && !task.summary.includes(text))
-          store.tasks.setSummary(
-            task.workspaceId,
-            [task.summary, text].filter(Boolean).join("\n\n"),
-          );
-      }
       if (
         error instanceof MasterError &&
         error.kind === "unavailable" &&
@@ -255,10 +198,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
         .catch((error) => log("总 agent 接续失败", error));
     },
     onTaskDispatchWanted: (request) => void taskDispatcher.handle(request),
-    taskConsolidated: (id) => {
-      const task = store.tasks.get(id);
-      return !!task && taskConsolidator.has(task);
-    },
     onMaintenancePaused({ ruleName, rejections }) {
       alerts.raise(
         "maintenance_paused",
@@ -288,7 +227,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     queue,
     enabled: () => deps.settings().enabled,
     tuning,
-    flags: () => deps.settings(),
     pollIntervalMs: deps.pollIntervalMs,
     log,
     ready: deps.promptsReady,
@@ -447,7 +385,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     queue,
     triggers,
     taskDispatcher,
-    taskConsolidator,
     quota,
     alerts,
     status,
@@ -460,7 +397,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     },
 
     /** Startup catch-up (completed tasks without a memory update). */
-    sweep: () => (deps.settings().sweepOnStart ? triggers.sweep() : 0),
+    sweep: () => 0,
 
     /** All master sessions, newest first (the history list of the screen). */
     sessions: (limit?: number) => session.sessions(limit),
@@ -503,13 +440,8 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       return "alerted";
     },
 
-    wake(workspaceId: string, force: boolean) {
-      const task = store.tasks.get(workspaceId);
-      if (task) {
-        queue.enqueue({ kind: "task_done", workspaceId: task.workspaceId, force });
-        return { queued: true, message: `已排队整理任务 ${task.workspaceId}` };
-      }
-      return { queued: false, message: "任务不存在，请使用原生 workspace 任务" };
+    wake(_workspaceId: string, _force: boolean) {
+      return { queued: false, message: "任务完成整理已迁移至项目 agent" };
     },
 
     async dispose(): Promise<void> {
