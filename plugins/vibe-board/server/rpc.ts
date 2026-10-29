@@ -1,3 +1,4 @@
+import { listHostProjects } from "./host-data";
 import { getProjectDefaults, setProjectDefaults } from "./project-defaults";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -8,7 +9,7 @@ import { resolveMainConfig } from "./main-model";
 import { providerCatalog } from "./provider-catalog";
 async function listPaseoProjects(paseo: PaseoApi) {
   try {
-    const result = await paseo.projects.list();
+    const result = await listHostProjects(paseo);
     return {
       projects: result.projects.map((project) => ({
         id: project.projectId,
@@ -25,15 +26,20 @@ async function listPaseoProjects(paseo: PaseoApi) {
   }
 }
 
-export function registerBoardRpcs(server: PluginServerContext, board: BoardService) {
+export function registerBoardRpcs(
+  server: PluginServerContext,
+  board: BoardService,
+  getPaseo?: () => PaseoApi | null,
+) {
+  const hostProjects = (api: PaseoApi) => listHostProjects(getPaseo?.() ?? api);
   server.handle(rpc.projectsListRpc, (input) => board.projects.list(input.includeArchived));
   server.handle(rpc.projectsCreateRpc, (input) => board.projects.create(input));
   server.handle(rpc.projectsUpdateRpc, ({ project, ...patch }) =>
     board.projects.update(project, patch),
   );
-  server.handle(rpc.paseoProjectsListRpc, (_input, { paseo }) => listPaseoProjects(paseo));
+  server.handle(rpc.paseoProjectsListRpc, (_input, { paseo }) => listPaseoProjects(getPaseo?.() ?? paseo));
   server.handle(rpc.resolveMainConfigRpc, async ({ projectId }, { paseo }) => {
-    const { projects } = await paseo.projects.list();
+    const { projects } = await hostProjects(paseo);
     const project = projects.find((candidate) => candidate.projectId === projectId);
     if (!project) throw new Error("项目不存在");
     return resolveMainConfig(board.store, projectId, project.projectRootPath);
@@ -46,13 +52,13 @@ export function registerBoardRpcs(server: PluginServerContext, board: BoardServi
   server.handle(rpc.presetsDeleteRpc, (input) => board.presets.delete(input.presetId));
   server.handle(rpc.providersCatalogRpc, (_input, { paseo }) => providerCatalog(paseo));
   server.handle(rpc.projectDefaultsGetRpc, async ({ projectId }, { paseo }) => {
-    const { projects } = await paseo.projects.list();
+    const { projects } = await hostProjects(paseo);
     const project = projects.find((p) => p.projectId === projectId);
     if (!project) throw new Error("项目不存在");
     return getProjectDefaults(board, projectId, project.projectRootPath);
   });
   server.handle(rpc.projectDefaultsSetRpc, async (input, { paseo }) => {
-    const { projects } = await paseo.projects.list();
+    const { projects } = await hostProjects(paseo);
     const project = projects.find((p) => p.projectId === input.projectId);
     if (!project) throw new Error("项目不存在");
     return setProjectDefaults(board, {

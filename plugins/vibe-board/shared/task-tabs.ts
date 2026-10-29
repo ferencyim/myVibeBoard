@@ -37,6 +37,13 @@ export const TaskTabViewSchema = z.object({
 });
 export type TaskTabViewData = z.infer<typeof TaskTabViewSchema>;
 
+/** Placeholder discovery only: no plan scan, agent refresh or provisioning. */
+export const taskWorkspaceTabsRpc = defineRpc({
+  name: "vibe.task.tabs.resolve",
+  input: z.object({ workspaceId: z.string().min(1) }),
+  output: z.array(TaskTabViewSchema),
+});
+
 export const TaskStepSchema = z.object({
   kind: z.string(),
   title: z.string(),

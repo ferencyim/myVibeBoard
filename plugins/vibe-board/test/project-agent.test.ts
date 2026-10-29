@@ -143,10 +143,24 @@ function fixture() {
     taskRows,
     tabs,
     providers: api.providers,
+    api,
   };
 }
 
 describe("项目 agent", () => {
+  it("状态并发单飞、项目列表共享缓存，找到 agent 后打开不再分页扫描", async () => {
+    const f = fixture();
+    const listProjects = vi.spyOn(f.api.projects, "list");
+    const listAgents = vi.spyOn(f.api.agents, "list");
+    await Promise.all(Array.from({ length: 10 }, () => f.service.state("p")));
+    expect(listProjects).toHaveBeenCalledTimes(1);
+    expect(listAgents).toHaveBeenCalledTimes(1);
+    const opened = await f.service.open("p");
+    expect((await f.service.state("p")).agentId).toBe(opened.agentId);
+    await f.service.open("p");
+    expect(listProjects).toHaveBeenCalledTimes(1);
+    expect(listAgents).toHaveBeenCalledTimes(1);
+  });
   it("入口按需创建、并发复用，归档后重建且沿用最近 #1 模型", async () => {
     const f = fixture();
     expect((await f.service.state("p")).agentId).toBeNull();

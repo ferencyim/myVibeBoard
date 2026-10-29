@@ -16,6 +16,7 @@ import {
   groupSelectRpc,
   groupTargetsRpc,
   taskPanelRpc,
+  taskWorkspaceTabsRpc,
   taskTabCommandRpc,
   taskTabEnsureRpc,
 } from "../shared/task-tabs";
@@ -213,6 +214,11 @@ export function registerTaskRuntime(
     options.onPaseo(context.paseo);
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
     return groupChat.select(input.workspaceId, input.agentId, input.number);
+  });
+  server.handle(taskWorkspaceTabsRpc, (input, context) => {
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    const task = options.store.tasks.get(input.workspaceId);
+    return task ? tabs.tabsFor(task, false) : [];
   });
   server.handle(taskPanelRpc, async (input, context) => {
     options.onPaseo(context.paseo);

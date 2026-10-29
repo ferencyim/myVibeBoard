@@ -48,8 +48,8 @@ export function createProjectDocuments(options: {
     if (!project) throw new Error("项目不存在");
     return realpath(project.projectRootPath);
   }
-  async function scan(projectId: string) {
-    const root = await projectRoot(projectId);
+  async function scan(projectId: string, project?: NativeProject) {
+    const root = project ? await realpath(project.projectRootPath) : await projectRoot(projectId);
     const paths = ["AGENTS.md", "CLAUDE.md", "PRODUCT-REQUIREMENTS.md"];
     async function walk(dir: string) {
       try {
@@ -124,10 +124,10 @@ export function createProjectDocuments(options: {
         ).run(projectId, r.path, r.content, r.total_bytes, r.truncated, r.revision, r.synced_at);
     });
   }
-  async function sync(projectId: string) {
+  async function sync(projectId: string, project?: NativeProject) {
     const previous = active.get(projectId);
     if (previous) return previous;
-    const work = scan(projectId);
+    const work = scan(projectId, project);
     active.set(projectId, work);
     try {
       await work;
@@ -290,7 +290,7 @@ export function createProjectDocuments(options: {
     for (const project of await options.listProjects()) {
       if (stopped) return;
       try {
-        await sync(project.projectId);
+        await sync(project.projectId, project);
         await deliver(project.projectId);
       } catch (error) {
         report(errorCode(error) ?? "document_sync_failed");

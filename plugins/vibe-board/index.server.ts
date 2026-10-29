@@ -1,3 +1,4 @@
+import { listHostProjects } from "./server/host-data";
 import { readLegacyMaintenance } from "./server/project-agent/settings-migration";
 import { createProjectAgents } from "./server/project-agent/service";
 import { registerProjectAgents } from "./server/project-agent/register";
@@ -72,7 +73,7 @@ export default function contribute(server: PluginServerContext) {
     db: runtime.db,
     listProjects: async () => {
       if (!paseo) throw new Error("项目宿主尚未连接");
-      return (await paseo.projects.list()).projects;
+      return (await listHostProjects(paseo)).projects;
     },
     notifyMerge: projects.sendProject,
   });
@@ -95,7 +96,7 @@ export default function contribute(server: PluginServerContext) {
     sendProject: projects.sendProject,
     ready: startup.ready,
   });
-  registerBoardRpcs(server, createBoardService(runtime));
+  registerBoardRpcs(server, createBoardService(runtime), () => paseo);
   const evidence = createTaskEvidenceReader(runtime.db);
   server.handle(verifyEvidenceRpc, (input) => evidence.evidence(input.evidenceId, input.thumb));
   server.registerAgentTool({

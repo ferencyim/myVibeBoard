@@ -21,6 +21,11 @@ the agent runs through `ensureAgentLoaded()`, which resumes the durable provider
 same Paseo agent ID. Provider history is not appended again when the canonical timeline is already
 primed.
 
+An idle Codex thread can have a persisted ID before its first turn writes a rollout. Interactive
+recovery may replace that provider session only when the stored record explicitly has no user
+message and Codex reports that exact thread's missing rollout. Keep the Paseo identity and metadata;
+never infer empty history from a failed resume, and never apply this recovery to archived history.
+
 Reload releases the old runtime before resuming its durable session: an idle provider process can
 still own an exclusive writer. A close failure retains that runtime for cleanup and blocks the
 replacement. Once closure succeeds, a failed resume leaves the durable agent closed and retryable.

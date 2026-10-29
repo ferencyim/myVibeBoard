@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRpc, type PluginProjectSidebarItemProps } from "@getpaseo/plugin/client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { projectAgentOpenRpc, projectAgentStateRpc } from "../shared/project-agent";
 
 export function ProjectAgentSidebarItem({
@@ -11,6 +11,7 @@ export function ProjectAgentSidebarItem({
 }: PluginProjectSidebarItemProps) {
   const openProjectAgent = useRpc(projectAgentOpenRpc);
   const readProjectAgent = useRpc(projectAgentStateRpc);
+  const queryClient = useQueryClient();
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const styles = useMemo(
@@ -27,23 +28,23 @@ export function ProjectAgentSidebarItem({
     queryKey: ["vibe-board", "project-agent", projectId],
     queryFn: () => readProjectAgent({ projectId }),
     refetchInterval: 15_000,
+    staleTime: 15_000,
   });
-  const refetch = state.refetch;
   const open = useCallback(async () => {
     if (opening) return;
     setOpening(true);
     setOpenError(null);
     try {
       const result = await openProjectAgent({ projectId });
+      queryClient.setQueryData(["vibe-board", "project-agent", projectId], result);
       if (result.agentId) openAgent(result.agentId);
       if (result.error) setOpenError(result.error);
-      await refetch();
     } catch (reason) {
       setOpenError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setOpening(false);
     }
-  }, [opening, projectId, openProjectAgent, openAgent, refetch]);
+  }, [opening, projectId, openProjectAgent, openAgent, queryClient]);
   const error = openError ?? state.data?.error;
   return (
     <View>

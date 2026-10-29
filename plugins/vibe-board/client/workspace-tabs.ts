@@ -1,5 +1,5 @@
 import type { PluginClientContext, PluginWorkspaceTabDescriptor } from "@getpaseo/plugin/client";
-import { taskPanelRpc, taskTabEnsureRpc, type TaskTabViewData } from "../shared/task-tabs";
+import { taskPanelRpc, taskTabEnsureRpc, taskWorkspaceTabsRpc, type TaskTabViewData } from "../shared/task-tabs";
 import { UNRESOLVED_TAB_MODEL } from "../shared/vibe/contract";
 
 export function taskWorkspaceTabs(tabs: TaskTabViewData[]): PluginWorkspaceTabDescriptor[] {
@@ -25,8 +25,8 @@ export function contributeWorkspaceTabs(client: PluginClientContext) {
   return client.addWorkspaceTabProvider({
     id: "task-flow",
     async resolve({ workspaceId }) {
-      const panel = await client.rpc(taskPanelRpc, { workspaceId });
-      return panel.isTask ? taskWorkspaceTabs(panel.tabs) : [];
+      const tabs = await client.rpc(taskWorkspaceTabsRpc, { workspaceId });
+      return taskWorkspaceTabs(tabs);
     },
     async create({ workspaceId, tabId, provider, model, thinkingOptionId }) {
       if (tabId === "main") {

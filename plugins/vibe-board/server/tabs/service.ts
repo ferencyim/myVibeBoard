@@ -34,6 +34,17 @@ import { resolveMainConfig } from "../main-model";
 
 export { tabTitle };
 
+export class TaskWorkspaceUnavailableError extends Error {
+  constructor(readonly reason: "missing" | "archived" | "not-worktree") {
+    const messages = {
+      "not-worktree": "任务必须绑定独立的附加 Git worktree，不能使用项目主检出或普通目录。",
+      archived: "任务 workspace 已归档",
+      missing: "任务 workspace 不存在",
+    };
+    super(messages[reason]);
+  }
+}
+
 export interface TaskTabView {
   number: number;
   agentId: string;
@@ -368,11 +379,28 @@ export function createTaskTabs(options: {
     if (!agent) throw new Error("找不到原生 agent：" + agentId);
     return { handle, agent };
   }
-  async function taskWorkspace(workspaceId: string) {
-    const placement = paseo().workspaces.ref(workspaceId);
-    await placement.refresh();
-    assertTaskWorkspace(placement.current());
-    return placement;
+  const workspaces = new Map<string, Promise<ReturnType<PaseoApi["workspaces"]["ref"]>>>();
+  function taskWorkspace(workspaceId: string) {
+    const pending = workspaces.get(workspaceId);
+    if (pending) return pending;
+    // SDK workspace refresh scans the directory; concurrent readers share that scan.
+    const run = (async () => {
+      const placement = paseo().workspaces.ref(workspaceId);
+      await placement.refresh();
+      const current = placement.current();
+      if (!current) throw new TaskWorkspaceUnavailableError("missing");
+      if (current.archivingAt) throw new TaskWorkspaceUnavailableError("archived");
+      try {
+        assertTaskWorkspace(current);
+      } catch {
+        throw new TaskWorkspaceUnavailableError("not-worktree");
+      }
+      return placement;
+    })().finally(() => {
+      if (workspaces.get(workspaceId) === run) workspaces.delete(workspaceId);
+    });
+    workspaces.set(workspaceId, run);
+    return run;
   }
   /** Opaque provider ids (`dfmodel`) get their catalog label (`DeepSeek-Flash`) in titles. */
   async function labelFor(provider: string, model: string): Promise<string | undefined> {
@@ -605,7 +633,7 @@ export function createTaskTabs(options: {
     return resolved;
   }
   async function tabsFor(task: Task, refresh: boolean): Promise<TaskTabView[]> {
-    if (!task.tabs.some((tab) => tab.role === "main")) {
+    if (refresh && !task.tabs.some((tab) => tab.role === "main")) {
       try {
         await ensureTab(task.anchorAgentId, { role: "main" });
         task = store.tasks.get(task.workspaceId) ?? task;

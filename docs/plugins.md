@@ -741,7 +741,7 @@ The fork exposes `client.addWorkspaceTabProvider({ id, resolve, create, enable? 
 
 Opening a placeholder uses the native draft composer and does not create an agent. The first submission calls `create({ workspaceId, tabId, provider, model?, modeId?, thinkingOptionId? })`, which returns `{ agentId }`; the host then sends the original message and attachments through its native user path with the original message ID. Plugin code must only create the agent here, never send an initialization prompt or substitute an agent-origin message. `enable` handles a disabled role explicitly. Providers own role prompts and permissions; the host owns composer controls, errors and message delivery.
 
-A provider registration belongs to its installation and host, and is removed on teardown. Desktop, Web and native clients share the merge and composer path. The first successful resolve populates placeholders; retained layouts keep their descriptors across reconnects. This is a fork SDK/host extension and requires deploying both together.
+A provider registration belongs to its installation and host, and is removed on teardown. Desktop, Web and native clients share the merge and composer path. Host agents render independently of provider queries; unresolved or failed providers never gate existing conversations. Discovery starts after the host agent directory hydrates and polls every 30 seconds without automatic error retries. The first successful resolve populates placeholders; retained layouts keep their descriptors across reconnects. This is a fork SDK/host extension and requires deploying both together.
 
 ## Contribute settings
 

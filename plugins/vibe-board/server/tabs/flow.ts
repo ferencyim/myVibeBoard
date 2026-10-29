@@ -66,6 +66,7 @@ import {
   roleTabDisabled,
   roleVars,
   tabTitle,
+  TaskWorkspaceUnavailableError,
   type FlowRole,
   type TaskTabs,
 } from "./service";
@@ -251,6 +252,27 @@ export function createTaskFlow(options: {
   // Pre-created tabs whose registration failed, keyed by workspace and role (see provisionTabsNow).
   const orphanTabs = new Map<string, { agentId: string; presetId: string }>();
   const provisioning = new Map<string, Promise<void>>();
+  const provisionFailures = new Map<string, { attempts: number; retryAt: number; loggedAt: number }>();
+  const now = options.now ?? Date.now;
+  function canProvision(key: string) {
+    const failure = provisionFailures.get(key);
+    return !failure || now() >= failure.retryAt;
+  }
+  function provisionFailed(key: string, error: unknown) {
+    const previous = provisionFailures.get(key);
+    if (previous?.retryAt === Infinity) return;
+    const permanent = error instanceof TaskWorkspaceUnavailableError;
+    const at = now();
+    const attempts = (previous?.attempts ?? 0) + 1;
+    const shouldLog = permanent || !previous || at - previous.loggedAt >= 5 * 60_000;
+    provisionFailures.set(key, {
+      attempts,
+      retryAt: permanent ? Infinity : at + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 5)),
+      loggedAt: shouldLog ? at : (previous?.loggedAt ?? at),
+    });
+    if (shouldLog)
+      log(permanent ? `流程 tab 预建停止：${error.message}` : "流程 tab 预建暂缓：稍后退避重试");
+  }
   const serial = new Map<string, Promise<unknown>>();
 
   function paseo(): PaseoApi {
@@ -546,7 +568,10 @@ export function createTaskFlow(options: {
   function provisionTabs(workspaceId: string): Promise<void> {
     const pending = provisioning.get(workspaceId);
     if (pending) return pending;
-    const run = queue(workspaceId, () => provisionTabsNow(workspaceId)).finally(() => {
+    if (!canProvision(workspaceId)) return Promise.resolve();
+    const run = queue(workspaceId, () => provisionTabsNow(workspaceId)).catch((error) => {
+      provisionFailed(workspaceId, error);
+    }).finally(() => {
       if (provisioning.get(workspaceId) === run) provisioning.delete(workspaceId);
     });
     provisioning.set(workspaceId, run);
@@ -555,27 +580,19 @@ export function createTaskFlow(options: {
   async function registerRoleTab(agentId: string, role: PrebuiltRole, presetId: string) {
     try {
       return !!(await tabs.ensureTab(agentId, { role, presetId }));
-    } catch (error) {
-      log("预建 " + role + " tab 登记失败", error);
+    } catch {
       return false;
     }
   }
   async function provisionTabsNow(workspaceId: string) {
     let task = store.tasks.get(workspaceId);
     if (!task || !PROVISION_PHASES.has(task.phase)) return;
+    const placement = await tabs.workspace(workspaceId);
     if (!task.tabs.some((tab) => tab.role === "main")) {
       const main = await tabs.ensureTab(task.anchorAgentId, { role: "main" });
       if (!main) throw new Error("旧任务主会话尚不可用，暂缓流程 tab 补建");
       task = requireTask(workspaceId);
     }
-    let placement;
-    try {
-      placement = await tabs.workspace(workspaceId);
-    } catch (error) {
-      log("流程 tab 预建跳过：workspace 不可用", error);
-      return;
-    }
-    if (placement.current()?.archivingAt) return;
     for (const role of PREBUILT_ROLES) {
       task = store.tasks.get(workspaceId);
       if (!task || !PROVISION_PHASES.has(task.phase)) return;
@@ -585,24 +602,29 @@ export function createTaskFlow(options: {
         continue;
       }
       if (roleTabDisabled(store, role, { task, projectId: placement.projectId })) continue;
+      if (!canProvision(key)) continue;
       // A tab created earlier whose registration failed: register it instead of creating
       // another agent; if it still cannot be registered, archive it so it does not linger.
       const orphan = orphanTabs.get(key);
       if (orphan) {
         orphanTabs.delete(key);
         if (await registerRoleTab(orphan.agentId, role, orphan.presetId)) continue;
+        provisionFailed(key, new Error("流程 tab 登记仍不可用"));
         await paseo()
           .agents.ref(orphan.agentId)
           .archive()
-          .catch((error) => log("未登记的预建 " + role + " tab 归档失败", error));
+          .catch((error) => provisionFailed(key, error));
         continue;
       }
       try {
         await ensureRoleTabNow({ workspaceId, role });
+        provisionFailures.delete(key);
       } catch (error) {
-        log("预建 " + role + " tab 失败", error);
+        if (error instanceof TaskWorkspaceUnavailableError) throw error;
+        provisionFailed(key, error);
       }
     }
+    provisionFailures.delete(workspaceId);
   }
   interface EnsureRoleInput {
     workspaceId: string;

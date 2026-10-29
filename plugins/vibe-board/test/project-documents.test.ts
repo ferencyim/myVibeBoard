@@ -6,6 +6,23 @@ import { openVibeDb, migrateOwner } from "../server/vibe/db";
 import { createProjectDocuments, registerProjectDocumentRpcs } from "../server/project-documents";
 import type { PluginServerContext, PluginAgentTool } from "@getpaseo/plugin/server";
 describe("project document snapshots", () => {
+  it("uses one host project list for an entire reconciliation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
+    const db = openVibeDb({ path: ":memory:" });
+    const listProjects = vi.fn(async () => [
+      { projectId: "first", projectRootPath: root },
+      { projectId: "second", projectRootPath: root },
+    ]);
+    const service = createProjectDocuments({ db, listProjects, notifyMerge: async () => {} });
+    try {
+      await service.start();
+      expect(listProjects).toHaveBeenCalledTimes(1);
+    } finally {
+      await service.close();
+      db.close();
+      await rmdir(root);
+    }
+  });
   it("synchronizes bounded Markdown snapshots, persists merge intent, retries delivery and requires a file update", async () => {
     const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
     const db = openVibeDb({ path: ":memory:" });

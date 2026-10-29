@@ -1,3 +1,4 @@
+import { cacheHostRead, listHostProjects } from "../host-data";
 import { reviewActive } from "../tabs/plan-review";
 import { createInputPersistence, PROJECT_INPUT_BYTES } from "./inputs";
 import { randomUUID } from "node:crypto";
@@ -77,7 +78,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     return api;
   }
   async function project(projectId: string): Promise<PaseoProject> {
-    const list = await paseo().projects.list();
+    const list = await listHostProjects(paseo());
     const found = list.projects.find((entry) => entry.projectId === projectId);
     if (!found) throw new Error("项目不存在或已归档");
     return found;
@@ -104,7 +105,9 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     await project(projectId);
     return projectId;
   }
-  async function find(projectId: string): Promise<PaseoAgent | null> {
+  const knownAgents = new Map<string, string>();
+  const discoveries = new Map<string, () => Promise<PaseoAgent | null>>();
+  async function discover(projectId: string): Promise<PaseoAgent | null> {
     let cursor: string | undefined;
     do {
       const page = await paseo().agents.list({
@@ -123,11 +126,34 @@ export function createProjectAgents(options: ProjectAgentOptions) {
           item.labels[PROJECT_AGENT_ROLE_LABEL] === "project" &&
           item.labels[PROJECT_AGENT_PROJECT_LABEL] === projectId,
       );
-      if (found) return found.agent;
+      if (found) {
+        knownAgents.set(projectId, found.agent.id);
+        return found.agent;
+      }
       cursor = page.pageInfo.nextCursor ?? undefined;
     } while (cursor);
     return null;
   }
+  async function find(projectId: string): Promise<PaseoAgent | null> {
+    const known = knownAgents.get(projectId);
+    if (known) {
+      const current = await agent(known);
+      if (
+        current && !current.archivedAt &&
+        current.labels[PROJECT_AGENT_ROLE_LABEL] === "project" &&
+        current.labels[PROJECT_AGENT_PROJECT_LABEL] === projectId
+      ) return current;
+      knownAgents.delete(projectId);
+      discoveries.delete(projectId);
+    }
+    let read = discoveries.get(projectId);
+    if (!read) {
+      read = cacheHostRead(() => discover(projectId), 15_000);
+      discoveries.set(projectId, read);
+    }
+    return read();
+  }
+  const stateReads = new Map<string, () => Promise<ProjectAgentState>>();
   function stateOf(projectId: string, current: PaseoAgent | null): ProjectAgentState {
     return {
       agentId: current?.id ?? null,
@@ -135,9 +161,16 @@ export function createProjectAgents(options: ProjectAgentOptions) {
       error: errors.get(projectId) ?? current?.lastError ?? null,
     };
   }
-  async function state(projectId: string): Promise<ProjectAgentState> {
-    await project(projectId);
-    return stateOf(projectId, await find(projectId));
+  function state(projectId: string): Promise<ProjectAgentState> {
+    let read = stateReads.get(projectId);
+    if (!read) {
+      read = cacheHostRead(async () => {
+        await project(projectId);
+        return stateOf(projectId, await find(projectId));
+      }, 15_000);
+      stateReads.set(projectId, read);
+    }
+    return read();
   }
   async function model(
     projectId: string,
@@ -222,6 +255,9 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     });
     await created.refresh();
     errors.delete(projectId);
+    knownAgents.set(projectId, created.id);
+    discoveries.delete(projectId);
+    stateReads.delete(projectId);
     return { agentId: created.id, workspaceId: created.workspaceId, error: null };
   }
   function open(projectId: string): Promise<ProjectAgentState> {
@@ -469,6 +505,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     sendProject,
     appendStatus,
     setError(projectId: string, error: string | null) {
+      stateReads.delete(projectId);
       if (error) errors.set(projectId, error);
       else errors.delete(projectId);
     },

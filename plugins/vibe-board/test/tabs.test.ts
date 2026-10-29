@@ -304,6 +304,7 @@ function setup(
     /** Clock and reviewer timeout of the plan review (the flow, not the tab registry). */
     reviewNow?: () => number;
     reviewTimeoutMs?: () => number;
+    flowLog?: (message: string, error?: unknown) => void;
   } = {},
 ) {
   const db = openVibeDb({ path: ":memory:" });
@@ -336,7 +337,7 @@ function setup(
     ...(options.git ? { git: options.git } : {}),
     ...(options.reviewNow ? { now: options.reviewNow } : {}),
     ...(options.reviewTimeoutMs ? { reviewTimeoutMs: options.reviewTimeoutMs } : {}),
-    log: () => {},
+    log: options.flowLog ?? (() => {}),
   });
   flow.registerPrompts();
   flows.push(flow);
@@ -2620,8 +2621,76 @@ describe("执行 tab 直接授权与调度准入", () => {
 });
 
 describe("预建 tab 的边界", () => {
+  it("并发 workspace 校验共用一次宿主目录扫描，完成后重新校验", async () => {
+    const { fake, tabs } = await projectTask();
+    const handle = fake.paseo.workspaces.ref();
+    let finish!: () => void;
+    const waiting = new Promise<void>((resolve) => { finish = resolve; });
+    const refresh = vi.fn(() => waiting);
+    vi.spyOn(fake.paseo.workspaces, "ref").mockReturnValue({ ...handle, refresh });
+    const first = tabs.workspace("ws");
+    const second = tabs.workspace("ws");
+    expect(first).toBe(second);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    finish();
+    await Promise.all([first, second]);
+    await tabs.workspace("ws");
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["not-worktree", "missing", "archived"])("%s 的任务只记一次简短日志并停止预建", async (reason) => {
+    let now = 0;
+    const log = vi.fn();
+    const { fake, tabs, flow } = await projectTask({ reviewNow: () => now, flowLog: log });
+    if (reason === "not-worktree") fake.setWorkspaceKinds("directory", "git");
+    else {
+      const handle = fake.paseo.workspaces.ref();
+      vi.spyOn(fake.paseo.workspaces, "ref").mockReturnValue({
+        ...handle,
+        current: () => reason === "missing" ? null : { ...handle.current(), archivingAt: "2026-10-29T00:00:00.000Z" },
+      } as never);
+    }
+    const workspace = vi.spyOn(tabs, "workspace");
+    await flow.provisionTabs("ws");
+    for (let i = 0; i < 5; i++) {
+      now += 24 * 60 * 60_000;
+      await flow.provisionTabs("ws");
+      await flow.provisionMissing();
+    }
+    expect(workspace).toHaveBeenCalledTimes(1);
+    expect(fake.created).toHaveLength(0);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]).toHaveLength(1);
+    expect(log.mock.calls[0]![0]).toContain("预建停止");
+  });
+
+  it("临时 workspace 故障单飞、按分钟指数退避且日志限频，恢复后继续补建", async () => {
+    let now = 0;
+    const log = vi.fn();
+    const { fake, tabs, flow } = await projectTask({ reviewNow: () => now, flowLog: log });
+    const original = tabs.workspace;
+    const workspace = vi.spyOn(tabs, "workspace").mockRejectedValue(new Error("temporary"));
+    await Promise.all([flow.provisionTabs("ws"), flow.provisionTabs("ws")]);
+    expect(workspace).toHaveBeenCalledTimes(1);
+    now = 59_999;
+    await flow.provisionMissing();
+    expect(workspace).toHaveBeenCalledTimes(1);
+    now = 60_000;
+    await flow.provisionTabs("ws");
+    expect(workspace).toHaveBeenCalledTimes(2);
+    now = 179_999;
+    await flow.provisionTabs("ws");
+    expect(workspace).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledTimes(1);
+    now = 180_000;
+    workspace.mockImplementation(original);
+    await flow.provisionTabs("ws");
+    expect(fake.created).toHaveLength(5);
+  });
+
   it("登记失败的预建 agent 下次先补登记，仍失败则归档，不重复创建", async () => {
-    const { store, fake, flow } = await projectTask();
+    let now = 0;
+    const { store, fake, flow } = await projectTask({ reviewNow: () => now });
     configurePresets(store);
     fake.setCreatePatch({ internal: true });
     await flow.provisionTabs("ws");
@@ -2629,6 +2698,7 @@ describe("预建 tab 的边界", () => {
     expect(store.tasks.get("ws")!.tabs).toHaveLength(1);
     fake.setCreatePatch({});
     fake.agents.get("worker-1")!.internal = false;
+    now += 60_000;
     await flow.provisionTabs("ws");
     expect(fake.created).toHaveLength(5);
     expect(store.tasks.get("ws")!.tabs.map((tab) => [tab.agentId, tab.role])).toEqual([
@@ -2644,6 +2714,7 @@ describe("预建 tab 的边界", () => {
       ]),
     );
     expect(fake.operations).not.toContain("archive:worker-1");
+    now += 120_000;
     await flow.provisionTabs("ws");
     expect(fake.created).toHaveLength(9);
     expect(store.tasks.get("ws")!.tabs.map((tab) => tab.role)).toEqual([
@@ -2715,6 +2786,24 @@ describe("预建 tab 的边界", () => {
       onPaseo: () => {},
     });
     try {
+      const resolve = handlers.get("vibe.task.tabs.resolve")!;
+      const agents = vi.spyOn(fake.paseo.agents, "ref");
+      const workspaces = vi.spyOn(fake.paseo.workspaces, "ref");
+      const provision = vi.spyOn(runtime.flow, "provisionTabs");
+      const resolved = (await resolve({ workspaceId: "ws" }, { paseo: fake.paseo })) as Array<{ number: number }>;
+      expect(resolved.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(await resolve({ workspaceId: "unrelated" }, { paseo: fake.paseo })).toEqual([]);
+      await expect(Promise.resolve().then(() => resolve(
+        { workspaceId: "ws" },
+        { callerAgentId: "agent-2", paseo: fake.paseo },
+      ))).rejects.toThrow("agent 消息不能授权任务命令");
+      expect(agents).not.toHaveBeenCalled();
+      expect(workspaces).not.toHaveBeenCalled();
+      expect(provision).not.toHaveBeenCalled();
+      expect(fake.created).toHaveLength(0);
+      agents.mockRestore();
+      workspaces.mockRestore();
+      provision.mockRestore();
       const panel = handlers.get("vibe.task.panel")!;
       await expect(
         panel({ workspaceId: "ws" }, { callerAgentId: "agent-2", paseo: fake.paseo }),
@@ -4716,6 +4805,24 @@ describe("WP-131 #1 群聊", () => {
 });
 
 describe("WP136 完整流程 tab 与懒创建", () => {
+  it.each([true, false])("占位投影有无主会话登记（%s）都不发宿主 RPC", async (registered) => {
+    const { store, fake, tabs } = setup();
+    fake.addAgent({ id: "main" });
+    if (registered) await tabs.ensureTab("main");
+    else store.tasks.create({ workspaceId: "ws", anchorAgentId: "main" });
+    const agents = vi.spyOn(fake.paseo.agents, "ref").mockImplementation(() => {
+      throw new Error("占位投影不能访问宿主 agent");
+    });
+    const workspaces = vi.spyOn(fake.paseo.workspaces, "ref").mockImplementation(() => {
+      throw new Error("占位投影不能访问宿主 workspace");
+    });
+    const result = await tabs.tabsFor(store.tasks.get("ws")!, false);
+    expect(result.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(result[0]!.agentId).toBe("main");
+    expect(agents).not.toHaveBeenCalled();
+    expect(workspaces).not.toHaveBeenCalled();
+  });
+
   it("旧会话移到 #7 后推进编号，下一会话使用 #8 而不覆盖 #7", async () => {
     const { store, fake, tabs } = setup();
     fake.addAgent({ id: "main" });
