@@ -1,3 +1,4 @@
+import { deferStartup } from "./server/vibe/db/startup";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { join } from "node:path";
@@ -36,13 +37,39 @@ export default function contribute(server: PluginServerContext) {
     // Dispatch availability for the scheduler, and a newly chosen preset for a running master.
     void runtime?.onSettingsChanged();
   };
-  void settings.read().then((state) => {
-    applySettings(state);
-    // One-time move of prompts edited in the old settings page into the prompt registry.
-    runtime?.migrateLegacyPrompts();
-    return undefined;
+  const settingsReady = settings.read();
+  const startup = deferStartup(
+    async () => {
+      const state = await settingsReady;
+      // Register with the persisted suffix before catch-up can send a prompt.
+      if (state.status === "ready") current = state.values;
+      maintainRequirements = current.maintainRequirements;
+      master.prompts.register();
+      master.migrateLegacyPrompts();
+      void startup.ready
+        .then(() => master.onSettingsChanged())
+        .catch((error) => console.error("[vibe-master] 设置应用失败", error));
+      master.startQuotaMonitor();
+      master.sweep();
+    },
+    (error) => console.error("[vibe-master] 后台初始化失败", error),
+  );
+  // Requests may arrive as soon as ready is sent; wait for the same startup promise.
+  const host = server;
+  server = {
+    ...host,
+    handle: (rpc, handler) => host.handle(rpc, startup.wrap(handler)),
+    before: (name, handler) => host.before(name, startup.wrap(handler)),
+    on: (name, handler) => host.on(name, startup.wrap(handler)),
+    registerAgentTool: (tool) =>
+      host.registerAgentTool({ ...tool, handler: startup.wrap(tool.handler) }),
+  };
+
+  const stopSettings = settings.subscribe((state) => {
+    void startup
+      .wrap(applySettings)(state)
+      .catch((error) => console.error("[vibe-master] 设置更新失败", error));
   });
-  const stopSettings = settings.subscribe(applySettings);
 
   // The SDK handle only reaches plugins through hook/RPC contexts: keep the newest one.
   let paseo: PaseoApi | null = null;
@@ -52,6 +79,7 @@ export default function contribute(server: PluginServerContext) {
     getPaseo: () => paseo,
     settings: () => current,
     dataDir: join(resolveVibeHome(), "master"),
+    promptsReady: startup.ready,
   });
   runtime = master;
   const onPaseo = (api: PaseoApi) => {
@@ -125,21 +153,22 @@ export default function contribute(server: PluginServerContext) {
 
   // Hosts that expose the handle and push at start-up (server.paseo / server.notify) need no hook
   // or RPC first; older hosts keep working through the paths above.
-  const host = server as { paseo?: PaseoApi; notify?: (notification: PushNotification) => void };
-  if (host.paseo) onPaseo(host.paseo);
-  const notifier = host.notify
+  const capabilities = server as {
+    paseo?: PaseoApi;
+    notify?: (notification: PushNotification) => void;
+  };
+  if (capabilities.paseo) onPaseo(capabilities.paseo);
+  const notifier = capabilities.notify
     ? startNotifyConsumer({
         db,
         store,
-        notify: host.notify,
+        notify: capabilities.notify,
         onError: (error) => console.error("vibe-master notify:", error),
       })
     : null;
 
-  master.startQuotaMonitor();
-  master.sweep();
-
   return async () => {
+    await startup.close();
     await notifier?.stop();
     for (const off of offs) off();
     stopSettings();

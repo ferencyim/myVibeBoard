@@ -117,6 +117,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     file: join(options.dataDir, "task-resources.json"),
     config: () => settings,
     memory: () => latest?.mem ?? null,
+    log: (message) => console.info("vibe-scheduler:", message),
     quota: () => quota,
     native:
       options.native ??

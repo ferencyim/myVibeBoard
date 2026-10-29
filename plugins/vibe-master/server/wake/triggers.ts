@@ -24,6 +24,7 @@ export interface TriggersOptions {
   /** Read on every event; missing = everything on. */
   flags?(): TriggerFlags;
   pollIntervalMs?: number;
+  ready?: Promise<void>;
   /** vibe-scheduler signals: quota getting low / admission paused or resumed (memory). */
   onScheduler?(event: SchedulerSignal): void;
   /** vibe-maintain: a rule was paused after repeated rejections (the owner is reminded). */
@@ -92,7 +93,8 @@ export function createTriggers(options: TriggersOptions): Triggers {
     startAt: "now",
     pollIntervalMs: options.pollIntervalMs,
     onError: (error, seq) => log(`event ${seq} failed`, error),
-    handler: (event) => {
+    handler: async (event) => {
+      await options.ready;
       if (isEvent(event, "context.continuation_requested")) {
         if (event.payload.role === "master") options.onMasterContinuation?.(event.payload);
         return;

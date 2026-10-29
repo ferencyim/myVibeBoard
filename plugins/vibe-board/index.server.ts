@@ -1,3 +1,4 @@
+import { deferStartup } from "./server/vibe/db/startup";
 import { registerResourceTool } from "./server/resource-tool";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -12,6 +13,21 @@ import { boardSettings, type BoardSettingsValues } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {
   const runtime = openBoardRuntime();
+  const startup = deferStartup(
+    () => tasks.flow.registerPrompts(),
+    (error) => console.error("[vibe-board] 后台提示词初始化失败", error),
+  );
+  // Requests may arrive as soon as ready is sent; wait for the same startup promise.
+  const host = server;
+  server = {
+    ...host,
+    handle: (rpc, handler) => host.handle(rpc, startup.wrap(handler)),
+    before: (name, handler) => host.before(name, startup.wrap(handler)),
+    on: (name, handler) => host.on(name, startup.wrap(handler)),
+    registerAgentTool: (tool) =>
+      host.registerAgentTool({ ...tool, handler: startup.wrap(tool.handler) }),
+  };
+
   let paseo: PaseoApi | null = server.paseo ?? null;
   // Owner settings, read on every use.
   const settings = server.registerSettings(boardSettings);
@@ -23,6 +39,7 @@ export default function contribute(server: PluginServerContext) {
   const stopSettings = settings.subscribe(applySettings);
   const tasks = registerTaskRuntime(server, {
     reviewTimeoutMs: () => preferences.planReviewTimeoutMinutes * 60_000,
+    promptsReady: startup.ready,
     db: runtime.db,
     store: runtime.store,
     getPaseo: () => paseo,
@@ -95,6 +112,7 @@ export default function contribute(server: PluginServerContext) {
   });
   return async () => {
     stopSettings();
+    await startup.close();
     await tasks.close();
     runtime.close();
   };

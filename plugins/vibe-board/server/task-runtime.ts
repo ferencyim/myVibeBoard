@@ -1,7 +1,12 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { EVENT_PAYLOADS } from "./vibe/contract";
-import { createEventConsumer, createTaskRuntimeCommands, type VibeDb, type VibeStore } from "./vibe/db";
+import {
+  createEventConsumer,
+  createTaskRuntimeCommands,
+  type VibeDb,
+  type VibeStore,
+} from "./vibe/db";
 import { createTaskTabs } from "./tabs/service";
 import { createTaskFlow } from "./tabs/flow";
 import { createTaskBoard } from "./tabs/board";
@@ -14,13 +19,13 @@ import {
   taskTabCommandRpc,
 } from "../shared/task-tabs";
 
-const AGENT_CALLER_ERROR =
-  "agent 消息不能授权任务命令；请由用户在原生输入框发送斜杠命令或「通过」";
+const AGENT_CALLER_ERROR = "agent 消息不能授权任务命令；请由用户在原生输入框发送斜杠命令或「通过」";
 
 /** The business owner for numbered task tabs and the open-tab task flow. */
 export function registerTaskRuntime(
   server: PluginServerContext,
   options: {
+    promptsReady?: Promise<void>;
     db: VibeDb;
     store: VibeStore;
     getPaseo(): PaseoApi | null;
@@ -54,7 +59,7 @@ export function registerTaskRuntime(
     log,
     ...(options.reviewTimeoutMs ? { reviewTimeoutMs: options.reviewTimeoutMs } : {}),
   });
-  flow.registerPrompts();
+  if (!options.promptsReady) flow.registerPrompts();
   const board = createTaskBoard({
     store: options.store,
     getPaseo: options.getPaseo,
@@ -102,15 +107,15 @@ export function registerTaskRuntime(
       await tabs.ensureTab(agent.id).catch((error) => log("任务 tab 登记失败", error));
       const task = agent.workspaceId ? options.store.tasks.get(agent.workspaceId) : undefined;
       if (task && task.anchorAgentId === agent.id && task.tabs.length === 1)
-        void flow
-          .provisionTabs(task.workspaceId)
-          .catch((error) => log("流程 tab 预建失败", error));
+        void flow.provisionTabs(task.workspaceId).catch((error) => log("流程 tab 预建失败", error));
     }),
     // Closed or archived tabs no longer need status repeat suppression; a closed or archived plan
     // reviewer fails its review slot.
     server.on("agent.closed", async ({ agent }) => {
       tabs.forgetStatus([agent.id]);
-      await flow.reviewerGone(agent, "closed").catch((error) => log("方案审阅者关闭处理失败", error));
+      await flow
+        .reviewerGone(agent, "closed")
+        .catch((error) => log("方案审阅者关闭处理失败", error));
     }),
     server.on("agent.archived", async ({ agent }) => {
       tabs.forgetStatus([agent.id]);
@@ -150,9 +155,7 @@ export function registerTaskRuntime(
     server.on("agent.permission_requested", async ({ agent }, context) => {
       options.onPaseo(context.paseo);
       if (closed) return;
-      await groupChat
-        .permissionRequested(agent)
-        .catch((error) => log("#1 审批提示失败", error));
+      await groupChat.permissionRequested(agent).catch((error) => log("#1 审批提示失败", error));
     }),
   ];
   // Hosts without the agent.prompt hook still enforce claims at create_agent and claim time.
@@ -245,6 +248,7 @@ export function registerTaskRuntime(
     consumer: "vibe-board:task-tabs",
     types: ["scheduler.task_admitted", "context.continuation_requested"],
     handler: async (event) => {
+      await options.promptsReady;
       if (!options.getPaseo()) throw new Error("任务宿主连接尚未就绪，保留事件待重试");
       if (event.type === "context.continuation_requested") {
         const payload = EVENT_PAYLOADS["context.continuation_requested"].parse(event.payload);
@@ -254,9 +258,7 @@ export function registerTaskRuntime(
       }
       flow.resources.handleAdmission(event);
       if (event.type !== "scheduler.task_admitted") return;
-      await flow.workerAdmitted(
-        EVENT_PAYLOADS["scheduler.task_admitted"].parse(event.payload),
-      );
+      await flow.workerAdmitted(EVENT_PAYLOADS["scheduler.task_admitted"].parse(event.payload));
     },
     onError: (error) => log("任务准入或接续事件处理失败", error),
   });
@@ -275,8 +277,14 @@ export function registerTaskRuntime(
   progress.start();
   // Review cycles survive plugin restarts: settle them shortly after start, then sweep for
   // timeouts and missed events once a minute.
-  const startRecovery = setTimeout(() => void flow.recoverReviews(), 5_000);
-  const sweep = setInterval(() => void flow.recoverReviews(), 60_000);
+  const recover = () =>
+    void Promise.resolve(options.promptsReady)
+      .then(() => {
+        return closed ? undefined : flow.recoverReviews();
+      })
+      .catch((error) => log("方案审阅恢复失败", error));
+  const startRecovery = setTimeout(recover, 5_000);
+  const sweep = setInterval(recover, 60_000);
   return {
     flow,
     tabs,

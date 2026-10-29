@@ -39,6 +39,7 @@ export interface RuntimeDeps {
   /** Injectable git for requirements commits (tests use a real temp repo by default). */
   git?: GitRunner;
   pollIntervalMs?: number;
+  promptsReady?: Promise<void>;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -53,7 +54,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     rules: deps.rules ?? MASTER_RULES,
     maintainRequirements: deps.settings().maintainRequirements,
   }));
-  prompts.register();
+  if (!deps.promptsReady) prompts.register();
 
   const quota = createQuotaReader({
     getPaseo: deps.getPaseo,
@@ -290,6 +291,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     flags: () => deps.settings(),
     pollIntervalMs: deps.pollIntervalMs,
     log,
+    ready: deps.promptsReady,
   });
 
   async function switchExhausted(provider: string): Promise<void> {

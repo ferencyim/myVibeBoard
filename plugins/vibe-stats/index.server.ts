@@ -1,3 +1,4 @@
+import { deferStartup } from "./server/vibe/db/startup";
 import { readFile } from "node:fs/promises";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -65,6 +66,7 @@ export default function contribute(server: PluginServerContext) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   const loop = () => {
+    if (stopped) return;
     timer = setTimeout(() => {
       runScan()
         .catch(() => undefined)
@@ -72,22 +74,31 @@ export default function contribute(server: PluginServerContext) {
     }, scanSeconds * 1000);
     (timer as unknown as { unref?: () => void }).unref?.();
   };
-  void runScan().catch(() => undefined);
-  loop();
+  const startup = deferStartup(
+    async () => {
+      await runScan().catch((error) => console.error("[vibe-stats] 后台首次索引失败", error));
+      loop();
+    },
+    (error) => console.error("[vibe-stats] 后台初始化失败", error),
+  );
 
   const stopTurnHook = server.on("agent.turn_ended", (_event, context) => {
     paseo = context.paseo;
-    void runScan().catch(() => undefined);
+    void startup.ready
+      .then(runScan)
+      .catch((error) => console.error("[vibe-stats] 回合后索引失败", error));
   });
 
   server.handle(overviewRpc, async ({ period }, context) => {
     paseo = context.paseo;
+    await startup.ready;
     await runScan();
     return computeOverview(db, period, new Date(), { files: fileCount, lastScanAt });
   });
 
   server.handle(reindexRpc, async ({ full }, context) => {
     paseo = context.paseo;
+    await startup.ready;
     if (full) indexer.resetCursors();
     const { files, lines } = await runScan();
     return { files, lines };
@@ -123,11 +134,12 @@ export default function contribute(server: PluginServerContext) {
     }
   });
 
-  return () => {
+  return async () => {
     stopped = true;
     if (timer) clearTimeout(timer);
     stopSettings();
     stopTurnHook();
+    await startup.close();
     db.close();
   };
 }

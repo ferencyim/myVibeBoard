@@ -1,3 +1,4 @@
+import { deferStartup } from "./server/vibe/db/startup";
 import { taskVerifyGetRpc, taskVerifyRerunRpc } from "./shared/task-rpc";
 import { createTaskPipeline } from "./server/task-pipeline";
 import { createTaskVerifyStore } from "./server/task-store";
@@ -32,7 +33,37 @@ export default function contribute(server: PluginServerContext) {
   const board = createVibeStore(db);
   const home = resolveVibeHome();
   const prompts = createVerifyPrompts(board);
-  prompts.register();
+  const startup = deferStartup(
+    () => {
+      prompts.register();
+      for (const stale of taskVerify.running()) {
+        taskVerify.writeNotes(stale.id, [
+          "daemon 重启中断验证；先核对原生 agent 与资源，再重新验证",
+        ]);
+        taskVerify.finish(stale.id, "doubt");
+        const task = board.tasks.get(stale.workspaceId);
+        if (task && ["reviewing", "verifying"].includes(task.phase)) {
+          board.tasks.setPhase(task.workspaceId, "paused");
+          board.tasks.setSummary(
+            task.workspaceId,
+            "验证因 daemon 重启中断，资源状态待核对，请重新验证。",
+          );
+        }
+      }
+    },
+    (error) => console.error("[vibe-verify] 后台初始化失败", error),
+  );
+  // Requests may arrive as soon as ready is sent; wait for the same startup promise.
+  const host = server;
+  server = {
+    ...host,
+    handle: (rpc, handler) => host.handle(rpc, startup.wrap(handler)),
+    before: (name, handler) => host.before(name, startup.wrap(handler)),
+    on: (name, handler) => host.on(name, startup.wrap(handler)),
+    registerAgentTool: (tool) =>
+      host.registerAgentTool({ ...tool, handler: startup.wrap(tool.handler) }),
+  };
+
   const configs: RunConfigs = new Map();
   const log = (message: string, error?: unknown) =>
     console.error(`[vibe-verify] ${message}`, error ?? "");
@@ -67,9 +98,7 @@ export default function contribute(server: PluginServerContext) {
           ...(input.presetId ? { presetId: input.presetId } : {}),
         };
         const label = paseo
-          ? await providerModelLabel(paseo, input.provider, input.model).catch(
-              () => input.model,
-            )
+          ? await providerModelLabel(paseo, input.provider, input.model).catch(() => input.model)
           : input.model;
         const modelLabel = label && label !== input.model ? label : undefined;
         board.tasks.allocateTab(input.workspaceId, {
@@ -93,8 +122,7 @@ export default function contribute(server: PluginServerContext) {
           .catch((error) => log("验证 tab 标题设置失败", error));
         return;
       }
-      if (Date.now() >= deadline)
-        throw new Error("验证 tab 未能登记到任务：等待任务登记超时");
+      if (Date.now() >= deadline) throw new Error("验证 tab 未能登记到任务：等待任务登记超时");
       await delay(200);
     }
   };
@@ -160,7 +188,11 @@ export default function contribute(server: PluginServerContext) {
     // with the task-verification renderer, which can open the report and evidence. The daemon
     // merges same-id rows at the first row's position, so a summary keys on its verification:
     // updates of one round stay together and later rounds never overwrite earlier ones.
-    async append(task: { workspaceId: string; anchorAgentId: string }, text: string, verificationId?: string) {
+    async append(
+      task: { workspaceId: string; anchorAgentId: string },
+      text: string,
+      verificationId?: string,
+    ) {
       if (!paseo) return;
       await paseo.agents.ref(task.anchorAgentId).timeline.append({
         type: "plugin",
@@ -177,18 +209,6 @@ export default function contribute(server: PluginServerContext) {
   });
   const startTask = (workspaceId: string) =>
     void taskPipeline.run(workspaceId).catch((error) => log("任务验证失败", error));
-  for (const stale of taskVerify.running()) {
-    taskVerify.writeNotes(stale.id, ["daemon 重启中断验证；先核对原生 agent 与资源，再重新验证"]);
-    taskVerify.finish(stale.id, "doubt");
-    const task = board.tasks.get(stale.workspaceId);
-    if (task && ["reviewing", "verifying"].includes(task.phase)) {
-      board.tasks.setPhase(task.workspaceId, "paused");
-      board.tasks.setSummary(
-        task.workspaceId,
-        "验证因 daemon 重启中断，资源状态待核对，请重新验证。",
-      );
-    }
-  }
   server.handle(taskVerifyGetRpc, ({ workspaceId, verificationId }, context) => {
     remember(context.paseo);
     if (!board.tasks.get(workspaceId)) throw new Error("任务不存在");
@@ -219,6 +239,7 @@ export default function contribute(server: PluginServerContext) {
     types: ["task.updated", "context.continuation_requested"],
     startAt: "now",
     handler: async (event) => {
+      await startup.ready;
       if (
         isEvent(event, "context.continuation_requested") &&
         ["reviewer", "verifier"].includes(event.payload.role) &&
@@ -264,6 +285,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   return async () => {
+    await startup.close();
     stopSettings();
     await consumer.stop();
     await resources.stop();
