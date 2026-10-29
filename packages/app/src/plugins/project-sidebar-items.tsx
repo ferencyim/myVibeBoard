@@ -60,6 +60,8 @@ function ProjectGroup({
   theme,
   onNavigate,
   sidebarCompact,
+  createRequest,
+  onCreateHandled,
 }: {
   plugin: InstalledPlugin;
   item: NonNullable<InstalledPlugin["projectSidebarGroups"]>[number];
@@ -67,6 +69,8 @@ function ProjectGroup({
   theme: PluginProjectSidebarItemProps["theme"];
   onNavigate?: () => void;
   sidebarCompact: boolean;
+  createRequest?: number;
+  onCreateHandled?: () => void;
 }) {
   const navigation = usePluginHostNavigation(plugin.serverId);
   const compact = useIsCompactFormFactor();
@@ -94,6 +98,8 @@ function ProjectGroup({
           layout={layout}
           navigation={wrappedNavigation}
           sidebarCompact={sidebarCompact}
+          createRequest={createRequest}
+          onCreateHandled={onCreateHandled}
           agents={agents}
           requestAgentPreview={requestAgentPreview}
           Avatar={Avatar}
@@ -112,11 +118,15 @@ export function PluginProjectSidebarItems({
   preferredServerId,
   onNavigate,
   sidebarCompact = false,
+  createRequest,
+  onCreateHandled,
 }: {
   hosts: readonly { serverId: string; projectId: string }[];
   preferredServerId?: string | null;
   onNavigate?: () => void;
   sidebarCompact?: boolean;
+  createRequest?: number;
+  onCreateHandled?: () => void;
 }) {
   const plugins = useInstalledPlugins();
   const groups = collectProjectSidebarItems(
@@ -140,6 +150,8 @@ export function PluginProjectSidebarItems({
           projectId={projectId}
           onNavigate={onNavigate}
           sidebarCompact={sidebarCompact}
+          createRequest={createRequest}
+          onCreateHandled={onCreateHandled}
           uniProps={themeMapping}
         />
       ))}

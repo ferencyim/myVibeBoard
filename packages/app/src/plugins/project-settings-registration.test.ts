@@ -39,15 +39,15 @@ describe("project settings registration", () => {
       "shell",
       bundle(`
       plugin.addPageRailItem({ id: "page", title: "Page", icon: "Bot", screenId: "main", order: 2 });
-      plugin.addSidebarGroup({ id: "bots", title: "Bots", order: 1, Component() {} });
+      plugin.addSidebarGroup({ id: "bots", title: "Bots", createLabel: "Create bot", order: 1, Component() {} });
     `),
     );
     expect(
       plugin.pageRailItems?.map(({ id, order, screenId }) => ({ id, order, screenId })),
     ).toEqual([{ id: "page", order: 2, screenId: "main" }]);
-    expect(plugin.sidebarGroups?.map(({ id, order }) => ({ id, order }))).toEqual([
-      { id: "bots", order: 1 },
-    ]);
+    expect(
+      plugin.sidebarGroups?.map(({ id, order, createLabel }) => ({ id, order, createLabel })),
+    ).toEqual([{ id: "bots", order: 1, createLabel: "Create bot" }]);
     await plugin.cleanup();
     expect(plugin.pageRailItems).toEqual([]);
     expect(plugin.sidebarGroups).toEqual([]);

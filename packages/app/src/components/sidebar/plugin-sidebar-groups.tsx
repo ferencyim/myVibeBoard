@@ -1,5 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { View } from "react-native";
+import { Plus } from "lucide-react-native";
+import { IconButton } from "@/ui/icon-button";
+import { isNative } from "@/constants/platform";
 import { withUnistyles } from "react-native-unistyles";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -35,6 +38,8 @@ function Group({
   sidebarCompact: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [createRequest, setCreateRequest] = useState(0);
   const compact = useIsCompactFormFactor();
   const { agents, requestAgentPreview } = useSidebarAgentActivity(plugin.serverId);
   const navigation = usePluginHostNavigation(plugin.serverId);
@@ -55,14 +60,31 @@ function Group({
     [navigation, onNavigate],
   );
   const toggle = useCallback(() => setCollapsed((value) => !value), []);
+  const enter = useCallback(() => setHovered(true), []);
+  const leave = useCallback(() => setHovered(false), []);
+  const clearCreate = useCallback(() => setCreateRequest(0), []);
+  const create = useCallback(() => {
+    setCollapsed(false);
+    setCreateRequest((value) => value + 1);
+  }, []);
   const Component = item.Component;
   return (
-    <View>
+    <View onPointerEnter={enter} onPointerLeave={leave}>
       <SidebarSectionHeader
         title={plugin.i18n.resolve(item.title, plugin.locale)}
         collapsed={collapsed}
         onToggle={toggle}
-      />
+      >
+        {item.createLabel && (hovered || isNative || compact) ? (
+          <IconButton
+            label={plugin.i18n.resolve(item.createLabel, plugin.locale)}
+            icon={Plus}
+            size="xs"
+            variant="ghost"
+            onPress={create}
+          />
+        ) : null}
+      </SidebarSectionHeader>
       {!collapsed && (
         <SurfaceErrorBoundary installation={plugin} Surface={Component}>
           <PluginInstallationProvider plugin={plugin}>
@@ -72,6 +94,8 @@ function Group({
               layout={layout}
               navigation={wrappedNavigation}
               sidebarCompact={sidebarCompact}
+              createRequest={createRequest}
+              onCreateHandled={clearCreate}
               agents={agents}
               requestAgentPreview={requestAgentPreview}
               Avatar={Avatar}

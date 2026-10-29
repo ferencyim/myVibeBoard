@@ -10,7 +10,8 @@ type BotRowProps = PluginProjectSidebarGroupProps & { bot: import("../shared/vib
 
 function useBotStyles(theme: PluginProjectSidebarGroupProps["theme"]) {
   return useMemo(() => StyleSheet.create({
-    row: { paddingHorizontal: 12, minHeight: 54, flexDirection: "row", alignItems: "center", gap: 8 },
+    row: { padding: (theme.spacing?.[2] ?? 8), borderRadius: (theme.borderRadius?.md ?? 8), flexDirection: "row", alignItems: "center", gap: (theme.spacing?.[2] ?? 8) },
+    badge: { color: theme.colors.foregroundMuted, backgroundColor: theme.colors.surface2, borderRadius: (theme.borderRadius?.md ?? 8), overflow: "hidden" },
     names: { flex: 1 },
     muted: { color: theme.colors.foregroundMuted },
     text: { color: theme.colors.foreground },
@@ -62,9 +63,9 @@ function ProjectBotRow({ bot, theme, navigation, host, sidebarCompact, Avatar, S
   const status = error ? "failed" : activity?.status;
   return <View>
     <Pressable {...contextMenu} accessibilityRole="button" accessibilityLabel={`${bot.name}：${label}`} disabled={disabled} style={styles.row} onPress={run} onLongPress={showMenu}>
-      <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={36} />
+      <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={28} />
       {status ? <StatusIndicator status={status} count={activity?.count} /> : null}
-      {!sidebarCompact ? <View style={styles.names}><Text style={styles.text}>{bot.isDefault ? "★ " : ""}{bot.name}{lastMessageTime ? ` · ${lastMessageTime}` : ""}</Text><Text numberOfLines={1} style={styles.muted}>{label !== bot.name ? label : [bot.title, activity?.lastMessage?.text].filter(Boolean).join(" · ")}</Text></View> : null}
+      {!sidebarCompact ? <View style={styles.names}><Text style={styles.text}>{bot.name}{bot.isDefault ? <Text style={styles.badge}> 默认 </Text> : null}{lastMessageTime ? ` · ${lastMessageTime}` : ""}</Text><Text numberOfLines={1} style={styles.muted}>{label !== bot.name ? label : [bot.title, activity?.lastMessage?.text].filter(Boolean).join(" · ")}</Text></View> : null}
     </Pressable>
     {menu ? <View><Pressable onPress={run}><Text style={styles.text}>打开</Text></Pressable><Pressable onPress={profile}><Text style={styles.text}>资料 / 改名</Text></Pressable><Pressable onPress={archiveBot}><Text style={styles.error}>归档</Text></Pressable><Pressable onPress={closeMenu}><Text style={styles.muted}>取消</Text></Pressable></View> : null}
     {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -99,12 +100,12 @@ function ProjectBotList(props: PluginProjectSidebarGroupProps) {
     } finally { setBusy(false); }
   }, [create, projectId, client]);
   const retry = useCallback(() => { void bots.refetch(); }, [bots]);
-  const showForm = useCallback(() => setCreating(true), []);
+  const { createRequest, onCreateHandled } = props;
+  useEffect(() => { if (createRequest) { setCreating(true); onCreateHandled?.(); } }, [createRequest, onCreateHandled]);
   const hideForm = useCallback(() => setCreating(false), []);
   const submitForm = useCallback((value: Omit<Parameters<typeof create>[0], "kind" | "projectId">) => { void add({ ...value, kind: "project", projectId }); }, [add, projectId]);
   return <View>
     {(bots.data?.bots ?? []).map((bot) => <ProjectBotRow key={`${projectId}:${bot.id}`} {...props} bot={bot} autoOpen={created?.projectId === projectId && created.botId === bot.id} />)}
-    <Pressable accessibilityRole="button" disabled={busy} style={styles.row} onPress={showForm}><Text style={styles.text}>{busy ? "正在新建…" : "+ 新建项目 bot"}</Text></Pressable>
     {creating ? <BotCreateForm error={error} theme={theme} projectId={projectId} busy={busy} onCancel={hideForm} onSubmit={submitForm} /> : null}
     {bots.isLoading ? <Text style={styles.loading}>正在加载 bot…</Text> : null}
     {bots.error ? <Pressable accessibilityRole="button" style={styles.row} onPress={retry}><Text style={styles.text}>重新加载项目 bot</Text></Pressable> : null}

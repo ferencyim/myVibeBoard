@@ -2,14 +2,27 @@ import { useRpc, type PluginSidebarGroupProps } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { botsArchiveRpc, botsListRpc, botsOpenRpc, botsStateRpc } from "../shared/rpc";
+import { BotCreateForm } from "./create-form";
+import { botsArchiveRpc, botsCreateRpc, botsListRpc, botsOpenRpc, botsStateRpc } from "../shared/rpc";
 
 export function IndependentBotsSidebar(props: PluginSidebarGroupProps) {
   const list = useRpc(botsListRpc);
+  const create = useRpc(botsCreateRpc);
+  const client = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const { createRequest, onCreateHandled } = props;
+  useEffect(() => { if (createRequest) { setCreating(true); onCreateHandled?.(); } }, [createRequest, onCreateHandled]);
+  const cancel = useCallback(() => setCreating(false), []);
+  const submit = useCallback((value: Omit<Parameters<typeof create>[0], "kind" | "projectId">) => {
+    setBusy(true); setError("");
+    void create({ ...value, kind: "independent" }).then(() => { setCreating(false); return client.invalidateQueries({ queryKey: ["vibe-bots", props.host.id, "independent"] }); }).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false));
+  }, [create, client, props.host.id]);
   const query = useQuery({ queryKey: ["vibe-bots", props.host.id, "independent"], queryFn: () => list({ kind: "independent" }), refetchInterval: 15000 });
   const styles = useMemo(() => ({ muted: { color: props.theme.colors.foregroundMuted }, danger: { color: props.theme.colors.statusDanger } }), [props.theme]);
   const retry = useCallback(() => { void query.refetch(); }, [query]);
-  return <View>{query.data?.bots.map((bot) => <BotRow key={bot.id} {...props} bot={bot} />)}
+  return <View>{creating ? <BotCreateForm theme={props.theme} busy={busy} error={error} onCancel={cancel} onSubmit={submit} /> : null}{query.data?.bots.map((bot) => <BotRow key={bot.id} {...props} bot={bot} />)}
     {query.isLoading ? <Text style={styles.muted}>正在加载…</Text> : null}
     {query.error ? <Pressable onPress={retry}><Text style={styles.danger}>加载失败，点击重试</Text></Pressable> : null}
   </View>;
@@ -38,7 +51,7 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
       setPending(false);
     }
   }, [pending, state.data, navigate]);
-  const styles = useMemo(() => ({ row: { minHeight: 54, paddingHorizontal: 12, flexDirection: "row" as const, alignItems: "center" as const, gap: 8 }, names: { flex: 1 }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted }, danger: { color: theme.colors.statusDanger } }), [theme]);
+  const styles = useMemo(() => ({ row: { minHeight: 54, padding: (theme.spacing?.[2] ?? 8), borderRadius: (theme.borderRadius?.md ?? 8), flexDirection: "row" as const, alignItems: "center" as const, gap: (theme.spacing?.[2] ?? 8) }, names: { flex: 1 }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted }, danger: { color: theme.colors.statusDanger } }), [theme]);
   const run = useCallback(async () => {
     setOpening(true); setError("");
     try {

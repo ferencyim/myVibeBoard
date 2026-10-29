@@ -331,10 +331,22 @@ export function runPluginClientBundle(
         throw new Error(`Sidebar group ${itemId} is not a component`);
       if (contribution.order !== undefined && !Number.isFinite(contribution.order))
         throw new Error(`Sidebar group ${itemId} has invalid order`);
+      const createLabel =
+        contribution.createLabel === undefined
+          ? undefined
+          : normalizePluginText(contribution.createLabel);
+      if (contribution.createLabel !== undefined && !createLabel)
+        throw new Error(`Sidebar group ${itemId} has invalid create label`);
       sidebarGroupIds.add(itemId);
       return register(
         collector.sidebarGroups!,
-        { id: itemId, title, order: contribution.order, Component: contribution.Component },
+        {
+          id: itemId,
+          title,
+          createLabel,
+          order: contribution.order,
+          Component: contribution.Component,
+        },
         () => sidebarGroupIds.delete(itemId),
       );
     },

@@ -7,7 +7,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { z } from "zod";
 import { botsListRpc, botsUpdateRpc, botsArchiveRpc, projectDefaultBotSetRpc, modelsListRpc, memoriesAddRpc, memoriesUpdateRpc, memoriesRemoveRpc, BotViewSchema } from "../shared/rpc";
 import type { BotMemory } from "../shared/vibe/contract/bots";
-import { Feedback } from "./ui";
+import { Button, Feedback } from "./ui";
 import { useBotConversation } from "./use-bot-conversation";
 import { findBotForAgent } from "./profile-mapping";
 

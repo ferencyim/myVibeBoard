@@ -685,7 +685,7 @@ const staticStyles = RNStyleSheet.create({
 });
 
 const styles = StyleSheet.create((theme) => ({
-  desktopRow: { flex: 1, flexDirection: "row" },
+  desktopRow: { flexDirection: "row" },
   hostRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   hostTrigger: {
     flex: 1,

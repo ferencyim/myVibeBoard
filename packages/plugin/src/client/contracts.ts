@@ -138,6 +138,9 @@ export interface PluginSidebarAgentActivity {
 
 export interface PluginSidebarGroupProps extends PluginSurfaceProps {
   sidebarCompact: boolean;
+  /** Increments when the user requests creation from the group header. */
+  createRequest?: number;
+  onCreateHandled?(): void;
   agents: readonly PluginSidebarAgentActivity[];
   requestAgentPreview(agentId: string): void;
   Avatar: ComponentType<{ seed: string; name: string; hue?: number; size?: number }>;
@@ -162,6 +165,7 @@ export interface PluginProjectSidebarGroupContribution<Text extends PluginText =
 /** A host-scoped sidebar group rendered by the plugin. */
 export interface PluginSidebarGroupContribution<Text extends PluginText = string> {
   id: string;
+  createLabel?: Text;
   title: Text;
   order?: number;
   Component: ComponentType<PluginSidebarGroupProps>;
