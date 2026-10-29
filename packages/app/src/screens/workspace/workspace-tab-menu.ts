@@ -188,6 +188,11 @@ export function buildWorkspaceTabMenuEntries(
     onCloseTabsAfter,
     onCloseOtherTabs,
   } = input;
+  if (
+    (tab.target.kind === "agent" && tab.target.flowTab) ||
+    (tab.target.kind === "draft" && tab.target.placeholder?.providerId === "task-flow")
+  )
+    return [];
   const labels = input.labels ?? DEFAULT_WORKSPACE_TAB_MENU_LABELS;
   const isFirstTab = index === 0;
   const isLastTab = index === tabCount - 1;

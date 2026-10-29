@@ -3,10 +3,11 @@ import { taskPanelRpc, taskTabEnsureRpc, taskWorkspaceTabsRpc, type TaskTabViewD
 import { UNRESOLVED_TAB_MODEL } from "../shared/vibe/contract";
 
 export function taskWorkspaceTabs(tabs: TaskTabViewData[]): PluginWorkspaceTabDescriptor[] {
-  return tabs.map((tab) => {
+  const fixedRoles = ["main", "planner", "scout", "worker", "reviewer", "verifier"];
+  return tabs.filter((tab) => fixedRoles.includes(tab.role)).sort((a, b) => a.number - b.number).map((tab) => {
     const descriptor: PluginWorkspaceTabDescriptor = {
       id: tab.role,
-      title: tab.title ?? `#${tab.number} ${tab.roleLabel} · ${tab.model}`,
+      title: `#${tab.number} ${tab.roleLabel} · ${tab.model} · ${{ "未启用": "本流程未启用", "运行中": "忙碌" }[tab.status] ?? tab.status}`,
       order: tab.number,
       disabled: tab.status === "未启用",
     };

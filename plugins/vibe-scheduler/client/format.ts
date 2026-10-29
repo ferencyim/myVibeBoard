@@ -12,6 +12,7 @@ export interface SchedulerView {
   briefing: string;
   tightItems: string[];
   hostErrors: string[];
+  hosts: Array<{ name: string; cpu: number | null; availableBytes: number | null; totalBytes: number | null; load1: number | null; cores: number | null; error: string | null }>;
   running: { total: number; byProvider: Record<string, number> };
   /** Native task resource leases. */
   pending: Array<{ id: string; workspaceId: string; role: string; provider: string; port: number }>;
@@ -43,6 +44,15 @@ export function parseStatus(raw: unknown): SchedulerView {
       .filter(isObj)
       .filter((h) => typeof h.error === "string")
       .map((h) => str(h.name) + "：" + str(h.error)),
+    hosts: (Array.isArray(o.hosts) ? o.hosts : []).filter(isObj).map((h) => ({
+      name: str(h.name),
+      cpu: typeof h.cpu === "number" && Number.isFinite(h.cpu) ? h.cpu : null,
+      availableBytes: typeof h.availableBytes === "number" && Number.isFinite(h.availableBytes) ? h.availableBytes : null,
+      totalBytes: typeof h.totalBytes === "number" && Number.isFinite(h.totalBytes) ? h.totalBytes : null,
+      load1: typeof h.load1 === "number" && Number.isFinite(h.load1) ? h.load1 : null,
+      cores: typeof h.cores === "number" && Number.isFinite(h.cores) ? h.cores : null,
+      error: typeof h.error === "string" ? h.error : null,
+    })),
     running: {
       total: num(running.total),
       byProvider: Object.fromEntries(Object.entries(byProvider).map(([k, v]) => [k, num(v)])),

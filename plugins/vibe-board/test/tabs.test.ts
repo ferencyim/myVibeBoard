@@ -905,6 +905,15 @@ describe("任务 tab 交流说明注入", () => {
 });
 
 describe("vibe_tabs", () => {
+  it("兼容缺失审批列表，并优先显示待审批", async () => {
+    const { fake, tabs } = setup();
+    const agent = fake.addAgent({ id: "agent-1", activeTurn: { id: "turn" } });
+    await tabs.ensureTab("agent-1");
+    expect((await tabs.vibeTabs("agent-1")).tabs.find((tab) => tab.agentId === agent.id)?.status).toBe("运行中");
+    agent.pendingPermissions = [{ id: "permission", kind: "tool", name: "tool" }];
+    expect((await tabs.vibeTabs("agent-1")).tabs.find((tab) => tab.agentId === agent.id)?.status).toBe("待审批");
+  });
+
   it("返回当前任务的编号、角色、模型和状态", async () => {
     const { fake, tabs } = setup();
     fake.addAgent({ id: "agent-1" });
@@ -941,6 +950,23 @@ describe("vibe_tabs", () => {
 });
 
 describe("WP132 未配置角色沿用主会话", () => {
+  it("只在未刷新时将排队中的执行角色标为排队，刷新失败仍为已关闭", async () => {
+    const { store, fake, tabs, flow } = await projectTask();
+    await flow.provisionTabs("ws");
+    fake.setTimeline("agent-1", [{
+      item: { type: "assistant_message", text: planMessage("整理文档"), messageId: "m-1" },
+      turnId: "turn-1",
+      seqEnd: 3,
+    }]);
+    await flow.execute({ workspaceId: "ws", agentId: "agent-1", requestId: "queue-test" });
+    const task = store.tasks.get("ws")!;
+    expect(task.phase).toBe("queued");
+    const worker = task.tabs.find((tab) => tab.role === "worker")!;
+    expect((await tabs.tabsFor(task, false)).find((tab) => tab.role === "worker")?.status).toBe("排队");
+    fake.agents.delete(worker.agentId);
+    expect((await tabs.tabsFor(task, true)).find((tab) => tab.role === "worker")?.status).toBe("已关闭");
+  });
+
   it("新任务创建六个有序流程tab，不发送提示词且沿用主会话模型与thinking", async () => {
     const { store, fake, tabs, flow } = await projectTask();
     await flow.provisionTabs("ws");
@@ -2893,8 +2919,18 @@ describe("预建 tab 的边界", () => {
       ).rejects.toThrow("agent 消息不能授权任务命令");
       const view = (await panel({ workspaceId: "ws" }, { paseo: fake.paseo })) as {
         isTask: boolean;
+        phaseLabel: string;
+        tabs: unknown[];
+        steps: unknown[];
+        board: unknown[];
+        otherPlans: unknown[];
       };
       expect(view.isTask).toBe(true);
+      expect(view.phaseLabel).toBeTruthy();
+      expect(view.tabs).toHaveLength(6);
+      expect(view.steps).toEqual(expect.any(Array));
+      expect(view.board).toEqual(expect.any(Array));
+      expect(view.otherPlans).toEqual(expect.any(Array));
     } finally {
       await runtime.close();
     }

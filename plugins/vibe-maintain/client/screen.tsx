@@ -59,9 +59,9 @@ function Section({
         backgroundColor: theme.colors.surface1,
         borderColor: theme.colors.border,
         borderWidth: 1,
-        borderRadius: 10,
-        padding: 12,
-        gap: 8,
+        borderRadius: theme.borderRadius?.md ?? 12,
+        padding: theme.spacing?.[4] ?? 16,
+        gap: theme.spacing?.[3] ?? 12,
       }}
     >
       <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>
@@ -203,8 +203,17 @@ export function MaintainScreen({ theme, params }: PluginScreenProps) {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
-      contentContainerStyle={{ padding: 16, gap: 12 }}
+      contentContainerStyle={{
+        padding: theme.spacing?.[4] ?? 16,
+        gap: theme.spacing?.[3] ?? 12,
+        width: "100%",
+        maxWidth: 784,
+        alignSelf: "center",
+      }}
     >
+      <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize?.xl ?? 18, fontWeight: "600" }}>
+        维护规则与运行记录
+      </Text>
       <Muted theme={theme}>
         自动维护按规则定期检查项目，把发现送到新的原生 workspace 中规划，等待用户显式
         /执行。每条规则只定义一份，在规则上选择适用的项目（或全部项目）；改一次，所有适用项目都生效。

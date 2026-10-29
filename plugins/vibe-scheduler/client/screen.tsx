@@ -67,9 +67,9 @@ function Section({
         backgroundColor: theme.colors.surface1,
         borderColor: theme.colors.border,
         borderWidth: 1,
-        borderRadius: 10,
-        padding: 12,
-        gap: 8,
+        borderRadius: theme.borderRadius?.md ?? 12,
+        padding: theme.spacing?.[4] ?? 16,
+        gap: theme.spacing?.[3] ?? 12,
       }}
     >
       <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>
@@ -170,7 +170,7 @@ const levelColor = (theme: PluginTheme, level: string) => {
   return theme.colors.foregroundMuted;
 };
 
-export function SchedulerScreen({ theme }: PluginScreenProps) {
+export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
   const devicesCall = useRpc(devicesRpc);
@@ -211,8 +211,32 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
-      contentContainerStyle={{ padding: 16, gap: 12 }}
+      contentContainerStyle={{
+        padding: theme.spacing?.[4] ?? 16,
+        gap: theme.spacing?.[3] ?? 12,
+        width: "100%",
+        maxWidth: 784,
+        alignSelf: "center",
+      }}
     >
+      <View style={{ gap: theme.spacing?.[2] ?? 8 }}>
+        <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize?.xl ?? 18, fontWeight: "600" }}>
+          调度器
+        </Text>
+        <Muted theme={theme}>查看任务、资源和维护规则。</Muted>
+      </View>
+      {navigation?.openPluginScreen ? (
+        <Section theme={theme} title="维护规则与运行记录">
+          <Muted theme={theme}>查看各项目的维护状态，编辑规则或手动运行。</Muted>
+          <View style={{ alignSelf: "flex-start" }}>
+            <Button
+              theme={theme}
+              label="打开维护规则"
+              onPress={() => navigation.openPluginScreen?.({ pluginId: "vibe-maintain", screenId: "main" })}
+            />
+          </View>
+        </Section>
+      ) : null}
       {status.error ? (
         <Text style={{ color: theme.colors.statusDanger }}>
           无法加载调度器：{formatRpcError(status.error)}
@@ -221,7 +245,13 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
       {s ? (
         <>
+          <Section theme={theme} title="任务状态">
+            <Row theme={theme} left="运行中" right={String(s.running.total)} />
+            <Row theme={theme} left="排队 / 阻塞" right={String(s.deferred.length)} />
+            <Row theme={theme} left="已分配资源" right={String(s.pending.length)} />
+          </Section>
           <ResourceStatus theme={theme} />
+          <RemoteHosts theme={theme} />
           <Section theme={theme} title="并发">
             <Row
               theme={theme}
@@ -477,21 +507,23 @@ function ResourceStatus({ theme }: { theme: PluginTheme }) {
   });
   return (
     <Section theme={theme} title="主机资源">
-      <Text
-        style={{
-          color: status.data?.tightItems.length
-            ? theme.colors.statusWarning
-            : theme.colors.foreground,
-        }}
-      >
-        {status.data?.briefing ?? "资源：等待采样"}
-      </Text>
+      {status.data?.hosts.length ? status.data.hosts.map((host) => (
+        <View key={host.name} style={{ gap: theme.spacing?.[2] ?? 8 }}>
+          <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>{host.name}</Text>
+          {host.error ? <Muted theme={theme}>{host.error}</Muted> : (
+            <>
+              {host.cpu !== null ? <Row theme={theme} left="CPU" right={fmtPct(host.cpu)} /> : null}
+              {host.availableBytes !== null && host.totalBytes !== null ? (
+                <Row theme={theme} left="可用内存" right={`${(host.availableBytes / 1024 ** 3).toFixed(1)} / ${(host.totalBytes / 1024 ** 3).toFixed(1)} GB`} />
+              ) : null}
+              {host.load1 !== null && host.cores !== null ? (
+                <Row theme={theme} left="1 分钟负载 / 核心" right={`${host.load1.toFixed(1)} / ${host.cores}`} />
+              ) : null}
+            </>
+          )}
+        </View>
+      )) : <Muted theme={theme}>资源：等待采样</Muted>}
       {status.data?.tightItems.map((reason) => (
-        <Muted key={reason} theme={theme}>
-          {reason}
-        </Muted>
-      ))}
-      {status.data?.hostErrors.map((reason) => (
         <Muted key={reason} theme={theme}>
           {reason}
         </Muted>

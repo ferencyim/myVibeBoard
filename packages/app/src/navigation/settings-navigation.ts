@@ -15,7 +15,14 @@ export type SettingsView =
   | { kind: "root" }
   | { kind: "section"; section: SettingsSectionSlug }
   | { kind: "host"; serverId: string; section: HostSectionSlug }
-  | { kind: "project"; serverId: string; projectId: string };
+  | { kind: "project"; serverId: string; projectId: string }
+  | {
+      kind: "document";
+      serverId: string;
+      projectId: string;
+      page: "brief" | "documents";
+      path?: string;
+    };
 
 export function openHostOverview(serverId: string): void {
   router.push(buildSettingsHostSectionRoute(serverId, "host"));
@@ -35,6 +42,7 @@ export function returnFromSettings(view: SettingsView): void {
 
   let parent: Href = buildSettingsRoute();
   if (view.kind === "plugin") parent = buildSettingsHostSectionRoute(view.serverId, "plugins");
+  if (view.kind === "document") parent = buildProjectSettingsRoute(view.serverId, view.projectId);
   if (view.kind === "project") parent = buildProjectsSettingsRoute(view.serverId);
   router.dismissTo(parent as Href);
 }

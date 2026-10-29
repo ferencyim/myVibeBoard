@@ -19,6 +19,7 @@ interface PageLayoutProps {
   /** Controls for the whole page: right of the title on desktop, in the back header on compact. */
   actions?: ReactNode;
   children: ReactNode;
+  settings?: boolean;
 }
 
 /**
@@ -33,6 +34,7 @@ export function PageLayout({
   titleTestID,
   actions,
   children,
+  settings = false,
 }: PageLayoutProps) {
   const isCompact = useIsCompactFormFactor();
   const insets = useSafeAreaInsets();
@@ -53,10 +55,10 @@ export function PageLayout({
         contentContainerStyle={scrollContentStyle}
         testID={testID}
       >
-        <View style={styles.content}>
+        <View style={[styles.content, settings && styles.settingsContent]}>
           {showTitle ? (
             <View style={styles.titleRow} testID={titleTestID}>
-              <Text style={styles.title} testID="page-title">
+              <Text style={[styles.title, settings && styles.settingsTitle]} testID="page-title">
                 {title}
               </Text>
               {actions}
@@ -83,6 +85,16 @@ const styles = StyleSheet.create((theme) => ({
     width: "100%",
     maxWidth: 720,
     alignSelf: "center",
+  },
+  settingsContent: {
+    maxWidth: 784,
+    padding: theme.spacing[6],
+  },
+  settingsTitle: {
+    fontSize: theme.fontSize.xl,
+    lineHeight: theme.lineHeight.xl,
+    fontWeight: theme.fontWeight.semibold,
+    marginLeft: 0,
   },
   titleRow: {
     flexDirection: "row",

@@ -92,6 +92,7 @@ export default function contribute(client: PluginClientContext) {
       id: "task-flow",
       title: "任务流程",
       icon: "ListChecks",
+      locations: ["workspace", "explorer"],
       Component: TaskFlowPanel,
     }),
     client.addCommandCenterItem({
@@ -101,7 +102,7 @@ export default function contribute(client: PluginClientContext) {
       keywords: ["任务", "流程", "状态", "tab", "面板"],
       context: "workspace",
       onSelect({ openPanel }) {
-        openPanel("task-flow");
+        openPanel("task-flow", { location: "explorer" });
       },
     }),
     // Agent 行为: every prompt of every agent, editable globally or per project.

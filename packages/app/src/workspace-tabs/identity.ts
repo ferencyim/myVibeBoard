@@ -25,7 +25,9 @@ export function normalizeWorkspaceTabTarget(
   }
   if (value.kind === "agent") {
     const agentId = trimNonEmpty(value.agentId);
-    return agentId ? { kind: "agent", agentId } : null;
+    return agentId
+      ? { kind: "agent", agentId, ...(value.flowTab ? { flowTab: value.flowTab } : {}) }
+      : null;
   }
   if (value.kind === "provider_subagent") {
     const parentAgentId = trimNonEmpty(value.parentAgentId);

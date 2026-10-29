@@ -697,7 +697,17 @@ function TabHandleContent({
       {showLabel && presentation.titleState === "loading" ? (
         <View style={tabLabelSkeletonStyle} />
       ) : null}
-      {showLabel && presentation.titleState !== "loading" ? (
+      {showLabel && presentation.titleState !== "loading" && presentation.flow ? (
+        <View style={styles.flowText}>
+          <Text style={[styles.flowTitle, isHighlighted && styles.tabLabelActive]}>
+            {presentation.label.split(" · ")[0]}
+          </Text>
+          <Text style={styles.flowDetails}>
+            {presentation.label.split(" · ").slice(1).join(" · ")}
+          </Text>
+        </View>
+      ) : null}
+      {showLabel && presentation.titleState !== "loading" && !presentation.flow ? (
         <Text style={tabLabelStyle} selectable={false} numberOfLines={1} ellipsizeMode="tail">
           {presentation.label}
         </Text>
@@ -766,7 +776,9 @@ function TabChip({
     contextMenuTestId,
   );
   const middleClickRef = useMiddleClickClose(
-    useCallback(() => void onCloseTab(tab.tabId), [onCloseTab, tab.tabId]),
+    useCallback(() => {
+      if (!presentation.flow) void onCloseTab(tab.tabId);
+    }, [onCloseTab, presentation.flow, tab.tabId]),
   );
   const isCompact = useIsCompactFormFactor();
   const [hovered, setHovered] = useState(false);
@@ -796,6 +808,7 @@ function TabChip({
   const tabChipStyle = useCallback(
     () => [
       styles.tab,
+      presentation.flow && styles.flowTab,
       isFilled && styles.tabFill(chipBackdrop),
       isWeb && isDragging && ({ cursor: "grabbing" } as object),
       {
@@ -804,7 +817,7 @@ function TabChip({
         maxWidth: resolvedTabWidth,
       },
     ],
-    [chipBackdrop, isDragging, isFilled, resolvedTabWidth],
+    [chipBackdrop, isDragging, isFilled, presentation.flow, resolvedTabWidth],
   );
 
   const handleTabPointerEnter = useCallback(() => {
@@ -1066,6 +1079,11 @@ function ResolvedWorkspaceDesktopTabsRow({
     () => new Map<string, WorkspaceTabLabelMeasurement>(),
   );
   const [trackSnapshot, setTrackSnapshot] = useState<WorkspaceTabTrackSnapshot | null>(null);
+  const hasFlowTabs = tabs.some(
+    ({ tab }) =>
+      (tab.target.kind === "agent" && Boolean(tab.target.flowTab)) ||
+      (tab.target.kind === "draft" && tab.target.placeholder?.providerId === "task-flow"),
+  );
 
   const handleTabsContainerLayout = useCallback((event: LayoutChangeEvent) => {
     updateMeasuredWidth(setTabsContainerWidth, event);
@@ -1087,14 +1105,20 @@ function ResolvedWorkspaceDesktopTabsRow({
       ),
       rowPaddingHorizontal: TAB_ROW_PADDING_HORIZONTAL,
       tabGap: TAB_CHIP_GAP,
-      minTabWidth: TAB_MIN_WIDTH,
-      maxTabWidth: TAB_MAX_WIDTH,
+      minTabWidth: hasFlowTabs ? 220 : TAB_MIN_WIDTH,
+      maxTabWidth: hasFlowTabs ? 360 : TAB_MAX_WIDTH,
       tabIconWidth: TAB_ICON_WIDTH,
       tabContentGap: TAB_CONTENT_GAP,
       tabHorizontalPadding: TAB_CHIP_HORIZONTAL_PADDING,
       closeButtonWidth: TAB_CLOSE_BUTTON_RESERVED_WIDTH,
     }),
-    [exitFocusModeWidth, focusModeEnabled, showPaneMaximizeAction, showPaneSplitActions],
+    [
+      exitFocusModeWidth,
+      focusModeEnabled,
+      showPaneMaximizeAction,
+      showPaneSplitActions,
+      hasFlowTabs,
+    ],
   );
 
   const panePanelKinds = useMemo(() => tabs.map(({ tab }) => tab.kind), [tabs]);
@@ -1366,7 +1390,11 @@ function ResolvedWorkspaceDesktopTabsRow({
 
   const row = (
     <View
-      style={[styles.tabsContainer, onSidebar && styles.tabsContainerSidebar]}
+      style={[
+        styles.tabsContainer,
+        hasFlowTabs && styles.flowTabsContainer,
+        onSidebar && styles.tabsContainerSidebar,
+      ]}
       testID="workspace-tabs-row"
       onLayout={handleTabsContainerLayout}
     >
@@ -1408,7 +1436,15 @@ function ResolvedWorkspaceDesktopTabsRow({
             data={displayedTabs}
             keyExtractor={tabKeyExtractor}
             useDragHandle
-            disabled={!externalDndContext && displayedTabs.length < 2}
+            disabled={
+              displayedTabs.some(
+                ({ tab }) =>
+                  (tab.target.kind === "agent" && !!tab.target.flowTab) ||
+                  (tab.target.kind === "draft" &&
+                    tab.target.placeholder?.providerId === "task-flow"),
+              ) ||
+              (!externalDndContext && displayedTabs.length < 2)
+            }
             onDragEnd={handleDragEnd}
             externalDndContext={externalDndContext}
             activeId={activeDragTabId}
@@ -1609,6 +1645,10 @@ const styles = StyleSheet.create((theme) => ({
   tabsContainerSidebar: {
     backgroundColor: theme.colors.surfaceSidebar,
   },
+  flowTabsContainer: {
+    height: "auto",
+    minHeight: 64,
+  },
   tabsScroll: {
     minWidth: 0,
   },
@@ -1657,6 +1697,26 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[1],
     userSelect: "none",
+  },
+  flowTab: {
+    height: "auto",
+    minHeight: 56,
+    paddingVertical: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+  },
+  flowText: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing[0.5],
+  },
+  flowTitle: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+  },
+  flowDetails: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
   },
   tabFill: (backdrop: SurfaceBackdrop) => ({
     backgroundColor: theme.colors[backdrop],

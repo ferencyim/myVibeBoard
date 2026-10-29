@@ -363,19 +363,21 @@ export function PromptLibraryPage({
           </>
         ) : (
           <>
-            <View style={styles.backRow}>
-              <Button
-                variant="ghost"
-                size="sm"
-                leftIcon={ArrowLeft}
-                onPress={state.view === "tags" ? closeTags : leaveEditor}
-                testID="prompt-library-back"
-              >
-                {state.view === "tags"
-                  ? t("promptLibrary.tagManagerTitle")
-                  : t("promptLibrary.back")}
-              </Button>
-            </View>
+            {!compactDevice ? (
+              <View style={styles.backRow}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leftIcon={ArrowLeft}
+                  onPress={state.view === "tags" ? closeTags : leaveEditor}
+                  testID="prompt-library-back"
+                >
+                  {state.view === "tags"
+                    ? t("promptLibrary.tagManagerTitle")
+                    : t("promptLibrary.back")}
+                </Button>
+              </View>
+            ) : null}
             {state.view === "tags" ? rail(false) : editor}
           </>
         )}
@@ -387,13 +389,58 @@ export function PromptLibraryPage({
   const title = t("promptLibrary.manageTitle");
   return (
     <View style={styles.page} onLayout={onLayout} testID="prompt-library-page">
-      {compactDevice ? <BackHeader title={title} onBack={onBack} /> : <MenuHeader borderless />}
-      <View style={styles.titleRow}>
-        {compactDevice ? null : <Text style={styles.title}>{title}</Text>}
-        <PromptLibraryStatus host={host} />
-      </View>
+      <PromptPageHeader
+        compact={compactDevice}
+        view={state.view}
+        title={title}
+        host={host}
+        onBack={onBack}
+        closeTags={closeTags}
+        leaveEditor={leaveEditor}
+      />
       {body}
     </View>
+  );
+}
+
+function PromptPageHeader({
+  compact,
+  view,
+  title,
+  host,
+  onBack,
+  closeTags,
+  leaveEditor,
+}: {
+  compact: boolean;
+  view: "list" | "tags" | "edit";
+  title: string;
+  host: ReturnType<typeof usePromptLibraryHost>;
+  onBack?: () => void;
+  closeTags: () => void;
+  leaveEditor: () => void;
+}): ReactElement {
+  const { t } = useTranslation();
+  let back = onBack;
+  if (view === "tags") back = closeTags;
+  if (view === "edit") back = leaveEditor;
+  return (
+    <>
+      {compact ? (
+        <BackHeader
+          title={view === "tags" ? t("promptLibrary.tagManagerTitle") : title}
+          onBack={back}
+        />
+      ) : (
+        <MenuHeader borderless />
+      )}
+      {(!compact || view === "list") && (
+        <View style={styles.titleRow}>
+          {compact ? null : <Text style={styles.title}>{title}</Text>}
+          <PromptLibraryStatus host={host} />
+        </View>
+      )}
+    </>
   );
 }
 
@@ -522,7 +569,7 @@ function EntryRow({
 const styles = StyleSheet.create((theme) => ({
   page: {
     flex: 1,
-    backgroundColor: theme.colors.surface0,
+    backgroundColor: theme.colors.bgCanvas,
   },
   flex: {
     flex: 1,
@@ -537,8 +584,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize["2xl"],
-    fontWeight: theme.fontWeight.normal,
+    fontSize: theme.fontSize.xl,
+    fontWeight: theme.fontWeight.semibold,
   },
   statusGroup: {
     flexShrink: 1,
@@ -548,18 +595,18 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     flexDirection: "row",
     borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
+    borderTopColor: theme.colors.borderStrong,
   },
   railColumn: {
     width: 220,
     flexGrow: 0,
     borderRightWidth: 1,
-    borderRightColor: theme.colors.border,
+    borderRightColor: theme.colors.borderStrong,
   },
   listColumn: {
     width: 340,
     borderRightWidth: 1,
-    borderRightColor: theme.colors.border,
+    borderRightColor: theme.colors.borderStrong,
   },
   editorColumn: {
     flex: 1,
@@ -587,12 +634,13 @@ const styles = StyleSheet.create((theme) => ({
   },
   entryRow: {
     gap: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[3],
+    minHeight: 64,
     borderRadius: theme.borderRadius.lg,
   },
   entryRowSelected: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.bgControlActive,
   },
   entryHeader: {
     flexDirection: "row",
@@ -603,7 +651,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.normal,
+    fontWeight: theme.fontWeight.semibold,
   },
   entryBody: {
     color: theme.colors.foregroundMuted,

@@ -18,3 +18,13 @@ export function collectSettingsSidebarScreens<Plugin extends SettingsPlugin>(
       );
     });
 }
+
+export function settingsPluginCategory(pluginId: string): "task" | "automation" | "other" {
+  if (["vibe-board", "vibe-bots", "vibe-master"].includes(pluginId)) return "task";
+  if (["vibe-scheduler", "vibe-maintain"].includes(pluginId)) return "automation";
+  return "other";
+}
+
+export function settingsSearchMatches(label: string, query: string): boolean {
+  return label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+}

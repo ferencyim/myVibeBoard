@@ -47,6 +47,29 @@ describe("plugin workspace tabs", () => {
     expect(merge(layout)).toBe(layout);
   });
 
+  it("preserves fixed flow metadata when a role is provisioned", () => {
+    const entries = contributions();
+    entries[0]!.providerId = "task-flow";
+    const initial = merge(null, entries);
+    entries[0]!.tabs = entries[0]!.tabs.map((tab) =>
+      tab.order === 4
+        ? Object.assign(tab, { agentId: "worker", title: "#4 执行 · model · 忙碌" })
+        : tab,
+    );
+    const provisioned = merge(initial, entries);
+    const target = collectAllTabs(provisioned.root)[3]!.target;
+    expect(target.kind === "agent" && target.flowTab?.title).toBe("#4 执行 · model · 忙碌");
+    expect(merge(provisioned, entries)).toBe(provisioned);
+    entries[0]!.tabs = entries[0]!.tabs.map((tab) =>
+      tab.order === 4
+        ? Object.assign(tab, { title: "#4 执行 · model · 待审批", disabled: true })
+        : tab,
+    );
+    const updated = collectAllTabs(merge(provisioned, entries).root)[3]!.target;
+    expect(updated.kind === "agent" && updated.flowTab?.title).toBe("#4 执行 · model · 待审批");
+    expect(updated.kind === "agent" && updated.flowTab?.disabled).toBe(true);
+  });
+
   it("replaces a placeholder with its provisioned agent while preserving six tabs", () => {
     const initial = merge(null);
     const entries = contributions();
