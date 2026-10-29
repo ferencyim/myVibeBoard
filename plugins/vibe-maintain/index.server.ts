@@ -1,3 +1,4 @@
+import { deferStartup } from "./server/vibe/db/startup";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
@@ -168,7 +169,7 @@ export default function contribute(server: PluginServerContext) {
     p.model.startsWith(`${p.provider}/`) ? p.model : `${p.provider}/${p.model}`;
   server.handle(statusRpc, async (_input, c) => {
     remember(c.paseo);
-    await rulesReady;
+    await startup.ready;
     await engine.syncRules(); // a UI edit shows up without waiting for the next tick
     return JSON.parse(
       JSON.stringify({
@@ -180,7 +181,7 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(runRpc, async ({ ruleId, ruleName, projectId }, c) => {
     remember(c.paseo);
-    await rulesReady;
+    await startup.ready;
     await engine.syncRules();
     if (ruleName) {
       const results = (await engine.runRuleNow(ruleName, projectId)).map((r) => ({
@@ -196,7 +197,10 @@ export default function contribute(server: PluginServerContext) {
       ? { status: "fired", run: outcome.run }
       : { status: "blocked", why: outcome.why };
   });
-  server.handle(resumeRpc, ({ ruleId }) => ({ rule: engine.resume(ruleId) }));
+  server.handle(resumeRpc, async ({ ruleId }) => {
+    await startup.ready;
+    return { rule: engine.resume(ruleId) };
+  });
 
   let ticking = false;
   const runTick = () => {
@@ -209,20 +213,22 @@ export default function contribute(server: PluginServerContext) {
   };
   // The tick period is a setting: start the timer once the settings are loaded.
   let timer: ReturnType<typeof setInterval> | null = null;
-  void Promise.all([settings.read(), rulesReady])
-    .then(([state]) => {
-      if (lifetime.signal.aborted) return null;
+  const startup = deferStartup(
+    async () => {
+      const [state] = await Promise.all([settings.read(), rulesReady]);
+      if (lifetime.signal.aborted) return;
       apply(state);
       engine.start();
       timer = setInterval(runTick, current.tickSeconds * 1000);
       (timer as unknown as { unref?: () => void }).unref?.();
       runTick();
-      return null;
-    })
-    .catch((error) => console.error("vibe-maintain: 维护配置读取失败，未启动规则同步", error));
+    },
+    (error) => console.error("vibe-maintain: 维护配置读取失败，未启动规则同步", error),
+  );
 
   return async () => {
     lifetime.abort();
+    await startup.close();
     if (timer) clearInterval(timer);
     stopSettings();
     stopRules();

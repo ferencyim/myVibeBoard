@@ -21,7 +21,11 @@ import { DEFAULT_CONFIG } from "../server/scheduler";
 import { createSchedulerRuntime, DEFAULT_SETTINGS } from "../server/runtime";
 import { fakeMachine } from "./helpers";
 
-function confirmTask(store: ReturnType<typeof createVibeStore>, id: string, roles: TaskRoleSnapshot) {
+function confirmTask(
+  store: ReturnType<typeof createVibeStore>,
+  id: string,
+  roles: TaskRoleSnapshot,
+) {
   const task = store.tasks.get(id)!;
   const tab =
     task.tabs.find((item) => item.agentId === task.anchorAgentId) ??
@@ -71,6 +75,9 @@ function setup(limit = 2) {
   const ports = createPortAllocator({ base: 17500, span: 50, isFree: async () => true });
   const native = new Map<string, NativeTaskWorkspace>();
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const unavailable = new Set<string>();
+  const logs: string[] = [];
+  const nativeQueries: string[] = [];
   let config = { ...DEFAULT_CONFIG, globalLimit: limit };
   let memory = 0.2;
   const file = join(dir, "resources.json");
@@ -84,7 +91,12 @@ function setup(limit = 2) {
       config: () => config,
       memory: () => memory,
       quota: () => ({}),
-      native: async (id) => native.get(id) ?? null,
+      native: async (id) => {
+        nativeQueries.push(id);
+        if (unavailable.has(id)) throw new Error("宿主暂时不可用");
+        return native.get(id) ?? null;
+      },
+      log: (message) => logs.push(message),
       identity: async (directory) => ({
         repo: "same-real-repository",
         directory: directory.toLowerCase(),
@@ -168,6 +180,9 @@ function setup(limit = 2) {
     leases,
     ports,
     native,
+    unavailable,
+    nativeQueries,
+    logs,
     scheduler,
     makeScheduler,
     task,
@@ -382,8 +397,95 @@ describe("原生任务准入", () => {
     writeFileSync(t.file, "bad json");
     const restarted = t.makeScheduler();
     expect((await restarted.tick()).admitted).toEqual([]);
-    t.native.delete("a");
-    await expect(t.makeScheduler().tick()).rejects.toThrow(/核对/);
+    t.unavailable.add("a");
+    expect((await t.makeScheduler().tick()).admitted).toEqual([]);
+    expect(t.store.tasks.get("a")!.phase).toBe("queued");
+  });
+  for (const missing of [true, false]) {
+    it(
+      missing
+        ? "工作区不存在则放弃任务、释放资源并继续派发"
+        : "工作区归档则放弃任务、释放资源并继续派发",
+      async () => {
+        const t = setup(1);
+        t.roles.worker.runtimeEnv = "android";
+        t.task("gone", ["old.ts"], false);
+        confirmTask(t.store, "gone", t.roles);
+        t.leases.registerDevice({ kind: "emulator", name: "测试设备" });
+        const lease = await t.request("gone", { action: "acquire", role: "worker" });
+        expect(lease.ok).toBe(true);
+        t.task("next", ["next.ts"]);
+        if (missing) t.native.delete("gone");
+        else t.native.get("gone")!.archived = true;
+        const restarted = t.makeScheduler();
+        expect((await restarted.tick()).admitted.map((row) => row.workspaceId)).toEqual(["next"]);
+        expect(t.store.tasks.get("gone")).toMatchObject({
+          phase: "failed",
+          control: { archivedAt: expect.any(String) },
+          summary: expect.stringContaining("已放弃"),
+        });
+        expect(t.ports.get(lease.reservationId!)).toBeUndefined();
+        expect(
+          t.leases
+            .activeLeases()
+            .every((row) => row.session_id !== "scheduler-task:" + lease.reservationId),
+        ).toBe(true);
+        expect(restarted.status().pending.every((row) => row.workspaceId !== "gone")).toBe(true);
+        expect(t.logs.filter((message) => message.includes("已放弃"))).toHaveLength(1);
+      },
+    );
+  }
+  it("宿主暂不可用时保留资源等待重试，逐任务继续核对且日志每分钟限频", async () => {
+    const t = setup(1);
+    t.task("waiting", ["old.ts"]);
+    const lease = await t.request("waiting", { action: "acquire", role: "worker" });
+    t.task("gone", ["gone.ts"]);
+    t.task("next", ["next.ts"]);
+    t.unavailable.add("waiting");
+    t.native.delete("gone");
+    const restarted = t.makeScheduler();
+    expect((await restarted.tick()).admitted).toEqual([]);
+    expect(t.store.tasks.get("gone")!.phase).toBe("failed");
+    expect(t.store.tasks.get("waiting")!.phase).toBe("queued");
+    expect(restarted.runningCounts().total).toBe(1);
+    expect(t.ports.get(lease.reservationId!)).toBe(lease.port);
+    const warnings = () => t.logs.filter((message) => message.includes("等待宿主恢复"));
+    expect(warnings()).toHaveLength(1);
+    t.advance(5_000);
+    await restarted.tick();
+    expect(warnings()).toHaveLength(1);
+    t.advance(60_000);
+    await restarted.tick();
+    expect(warnings()).toHaveLength(2);
+    t.unavailable.delete("waiting");
+    expect((await restarted.tick()).admitted.map((row) => row.workspaceId)).toEqual(["next"]);
+  });
+  it("未确认且无租约的 planning 任务缺工作区不核对、不阻塞派发", async () => {
+    const t = setup(1);
+    t.task("draft", [], false);
+    t.store.tasks.setPhase("draft", "planning");
+    t.native.delete("draft");
+    t.task("next", ["next.ts"]);
+    expect((await t.scheduler.tick()).admitted.map((row) => row.workspaceId)).toEqual(["next"]);
+    expect(t.nativeQueries).not.toContain("draft");
+    expect(t.store.tasks.get("draft")!.phase).toBe("planning");
+  });
+  it("planning 任务若持有租约仍需核对，缺工作区时释放名额", async () => {
+    const t = setup(1);
+    t.task("planner", [], false);
+    const lease = await t.request("planner", {
+      action: "acquire",
+      role: "planner",
+      provider: "codex",
+      model: "model",
+    });
+    expect(lease.ok).toBe(true);
+    t.native.delete("planner");
+    t.task("next", ["next.ts"]);
+    expect((await t.makeScheduler().tick()).admitted.map((row) => row.workspaceId)).toEqual([
+      "next",
+    ]);
+    expect(t.store.tasks.get("planner")!.phase).toBe("failed");
   });
   it("总agent只排序已确认候选，关闭/不可用/超时退回FIFO", async () => {
     const t = setup(2);
@@ -559,7 +661,7 @@ describe("原生任务准入", () => {
     t.task("a");
     const row = await t.request("a", { action: "acquire", role: "worker" });
     expect(row.ok).toBe(true);
-    t.native.delete("a");
+    t.unavailable.add("a");
     expect(await t.request("a", { action: "reconcile" })).toMatchObject({
       ok: false,
       retryable: false,

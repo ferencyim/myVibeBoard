@@ -1,3 +1,4 @@
+import { deferStartup } from "./server/vibe/db/startup";
 import { projectIdForDirectory } from "./server/inject/project";
 import { registerTaskContext } from "./server/runtime";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -14,7 +15,22 @@ export default function contribute(server: PluginServerContext) {
   migrateOwner(db, "core");
   const store = createVibeStore(db);
   const prompts = createContextPrompts(store);
-  prompts.register();
+  const startup = deferStartup(
+    () => {
+      prompts.register();
+    },
+    (error) => console.error("[vibe-context] 后台初始化失败", error),
+  );
+  // Requests may arrive as soon as ready is sent; wait for the same startup promise.
+  const host = server;
+  server = {
+    ...host,
+    handle: (rpc, handler) => host.handle(rpc, startup.wrap(handler)),
+    before: (name, handler) => host.before(name, startup.wrap(handler)),
+    on: (name, handler) => host.on(name, startup.wrap(handler)),
+    registerAgentTool: (tool) =>
+      host.registerAgentTool({ ...tool, handler: startup.wrap(tool.handler) }),
+  };
 
   const context = server.registerSettings(contextSettings);
   let memoryTokens = DEFAULT_MEMORY_TOKENS;
@@ -56,6 +72,7 @@ export default function contribute(server: PluginServerContext) {
     runTaskTurn: taskContext.runTaskTurn,
   });
   return async () => {
+    await startup.close();
     unregister();
     stopCompaction();
     await taskContext.close();

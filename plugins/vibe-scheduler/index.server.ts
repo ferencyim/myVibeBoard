@@ -36,9 +36,13 @@ export default function contribute(server: PluginServerContext) {
     native: async (workspaceId) => {
       if (!paseo) throw new Error("尚未连接原生宿主，暂停派发");
       const workspace = paseo.workspaces.ref(workspaceId);
-      await workspace.refresh();
-      const snapshot = workspace.current();
-      if (!snapshot || !workspace.directory || !workspace.projectId) return null;
+      // refresh completes a host query, including every page; null confirms absence.
+      const snapshot = await workspace.refresh();
+      if (!snapshot) return null;
+      // archivingAt is an in-progress operation that can still fail to stop agents.
+      if (snapshot.archivingAt) throw new Error("原生工作区正在归档，等待归档完成后核对");
+      if (!workspace.directory || !workspace.projectId)
+        throw new Error("原生工作区元数据尚未就绪，等待重试");
       const agents = [];
       let cursor: string | undefined;
       do {
@@ -57,7 +61,7 @@ export default function contribute(server: PluginServerContext) {
         workspaceId,
         projectId: workspace.projectId,
         directory: workspace.directory,
-        archived: !!snapshot.archivingAt,
+        archived: false,
         agents,
       };
     },

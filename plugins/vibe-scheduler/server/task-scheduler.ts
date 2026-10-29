@@ -105,7 +105,9 @@ export interface TaskSchedulerDeps {
   now: () => Date;
   memory: () => number | null;
   quota: () => Record<string, ProviderQuota>;
+  /** null means a successful host query confirmed absence; unavailable hosts must throw. */
   native: (workspaceId: string) => Promise<NativeTaskWorkspace | null>;
+  log?: (message: string) => void;
   identity?: (directory: string) => Promise<{ repo: string; directory: string }>;
   emit: (type: string, payload: Record<string, unknown>) => void;
 }
@@ -174,6 +176,8 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   let recoveryError: string | null = null;
   let restored = false;
   let startup = true;
+  const recoveryLogs = new Map<string, number>();
+  let startupDeferred: Record<string, string> = {};
   let serial = Promise.resolve();
   let lastDeferred: Record<string, string> = {};
   let round: { requestId: string; at: number; workspaceIds?: string[] } | null = null;
@@ -289,6 +293,18 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     }
     save();
   }
+  function abandonWorkspace(workspaceId: string) {
+    const task = deps.store.tasks.get(workspaceId);
+    if (task && !["completed", "failed"].includes(task.phase)) {
+      // Match vibe-board's archived workspace marker and its abandoned plan status.
+      deps.store.tasks.updateControl(workspaceId, { archivedAt: deps.now().toISOString() });
+      deps.store.tasks.setPhase(workspaceId, "failed");
+      deps.store.tasks.setSummary(workspaceId, "原生工作区不存在或已归档，任务已放弃");
+      deps.log?.("原生工作区不存在或已归档，任务已放弃并释放资源：" + workspaceId);
+    }
+    for (const row of held.values()) if (row.workspaceId === workspaceId) release(row);
+    recoveryLogs.delete(workspaceId);
+  }
   async function reconcile(workspaceId?: string) {
     const targets = new Set(
       [...held.values()]
@@ -298,7 +314,10 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     if (workspaceId) targets.add(workspaceId);
     for (const id of targets) {
       const workspace = await deps.native(id);
-      if (!workspace) throw new Error("原生状态不可读，资源继续保留：" + id); // Unknown is never evidence that a writer stopped.
+      if (!workspace || workspace.archived) {
+        abandonWorkspace(id);
+        continue;
+      }
       const rows = [...held.values()].filter((row) => row.workspaceId === id);
       for (const row of rows) {
         const agent = row.agentId
@@ -746,17 +765,43 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     return false;
   }
   async function recoverNativeTasks() {
-    if (!startup) return;
-    // Do not dispatch anything until all persisted native task states can be checked.
-    for (const task of deps.store.tasks.list()) {
-      if (["completed", "failed"].includes(task.phase)) continue;
-      const workspace = await deps.native(task.workspaceId);
-      if (!workspace) throw new Error("无法核对原生任务状态，暂停派发：" + task.workspaceId);
-      for (const agent of workspace.agents)
-        if (!nativeStopped(agent)) await observeAgent(task.workspaceId, agent.id);
+    if (!startup) return true;
+    const deferred: Record<string, string> = {};
+    const reconcileRestored = restored;
+    const targets = new Set([...held.values()].map((row) => row.workspaceId));
+    for (const task of deps.store.tasks.list())
+      if (task.confirmedAt && !["completed", "failed"].includes(task.phase))
+        targets.add(task.workspaceId);
+    // Unconfirmed drafts without leases cannot own a dispatch slot.
+    for (const workspaceId of targets) {
+      try {
+        const workspace = await deps.native(workspaceId);
+        if (!workspace || workspace.archived) {
+          abandonWorkspace(workspaceId);
+          continue;
+        }
+        for (const agent of workspace.agents)
+          if (!nativeStopped(agent)) await observeAgent(workspaceId, agent.id);
+        if (reconcileRestored) await reconcile(workspaceId);
+        recoveryLogs.delete(workspaceId);
+      } catch (error) {
+        const reason = "无法核对原生任务状态，等待宿主恢复：" + workspaceId;
+        deferred[workspaceId] = reason;
+        const now = deps.now().getTime();
+        const previous = recoveryLogs.get(workspaceId);
+        if (previous === undefined || now - previous >= 60_000) {
+          recoveryLogs.set(workspaceId, now);
+          deps.log?.(reason + "；" + (error instanceof Error ? error.message : String(error)));
+        }
+      }
     }
-    if (restored) await reconcile();
+    startupDeferred = deferred;
+    if (Object.keys(deferred).length) {
+      restored = reconcileRestored;
+      return false;
+    }
     startup = false;
+    return true;
   }
   function bindPlannedLease(request: TaskResourceRequest, row: TaskResourceLease) {
     const planned = request.agentId
@@ -833,7 +878,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     return result(request, true, "原生停止已确认，资源已释放");
   }
   async function resourceAction(request: TaskResourceRequest): Promise<TaskResourceResult> {
-    await recoverNativeTasks();
+    if (!(await recoverNativeTasks())) block(Object.values(startupDeferred)[0]!, true);
     if (request.action === "acquire") return acquire(request);
     if (request.action === "freeze") {
       await freeze(request.workspaceId, "已撤销排队和新派发；等待原生停止确认，资源继续保留");
@@ -870,9 +915,11 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   }
   async function tick() {
     return exclusive(async () => {
-      await recoverNativeTasks();
+      if (!(await recoverNativeTasks())) {
+        lastDeferred = startupDeferred;
+        return { admitted: [], deferred: startupDeferred, paused };
+      }
       updateMemory();
-      if (restored) await reconcile();
       const admitted: Array<TaskResourceResult & { confirmedAt: string }> = [];
       const deferred: Record<string, string> = {};
       const waiting = deps.store.tasks
