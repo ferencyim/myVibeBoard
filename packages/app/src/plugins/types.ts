@@ -21,6 +21,7 @@ import type {
   PluginFirstMessageModelResolver,
   PluginWorkspaceTabProvider,
   PluginTimelineRendererContribution,
+  PluginConversationHeaderAccessory,
   PluginTimelineTransformerContribution,
   PluginPanelLocation,
   PluginWorkspacePanelContribution as SDKPluginWorkspacePanelContribution,
@@ -71,6 +72,7 @@ export interface EvaluatedPlugin {
   themes: PluginThemeContribution[];
   timelineTransformers: PluginTimelineTransformerContribution[];
   timelineRenderers: PluginTimelineRendererContribution[];
+  conversationHeaderAccessories?: PluginConversationHeaderAccessory[];
 }
 
 export interface InstalledPlugin extends EvaluatedPlugin {
