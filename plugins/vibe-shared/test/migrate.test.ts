@@ -41,6 +41,8 @@ const EXPECTED_TABLES = [
   "bot_legacy_migration",
   "bot_model_state",
   "bot_thread",
+  "bot_routine",
+  "bot_routine_run",
   "bot_continuation_request",
   "resource_sample",
   "device",

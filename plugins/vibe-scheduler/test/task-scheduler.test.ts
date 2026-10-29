@@ -583,6 +583,34 @@ describe("原生任务准入", () => {
     expect(JSON.parse(response!.payload_json)).toMatchObject({ requestId: "bus", ok: false });
     await runtime.stop();
   });
+  it("例程运行计入任务资源并发，结束后释放", () => {
+    const t = setup();
+    migrateOwner(t.db, "vibe-bots");
+    t.db.exec(`INSERT INTO bot(id, kind, project_id, name, provider, created_at, updated_at)
+        VALUES ('bot_b', 'project', 'p', '测试 bot', 'codex', 'now', 'now');
+      INSERT INTO bot_routine(id, bot_id, title, schedule_json, timezone, prompt, target, quiet, paused, missed_policy, created_at, updated_at)
+        VALUES ('r', 'bot_b', '例程', '{"kind":"interval","minutes":60}', 'UTC', '检查', 'main', 0, 0, 'skip', 'now', 'now');
+      INSERT INTO bot_routine_run(id, routine_id, scheduled_at, status, provider)
+        VALUES ('run', 'r', 'now', 'running', 'codex');`);
+    expect(t.scheduler.runningCounts()).toMatchObject({ total: 1, byProvider: { codex: 1 }, byProject: { p: 1 } });
+    t.db.exec("UPDATE bot_routine_run SET status='completed'");
+    expect(t.scheduler.runningCounts().total).toBe(0);
+  });
+  it("每次调度携带当前资源状态触发例程", async () => {
+    const t = setup();
+    const calls: unknown[] = [];
+    const runtime = createSchedulerRuntime({
+      db: t.db, dataDir: join(t.dir, "routine-runtime"), probe: fakeMachine(),
+      settings: DEFAULT_SETTINGS, native: async (id) => t.native.get(id) ?? null,
+      routineTick: async (input) => { calls.push(input); },
+    });
+    await runtime.tickOnce();
+    expect(calls).toEqual([expect.objectContaining({
+      paused: false, globalLimit: DEFAULT_SETTINGS.globalLimit,
+      running: expect.objectContaining({ total: 0 }),
+    })]);
+    await runtime.stop();
+  });
   it("同workspace不同设备kind各持正确设备，不借错设备", async () => {
     const t = setup(3);
     t.roles.worker.runtimeEnv = "android";

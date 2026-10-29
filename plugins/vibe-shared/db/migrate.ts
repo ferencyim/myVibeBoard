@@ -78,6 +78,11 @@ export function migrateOwner(
   return migrateSchema(db, owner, now, true);
 }
 
+/** Initialize an owner's released prefix while a later migration is unavailable. */
+export function migrateOwnerThrough(db: VibeDb, owner: Owner, version: number): MigrateResult {
+  return migrateSchema(db, owner, () => new Date(), true, version);
+}
+
 function migrateSchema(
   db: VibeDb,
   owner: Owner,

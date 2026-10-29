@@ -113,3 +113,15 @@ export const resumeRpc = defineRpc({
   input: z.object({ ruleId: z.string().min(1) }),
   output: z.object({ rule: z.unknown() }),
 });
+
+export const systemRoutinesRpc = defineRpc({
+  name: "maintain.system_routines",
+  input: z.object({}),
+  output: z.object({ routines: z.array(z.object({
+    id: z.string(), title: z.string(), projectId: z.string(), projectName: z.string(),
+    schedule: z.object({ kind: z.literal("cron"), expression: z.string() }).nullable(),
+    scheduleText: z.string(), timezone: z.string(), nextRunAt: z.string().nullable(),
+    paused: z.boolean(), lastRunAt: z.string().nullable(), lastStatus: z.string().nullable(),
+    lastError: z.string().nullable(), editKey: z.string(),
+  })) }),
+});

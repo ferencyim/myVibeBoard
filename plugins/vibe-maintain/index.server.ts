@@ -7,11 +7,13 @@ import {
   rulesSettings,
   runRpc,
   statusRpc,
+  systemRoutinesRpc,
   type MaintainSettings,
 } from "./shared/rpc";
 import { EMPTY_RULES_CONFIG, migrateRulesV1, type RulesConfig } from "./shared/rules";
 import { BUILTIN_RULES } from "./server/config";
 import { createMaintenanceEngine } from "./server/engine";
+import { systemRoutines } from "./server/system-routines";
 import { perfSlowCheck } from "./server/checks/perf-slow";
 import { gitCheck } from "./server/git/check";
 import { execGit } from "./server/git/exec";
@@ -179,6 +181,12 @@ export default function contribute(server: PluginServerContext) {
       }),
     );
   });
+  server.handle(systemRoutinesRpc, async (_input, c) => {
+    remember(c.paseo);
+    await startup.ready;
+    await engine.syncRules();
+    return { routines: systemRoutines(engine.status()) };
+  });
   server.handle(runRpc, async ({ ruleId, ruleName, projectId }, c) => {
     remember(c.paseo);
     await startup.ready;
@@ -237,3 +245,4 @@ export default function contribute(server: PluginServerContext) {
     db.close();
   };
 }
+

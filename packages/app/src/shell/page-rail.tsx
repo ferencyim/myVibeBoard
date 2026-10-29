@@ -73,7 +73,8 @@ export function PageRail({
       label: "例程",
       icon: Clock3,
       order: 10,
-      active: pathname === "/routines",
+      active:
+        pathname === "/routines" || /\/plugin\/vibe-bots\/surface\/routines\/?$/.test(pathname),
       press: () => router.push("/routines" as never),
     },
     {

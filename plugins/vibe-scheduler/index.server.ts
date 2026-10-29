@@ -68,6 +68,10 @@ export default function contribute(server: PluginServerContext) {
       };
     },
     fetchUsage: () => (paseo ? paseo.providers.listUsage().then((r) => r.providers) : null),
+    routineTick: async (input) => {
+      if (!paseo) return;
+      await paseo.plugins.invoke("vibe-bots", "routine.tick", input);
+    },
   });
 
   registerBotTools(server, runtime, () => paseo);
