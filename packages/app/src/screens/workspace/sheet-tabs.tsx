@@ -40,6 +40,7 @@ import { useWorkspaceLayoutStore, type SheetTab } from "@/stores/workspace-layou
 import { useWorkspaceSheetEnvironment } from "./workspace-sheet-environment";
 
 const SNAP_POINTS = ["92%"];
+const FULL_HEIGHT_SNAP_POINTS = ["100%"];
 const NO_SHEETS: readonly SheetTab[] = [];
 
 function PanelIcon({
@@ -239,7 +240,13 @@ function SheetTabSheet({
     <IsolatedBottomSheetModal
       ref={sheetRef}
       contextBridge={contextBridge}
-      snapPoints={SNAP_POINTS}
+      snapPoints={
+        tab.target.kind === "plugin" &&
+        tab.target.pluginId === "vibe-bots" &&
+        tab.target.panelId === "profile"
+          ? FULL_HEIGHT_SNAP_POINTS
+          : SNAP_POINTS
+      }
       enableDynamicSizing={false}
       enablePanDownToClose
       enableContentPanningGesture={false}

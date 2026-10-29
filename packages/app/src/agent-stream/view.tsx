@@ -1,5 +1,12 @@
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import type { ComposerQuote } from "@/composer/quote";
+import {
+  defaultStepGroupExpanded,
+  isStepGroupExpanded,
+  setStepGroupExpanded,
+} from "./step-expansion";
+import { Avatar } from "@/ui/avatar";
 import React, {
   forwardRef,
   memo,
@@ -135,6 +142,7 @@ function BottomOverlayInset({ height }: { height: number }) {
 function renderPendingPermissionsNode(input: {
   pendingPermissions: PendingPermission[];
   client: DaemonClient | null;
+  toast?: ToastApi | null;
 }): ReactNode {
   if (input.pendingPermissions.length === 0) {
     return null;
@@ -142,7 +150,12 @@ function renderPendingPermissionsNode(input: {
   return (
     <View style={stylesheet.permissionsContainer}>
       {input.pendingPermissions.map((permission) => (
-        <PermissionRequestCard key={permission.key} permission={permission} client={input.client} />
+        <PermissionRequestCard
+          key={permission.key}
+          permission={permission}
+          client={input.client}
+          toast={input.toast}
+        />
       ))}
     </View>
   );
@@ -197,6 +210,7 @@ function renderListEmptyComponent(input: {
   renderModel: AgentStreamRenderModel;
   emptyStateStyle: StyleProp<ViewStyle>;
   emptyText: string;
+  identity?: AgentStreamViewProps["emptyIdentity"];
 }): ReactNode {
   if (
     input.renderModel.boundary.hasVirtualizedHistory ||
@@ -210,6 +224,21 @@ function renderListEmptyComponent(input: {
 
   return (
     <View style={input.emptyStateStyle}>
+      {input.identity ? (
+        <>
+          <Avatar
+            seed={input.identity.avatarSeed ?? input.identity.id}
+            hue={input.identity.avatarHue}
+            name={input.identity.name}
+            uri={input.identity.avatarUrl}
+            size={64}
+          />
+          <Text style={stylesheet.emptyStateTitle}>{input.identity.name}</Text>
+          {input.identity.title ? (
+            <Text style={stylesheet.emptyStateText}>{input.identity.title}</Text>
+          ) : null}
+        </>
+      ) : null}
       <Text style={stylesheet.emptyStateText}>{input.emptyText}</Text>
     </View>
   );
@@ -257,6 +286,15 @@ export interface AgentStreamViewHandle {
 
 export interface AgentStreamViewProps {
   agentId: string;
+  onQuote?: (quote: ComposerQuote) => void;
+  emptyIdentity?: {
+    id: string;
+    name: string;
+    title?: string;
+    avatarUrl?: string;
+    avatarSeed?: string;
+    avatarHue?: number;
+  };
   serverId?: string;
   context: AgentScreenAgent;
   streamItems: StreamItem[];
@@ -303,6 +341,22 @@ function useRetainedValue<T>(value: T, active: boolean): T {
   return active ? value : retainedRef.current;
 }
 const EMPTY_PENDING_MESSAGE_SUBMISSIONS: readonly PendingMessageSubmission[] = [];
+const EMPTY_GROUP_OVERRIDES: ReadonlySet<string> = new Set();
+function useGroupOverridesForLayout(
+  isMobile: boolean,
+  overrides: Set<string>,
+  reset: (value: Set<string>) => void,
+) {
+  const compactRef = useRef(isMobile);
+  const effective = compactRef.current === isMobile ? overrides : EMPTY_GROUP_OVERRIDES;
+  useEffect(() => {
+    if (compactRef.current !== isMobile) {
+      compactRef.current = isMobile;
+      reset(new Set());
+    }
+  }, [isMobile, reset]);
+  return effective;
+}
 const GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT = 200;
 
 function resolveBottomOverlayControlOffset(clearance: number | undefined): number {
@@ -313,6 +367,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
   function AgentStreamView(
     {
       agentId,
+      onQuote,
+      emptyIdentity,
       serverId,
       context,
       streamItems,
@@ -342,6 +398,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [pendingMessageSubmissions],
     );
     const isMobile = useIsCompactFormFactor();
+    const defaultGroupExpanded = defaultStepGroupExpanded(autoExpandReasoning, isMobile);
     const streamRenderStrategy = useMemo(
       () =>
         resolveStreamRenderStrategy({
@@ -356,6 +413,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     );
     const [expandedToolCallGroupIds, setExpandedToolCallGroupIds] = useState<Set<string>>(
       new Set(),
+    );
+    const effectiveGroupOverrides = useGroupOverridesForLayout(
+      isMobile,
+      expandedToolCallGroupIds,
+      setExpandedToolCallGroupIds,
     );
 
     // Get serverId (fallback to agent's serverId if not provided)
@@ -633,6 +695,31 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       });
     }, [agentId, handleTimelineHistoryLoadError, isTimelineDetached, resolvedServerId]);
 
+    const [pendingQuoteJump, setPendingQuoteJump] = useState<string | null>(null);
+    useEffect(() => {
+      setPendingQuoteJump(null);
+    }, [agentId, resolvedServerId]);
+    useEffect(() => {
+      if (pendingQuoteJump && mountedMessageIds.has(pendingQuoteJump)) {
+        viewportRef.current?.scrollToMessage?.(pendingQuoteJump);
+        setPendingQuoteJump(null);
+      }
+    }, [mountedMessageIds, pendingQuoteJump]);
+    const jumpToQuote = useCallback(
+      (messageId: string) => {
+        if (mountedMessageIds.has(messageId)) {
+          viewportRef.current?.scrollToMessage?.(messageId);
+          return true;
+        } else if (revealLoadedHistory(messageId)) {
+          setPendingQuoteJump(messageId);
+          return true;
+        } else {
+          return false;
+        }
+      },
+      [mountedMessageIds, revealLoadedHistory],
+    );
+
     const setInlineDetailsExpanded = useCallback(
       (itemId: string, expanded: boolean) => {
         if (!streamRenderStrategy.shouldDisableParentScrollOnInlineDetailsExpansion()) {
@@ -651,17 +738,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [streamRenderStrategy],
     );
 
-    const setToolCallGroupExpanded = useCallback((groupId: string, expanded: boolean) => {
-      setExpandedToolCallGroupIds((previous) => {
-        const next = new Set(previous);
-        if (expanded) {
-          next.add(groupId);
-        } else {
-          next.delete(groupId);
-        }
-        return next;
-      });
-    }, []);
+    const setToolCallGroupExpanded = useCallback(
+      (groupId: string, expanded: boolean) => {
+        setExpandedToolCallGroupIds((previous) => {
+          return setStepGroupExpanded(defaultGroupExpanded, previous, groupId, expanded);
+        });
+      },
+      [defaultGroupExpanded],
+    );
 
     const renderUserMessageItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "user_message" }>) => {
@@ -671,6 +755,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             agentId={agentId}
             messageId={item.messageId}
             message={item.text}
+            onQuote={onQuote}
+            quoteMessageId={getStreamItemMessageId(item)}
+            onJumpToQuote={jumpToQuote}
             images={item.images}
             attachments={item.attachments}
             timestamp={item.timestamp.getTime()}
@@ -685,7 +772,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [context.capabilities, agentId, client, pendingClientMessageIds, resolvedServerId],
+      [
+        context.capabilities,
+        agentId,
+        client,
+        jumpToQuote,
+        onQuote,
+        pendingClientMessageIds,
+        resolvedServerId,
+      ],
     );
 
     const renderAssistantMessageItem = useCallback(
@@ -704,6 +799,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                   renderFullContent={renderFullContent}
                   occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
                   message={item.text}
+                  onQuote={onQuote}
+                  quoteMessageId={getStreamItemMessageId(item)}
                   timestamp={item.timestamp.getTime()}
                   workspaceRoot={workspaceRoot}
                   serverId={resolvedServerId}
@@ -716,7 +813,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           </AssistantFileLinkResolverProvider>
         );
       },
-      [agentId, client, handleInlinePathPress, resolvedServerId, toast, workspaceRoot],
+      [agentId, client, handleInlinePathPress, onQuote, resolvedServerId, toast, workspaceRoot],
     );
 
     const renderThoughtItem = useCallback(
@@ -799,28 +896,43 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const getToolCallGroup = useStableEvent((hostId: string) =>
       presentation.groupsByHostId.get(hostId),
     );
+    const jumpToStepGroup = useCallback((groupId: string) => {
+      viewportRef.current?.scrollToMessage?.(groupId);
+    }, []);
     const renderToolCallItem = useCallback(
-      (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "tool_call" }>) => {
+      (
+        layoutItem: StreamLayoutItem,
+        item: Extract<StreamItem, { kind: "tool_call" | "thought" }>,
+      ) => {
         const group = getToolCallGroup(item.id);
         if (!group) {
-          return renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
+          return item.kind === "thought"
+            ? renderThoughtItem(layoutItem, item)
+            : renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
         }
-        const expanded = expandedToolCallGroupIds.has(group.run.id);
+        const expanded = isStepGroupExpanded(
+          defaultGroupExpanded,
+          effectiveGroupOverrides,
+          group.run.id,
+        );
         return (
           <OverviewToolCallGroupView
             group={group}
             expanded={expanded}
             isLastInSequence={layoutItem.isLastInToolSequence}
             onExpandedChange={setToolCallGroupExpanded}
+            onLocate={jumpToStepGroup}
           >
             {expanded
               ? group.run.calls.map((call, index) => (
                   <React.Fragment key={call.id}>
-                    {renderSingleToolCallItem(
-                      call,
-                      index === group.run.calls.length - 1,
-                      GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT,
-                    )}
+                    {call.kind === "thought"
+                      ? renderThoughtItem(layoutItem, call)
+                      : renderSingleToolCallItem(
+                          call,
+                          index === group.run.calls.length - 1,
+                          GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT,
+                        )}
                   </React.Fragment>
                 ))
               : null}
@@ -828,9 +940,12 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         );
       },
       [
-        expandedToolCallGroupIds,
+        effectiveGroupOverrides,
+        defaultGroupExpanded,
         getToolCallGroup,
+        jumpToStepGroup,
         renderSingleToolCallItem,
+        renderThoughtItem,
         setToolCallGroupExpanded,
       ],
     );
@@ -846,7 +961,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             return renderAssistantMessageItem(layoutItem, item);
 
           case "thought":
-            return renderThoughtItem(layoutItem, item);
+            return renderToolCallItem(layoutItem, item);
 
           case "tool_call":
             return renderToolCallItem(layoutItem, item);
@@ -879,7 +994,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         agentId,
         renderUserMessageItem,
         renderAssistantMessageItem,
-        renderThoughtItem,
         renderToolCallItem,
         resolvedServerId,
       ],
@@ -917,8 +1031,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         renderPendingPermissionsNode({
           pendingPermissions: pendingPermissionItems,
           client,
+          toast,
         }),
-      [client, pendingPermissionItems],
+      [client, pendingPermissionItems, toast],
     );
     const turnFooterNode = useMemo(
       () =>
@@ -969,8 +1084,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           renderModel,
           emptyStateStyle,
           emptyText: t("agentStream.empty"),
+          identity: emptyIdentity,
         }),
-      [renderModel, emptyStateStyle, t],
+      [renderModel, emptyStateStyle, emptyIdentity, t],
     );
 
     const { boundary, auxiliary } = renderModel;
@@ -1064,9 +1180,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => ({
         contentById: presentation.historyGroupUpdatesByHostId,
         displayStateById: expandedToolCallGroupIds,
-        globalDisplayState: isMobile,
+        globalDisplayState: isMobile !== autoExpandReasoning,
       }),
-      [expandedToolCallGroupIds, isMobile, presentation.historyGroupUpdatesByHostId],
+      [
+        autoExpandReasoning,
+        expandedToolCallGroupIds,
+        isMobile,
+        presentation.historyGroupUpdatesByHostId,
+      ],
     );
 
     const findItems = useMemo(
@@ -1230,6 +1351,8 @@ function agentStreamViewPropsEqual(
 ): boolean {
   const reasons: string[] = [];
   if (left.agentId !== right.agentId) reasons.push("agentId");
+  if (left.onQuote !== right.onQuote) reasons.push("onQuote");
+  if (left.emptyIdentity !== right.emptyIdentity) reasons.push("emptyIdentity");
   if (left.serverId !== right.serverId) reasons.push("serverId");
   reasons.push(...collectAgentScreenAgentDiffs(left.context, right.context));
   if (left.streamItems !== right.streamItems) reasons.push("streamItems");
@@ -1386,9 +1509,11 @@ function PermissionActionButton({
 function PermissionRequestCard({
   permission,
   client,
+  toast,
 }: {
   permission: PendingPermission;
   client: DaemonClient | null;
+  toast?: ToastApi | null;
 }) {
   const { t } = useTranslation();
   const isMobile = useIsCompactFormFactor();
@@ -1487,9 +1612,10 @@ function PermissionRequestCard({
         response,
       }).catch((error) => {
         console.error("[PermissionRequestCard] Failed to respond to permission:", error);
+        toast?.error(t("message.question.responseFailed"));
       });
     },
-    [permission.agentId, permission.request.id, respondToPermission],
+    [permission.agentId, permission.request.id, respondToPermission, t, toast],
   );
   const handleActionPress = useCallback(
     (action: AgentPermissionAction) => {
@@ -1536,6 +1662,11 @@ function PermissionRequestCard({
 
   const footer = (
     <>
+      {permissionMutation.isError ? (
+        <Text accessibilityRole="alert" style={permissionStyles.responseError}>
+          {t("message.question.responseFailed")}
+        </Text>
+      ) : null}
       <Text testID="permission-request-question" style={permissionStyles.question}>
         {t("agentStream.permission.question")}
       </Text>
@@ -1643,6 +1774,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[12],
+    gap: theme.spacing[3],
   },
   permissionsContainer: {
     gap: theme.spacing[2],
@@ -1670,6 +1802,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     textAlign: "center",
   },
+  emptyStateTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.fontSize.xl,
+    fontWeight: theme.fontWeight.medium,
+    textAlign: "center",
+  },
   scrollToBottomContainer: {
     position: "absolute",
     left: 0,
@@ -1693,22 +1831,27 @@ const stylesheet = StyleSheet.create((theme) => ({
 const permissionStyles = StyleSheet.create((theme) => ({
   container: {
     marginVertical: theme.spacing[3],
-    padding: theme.spacing[3],
-    borderRadius: theme.spacing[2],
-    borderWidth: 1,
+    padding: theme.spacing[4],
+    borderRadius: theme.borderRadius.card,
+    borderWidth: theme.borderWidth[1],
     gap: theme.spacing[2],
-    backgroundColor: theme.colors.surface1,
+    backgroundColor: theme.colors.bgCanvas,
     borderColor: theme.colors.border,
   },
   title: {
     fontSize: theme.fontSize.base,
-    lineHeight: 22,
+    lineHeight: theme.lineHeight.base,
+    fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
   },
   description: {
     fontSize: theme.fontSize.base,
     lineHeight: 20,
     color: theme.colors.foregroundMuted,
+  },
+  responseError: {
+    color: theme.colors.dangerText,
+    fontSize: theme.fontSize.base,
   },
   section: {
     gap: theme.spacing[2],

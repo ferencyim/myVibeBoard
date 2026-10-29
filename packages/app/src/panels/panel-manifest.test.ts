@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getPanelManifest,
   panelCanLaunchInPane,
+  panelCompactSheetPolicy,
   panelResourceKey,
   panelSupportsHost,
 } from "@/panels/panel-manifest";
@@ -23,7 +24,35 @@ describe("panel manifest", () => {
     expect(panelSupportsHost("agent", "sheet")).toBe(true);
     expect(panelSupportsHost("provider_subagent", "sheet")).toBe(true);
     expect(panelSupportsHost("terminal", "sheet")).toBe(false);
-    expect(panelSupportsHost("plugin", "sheet")).toBe(false);
+    expect(panelSupportsHost("plugin", "sheet")).toBe(true);
+  });
+
+  it("opens only bot profiles as compact plugin sheets", () => {
+    const facts = { isWorkspaceRootAgent: () => true };
+    expect(
+      panelCompactSheetPolicy(
+        {
+          kind: "plugin",
+          pluginId: "vibe-bots",
+          panelId: "profile",
+          context: "agent",
+          agentId: "agent",
+        },
+        facts,
+      ),
+    ).toEqual({ openAsTab: false });
+    expect(
+      panelCompactSheetPolicy(
+        {
+          kind: "plugin",
+          pluginId: "other",
+          panelId: "profile",
+          context: "agent",
+          agentId: "agent",
+        },
+        facts,
+      ),
+    ).toBeNull();
   });
 
   it("lets navigation tabs hide their close button without losing their close action", () => {

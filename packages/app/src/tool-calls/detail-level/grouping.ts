@@ -11,15 +11,16 @@ export interface ToolCallDescriptor {
 
 export interface ToolCallRun {
   id: string;
-  calls: readonly ToolCallItem[];
-  latest: ToolCallItem;
+  calls: readonly StepItem[];
+  latest: StepItem;
   isSealed: boolean;
 }
+export type StepItem = ToolCallItem | Extract<StreamItem, { kind: "thought" }>;
 
 export interface GroupedHistory<TGroup> {
   tail: StreamItem[];
   groupsByHostId: Map<string, TGroup>;
-  pendingCalls: readonly ToolCallItem[];
+  pendingCalls: readonly StepItem[];
 }
 
 export interface GroupedToolCalls<TGroup> {
@@ -70,7 +71,7 @@ export function isGroupableToolCall(item: StreamItem): item is ToolCallItem {
   return descriptor.detail.type !== "plan" && descriptor.name.trim().toLowerCase() !== "speak";
 }
 
-function createRun(calls: readonly ToolCallItem[], isSealed: boolean): ToolCallRun {
+function createRun(calls: readonly StepItem[], isSealed: boolean): ToolCallRun {
   const first = calls[0];
   const latest = calls.at(-1);
   if (!first || !latest) {
@@ -79,20 +80,21 @@ function createRun(calls: readonly ToolCallItem[], isSealed: boolean): ToolCallR
   return { id: first.id, calls, latest, isSealed };
 }
 
-function createHost(run: ToolCallRun): ToolCallItem {
+function createHost(run: ToolCallRun): StepItem {
   if (run.calls.length === 1) {
     return run.latest;
   }
   return { ...run.latest, id: run.id };
 }
 
-function isRunning(call: ToolCallItem): boolean {
+function isRunning(call: StepItem): boolean {
+  if (call.kind === "thought") return call.status !== "ready";
   const status = describeToolCall(call).status;
   return status === "running" || status === "executing";
 }
 
 function appendRun<TGroup>(input: {
-  calls: readonly ToolCallItem[];
+  calls: readonly StepItem[];
   isSealed: boolean;
   output: StreamItem[];
   groups: Map<string, TGroup>;
@@ -113,10 +115,10 @@ export function prepareGroupedHistory<TGroup>(input: {
 }): GroupedHistory<TGroup> {
   const output: StreamItem[] = [];
   const groups = new Map<string, TGroup>();
-  let pending: ToolCallItem[] = [];
+  let pending: StepItem[] = [];
 
   for (const item of input.tail) {
-    if (isGroupableToolCall(item)) {
+    if (item.kind === "thought" || isGroupableToolCall(item)) {
       pending.push(item);
       continue;
     }
@@ -175,7 +177,7 @@ export function groupLiveToolCalls<TGroup>(input: {
   };
 
   for (const item of input.head) {
-    if (isGroupableToolCall(item)) {
+    if (item.kind === "thought" || isGroupableToolCall(item)) {
       if (pending.length === 0) {
         hostPlacement = "head";
       }

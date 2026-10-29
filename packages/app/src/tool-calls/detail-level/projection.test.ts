@@ -63,6 +63,43 @@ function project(input: {
 }
 
 describe("tool call detail-level projection", () => {
+  it("groups adjacent thinking and tool steps and keeps their original ids", () => {
+    const thought: StreamItem = {
+      kind: "thought",
+      id: "thought",
+      text: "consider",
+      status: "ready",
+      timestamp: new Date(0),
+    };
+    const call = toolCall("1", { type: "shell", command: "test" });
+    const result = project({ level: "overview", head: [thought, call] });
+    const group = result.groupsByHostId.get("thought");
+    expect(group?.run.calls.map((item) => item.id)).toEqual(["thought", "1"]);
+    expect(group?.summary.thoughtCount).toBe(1);
+  });
+  it("joins thinking in history with live tools without replacing the history host", () => {
+    const thought: StreamItem = {
+      kind: "thought",
+      id: "thought",
+      text: "consider",
+      status: "ready",
+      timestamp: new Date(0),
+    };
+    const call = toolCall("1", { type: "shell", command: "test" }, { status: "running" });
+    const result = project({
+      level: "overview",
+      tail: [thought],
+      head: [call],
+      isTurnActive: true,
+    });
+    expect(result.tail.map((item) => item.id)).toEqual(["thought"]);
+    expect(result.head).toEqual([]);
+    expect(result.groupsByHostId.get("thought")?.run.calls.map((item) => item.id)).toEqual([
+      "thought",
+      "1",
+    ]);
+    expect(result.historyGroupUpdatesByHostId.has("thought")).toBe(true);
+  });
   it.each(["detailed", "overview"] as const)(
     "keeps pending approval tools out of %s presentation without removing their canonical position",
     (level) => {
@@ -261,6 +298,8 @@ describe("tool call detail-level projection", () => {
         searchCount: 0,
         otherToolCount: 0,
         paseoCallCount: 0,
+        failedCount: 1,
+        thoughtCount: 0,
       },
     });
   });

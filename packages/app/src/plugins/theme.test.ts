@@ -80,6 +80,10 @@ function installed(serverId: string, themes: PluginThemeContribution[]): Install
 describe("toPluginTheme", () => {
   it("maps the app theme into the plugin color tokens", () => {
     expect(toPluginTheme(lightTheme)).toEqual({
+      spacing: lightTheme.spacing,
+      fontSize: lightTheme.fontSize,
+      borderRadius: lightTheme.borderRadius,
+      borderWidth: lightTheme.borderWidth,
       colors: {
         surface0: lightTheme.colors.surface0,
         surface1: lightTheme.colors.surface1,

@@ -4,6 +4,15 @@ import type { PluginSerializableIcon } from "./icons.js";
 import type { PluginRpcContract } from "./rpc.js";
 
 export interface PluginTheme {
+  readonly spacing?: {
+    readonly 2: number;
+    readonly 3: number;
+    readonly 4: number;
+    readonly 24: number;
+  };
+  readonly fontSize?: { readonly xl: number };
+  readonly borderRadius?: { readonly md: number };
+  readonly borderWidth?: { readonly 1: number };
   readonly colors: {
     readonly surface0: string;
     readonly surface1: string;

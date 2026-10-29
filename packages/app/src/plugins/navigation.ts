@@ -43,7 +43,12 @@ export function createPluginNavigation(input: {
         serverId,
         workspaceId,
         target: { kind: "plugin", pluginId, panelId, context: "agent", agentId },
-        placement: placement(location),
+        placement:
+          pluginId === "vibe-bots" &&
+          panelId === "profile" &&
+          useWorkspaceLayoutStore.getState().layoutMode === "compact"
+            ? undefined
+            : placement(location),
       });
     },
   };

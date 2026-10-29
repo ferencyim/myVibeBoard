@@ -27,6 +27,9 @@ import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
 import { Composer } from "@/composer";
+import { AgentControls } from "@/composer/agent-controls";
+import { ComposerKeyboardScopeProvider, useComposerScopeState } from "@/composer/keyboard-scope";
+import type { ComposerQuote } from "@/composer/quote";
 import {
   useComposerEditingSession,
   useComposerFullscreen,
@@ -80,6 +83,8 @@ import {
 } from "@/screens/agent/agent-ready-screen-bottom-anchor";
 import { WorkspaceDraftAgentTab } from "@/composer/draft/workspace-tab";
 import { AgentTracks, hasAgentTracks } from "@/panels/agent-tracks";
+import { BotConversationHeader, useConversationBot } from "@/panels/bot-conversation-header";
+import { conversationControlsPlacement } from "@/panels/conversation-controls-placement";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
@@ -443,6 +448,15 @@ type AgentLookupState =
   | { tag: "not_found"; message: string }
   | { tag: "error"; message: string };
 
+interface EmptyIdentity {
+  id: string;
+  name: string;
+  title?: string;
+  avatarSeed?: string;
+  avatarHue?: number;
+}
+
+// oxlint-disable-next-line complexity
 function AgentPanelContent({
   serverId,
   workspaceId,
@@ -465,6 +479,23 @@ function AgentPanelContent({
   const runtimeIsConnected = useHostRuntimeIsConnected(runtimeServerId);
   const runtimeConnectionStatus = useHostRuntimeConnectionStatus(runtimeServerId);
   const runtimeLastError = useHostRuntimeLastError(runtimeServerId);
+  const bot = useConversationBot(runtimeServerId, resolvedAgentId ?? "");
+  const emptyIdentity = useMemo(
+    () =>
+      bot
+        ? {
+            id: bot.id,
+            name: bot.name,
+            title: bot.title,
+            avatarSeed: bot.avatarSeed,
+            avatarHue: bot.avatarHue,
+          }
+        : undefined,
+    [bot],
+  );
+  const showsHeader = usePaneContext().host !== "sheet";
+  const editingSession = useComposerEditingSession("chat");
+  const fullscreen = useComposerFullscreen(editingSession);
   const hasCachedAgent = useSessionStore((state) => {
     if (!resolvedServerId || !resolvedAgentId) return false;
     const session = state.sessions[resolvedServerId];
@@ -486,8 +517,8 @@ function AgentPanelContent({
       : runtimeConnectionStatus;
   const lastConnectionError = runtimeLastError;
 
-  if (!resolvedServerId || (!runtimeClient && !hasCachedAgent)) {
-    return (
+  const content =
+    !resolvedServerId || (!runtimeClient && !hasCachedAgent) ? (
       <AgentSessionUnavailableState
         serverLabel={serverLabel}
         connectionStatus={connectionStatus}
@@ -495,23 +526,36 @@ function AgentPanelContent({
         isUnknownDaemon={isUnknownDaemon}
         t={t}
       />
+    ) : (
+      <AgentPanelBody
+        emptyIdentity={emptyIdentity}
+        serverId={resolvedServerId}
+        workspaceId={workspaceId}
+        agentId={resolvedAgentId}
+        isPaneFocused={isPaneFocused}
+        client={runtimeClient}
+        isConnected={runtimeIsConnected}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />
     );
-  }
-
   return (
-    <AgentPanelBody
-      serverId={resolvedServerId}
-      workspaceId={workspaceId}
-      agentId={resolvedAgentId}
-      isPaneFocused={isPaneFocused}
-      client={runtimeClient}
-      isConnected={runtimeIsConnected}
-      onOpenWorkspaceFile={onOpenWorkspaceFile}
-    />
+    <View style={styles.root}>
+      {showsHeader && !fullscreen && resolvedServerId && resolvedAgentId ? (
+        <BotConversationHeader
+          bot={bot}
+          serverId={resolvedServerId}
+          workspaceId={workspaceId}
+          agentId={resolvedAgentId}
+          isPaneFocused={isPaneFocused}
+        />
+      ) : null}
+      {content}
+    </View>
   );
 }
 
 function AgentPanelBody({
+  emptyIdentity,
   serverId,
   workspaceId,
   agentId,
@@ -520,6 +564,7 @@ function AgentPanelBody({
   isConnected,
   onOpenWorkspaceFile,
 }: {
+  emptyIdentity?: EmptyIdentity;
   serverId: string;
   workspaceId: string;
   agentId?: string;
@@ -655,6 +700,7 @@ function AgentPanelBody({
 
   return (
     <ChatAgentContent
+      emptyIdentity={emptyIdentity}
       serverId={serverId}
       workspaceId={workspaceId}
       agentId={agentId}
@@ -667,6 +713,7 @@ function AgentPanelBody({
 }
 
 function ChatAgentContent({
+  emptyIdentity,
   serverId,
   workspaceId,
   agentId,
@@ -675,6 +722,7 @@ function ChatAgentContent({
   isConnected,
   onOpenWorkspaceFile,
 }: {
+  emptyIdentity?: EmptyIdentity;
   serverId: string;
   workspaceId: string;
   agentId?: string;
@@ -1013,6 +1061,7 @@ function ChatAgentContent({
 
   return (
     <ChatAgentReadyContent
+      emptyIdentity={emptyIdentity}
       serverId={serverId}
       workspaceId={workspaceId}
       agentId={agentId}
@@ -1043,6 +1092,7 @@ function ChatAgentContent({
 }
 
 const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
+  emptyIdentity,
   serverId,
   workspaceId,
   agentId,
@@ -1069,6 +1119,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   onAttentionPromptSend,
   onOpenWorkspaceFile,
 }: {
+  emptyIdentity?: EmptyIdentity;
   serverId: string;
   workspaceId: string;
   agentId: string;
@@ -1098,6 +1149,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   const { t } = useTranslation();
   // The workspace sheet is for looking; Open as tab brings the agent back with its composer.
   const showsComposer = usePaneContext().host !== "sheet";
+  const composerScope = useComposerScopeState(isPaneFocused);
   // The dock lays out fullscreen for the same session the composer edits in.
   const composerEditingSession = useComposerEditingSession("chat");
   const isComposerFullscreen = useComposerFullscreen(composerEditingSession);
@@ -1111,6 +1163,31 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     rows: subagentRows,
   });
   const hasPluginComposerPills = useHasPluginComposerPills(serverId, workspaceId, agentId);
+  const quoteKey = JSON.stringify([serverId, agentId]);
+  const [quotes, setQuotes] = useState<Record<string, ComposerQuote>>({});
+  const quote = quotes[quoteKey] ?? null;
+  const handleQuote = useCallback(
+    (value: ComposerQuote | null) => {
+      setQuotes((current) => {
+        if (value) return { ...current, [quoteKey]: value };
+        const next = { ...current };
+        delete next[quoteKey];
+        return next;
+      });
+    },
+    [quoteKey],
+  );
+  const clearQuote = useCallback(
+    (value: ComposerQuote) => {
+      setQuotes((current) => {
+        if (current[quoteKey] !== value) return current;
+        const next = { ...current };
+        delete next[quoteKey];
+        return next;
+      });
+    },
+    [quoteKey],
+  );
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
   const hasVisibleAgentTracks = hasAgentTracks({
     subagentRows,
@@ -1167,6 +1244,12 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   const composerSection = showsComposer ? (
     <RenderProfile id={`AgentComposerSection:${agentId}`}>
       <AgentComposerSection
+        quote={quote}
+        onClearQuote={clearQuote}
+        onSetQuote={handleQuote}
+        hideAgentControls={
+          conversationControlsPlacement(false, isComposerFullscreen, false) !== "composer"
+        }
         agentId={agentId}
         serverId={serverId}
         isPaneFocused={isPaneFocused}
@@ -1185,9 +1268,18 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   ) : null;
   const streamContent = (
     <View style={animatedStaticStyles.content}>
-      {showsComposer ? null : <SheetAgentFacts serverId={serverId} agentId={agentId} />}
+      {showsComposer ? null : (
+        <>
+          <SheetAgentFacts serverId={serverId} agentId={agentId} />
+          <ComposerKeyboardScopeProvider {...composerScope}>
+            <AgentControls serverId={serverId} agentId={agentId} isCompactLayout />
+          </ComposerKeyboardScopeProvider>
+        </>
+      )}
       <RenderProfile id={`AgentStreamSection:${agentId}`}>
         <AgentStreamSection
+          emptyIdentity={emptyIdentity}
+          onQuote={handleQuote}
           streamViewRef={streamViewRef}
           serverId={serverId}
           workspaceId={workspaceId}
@@ -1323,6 +1415,8 @@ function SheetAgentFacts({ serverId, agentId }: { serverId: string; agentId: str
 }
 
 const AgentStreamSection = memo(function AgentStreamSection({
+  emptyIdentity,
+  onQuote,
   streamViewRef,
   serverId,
   workspaceId,
@@ -1335,6 +1429,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
   toast,
   onOpenWorkspaceFile,
 }: {
+  emptyIdentity?: EmptyIdentity;
+  onQuote: (quote: ComposerQuote) => void;
   streamViewRef: React.RefObject<AgentStreamViewHandle | null>;
   serverId: string;
   workspaceId: string;
@@ -1404,6 +1500,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
 
   return (
     <AgentStreamView
+      emptyIdentity={emptyIdentity}
+      onQuote={onQuote}
       ref={streamViewRef}
       agentId={agent.id}
       serverId={serverId}
@@ -1423,6 +1521,10 @@ const AgentStreamSection = memo(function AgentStreamSection({
 });
 
 const AgentComposerSection = memo(function AgentComposerSection({
+  quote,
+  onClearQuote,
+  onSetQuote,
+  hideAgentControls,
   agentId,
   serverId,
   isPaneFocused,
@@ -1437,6 +1539,10 @@ const AgentComposerSection = memo(function AgentComposerSection({
   onComposerHeightChange,
   onMessageSent,
 }: {
+  quote: ComposerQuote | null;
+  onClearQuote: (quote: ComposerQuote) => void;
+  onSetQuote: (quote: ComposerQuote | null) => void;
+  hideAgentControls: boolean;
   agentId?: string;
   serverId: string;
   isPaneFocused: boolean;
@@ -1463,6 +1569,10 @@ const AgentComposerSection = memo(function AgentComposerSection({
 
   return (
     <ActiveAgentComposer
+      quote={quote}
+      onClearQuote={onClearQuote}
+      onSetQuote={onSetQuote}
+      hideAgentControls={hideAgentControls}
       agentId={agentId}
       serverId={serverId}
       isPaneFocused={isPaneFocused}
@@ -1479,6 +1589,10 @@ const AgentComposerSection = memo(function AgentComposerSection({
 });
 
 function ActiveAgentComposer({
+  quote,
+  onClearQuote,
+  onSetQuote,
+  hideAgentControls,
   agentId,
   serverId,
   isPaneFocused,
@@ -1491,6 +1605,10 @@ function ActiveAgentComposer({
   onComposerHeightChange,
   onMessageSent,
 }: {
+  quote: ComposerQuote | null;
+  onClearQuote: (quote: ComposerQuote) => void;
+  onSetQuote: (quote: ComposerQuote | null) => void;
+  hideAgentControls: boolean;
   agentId: string;
   serverId: string;
   isPaneFocused: boolean;
@@ -1579,6 +1697,10 @@ function ActiveAgentComposer({
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
       <Composer
+        quote={quote}
+        onClearQuote={onClearQuote}
+        onSetQuote={onSetQuote}
+        hideAgentControls={hideAgentControls}
         agentId={agentId}
         serverId={serverId}
         workspaceId={workspaceId}

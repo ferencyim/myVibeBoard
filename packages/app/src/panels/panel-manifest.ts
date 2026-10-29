@@ -136,7 +136,10 @@ const manifests = {
     supportedHosts: ["main", "explorer"],
     showCloseButton: true,
     singleton: false,
-    compactSheet: null,
+    compactSheet: (target) =>
+      target.pluginId === "vibe-bots" && target.panelId === "profile" && target.context === "agent"
+        ? { openAsTab: false }
+        : null,
     resourceKey: (target) =>
       target.context === "agent"
         ? `${target.pluginId}:${target.panelId}:agent:${target.agentId}`

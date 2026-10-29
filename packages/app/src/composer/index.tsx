@@ -10,6 +10,7 @@ import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   View,
+  ScrollView,
   Pressable,
   Text,
   StyleSheet as RNStyleSheet,
@@ -31,7 +32,6 @@ import {
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { usePanelStore } from "@/stores/panel-store";
 import { useHasFinePointer } from "@/hooks/use-fine-pointer";
 import { useShallow } from "zustand/shallow";
 import {
@@ -114,13 +114,25 @@ import {
 } from "@/attachments/service";
 import { resolveAgentControlsMode } from "@/composer/agent-controls/mode";
 import { resolveComposerInputMode, type ComposerInputMode } from "@/composer/input-mode";
+import {
+  decodeComposerQuote,
+  encodeComposerQuote,
+  finishQuotedSubmission,
+  restoreQuotedDraft,
+  type ComposerQuote,
+} from "@/composer/quote";
+import { ComposerQuoteChip } from "@/composer/quote-chip";
 import { resolveActiveSendBehavior } from "./input/state";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 import { agentInputOfflineError, submitAgentInput } from "@/composer/submit";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
-import { ComposerKeyboardScopeProvider, useComposerKeyboardScope } from "@/composer/keyboard-scope";
+import {
+  ComposerKeyboardScopeProvider,
+  useComposerKeyboardScope,
+  useComposerScopeState,
+} from "@/composer/keyboard-scope";
 import { useAppSettings } from "@/hooks/use-settings";
 import { RenderProfile } from "@/utils/render-profiler";
 import { AfterPaintPublication } from "@/composer/after-paint-publication";
@@ -343,9 +355,14 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
   } = args;
   if (selectedAttachments.length === 0 && pendingFiles.length === 0) return null;
   return (
-    <View style={styles.attachmentTray} testID="composer-attachment-tray">
-      {selectedAttachments.map((attachment, index) =>
-        renderComposerAttachmentPill({
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.attachmentTray}
+      testID="composer-attachment-tray"
+    >
+      {selectedAttachments.map((attachment, index) => {
+        const pill = renderComposerAttachmentPill({
           serverId,
           attachment,
           index,
@@ -353,18 +370,26 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
           onOpen: handleOpenAttachment,
           onRemove: handleRemoveAttachment,
           labels,
-        }),
-      )}
+        });
+        return (
+          <View key={pill.key} style={styles.attachmentTile}>
+            {pill}
+          </View>
+        );
+      })}
       {pendingFiles.map(({ id, file }) => (
-        <AttachmentFrame key={id} testID="composer-pending-file-attachment">
-          <AttachmentLabel
-            icon={pendingFilePillIcon}
-            title={file.fileName}
-            subtitle={getFileTypeLabel(file.fileName) ?? ""}
-          />
-        </AttachmentFrame>
+        <View key={id} style={styles.attachmentTile}>
+          <AttachmentFrame testID="composer-pending-file-attachment">
+            <AttachmentLabel
+              composer
+              icon={pendingFilePillIcon}
+              title={file.fileName}
+              subtitle={getFileTypeLabel(file.fileName) ?? ""}
+            />
+          </AttachmentFrame>
+        </View>
       ))}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -673,6 +698,7 @@ function QueuedMessageRow({
   editLabel,
   sendNowLabel,
 }: QueuedMessageRowProps) {
+  const decodedQuote = decodeComposerQuote(item.text);
   const handleEdit = useCallback(() => {
     onEdit(item.id);
   }, [onEdit, item.id]);
@@ -682,7 +708,7 @@ function QueuedMessageRow({
   return (
     <View style={styles.queueItem}>
       <Text style={styles.queueText} numberOfLines={2} ellipsizeMode="tail">
-        {item.text}
+        {decodedQuote ? decodedQuote.text || decodedQuote.quote.text : item.text}
       </Text>
       <View style={styles.queueActions}>
         <Pressable
@@ -740,7 +766,7 @@ function ImageAttachmentPill({
       removeAccessibilityLabel={removeLabel}
       disabled={disabled}
     >
-      <AttachmentThumbnail metadata={attachment.metadata} />
+      <AttachmentThumbnail metadata={attachment.metadata} composer />
     </AttachmentPill>
   );
 }
@@ -789,6 +815,7 @@ function GithubAttachmentPill({
       disabled={disabled}
     >
       <AttachmentLabel
+        composer
         icon={isChangeRequest ? githubPrPillIcon : githubIssuePillIcon}
         title={item.title}
         subtitle={`${subtitleKind} ${numberPrefix}${item.number}`}
@@ -827,6 +854,7 @@ function FileAttachmentPill({
       disabled={disabled}
     >
       <AttachmentLabel
+        composer
         icon={filePillIcon}
         title={fileName}
         subtitle={getFileTypeLabel(fileName) ?? t("message.attachments.file")}
@@ -864,6 +892,7 @@ function WorkspaceFileAttachmentPill({
       disabled={disabled}
     >
       <AttachmentLabel
+        composer
         icon={filePillIcon}
         title={fileName}
         subtitle={getWorkspaceFileAttachmentSubtitle(attachment)}
@@ -962,6 +991,11 @@ interface ComposerProps {
   onAttentionPromptSend?: () => void;
   /** Controlled agent controls rendered in input area (draft flows). */
   agentControls?: DraftAgentControlsProps;
+  quote?: ComposerQuote | null;
+  onClearQuote?: (quote: ComposerQuote) => void;
+  onSetQuote?: (quote: ComposerQuote | null) => void;
+  /** Live controls are displayed in the conversation header. */
+  hideAgentControls?: boolean;
   /** Extra styles merged onto the message input wrapper (e.g. elevated background). */
   inputWrapperStyle?: import("react-native").ViewStyle;
   /** Optional panel/container layout breakpoint. Defaults to the screen breakpoint. */
@@ -1204,14 +1238,9 @@ export function Composer({ isPaneFocused, ...props }: ComposerProps) {
   // not when its motion settles, so the exit action and autocomplete never race it.
   // Pane focus stays put, so the keyboard the panel dismisses is a blur in the
   // user's own pane: closing the panel does not bring focus back.
-  const isCompact = useIsCompactFormFactor();
-  const overlayPanelRequested = usePanelStore((state) => state.mobilePanel.target !== "agent");
-  const coveredByOverlayPanel = isCompact && overlayPanelRequested;
+  const scope = useComposerScopeState(isPaneFocused);
   return (
-    <ComposerKeyboardScopeProvider
-      isPaneFocused={isPaneFocused}
-      isActiveComposer={isPaneFocused && !coveredByOverlayPanel}
-    >
+    <ComposerKeyboardScopeProvider {...scope}>
       <RenderProfile id="ComposerContent">
         <ComposerContent {...props} />
       </RenderProfile>
@@ -1259,6 +1288,10 @@ function ComposerContentImpl({
   onAttentionInputFocus,
   onAttentionPromptSend,
   agentControls,
+  quote,
+  onClearQuote,
+  onSetQuote,
+  hideAgentControls = false,
   inputWrapperStyle,
   isCompactLayout: isCompactLayoutOverride,
   inputMode = "chat",
@@ -1639,12 +1672,13 @@ function ComposerContentImpl({
         attachments: queuedAttachments,
         queue: queueWriter,
       });
-      if (!result.queued) return;
+      if (!result.queued) return false;
 
       replaceUserInput("");
       setSelectedAttachments([]);
       resetSuppression();
       clearSentAttachments(queuedAttachments);
+      return true;
     },
     [
       agentId,
@@ -1661,6 +1695,7 @@ function ComposerContentImpl({
       outgoingMessage: string,
       outgoingAttachments: ComposerAttachment[],
       forceSend?: boolean,
+      submittedQuote?: ComposerQuote | null,
     ) => {
       const result = await submitAgentInput({
         message: outgoingMessage,
@@ -1684,7 +1719,8 @@ function ComposerContentImpl({
           await submitMessage(submitText, submitAttachments);
         },
         clearDraft,
-        setUserInput: replaceUserInput,
+        setUserInput: (text) =>
+          replaceUserInput(restoreQuotedDraft(text, outgoingMessage, submittedQuote)),
         setAttachments: (nextAttachments) => {
           setSelectedAttachments(composerWorkspaceAttachment.userAttachmentsOnly(nextAttachments));
         },
@@ -1699,6 +1735,7 @@ function ComposerContentImpl({
         result,
         outgoingAttachments,
       });
+      finishQuotedSubmission(result, submittedQuote, onClearQuote);
     },
     [
       allowEmptySubmit,
@@ -1709,6 +1746,7 @@ function ComposerContentImpl({
       hasAgent,
       isConnected,
       isAgentRunning,
+      onClearQuote,
       queueMessage,
       setSelectedAttachments,
       replaceUserInput,
@@ -1729,14 +1767,14 @@ function ComposerContentImpl({
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
-        hasAttachments: outgoingAttachments.length > 0,
+        hasAttachments: outgoingAttachments.length > 0 || Boolean(quote),
       });
       if (clientSlashCommand && runClientSlashCommand(clientSlashCommand)) {
         return;
       }
       const pluginSlashCommand = resolvePluginClientSlashCommand({
         text: payload.text,
-        hasAttachments: outgoingAttachments.length > 0,
+        hasAttachments: outgoingAttachments.length > 0 || Boolean(quote),
         commands: pluginClientSlashCommands,
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
@@ -1744,7 +1782,12 @@ function ComposerContentImpl({
       if (blurOnSubmit) {
         messageInputRef.current?.blur();
       }
-      void sendMessageWithContent(payload.text, outgoingAttachments, payload.forceSend);
+      void sendMessageWithContent(
+        quote ? encodeComposerQuote(quote, payload.text) : payload.text,
+        outgoingAttachments,
+        payload.forceSend,
+        quote,
+      );
     },
     [
       hasAgent,
@@ -1754,6 +1797,7 @@ function ComposerContentImpl({
       buildOutgoingAttachments,
       runClientSlashCommand,
       pluginClientSlashCommands,
+      quote,
       runPluginClientSlashCommand,
       sendMessageWithContent,
     ],
@@ -1954,10 +1998,12 @@ function ComposerContentImpl({
         queue: queueWriter,
       });
       if (!result) return;
-      replaceUserInput(result.text);
+      const decoded = decodeComposerQuote(result.text);
+      replaceUserInput(decoded && onSetQuote ? decoded.text : result.text);
+      onSetQuote?.(decoded?.quote ?? null);
       setSelectedAttachments(result.attachments);
     },
-    [agentId, queueWriter, replaceUserInput, setSelectedAttachments],
+    [agentId, onSetQuote, queueWriter, replaceUserInput, setSelectedAttachments],
   );
 
   const handleSendQueuedNow = useCallback(
@@ -1996,18 +2042,22 @@ function ComposerContentImpl({
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
-        hasAttachments: outgoingAttachments.length > 0,
+        hasAttachments: outgoingAttachments.length > 0 || Boolean(quote),
       });
       if (clientSlashCommand && runClientSlashCommand(clientSlashCommand)) {
         return;
       }
       const pluginSlashCommand = resolvePluginClientSlashCommand({
         text: payload.text,
-        hasAttachments: outgoingAttachments.length > 0,
+        hasAttachments: outgoingAttachments.length > 0 || Boolean(quote),
         commands: pluginClientSlashCommands,
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
-      queueMessage(payload.text, outgoingAttachments);
+      const queued = queueMessage(
+        quote ? encodeComposerQuote(quote, payload.text) : payload.text,
+        outgoingAttachments,
+      );
+      if (quote && queued) onClearQuote?.(quote);
     },
     [
       hasAgent,
@@ -2015,6 +2065,8 @@ function ComposerContentImpl({
       attachments,
       buildOutgoingAttachments,
       pluginClientSlashCommands,
+      quote,
+      onClearQuote,
       queueMessage,
       runClientSlashCommand,
       runPluginClientSlashCommand,
@@ -2251,7 +2303,9 @@ function ComposerContentImpl({
           serverId,
           focusInput,
           isCompactLayout,
-          showAgentControls: mode.showAgentControls,
+          showAgentControls:
+            mode.showAgentControls &&
+            (!hideAgentControls || resolveAgentControlsMode(agentControls) === "draft"),
         })}
         {mode.showAttachments ? (
           <PromptLibraryComposerButton serverId={serverId} onInsert={insertPromptAtCursor} />
@@ -2262,6 +2316,7 @@ function ComposerContentImpl({
       agentControls,
       agentId,
       focusInput,
+      hideAgentControls,
       insertPromptAtCursor,
       isCompactLayout,
       mode.showAgentControls,
@@ -2475,6 +2530,9 @@ function ComposerContentImpl({
           <View style={inputAreaContentStyle}>
             {isFullscreen ? null : queueList}
             {!isFullscreen && sendErrorNode}
+            {quote && onClearQuote ? (
+              <ComposerQuoteChip quote={quote} onClear={onClearQuote} />
+            ) : null}
 
             <View ref={messageInputContainerRef} style={messageInputContainerStyle}>
               <ComposerAutocompleteBinding
@@ -2601,8 +2659,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
     alignItems: "center",
     width: "100%",
     overflow: "visible",
-    paddingHorizontal: theme.spacing[4],
-    paddingBottom: theme.spacing[4],
+    paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[1.5] },
+    paddingBottom: { xs: theme.spacing[4], md: theme.spacing[1.5] },
   },
   inputAreaLocked: {
     opacity: 0.6,
@@ -2632,10 +2690,10 @@ const styles = StyleSheet.create((theme: Theme) => ({
     gap: theme.spacing[3],
   },
   cancelButton: {
-    width: 28,
-    height: 28,
+    width: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
+    height: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.palette.red[600],
+    backgroundColor: theme.colors.destructive,
     alignItems: "center",
     justifyContent: "center",
     marginLeft: theme.spacing[1],
@@ -2653,8 +2711,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
     justifyContent: "center",
   },
   realtimeVoiceButton: {
-    width: 28,
-    height: 28,
+    width: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
+    height: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
@@ -2663,8 +2721,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
     marginLeft: theme.spacing[1],
   },
   realtimeVoiceButtonActive: {
-    backgroundColor: theme.colors.palette.green[600],
-    borderColor: theme.colors.palette.green[800],
+    backgroundColor: theme.colors.success,
+    borderColor: theme.colors.success,
   },
   iconButtonHovered: {
     backgroundColor: theme.colors.surface2,
@@ -2672,7 +2730,12 @@ const styles = StyleSheet.create((theme: Theme) => ({
   attachmentTray: {
     flexDirection: "row",
     gap: theme.spacing[2],
-    flexWrap: "wrap",
+    padding: theme.spacing[2],
+  },
+  attachmentTile: {
+    width: { xs: theme.spacing[24] + theme.spacing[6], md: undefined },
+    height: { xs: theme.spacing[24] + theme.spacing[6], md: undefined },
+    justifyContent: "center",
   },
   tooltipRow: {
     flexDirection: "row",
@@ -2724,8 +2787,12 @@ const styles = StyleSheet.create((theme: Theme) => ({
     backgroundColor: theme.colors.accent,
   },
   sendErrorText: {
-    color: theme.colors.palette.red[500],
+    color: theme.colors.statusDanger,
     fontSize: theme.fontSize.base,
+    backgroundColor: theme.colors.dangerSoft,
+    borderRadius: theme.borderRadius.md,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
   },
 })) as unknown as Record<string, object>;
 

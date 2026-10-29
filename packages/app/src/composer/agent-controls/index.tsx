@@ -164,6 +164,7 @@ export interface DraftAgentControlsProps {
 interface AgentControlsProps {
   agentId: string;
   serverId: string;
+  registrationOnly?: boolean;
   onDropdownClose?: () => void;
   isCompactLayout?: boolean;
 }
@@ -1549,9 +1550,11 @@ function ThinkingComboboxOption({
   );
 }
 
+// oxlint-disable-next-line complexity
 export const AgentControls = memo(function AgentControls({
   agentId,
   serverId,
+  registrationOnly = false,
   onDropdownClose,
   isCompactLayout,
 }: AgentControlsProps) {
@@ -1788,6 +1791,8 @@ export const AgentControls = memo(function AgentControls({
   if (!agent) {
     return null;
   }
+
+  if (registrationOnly) return commandCenterRegistration;
 
   return (
     <>
