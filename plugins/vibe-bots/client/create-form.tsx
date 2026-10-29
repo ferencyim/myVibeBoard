@@ -1,16 +1,15 @@
+/* eslint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-array-as-prop -- Small plugin form; option lists depend on the loaded catalog. */
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { Modal, SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Text, TextInput, View } from "react-native";
 import { modelsListRpc } from "../shared/rpc";
-import { Pressable } from "react-native";
-function Button({ theme, label, onPress, disabled }: { theme: PluginTheme; label: string; onPress(): void; disabled?: boolean }) {
-  const styles = useMemo(() => ({ button: { padding: 10, opacity: disabled ? 0.5 : 1 }, text: { color: theme.colors.foreground } }), [theme, disabled]);
-  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={styles.button}><Text style={styles.text}>{label}</Text></Pressable>;
-}
 import { modelChoices, suggestedModel } from "./create-model";
+import { INSTRUCTIONS_MAX, NAME_MAX, TITLE_MAX } from "./profile-mapping";
+import { Caption, ControlRow, ErrorLine, Field, Group, KitProvider, OutlineButton, TextArea } from "./settings-kit";
+
+const contentStyle = { padding: 16, gap: 16 } as const;
 
 export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmit }: {
   theme: PluginTheme; projectId?: string; busy: boolean; error?: string; onCancel(): void;
@@ -18,7 +17,7 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
 }) {
   const list = useRpc(modelsListRpc);
   const [refreshing, setRefreshing] = useState(false);
-  const catalog = useQuery({ queryKey: ["vibe-bots", "create-models", projectId], queryFn: () => list({ projectId }), refetchInterval: refreshing ? 3000 : false });
+  const catalog = useQuery({ queryKey: ["vibe-bots", "create-models", projectId], queryFn: () => list({ projectId }), staleTime: 60_000, refetchInterval: refreshing ? 3000 : false });
   const [refreshError, setRefreshError] = useState("");
   const refreshModels = useCallback(() => {
     setRefreshing(true); setRefreshError("");
@@ -44,13 +43,6 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   }, [catalog.data, initialized]);
   const selectedProvider = catalog.data?.providers.find((item) => item.provider === provider);
   const selectedModel = selectedProvider?.models.find((item) => item.id === model);
-  const styles = useMemo(() => ({
-    input: { color: theme.colors.foreground, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 10 },
-    description: { color: theme.colors.foreground, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 10, minHeight: 80 },
-    content: { padding: 16, gap: 12 },
-    muted: { color: theme.colors.foregroundMuted },
-    danger: { color: theme.colors.statusDanger }, fields: { gap: 8 },
-  }), [theme]);
   const presets = useMemo(() => [{ label: "直接选择模型", value: "" }, ...(catalog.data?.presets ?? []).map((p) => ({ label: p.name, value: p.id }))], [catalog.data]);
   const providers = useMemo(() => [{ label: "请选择 provider", value: "" }, ...(catalog.data?.providers ?? []).map((p) => ({ label: p.provider, value: p.provider }))], [catalog.data]);
   const modelOptions = useMemo(() => modelChoices(selectedProvider?.models, !!provider && !catalog.isLoading), [selectedProvider, provider, catalog.isLoading]);
@@ -59,26 +51,27 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   const changeModel = useCallback((v: string) => { setModel(v); setThinking(""); }, []);
   const submit = useCallback(() => onSubmit({ name: name.trim(), title, instructions, presetId: presetId || null, provider: presetId ? null : provider, model: presetId ? null : model, thinking }), [onSubmit, name, title, instructions, presetId, provider, model, thinking]);
   const closeModal = useCallback((open: boolean) => { if (!open) onCancel(); }, [onCancel]);
-  const canSubmit = presetId || (provider && model);
+  const canSubmit = !!presetId || (!!provider && !!model);
   return <Modal title={`新建${projectId ? "项目 " : ""}bot`} open onOpenChange={closeModal}>
-    <Modal.Content contentContainerStyle={styles.content}>
-      <TextInput accessibilityLabel="名字" placeholder="名字（必填）" placeholderTextColor={theme.colors.foregroundMuted} value={name} onChangeText={setName} maxLength={100} style={styles.input} />
-      <TextInput accessibilityLabel="头衔" placeholder="头衔（可选）" placeholderTextColor={theme.colors.foregroundMuted} value={title} onChangeText={setTitle} maxLength={200} style={styles.input} />
-      <TextInput accessibilityLabel="角色说明" placeholder="角色说明（可选，也可稍后编辑）" placeholderTextColor={theme.colors.foregroundMuted} value={instructions} onChangeText={setInstructions} multiline maxLength={30000} style={styles.description} />
-      <Text style={styles.muted}>{catalog.isLoading ? "正在读取缓存模型…" : "缓存目录没有价格信息，无法确定最低价；请确认或选择合适的模型。"}</Text>
-      {catalog.error ? <Text style={styles.danger}>模型目录加载失败：{String(catalog.error)}</Text> : null}
-      <Button theme={theme} label={refreshing ? "正在刷新模型列表…" : "刷新模型列表"} disabled={refreshing} onPress={refreshModels} />
-      {refreshError ? <Text style={styles.danger}>刷新模型列表失败：{refreshError}</Text> : null}
-      <SettingsSelect label="预设" value={presetId} options={presets} onValueChange={setPresetId} />
-      {!presetId ? <View style={styles.fields}>
-        <SettingsSelect label="Provider" value={provider} options={providers} onValueChange={changeProvider} />
-        {provider && !catalog.isLoading && !selectedProvider?.models.length ? <Text style={styles.muted}>暂无缓存模型（可稍后重试或改选其它 provider）</Text> : null}
-        <SettingsSelect label="模型" value={model} options={modelOptions} onValueChange={changeModel} />
-        <SettingsSelect label="思考强度" value={thinking} options={thinkingOptions} onValueChange={setThinking} />
-      </View> : null}
-      {error ? <Text accessibilityRole="alert" style={styles.danger}>{error}</Text> : null}
-      <Button theme={theme} label={busy ? "正在新建…" : "确认新建"} disabled={busy || !name.trim() || !canSubmit} onPress={submit} />
-      <Button theme={theme} label="取消" disabled={busy} onPress={onCancel} />
+    <Modal.Content contentContainerStyle={contentStyle}>
+      <KitProvider theme={theme}>
+        <Field label="名字" value={name} onChangeText={setName} placeholder="必填" maxLength={NAME_MAX} />
+        <Field label="头衔" value={title} onChangeText={setTitle} placeholder="这个 bot 负责什么（可选）" maxLength={TITLE_MAX} />
+        <TextArea label="角色说明" value={instructions} onChangeText={setInstructions} placeholder="可选，也可稍后编辑" error={instructions.length > INSTRUCTIONS_MAX ? `最多 ${INSTRUCTIONS_MAX} 个字符` : null} />
+        <Group title="模型">
+          <ControlRow icon="Cpu" label="预设"><SettingsSelect inline label="预设" value={presetId} options={presets} onValueChange={setPresetId} /></ControlRow>
+          {!presetId ? <ControlRow label="Provider"><SettingsSelect inline label="Provider" value={provider} options={providers} onValueChange={changeProvider} /></ControlRow> : null}
+          {!presetId ? <ControlRow label="模型"><SettingsSelect inline label="模型" value={model} options={modelOptions} onValueChange={changeModel} /></ControlRow> : null}
+          {!presetId ? <ControlRow icon="Brain" label="思考强度"><SettingsSelect inline label="思考强度" value={thinking} options={thinkingOptions} onValueChange={setThinking} /></ControlRow> : null}
+          <ControlRow label="模型列表"><OutlineButton label={refreshing ? "正在刷新…" : "刷新"} disabled={refreshing} onPress={refreshModels} /></ControlRow>
+        </Group>
+        <Caption>{catalog.isLoading ? "正在读取缓存模型…" : "缓存目录没有价格信息，无法确定最低价；请确认或选择合适的模型。"}</Caption>
+        {catalog.error ? <ErrorLine error={`模型目录加载失败：${String(catalog.error)}`} /> : null}
+        {refreshError ? <ErrorLine error={`刷新模型列表失败：${refreshError}`} /> : null}
+        <ErrorLine error={error} />
+        <OutlineButton label={busy ? "正在新建…" : "确认新建"} disabled={busy || !name.trim() || !canSubmit} onPress={submit} />
+        <OutlineButton label="取消" disabled={busy} onPress={onCancel} />
+      </KitProvider>
     </Modal.Content>
   </Modal>;
 }
