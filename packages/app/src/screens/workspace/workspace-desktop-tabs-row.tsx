@@ -108,7 +108,7 @@ const PANE_MAXIMIZE_ACTION_RESERVED_WIDTH = smallIconButtonChromeFrameSize(false
 // the wrong width. Keep them together.
 // Tabs and the adjacent New Tab trigger are one control family. Keep their outer box and corner
 // token identical; only their horizontal sizing differs (content-width chip versus square icon).
-const TAB_CHIP_HORIZONTAL_PADDING = 8;
+const TAB_CHIP_HORIZONTAL_PADDING = 10;
 const TAB_CHIP_GAP = 4;
 const TAB_ROW_PADDING_HORIZONTAL = 4;
 const TAB_ICON_WIDTH = 14;
@@ -697,17 +697,7 @@ function TabHandleContent({
       {showLabel && presentation.titleState === "loading" ? (
         <View style={tabLabelSkeletonStyle} />
       ) : null}
-      {showLabel && presentation.titleState !== "loading" && presentation.flow ? (
-        <View style={styles.flowText}>
-          <Text style={[styles.flowTitle, isHighlighted && styles.tabLabelActive]}>
-            {presentation.label.split(" · ")[0]}
-          </Text>
-          <Text style={styles.flowDetails}>
-            {presentation.label.split(" · ").slice(1).join(" · ")}
-          </Text>
-        </View>
-      ) : null}
-      {showLabel && presentation.titleState !== "loading" && !presentation.flow ? (
+      {showLabel && presentation.titleState !== "loading" ? (
         <Text style={tabLabelStyle} selectable={false} numberOfLines={1} ellipsizeMode="tail">
           {presentation.label}
         </Text>
@@ -808,7 +798,6 @@ function TabChip({
   const tabChipStyle = useCallback(
     () => [
       styles.tab,
-      presentation.flow && styles.flowTab,
       isFilled && styles.tabFill(chipBackdrop),
       isWeb && isDragging && ({ cursor: "grabbing" } as object),
       {
@@ -817,7 +806,7 @@ function TabChip({
         maxWidth: resolvedTabWidth,
       },
     ],
-    [chipBackdrop, isDragging, isFilled, presentation.flow, resolvedTabWidth],
+    [chipBackdrop, isDragging, isFilled, resolvedTabWidth],
   );
 
   const handleTabPointerEnter = useCallback(() => {
@@ -961,6 +950,9 @@ function TabChip({
           pages={openWith.pages}
           testID={contextMenuTestId}
         >
+          {presentation.flow && isNative ? (
+            <ContextMenuItem disabled>{tooltipLabel}</ContextMenuItem>
+          ) : null}
           {menuEntries.map((entry) => {
             if (entry.kind === "separator") return <ContextMenuSeparator key={entry.key} />;
             if (entry.kind === "file-panel-open-with") {
@@ -1074,6 +1066,7 @@ function ResolvedWorkspaceDesktopTabsRow({
   const [tabsContainerWidth, setTabsContainerWidth] = useState<number>(0);
   const tabsScrollRef = useRef<ScrollView>(null);
   const [exitFocusModeWidth, setExitFocusModeWidth] = useState<number>(0);
+  const [hoveredTabIndex, setHoveredTabIndex] = useState<number | null>(null);
   const tabScrollBoundary = useHorizontalScrollBoundary();
   const [labelMeasurements, setLabelMeasurements] = useState(
     () => new Map<string, WorkspaceTabLabelMeasurement>(),
@@ -1105,20 +1098,14 @@ function ResolvedWorkspaceDesktopTabsRow({
       ),
       rowPaddingHorizontal: TAB_ROW_PADDING_HORIZONTAL,
       tabGap: TAB_CHIP_GAP,
-      minTabWidth: hasFlowTabs ? 220 : TAB_MIN_WIDTH,
-      maxTabWidth: hasFlowTabs ? 360 : TAB_MAX_WIDTH,
+      minTabWidth: TAB_MIN_WIDTH,
+      maxTabWidth: TAB_MAX_WIDTH,
       tabIconWidth: TAB_ICON_WIDTH,
       tabContentGap: TAB_CONTENT_GAP,
       tabHorizontalPadding: TAB_CHIP_HORIZONTAL_PADDING,
       closeButtonWidth: TAB_CLOSE_BUTTON_RESERVED_WIDTH,
     }),
-    [
-      exitFocusModeWidth,
-      focusModeEnabled,
-      showPaneMaximizeAction,
-      showPaneSplitActions,
-      hasFlowTabs,
-    ],
+    [exitFocusModeWidth, focusModeEnabled, showPaneMaximizeAction, showPaneSplitActions],
   );
 
   const panePanelKinds = useMemo(() => tabs.map(({ tab }) => tab.kind), [tabs]);
@@ -1255,6 +1242,81 @@ function ResolvedWorkspaceDesktopTabsRow({
     }
   }, [layout.requiresHorizontalScrollFallback]);
 
+  const activeTabIndex = displayedTabs.findIndex((item) => item.isActive);
+  useEffect(() => {
+    if (!hasFlowTabs || !layout.requiresHorizontalScrollFallback || activeTabIndex < 0) return;
+    const left =
+      TAB_ROW_PADDING_HORIZONTAL +
+      layout.items
+        .slice(0, activeTabIndex)
+        .reduce((sum, item) => sum + item.width + TAB_CHIP_GAP, 0);
+    const width = layout.items[activeTabIndex]?.width ?? 0;
+    tabsScrollRef.current?.scrollTo({
+      x: Math.max(
+        0,
+        left + width / 2 - (tabsContainerWidth - layoutMetrics.actionsReservedWidth) / 2,
+      ),
+      animated: true,
+    });
+  }, [
+    activeTabIndex,
+    hasFlowTabs,
+    layout.items,
+    layout.requiresHorizontalScrollFallback,
+    layoutMetrics.actionsReservedWidth,
+    tabsContainerWidth,
+  ]);
+
+  useEffect(() => {
+    if (!isWeb || !hasFlowTabs || !layout.requiresHorizontalScrollFallback) return;
+    const node = tabsScrollRef.current?.getScrollableNode() as unknown as HTMLElement | null;
+    if (!node) return;
+    let startX = 0;
+    let startScroll = 0;
+    let dragging = false;
+    let moved = false;
+    const wheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+        node.scrollLeft += event.deltaY;
+        event.preventDefault();
+      }
+    };
+    const down = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse" || event.button !== 0) return;
+      startX = event.clientX;
+      startScroll = node.scrollLeft;
+      dragging = true;
+      moved = false;
+    };
+    const move = (event: PointerEvent) => {
+      if (!dragging) return;
+      if (Math.abs(event.clientX - startX) > 4) moved = true;
+      if (moved) node.scrollLeft = startScroll - (event.clientX - startX);
+    };
+    const up = () => {
+      dragging = false;
+    };
+    const click = (event: MouseEvent) => {
+      if (moved) {
+        event.preventDefault();
+        event.stopPropagation();
+        moved = false;
+      }
+    };
+    node.addEventListener("wheel", wheel, { passive: false });
+    node.addEventListener("pointerdown", down);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    node.addEventListener("click", click, true);
+    return () => {
+      node.removeEventListener("wheel", wheel);
+      node.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      node.removeEventListener("click", click, true);
+    };
+  }, [hasFlowTabs, layout.requiresHorizontalScrollFallback]);
+
   const handleDragEnd = useCallback(
     (nextTabs: ResolvedWorkspaceDesktopTabRowItem[]) => {
       onReorderTabs(nextTabs.map((tab) => tab.tab));
@@ -1325,6 +1387,15 @@ function ResolvedWorkspaceDesktopTabsRow({
           serverId={normalizedServerId}
           workspaceId={normalizedWorkspaceId}
           item={item}
+          showSeparator={
+            hasFlowTabs &&
+            index > 0 &&
+            !item.isActive &&
+            !displayedTabs[index - 1]?.isActive &&
+            hoveredTabIndex !== index &&
+            hoveredTabIndex !== index - 1
+          }
+          onTabHover={setHoveredTabIndex}
           isFocused={isFocused}
           isDragging={isActive}
           index={index}
@@ -1354,6 +1425,9 @@ function ResolvedWorkspaceDesktopTabsRow({
     },
     [
       activeDragTabId,
+      hasFlowTabs,
+      hoveredTabIndex,
+      displayedTabs,
       isFocused,
       layout.closeButtonPolicy,
       layout.items,
@@ -1374,7 +1448,6 @@ function ResolvedWorkspaceDesktopTabsRow({
       setHoveredCloseTabKey,
       tabMenuLabels,
       tabDropPreviewIndex,
-      displayedTabs.length,
     ],
   );
 
@@ -1495,6 +1568,8 @@ function ResolvedDesktopTabChip({
   serverId,
   workspaceId,
   item,
+  showSeparator,
+  onTabHover,
   isFocused,
   isDragging,
   index,
@@ -1523,6 +1598,8 @@ function ResolvedDesktopTabChip({
   serverId: string;
   workspaceId: string;
   item: ResolvedWorkspaceDesktopTabRowItem;
+  showSeparator: boolean;
+  onTabHover: (index: number | null) => void;
   isFocused: boolean;
   isDragging: boolean;
   index: number;
@@ -1597,8 +1674,16 @@ function ResolvedDesktopTabChip({
       ? formatAgentTooltipTitle(accessibilityLabel)
       : rawTooltipLabel;
 
+  const handlePointerEnter = useCallback(() => onTabHover(index), [index, onTabHover]);
+  const handlePointerLeave = useCallback(() => onTabHover(null), [onTabHover]);
+
   return (
-    <View style={styles.tabSlot}>
+    <View
+      style={styles.tabSlot}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+    >
+      {showSeparator ? <View pointerEvents="none" style={styles.tabSeparator} /> : null}
       {showDropIndicatorBefore ? (
         <View style={[styles.tabDropIndicator, styles.tabDropIndicatorBefore]} />
       ) : null}
@@ -1642,12 +1727,9 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     overflow: "visible",
   },
+  flowTabsContainer: { height: 38 },
   tabsContainerSidebar: {
     backgroundColor: theme.colors.surfaceSidebar,
-  },
-  flowTabsContainer: {
-    height: "auto",
-    minHeight: 64,
   },
   tabsScroll: {
     minWidth: 0,
@@ -1698,26 +1780,6 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[1],
     userSelect: "none",
   },
-  flowTab: {
-    height: "auto",
-    minHeight: 56,
-    paddingVertical: theme.spacing[2],
-    borderRadius: theme.borderRadius.md,
-  },
-  flowText: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing[0.5],
-  },
-  flowTitle: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
-  },
-  flowDetails: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-  },
   tabFill: (backdrop: SurfaceBackdrop) => ({
     backgroundColor: theme.colors[backdrop],
   }),
@@ -1728,6 +1790,14 @@ const styles = StyleSheet.create((theme) => ({
     position: "relative",
     overflow: "visible",
     marginHorizontal: TAB_CHIP_GAP / 2,
+  },
+  tabSeparator: {
+    position: "absolute",
+    left: -TAB_CHIP_GAP / 2,
+    top: 6,
+    bottom: 6,
+    width: 1,
+    backgroundColor: theme.colors.border,
   },
   tabDisabled: { opacity: 0.5 },
   tabHandle: {

@@ -15,6 +15,7 @@ export type SurfaceBackdrop =
   | "surface0"
   | "surface1"
   | "surface2"
+  | "surface4"
   | "surfaceSidebar"
   | "surfaceSidebarHover"
   | "surfaceSidebarSelected";

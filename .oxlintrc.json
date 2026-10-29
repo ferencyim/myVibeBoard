@@ -21,6 +21,7 @@
   },
   "rules": {
     "react/react-in-jsx-scope": "off",
+    "no-underscore-dangle": "off",
 
     "no-await-in-loop": "off",
 
@@ -394,7 +395,6 @@
         "packages/app/src/components/app-diagnostic-sheet.tsx",
         "packages/app/src/components/attachment-lightbox.tsx",
         "packages/app/src/components/attachment-pill.tsx",
-        "packages/app/src/components/combined-model-selector.tsx",
         "packages/app/src/components/compact-explorer-sidebar.tsx",
         "packages/app/src/components/context-window-meter.tsx",
         "packages/app/src/components/desktop/window-controls.tsx",

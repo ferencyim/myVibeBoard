@@ -1,5 +1,5 @@
-import type { PluginProjectSidebarItemProps } from "@getpaseo/plugin/client";
-import { useCallback, useMemo } from "react";
+import type { PluginProjectSidebarItemProps, PluginSidebarListItem } from "@getpaseo/plugin/client";
+import { useCallback, useEffect, useMemo } from "react";
 import { withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import type { Theme } from "@/styles/theme";
@@ -62,6 +62,7 @@ function ProjectGroup({
   sidebarCompact,
   createRequest,
   onCreateHandled,
+  onItemsChange,
 }: {
   plugin: InstalledPlugin;
   item: NonNullable<InstalledPlugin["projectSidebarGroups"]>[number];
@@ -71,6 +72,7 @@ function ProjectGroup({
   sidebarCompact: boolean;
   createRequest?: number;
   onCreateHandled?: () => void;
+  onItemsChange?: (key: string, items: readonly PluginSidebarListItem[]) => void;
 }) {
   const navigation = usePluginHostNavigation(plugin.serverId);
   const compact = useIsCompactFormFactor();
@@ -87,11 +89,29 @@ function ProjectGroup({
     }),
     [navigation, onNavigate],
   );
+  const publish = useCallback(
+    (items: readonly PluginSidebarListItem[]) => {
+      onItemsChange?.(
+        `${plugin.serverId}:${projectId}:${plugin.id}:${item.id}`,
+        items.map((entry) => ({
+          ...entry,
+          render: (options) => (
+            <PluginInstallationProvider plugin={plugin}>
+              {entry.render(options)}
+            </PluginInstallationProvider>
+          ),
+        })),
+      );
+    },
+    [onItemsChange, plugin, projectId, item.id],
+  );
+  useEffect(() => () => publish([]), [publish]);
   const Component = item.Component;
   return (
     <SurfaceErrorBoundary installation={plugin} Surface={Component} resetKey={projectId}>
       <PluginInstallationProvider plugin={plugin}>
         <Component
+          onItemsChange={onItemsChange ? publish : undefined}
           projectId={projectId}
           theme={theme}
           host={host}
@@ -120,6 +140,7 @@ export function PluginProjectSidebarItems({
   sidebarCompact = false,
   createRequest,
   onCreateHandled,
+  onItemsChange,
 }: {
   hosts: readonly { serverId: string; projectId: string }[];
   preferredServerId?: string | null;
@@ -127,6 +148,7 @@ export function PluginProjectSidebarItems({
   sidebarCompact?: boolean;
   createRequest?: number;
   onCreateHandled?: () => void;
+  onItemsChange?: (key: string, items: readonly PluginSidebarListItem[]) => void;
 }) {
   const plugins = useInstalledPlugins();
   const groups = collectProjectSidebarItems(
@@ -152,6 +174,7 @@ export function PluginProjectSidebarItems({
           sidebarCompact={sidebarCompact}
           createRequest={createRequest}
           onCreateHandled={onCreateHandled}
+          onItemsChange={onItemsChange}
           uniProps={themeMapping}
         />
       ))}
