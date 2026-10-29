@@ -153,8 +153,6 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
               isRetryingProvider={snapshot.isRefreshing}
               disabled={isSaving}
               serverId={serverId}
-              desktopPlacement="bottom-start"
-              desktopMinWidth={360}
             />
           </View>
         ) : null}
