@@ -457,3 +457,66 @@ it("旧主对话下一回合送达通用角色说明，用户修改说明后仅�
   expect(next.context).toContain("协助写作");
   expect(next.context).not.toContain("你不自动派发");
 });
+
+describe("旁线程", () => {
+  it("支持增改归档并限制每个 bot 的未归档数量", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    const other = await f.createProjectBot();
+    const rows = Array.from({ length: 8 }, (_, i) => f.service.threads.create(bot.id, `话题 ${i}`));
+    expect(() => f.service.threads.create(bot.id, "超限")).toThrow("8");
+    expect(() => f.service.threads.rename(other.id, rows[0].id, "越权")).toThrow();
+    expect(f.service.threads.rename(bot.id, rows[0].id, "新标题").title).toBe("新标题");
+    f.service.threads.archive(bot.id, rows[0].id);
+    expect(f.service.threads.list(bot.id)).toHaveLength(7);
+    expect(f.service.threads.create(bot.id, "新话题")).toBeTruthy();
+  });
+
+  it("后台打开单飞，继承身份、目录和记忆，并校验调用者", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    f.service.bots.memoryAdd(bot.id, "共享记忆");
+    const thread = f.service.threads.create(bot.id, "话题");
+    const create = f.createAgent.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    f.createAgent.mockImplementationOnce(async (input) => { await gate; return create(input); });
+    try {
+      expect((await f.service.openThread(bot.id, thread.id)).status).toBe("creating");
+      expect((await f.service.openThread(bot.id, thread.id)).status).toBe("creating");
+      release();
+      const opened = await f.service.waitThread(bot.id, thread.id);
+      const request = f.createAgent.mock.calls[0][0];
+      expect(request.cwd).toBe("/project-repo");
+      expect(request.labels).toMatchObject({ "vibe.bot": bot.id, "vibe.bot-thread": thread.id });
+      expect(request.config.systemPrompt).toContain("共享记忆");
+      expect((await f.service.caller(opened.agentId)).id).toBe(bot.id);
+      f.agents.get(opened.agentId)!.labels["vibe.bot"] = "other";
+      await expect(f.service.caller(opened.agentId)).rejects.toThrow();
+      expect(f.createAgent).toHaveBeenCalledTimes(1);
+    } finally { release(); }
+  });
+
+  it("使用迁移主对话的目录，创建期间归档不会交付任务", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    f.seedLegacy("old-main", { "vibe.bot": bot.id, "vibe.bot-thread": "main" });
+    f.agents.get("old-main")!.cwd = "/existing-directory";
+    f.service.bots.setMain(bot.id, "old-main");
+    const thread = f.service.threads.create(bot.id, "话题");
+    const create = f.createAgent.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    f.createAgent.mockImplementationOnce(async (input) => { await gate; return create(input); });
+    try {
+      const opening = f.service.waitThread(bot.id, thread.id);
+      for (let attempt = 0; attempt < 100 && !f.createAgent.mock.calls.length; attempt++) await Promise.resolve();
+      expect(f.createAgent.mock.calls[0][0].cwd).toBe("/existing-directory");
+      f.service.threads.archive(bot.id, thread.id);
+      release();
+      await expect(opening).rejects.toThrow("已归档");
+      expect(f.service.threads.require(bot.id, thread.id).agentId).toBeTruthy();
+      expect(f.send).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+});

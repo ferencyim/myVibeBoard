@@ -6,6 +6,7 @@ import { migrateOwner } from "./server/vibe/db/migrate";
 import { openVibeDb } from "./server/vibe/db/sqlite";
 import { createBotService } from "./server/service";
 import { registerBotContinuations } from "./server/continuation";
+import { registerVisualReply } from "./server/visual-reply";
 
 function userOnly(callerAgentId: string | null | undefined) {
   if (callerAgentId) throw new Error("此操作仅供用户使用，请使用 bot 自配置工具");
@@ -15,7 +16,41 @@ export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
   migrateOwner(db, "vibe-bots");
   const service = createBotService(db, server.paseo);
+  registerVisualReply(server, service.caller);
   const stopContinuations = registerBotContinuations(db, service);
+  server.handle(rpc.threadsListRpc, async (input, ctx) => {
+    userOnly(ctx.callerAgentId); await service.ready(); service.bots.require(input.botId);
+    return { threads: service.threads.list(input.botId) };
+  });
+  server.handle(rpc.threadsCreateRpc, async (input, ctx) => {
+    userOnly(ctx.callerAgentId); await service.ready();
+    return { thread: service.threads.create(input.botId, input.title) };
+  });
+  server.handle(rpc.threadsRenameRpc, async (input, ctx) => {
+    userOnly(ctx.callerAgentId); await service.ready();
+    const thread = service.threads.rename(input.botId, input.id, input.title);
+    if (thread.agentId) await server.paseo.agents.ref(thread.agentId).setTitle(thread.title);
+    return { thread };
+  });
+  server.handle(rpc.threadsArchiveRpc, async (input, ctx) => {
+    userOnly(ctx.callerAgentId); await service.ready(); service.threads.archive(input.botId, input.id);
+    return { ok: true as const };
+  });
+  server.handle(rpc.threadsOpenRpc, (input, ctx) => {
+    userOnly(ctx.callerAgentId); return service.openThread(input.botId, input.id);
+  });
+  const threadCreate = z.object({ title: z.string().trim().min(1).max(200), task: z.string().trim().min(1).max(30000) }).strict();
+  server.registerAgentTool({
+    name: "vibe_thread_create", description: "为自己创建旁线程并交付首条任务。", input: threadCreate,
+    handler: async (input, ctx) => {
+      const bot = await service.caller(ctx.callerAgentId);
+      const value = threadCreate.parse(input);
+      const thread = service.threads.create(bot.id, value.title);
+      const opened = await service.waitThread(bot.id, thread.id);
+      await server.paseo.agents.ref(opened.agentId).send(value.task, { sourceAgentId: ctx.callerAgentId! });
+      return { thread: service.threads.require(bot.id, thread.id) };
+    },
+  });
   server.handle(rpc.botsListRpc, async (input, ctx) => {
     userOnly(ctx.callerAgentId);
     await service.ready();
@@ -171,7 +206,7 @@ export default function contribute(server: PluginServerContext) {
   const stop = [
     server.before("agent.notification", async ({ request }) => {
       await service.ready();
-      const bot = service.bots.list().find((item) => item.mainAgentId === request.agentId);
+      const bot = service.bots.list().find((item) => item.mainAgentId === request.agentId || service.threads.list(item.id).some((thread) => thread.agentId === request.agentId));
       if (!bot) return;
       const disabled = !bot.notifications.enabled;
       const completedDisabled = request.reason === "finished" && !bot.notifications.completed;
@@ -180,7 +215,7 @@ export default function contribute(server: PluginServerContext) {
     }),
     server.before("agent.turn_context", async ({ request }) => {
       await service.ready();
-      const bot = service.bots.list().find((item) => item.mainAgentId === request.agentId);
+      const bot = service.bots.list().find((item) => item.mainAgentId === request.agentId || service.threads.list(item.id).some((thread) => thread.agentId === request.agentId));
       if (!bot) return;
       const delivery = service.memoryDelivery.prepare(bot.id, request.agentId, service.bots.memories(bot.id), [service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n"));
       if (delivery) return { ...request, ...delivery };
