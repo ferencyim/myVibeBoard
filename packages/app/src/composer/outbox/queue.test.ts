@@ -216,6 +216,30 @@ describe("手机新任务首消息 outbox", () => {
     ]);
   });
 
+  it("用户选择的流程档位在离线恢复后随创建请求发送", async () => {
+    const f = fixture();
+    await f.queue().enqueue({ ...input(), flowLevel: "simple" });
+    const restarted = f.queue();
+    await restarted.hydrate();
+    const native = port();
+    await restarted.flushHost("host-one", native);
+    expect(native.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        firstAgentContext: expect.objectContaining({ flowLevel: "simple" }),
+      }),
+    );
+  });
+
+  it("旧主机不发送用户选择的流程档位，保留首消息", async () => {
+    const f = fixture();
+    const q = f.queue();
+    await q.enqueue({ ...input(), flowLevel: "simple" });
+    const native = { ...port(), supportsFlowChoice: false };
+    await q.flushHost("host-one", native);
+    expect(native.createWorkspace).not.toHaveBeenCalled();
+    expect(q.getSnapshot()[0]).toMatchObject({ status: "failed", submitted: false });
+  });
+
   it("只有 enqueue 持久化成功后才返回，不因磁盘失败发请求", async () => {
     const f = fixture();
     vi.mocked(f.storage.setItem).mockRejectedValueOnce(new Error("磁盘不可用"));

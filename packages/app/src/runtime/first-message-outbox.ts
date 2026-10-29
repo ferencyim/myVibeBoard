@@ -16,6 +16,8 @@ export const firstMessageOutbox = new FirstMessageOutbox({
 
 function createOutboxPort(hostId: string, client: DaemonClient): FirstMessageOutboxPort {
   return {
+    // COMPAT(taskFlowChoice): added in v0.13.2, remove after 2027-02-01.
+    supportsFlowChoice: client.getLastServerInfoMessage()?.features?.taskFlowChoice === true,
     resolveDefaultConfig: async (entry) => {
       const resolver = getFirstMessageModelResolver(hostId);
       if (!resolver && !hasInstalledPluginCatalog(hostId)) return null;

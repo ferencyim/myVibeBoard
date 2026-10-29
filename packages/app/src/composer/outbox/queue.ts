@@ -25,6 +25,7 @@ export interface PreparedFirstMessageAttachments {
 }
 
 export interface FirstMessageOutboxPort {
+  supportsFlowChoice?: boolean;
   resolveDefaultConfig?(
     entry: FirstMessageOutboxEntry,
   ): Promise<NonNullable<CreateWorkspaceRequestOptions["agent"]>["config"] | null>;
@@ -190,6 +191,14 @@ export class FirstMessageOutbox {
       }
     }
 
+    if (entry.flowLevel && port.supportsFlowChoice === false) {
+      await this.patch(entry.id, {
+        status: "failed",
+        error: "请升级目标主机后发送流程档位；首消息已保留",
+      });
+      return;
+    }
+
     let prepared: PreparedFirstMessageAttachments;
     try {
       prepared = await port.prepareAttachments(entry);
@@ -210,7 +219,11 @@ export class FirstMessageOutbox {
         source: entry.source,
         idempotencyKey: entry.requestId,
         requestId: entry.requestId,
-        firstAgentContext: { prompt: entry.text, attachments: prepared.attachments ?? [] },
+        firstAgentContext: {
+          prompt: entry.text,
+          attachments: prepared.attachments ?? [],
+          ...(entry.flowLevel ? { flowLevel: entry.flowLevel } : {}),
+        },
         agent: {
           config,
           initialPrompt: entry.text,

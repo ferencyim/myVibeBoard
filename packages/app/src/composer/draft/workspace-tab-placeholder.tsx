@@ -83,7 +83,7 @@ function PlaceholderControls({
     <View style={styles.row}>
       {placeholder.disabled ? (
         <Button size="sm" loading={enabling} disabled={!provider?.enable} onPress={handleEnable}>
-          未启用 · 点击启用
+          本流程未启用 · 点击启用
         </Button>
       ) : null}
       <DropdownMenu open={open} onOpenChange={handleOpenChange}>

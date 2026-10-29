@@ -79,6 +79,7 @@ export const FirstMessageOutboxInputSchema = z
     source: WorkspaceCreateRequestSchema.shape.source,
     config: AgentCreateRequestSchema.shape.config.optional(),
     modelSelection: z.literal("default").optional(),
+    flowLevel: z.enum(["simple", "medium", "full"]).optional(),
     text: z.string(),
     attachments: z.array(ComposerAttachmentSchema),
   })
