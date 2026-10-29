@@ -1868,11 +1868,19 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       () => [
         styles.inputWrapper,
         isCompact && !isFullscreen && styles.inputWrapperCompact,
+        isInputFocused && !isFullscreen && styles.inputWrapperFocused,
         readOnly && styles.inputWrapperReadOnly,
         inputWrapperStyle,
         { opacity: surfacePresentation.input.opacity },
       ],
-      [inputWrapperStyle, isCompact, isFullscreen, readOnly, surfacePresentation.input.opacity],
+      [
+        inputWrapperStyle,
+        isCompact,
+        isFullscreen,
+        isInputFocused,
+        readOnly,
+        surfacePresentation.input.opacity,
+      ],
     );
     // `withUnistyles` maps this component's `style` into a `.hash > *` child
     // rule, which ties on specificity with react-native-web's own
@@ -2203,23 +2211,25 @@ const styles = StyleSheet.create((theme: Theme) => ({
   inputWrapper: {
     flexShrink: 1,
     flexDirection: "column",
-    gap: theme.spacing[3],
-    backgroundColor: theme.colors.surface1,
+    justifyContent: "space-between",
+    gap: theme.spacing[1],
+    backgroundColor: theme.colors.bgSurface,
     borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.borderAccent,
-    borderRadius: theme.borderRadius["2xl"],
+    borderColor: theme.colors.borderStrong,
+    borderRadius: { xs: theme.borderRadius["2xl"], md: theme.borderRadius.lg },
+    minHeight: { xs: theme.spacing[12], md: theme.spacing[24] },
     paddingTop: {
       xs: theme.spacing[2],
-      md: theme.spacing[4],
+      md: theme.spacing[2],
     },
     // The button row bleeds 6px horizontally, so match its corner inset at the bottom.
     paddingBottom: {
       xs: theme.spacing[2],
-      md: theme.spacing[3],
+      md: theme.spacing[2],
     },
     paddingHorizontal: {
       xs: theme.spacing[3],
-      md: theme.spacing[4],
+      md: theme.spacing[3],
     },
     ...(isWeb
       ? {
@@ -2232,6 +2242,10 @@ const styles = StyleSheet.create((theme: Theme) => ({
   // Lifts the composer off the chat it sits under on phones.
   inputWrapperCompact: {
     ...theme.shadow.sm,
+  },
+  inputWrapperFocused: {
+    borderColor: theme.colors.accent,
+    ...(isWeb ? ({ boxShadow: `0 0 0 3px ${theme.colors.accentSoft}` } as object) : {}),
   },
   // Dotted says "this surface is the same box, but there is nothing to type
   // into it" without swapping the border colour, which reads as an error state.
@@ -2313,24 +2327,24 @@ const styles = StyleSheet.create((theme: Theme) => ({
     flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[1],
+    gap: theme.spacing[1.5],
   },
   attachButton: {
-    width: 28,
-    height: 28,
+    width: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
+    height: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
   },
   attachButtonAnchor: {
-    width: 28,
-    height: 28,
+    width: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
+    height: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
     alignItems: "center",
     justifyContent: "center",
   },
   voiceButton: {
-    width: 28,
-    height: 28,
+    width: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
+    height: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
@@ -2339,8 +2353,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
     backgroundColor: theme.colors.destructive,
   },
   sendButton: {
-    width: 28,
-    height: 28,
+    width: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
+    height: { xs: theme.controlHeight.xl, md: theme.controlHeight.sm },
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.accent,
     alignItems: "center",

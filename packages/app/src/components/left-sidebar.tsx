@@ -1,12 +1,5 @@
 import { router } from "expo-router";
-import {
-  CircleGauge,
-  FolderPlus,
-  GitBranch,
-  Server,
-  Settings,
-  type LucideIcon,
-} from "lucide-react-native";
+import { FolderPlus, Server, type LucideIcon } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -21,25 +14,20 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from "react-nativ
 import { scheduleOnRN } from "react-native-worklets";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { SidebarCloseButton } from "@/components/headers/sidebar-close-button";
-import { resolveDesktopSidebarWidth } from "@/components/desktop-sidebar-layout";
+import { PAGE_RAIL_WIDTH, resolveDesktopSidebarWidth } from "@/components/desktop-sidebar-layout";
 import {
   SIDEBAR_RESIZE_ACTIVATION_OFFSET,
   SIDEBAR_RESIZE_FAIL_OFFSET,
 } from "@/components/sidebar-resize-handle-layout";
-import { HostPicker } from "@/components/hosts/host-picker";
-import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
-import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
-import { SidebarNavRows } from "@/components/sidebar/sidebar-nav-rows";
+import { ALL_HOSTS_OPTION_ID, HostPicker } from "@/components/hosts/host-picker";
+import { PageRail } from "@/shell/page-rail";
 import { SidebarFooterIconHighlight } from "@/components/sidebar/sidebar-footer-icon-highlight";
-import { SidebarHelpMenu } from "@/components/sidebar/sidebar-help-menu";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { DensityIcon } from "@/components/ui/density-icon";
-import { SidebarSectionHeader } from "@/components/sidebar/sidebar-section-header";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { useImportSession } from "@/hooks/use-import-session";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
@@ -55,28 +43,19 @@ import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels"
 import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { type SidebarGroupMode, useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useHosts } from "@/runtime/host-runtime";
-import { PluginSidebarItem } from "@/plugins/sidebar-items";
 import { builtinSidebarNavLabelKey } from "@/sidebar-nav/model";
-import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { usePanelStore } from "@/stores/panel-store";
-import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop-window";
+import { WindowChromeSafeArea } from "@/utils/desktop-window";
 import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import { buildSettingsAddHostRoute, buildSettingsRoute } from "@/utils/host-routes";
 import { openHostOverview } from "@/navigation/settings-navigation";
-import {
-  UsageSidebarItem,
-  UsageSidebarRoot,
-  useHasUsageSummary,
-  useOpenSidebarUsage,
-} from "@/usage";
+import { UsageSidebarRoot } from "@/usage";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
-
-const DEV_BUILD_LABEL = process.env.EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL?.trim() || null;
 
 interface SidebarSharedProps {
   theme: SidebarTheme;
@@ -242,20 +221,22 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
   if (isCompactLayout) {
     return (
       <>
-        <RetainedPanelActivity active={active}>
-          <MobileSidebar
-            {...sharedProps}
-            active={active}
-            insetsTop={insets.top}
-            insetsBottom={insets.bottom}
-            closeSidebar={showMobileAgent}
-            handleOpenProject={handleOpenProjectMobile}
-            handleImportSession={handleImportSessionMobile}
-            handleSettings={handleSettingsMobile}
-            handleAddHost={handleAddHostMobile}
-            handleOpenHostSettings={handleOpenHostSettingsMobile}
-          />
-        </RetainedPanelActivity>
+        <UsageSidebarRoot>
+          <RetainedPanelActivity active={active}>
+            <MobileSidebar
+              {...sharedProps}
+              active={active}
+              insetsTop={insets.top}
+              insetsBottom={insets.bottom}
+              closeSidebar={showMobileAgent}
+              handleOpenProject={handleOpenProjectMobile}
+              handleImportSession={handleImportSessionMobile}
+              handleSettings={handleSettingsMobile}
+              handleAddHost={handleAddHostMobile}
+              handleOpenHostSettings={handleOpenHostSettingsMobile}
+            />
+          </RetainedPanelActivity>
+        </UsageSidebarRoot>
         {importSessionSheet}
       </>
     );
@@ -263,18 +244,20 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
 
   return (
     <>
-      <RetainedPanelActivity active={active}>
-        <DesktopSidebar
-          {...sharedProps}
-          insetsTop={insets.top}
-          active={active}
-          handleOpenProject={handleOpenProjectDesktop}
-          handleImportSession={openImportSession}
-          handleSettings={handleSettingsDesktop}
-          handleAddHost={handleAddHostDesktop}
-          handleOpenHostSettings={handleOpenHostSettingsDesktop}
-        />
-      </RetainedPanelActivity>
+      <UsageSidebarRoot>
+        <RetainedPanelActivity active={active}>
+          <DesktopSidebar
+            {...sharedProps}
+            insetsTop={insets.top}
+            active={active}
+            handleOpenProject={handleOpenProjectDesktop}
+            handleImportSession={openImportSession}
+            handleSettings={handleSettingsDesktop}
+            handleAddHost={handleAddHostDesktop}
+            handleOpenHostSettings={handleOpenHostSettingsDesktop}
+          />
+        </RetainedPanelActivity>
+      </UsageSidebarRoot>
       {importSessionSheet}
     </>
   );
@@ -340,32 +323,35 @@ function SidebarHostPicker({
   label,
   onAddHost,
   onOpenHostSettings,
+  compact = false,
 }: {
   label: string;
   onAddHost: () => void;
   onOpenHostSettings: (serverId: string) => void;
+  compact?: boolean;
 }) {
   const hosts = useHosts();
+  const hostFilters = useSidebarViewStore((state) => state.hostFilters);
+  const selected = hostFilters.length === 1 ? hostFilters[0] : ALL_HOSTS_OPTION_ID;
+  const selectedLabel = hosts.find((host) => host.serverId === selected)?.label ?? "全部主机";
   const triggerRef = useRef<View | null>(null);
   const [isOpen, setIsOpen] = useState(false);
 
-  const handleSelect = useCallback(
-    (id: string) => {
-      onOpenHostSettings(id);
-    },
-    [onOpenHostSettings],
-  );
+  const handleSelect = useCallback((id: string) => {
+    useSidebarViewStore.setState({ hostFilters: id === ALL_HOSTS_OPTION_ID ? [] : [id] });
+  }, []);
 
   const handleOpen = useCallback(() => setIsOpen(true), []);
 
   return (
     <HostPicker
       hosts={hosts}
-      value=""
+      value={selected}
       onSelect={handleSelect}
       open={isOpen}
       onOpenChange={setIsOpen}
       anchorRef={triggerRef}
+      includeAllHost
       includeAddHost
       onAddHost={onAddHost}
       showActiveConnection
@@ -376,15 +362,21 @@ function SidebarHostPicker({
       addHostTestID="sidebar-host-add"
       hostOptionTestID={sidebarHostOptionTestID}
     >
-      <FooterIconButton
-        buttonRef={triggerRef}
+      <Pressable
+        ref={triggerRef}
         onPress={handleOpen}
+        style={styles.hostTrigger}
         testID="sidebar-hosts-trigger"
-        label={label}
-        icon={Server}
-        // Server's two boxes fill more of the square than the other glyphs.
-        iconSizeAdjustment={-1}
-      />
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${selectedLabel}`}
+      >
+        <DensityIcon icon={Server} size="md" color="foregroundMuted" />
+        {!compact ? (
+          <Text numberOfLines={1} style={styles.hostLabel}>
+            {selectedLabel} ▾
+          </Text>
+        ) : null}
+      </Pressable>
     </HostPicker>
   );
 }
@@ -401,110 +393,6 @@ function IconTooltipContent({
       <Text style={styles.tooltipText}>{label}</Text>
       {shortcutKeys ? <Shortcut chord={shortcutKeys} /> : null}
     </View>
-  );
-}
-
-function SidebarFooter({
-  handleOpenProject,
-  handleSettings,
-  labels,
-  handleAddHost,
-  handleOpenHostSettings,
-  onBeforeNavigate,
-}: {
-  handleOpenProject: () => void;
-  handleSettings: () => void;
-  labels: {
-    addProject: string;
-    hosts: string;
-    settings: string;
-    searchHosts: string;
-    usage: string;
-  };
-  handleAddHost: () => void;
-  handleOpenHostSettings: (serverId: string) => void;
-  onBeforeNavigate?: () => void;
-}) {
-  const newAgentKeys = useShortcutKeys("new-agent");
-  const settingsKeys = useShortcutKeys("toggle-settings");
-
-  // One line of icons: Add project, Usage, Hosts, then Help and Settings at the end.
-  return (
-    <UsageSidebarRoot>
-      <View style={styles.footerContainer} testID="sidebar-footer">
-        <SidebarFooterRows onBeforeNavigate={onBeforeNavigate} />
-        <View style={styles.sidebarFooter} testID="sidebar-footer-bottom-line">
-          <FooterIconButton
-            onPress={handleOpenProject}
-            testID="sidebar-add-project"
-            label={labels.addProject}
-            icon={FolderPlus}
-            shortcutKeys={newAgentKeys}
-          />
-          <SidebarUsageIcon label={labels.usage} />
-          <SidebarHostPicker
-            label={labels.hosts}
-            onAddHost={handleAddHost}
-            onOpenHostSettings={handleOpenHostSettings}
-          />
-          <View style={styles.footerSpacer} />
-          <SidebarHelpMenu />
-          <FooterIconButton
-            onPress={handleSettings}
-            testID="sidebar-settings"
-            label={labels.settings}
-            icon={Settings}
-            shortcutKeys={settingsKeys}
-          />
-        </View>
-      </View>
-    </UsageSidebarRoot>
-  );
-}
-
-function SidebarUsageIcon({ label }: { label: string }) {
-  const openUsage = useOpenSidebarUsage();
-  return (
-    <FooterIconButton
-      onPress={openUsage}
-      testID="sidebar-usage-icon"
-      label={label}
-      icon={CircleGauge}
-    />
-  );
-}
-
-/**
- * The footer rows in the user's `sidebarFooterItems` order: the Usage item and plugin rows. The
- * Usage item is left out while it has no summary to show.
- */
-function SidebarFooterRows({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
-  const { items } = useSidebarNavItems("footer");
-  const hasUsageSummary = useHasUsageSummary();
-  const rowsRef = useRef<View | null>(null);
-  const visibleItems = items.filter(
-    (item) => item.visible && (item.kind === "plugin" || hasUsageSummary),
-  );
-  if (visibleItems.length === 0) return null;
-  return (
-    <>
-      <View ref={rowsRef} collapsable={false} style={styles.footerRows}>
-        {visibleItems.map((item) =>
-          item.kind === "plugin" ? (
-            <PluginSidebarItem
-              key={item.key}
-              group={item.group}
-              section="footer"
-              fallbackAnchorRef={rowsRef}
-              onBeforeNavigate={onBeforeNavigate}
-            />
-          ) : (
-            <UsageSidebarItem key={item.key} />
-          ),
-        )}
-      </View>
-      <SidebarSeparator testID="sidebar-footer-separator" />
-    </>
   );
 }
 
@@ -528,7 +416,6 @@ function MobileSidebar({
   handleRefresh,
   handleOpenProject,
   handleImportSession,
-  handleSettings,
   labels,
   handleAddHost,
   handleOpenHostSettings,
@@ -573,11 +460,21 @@ function MobileSidebar({
     >
       <View style={styles.sidebarContent} pointerEvents="auto">
         <WindowChromeSafeArea placement="below" />
-        <SidebarNavRows
-          style={styles.sidebarHeaderGroup}
-          onBeforeNavigate={closeSidebar}
-          firstRowTrailing={closeButton}
-        />
+        <PageRail horizontal onNavigate={closeSidebar} />
+        <View style={styles.hostRow}>
+          <SidebarHostPicker
+            label={labels.hosts}
+            onAddHost={handleAddHost}
+            onOpenHostSettings={handleOpenHostSettings}
+          />
+          <FooterIconButton
+            onPress={handleOpenProject}
+            testID="sidebar-add-project"
+            label={labels.addProject}
+            icon={FolderPlus}
+          />
+          {closeButton}
+        </View>
 
         {isInitialLoad && !hasActiveHostFilter ? (
           <SidebarAgentListSkeleton />
@@ -601,25 +498,14 @@ function MobileSidebar({
             onImportSession={handleImportSession}
             parentGestureRef={closeGestureRef}
             dragGestureHostActive={active}
-            listHeaderComponent={workspacesSectionHeaderElement}
           />
         )}
-
-        <SidebarFooter
-          handleOpenProject={handleOpenProject}
-          handleSettings={handleSettings}
-          labels={labels}
-          handleAddHost={handleAddHost}
-          handleOpenHostSettings={handleOpenHostSettings}
-          onBeforeNavigate={closeSidebar}
-        />
       </View>
     </MobilePanelOverlay>
   );
 }
 
 function DesktopSidebar({
-  theme,
   workspaceGroups,
   projectIconTargets,
   pinnedGroups,
@@ -637,20 +523,18 @@ function DesktopSidebar({
   handleRefresh,
   handleOpenProject,
   handleImportSession,
-  handleSettings,
   labels,
   handleAddHost,
   handleOpenHostSettings,
   insetsTop,
   active,
 }: DesktopSidebarProps) {
-  const ownsTopLeft = useOwnsWindowChromeCorner("top-left");
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
   const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
   const setSidebarWidth = usePanelStore((state) => state.setSidebarWidth);
   const { width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const viewportWidth = windowWidth - insets.left - insets.right;
+  const viewportWidth = windowWidth - insets.left - insets.right - PAGE_RAIL_WIDTH;
   const visibleSidebarWidth = resolveDesktopSidebarWidth({
     requestedWidth: sidebarWidth,
     viewportWidth,
@@ -725,106 +609,68 @@ function DesktopSidebar({
     ],
     [insetsTop, insets.bottom],
   );
-  const sidebarHeaderGroupStyle = useMemo(
-    () => [styles.sidebarHeaderGroup, ownsTopLeft && styles.sidebarHeaderGroupBelowChrome],
-    [ownsTopLeft],
-  );
   return (
-    <Animated.View
-      accessibilityElementsHidden={!active}
-      importantForAccessibility={active ? "auto" : "no-hide-descendants"}
-      pointerEvents={active ? "auto" : "none"}
-      style={desktopSidebarStyle}
-    >
-      <View style={desktopSidebarBorderStyle}>
-        <View style={styles.sidebarDragArea}>
-          {ownsTopLeft || DEV_BUILD_LABEL ? (
-            <View style={styles.desktopChromeRow}>
-              <TitlebarDragRegion />
-              {DEV_BUILD_LABEL ? (
-                <View
-                  pointerEvents="none"
-                  style={styles.devBuildBadge}
-                  testID="dev-build-label"
-                  accessibilityLabel={`Development build: ${DEV_BUILD_LABEL}`}
-                >
-                  <GitBranch size={12} color={theme.colors.accentForeground} />
-                  <Text numberOfLines={1} ellipsizeMode="tail" style={styles.devBuildBadgeText}>
-                    {DEV_BUILD_LABEL}
-                  </Text>
-                </View>
-              ) : null}
+    <View style={styles.desktopRow}>
+      <Animated.View
+        accessibilityElementsHidden={!active}
+        importantForAccessibility={active ? "auto" : "no-hide-descendants"}
+        pointerEvents={active ? "auto" : "none"}
+        style={desktopSidebarStyle}
+      >
+        <View style={desktopSidebarBorderStyle}>
+          <View style={styles.sidebarDragArea}>
+            <View style={styles.hostRow}>
+              <SidebarHostPicker
+                compact={visibleSidebarWidth <= 88}
+                label={labels.hosts}
+                onAddHost={handleAddHost}
+                onOpenHostSettings={handleOpenHostSettings}
+              />
+              <FooterIconButton
+                onPress={handleOpenProject}
+                testID="sidebar-add-project"
+                label={labels.addProject}
+                icon={FolderPlus}
+              />
             </View>
-          ) : (
-            <TitlebarDragRegion />
-          )}
-          <SidebarNavRows style={sidebarHeaderGroupStyle} />
-        </View>
-
-        {isInitialLoad && !hasActiveHostFilter ? (
-          <SidebarAgentListSkeleton />
-        ) : (
-          <SidebarWorkspaceList
-            collapsedProjectKeys={collapsedProjectKeys}
-            onToggleProjectCollapsed={toggleProjectCollapsed}
-            shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
-            groupMode={groupMode}
-            workspaceGroups={workspaceGroups}
-            projectIconTargets={projectIconTargets}
-            pinnedGroups={pinnedGroups}
-            projects={projects}
-            hasProjectsBeforeFilter={hasProjectsBeforeFilter}
-            hasActiveProjectFilter={hasActiveProjectFilter}
-            workspaceEntriesByKey={workspaceEntriesByKey}
-            isRefreshing={isManualRefresh && isRevalidating}
-            onRefresh={handleRefresh}
-            onAddProject={handleOpenProject}
-            onImportSession={handleImportSession}
-            listHeaderComponent={workspacesSectionHeaderElement}
-          />
-        )}
-
-        <SidebarCalloutSlot />
-
-        <SidebarFooter
-          handleOpenProject={handleOpenProject}
-          handleSettings={handleSettings}
-          labels={labels}
-          handleAddHost={handleAddHost}
-          handleOpenHostSettings={handleOpenHostSettings}
-        />
-
-        <SidebarResizeHandle
-          edge="right"
-          gesture={resizeGesture}
-          pressed={resizePressed}
-          testID="left-sidebar-resize-handle"
-        />
-      </View>
-    </Animated.View>
-  );
-}
-
-function WorkspacesSectionHeader() {
-  return (
-    <SidebarSectionHeader title="Workspaces">
-      <Tooltip delayDuration={300}>
-        <TooltipTrigger asChild>
-          <View>
-            <SidebarDisplayPreferencesMenu />
           </View>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="center" offset={8}>
-          <IconTooltipContent label="Display preferences" />
-        </TooltipContent>
-      </Tooltip>
-    </SidebarSectionHeader>
+
+          {isInitialLoad && !hasActiveHostFilter ? (
+            <SidebarAgentListSkeleton />
+          ) : (
+            <SidebarWorkspaceList
+              compact={visibleSidebarWidth <= 88}
+              collapsedProjectKeys={collapsedProjectKeys}
+              onToggleProjectCollapsed={toggleProjectCollapsed}
+              shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
+              groupMode={groupMode}
+              workspaceGroups={workspaceGroups}
+              projectIconTargets={projectIconTargets}
+              pinnedGroups={pinnedGroups}
+              projects={projects}
+              hasProjectsBeforeFilter={hasProjectsBeforeFilter}
+              hasActiveProjectFilter={hasActiveProjectFilter}
+              workspaceEntriesByKey={workspaceEntriesByKey}
+              isRefreshing={isManualRefresh && isRevalidating}
+              onRefresh={handleRefresh}
+              onAddProject={handleOpenProject}
+              onImportSession={handleImportSession}
+            />
+          )}
+
+          <SidebarCalloutSlot />
+
+          <SidebarResizeHandle
+            edge="right"
+            gesture={resizeGesture}
+            pressed={resizePressed}
+            testID="left-sidebar-resize-handle"
+          />
+        </View>
+      </Animated.View>
+    </View>
   );
 }
-
-// Stable element so the sidebar list's listHeaderComponent prop keeps identity across
-// renders (WorkspacesSectionHeader takes no props).
-const workspacesSectionHeaderElement = <WorkspacesSectionHeader />;
 
 // Static styles for Animated.Views — must NOT use Unistyles dynamic theme to
 // avoid the "Unable to find node on an unmounted component" crash when Unistyles
@@ -839,6 +685,18 @@ const staticStyles = RNStyleSheet.create({
 });
 
 const styles = StyleSheet.create((theme) => ({
+  desktopRow: { flex: 1, flexDirection: "row" },
+  hostRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  hostTrigger: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[2],
+    minHeight: 44,
+  },
+  hostLabel: { flexShrink: 1, color: theme.colors.foreground, fontSize: theme.fontSize.sm },
   sidebarHeaderGroup: {
     paddingTop: theme.spacing[2],
     gap: 2,
@@ -866,7 +724,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   desktopChromeRow: {
     position: "relative",
-    height: HEADER_INNER_HEIGHT,
+    height: 38,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",

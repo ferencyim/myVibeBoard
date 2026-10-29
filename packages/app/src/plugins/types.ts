@@ -14,6 +14,10 @@ import type {
   PluginComposerPillContribution as SDKPluginComposerPillContribution,
   PluginSidebarContribution as SDKPluginSidebarContribution,
   PluginSidebarItemContribution as SDKPluginSidebarItemContribution,
+  PluginPageRailItemContribution,
+  PluginSidebarGroupContribution,
+  PluginSidebarWorkspaceProvider,
+  PluginProjectSidebarGroupContribution,
   PluginScreenContribution as SDKPluginScreenContribution,
   PluginSettingsScreenContribution as SDKPluginSettingsScreenContribution,
   PluginProjectSettingsSectionContribution as SDKPluginProjectSettingsSectionContribution,
@@ -21,6 +25,7 @@ import type {
   PluginFirstMessageModelResolver,
   PluginWorkspaceTabProvider,
   PluginTimelineRendererContribution,
+  PluginConversationHeaderAccessory,
   PluginTimelineTransformerContribution,
   PluginPanelLocation,
   PluginWorkspacePanelContribution as SDKPluginWorkspacePanelContribution,
@@ -57,6 +62,10 @@ export interface EvaluatedPlugin {
   settingsScreens: PluginSettingsScreenContribution[];
   projectSettingsSections: PluginProjectSettingsSectionContribution[];
   projectSidebarItems?: PluginProjectSidebarItemContribution[];
+  pageRailItems?: PluginPageRailItemContribution<PluginText>[];
+  sidebarGroups?: PluginSidebarGroupContribution<PluginText>[];
+  sidebarWorkspaceProviders?: PluginSidebarWorkspaceProvider[];
+  projectSidebarGroups?: PluginProjectSidebarGroupContribution<PluginText>[];
   workspaceTabProviders?: PluginWorkspaceTabProvider[];
   firstMessageModelResolvers: PluginFirstMessageModelResolver[];
   sidebarItems: Record<PluginSidebarSection, PluginSidebarItemContribution[]>;
@@ -71,6 +80,7 @@ export interface EvaluatedPlugin {
   themes: PluginThemeContribution[];
   timelineTransformers: PluginTimelineTransformerContribution[];
   timelineRenderers: PluginTimelineRendererContribution[];
+  conversationHeaderAccessories?: PluginConversationHeaderAccessory[];
 }
 
 export interface InstalledPlugin extends EvaluatedPlugin {

@@ -40,6 +40,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
 import invariant from "tiny-invariant";
+import { ConversationHeaderSlotsProvider } from "@/panels/conversation-header-slots";
 import { SidebarMenuToggle } from "@/components/headers/sidebar-menu-toggle";
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { MenuHeader } from "@/components/headers/menu-header";
@@ -153,6 +154,7 @@ import {
   EXPLORER_TOGGLE_KEYS,
   WorkspaceExplorerSidebarToggle,
   WorkspaceHeaderExplorerToggle,
+  WorkspaceExplorerToggle,
 } from "@/screens/workspace/workspace-explorer-toggle";
 import { useHasWindowChromeObstruction } from "@/utils/desktop-window";
 import {
@@ -774,6 +776,15 @@ function WorkspaceContentProviders({
   );
 }
 
+function isBotProfileTarget(target: WorkspaceTabTarget | undefined): boolean {
+  return (
+    target?.kind === "plugin" &&
+    target.pluginId === "vibe-bots" &&
+    target.panelId === "profile" &&
+    target.context === "agent"
+  );
+}
+
 function WorkspacePanelSurface({
   launcher,
   children,
@@ -849,6 +860,10 @@ function WorkspaceDocumentTitleEffectSlot({
   );
 }
 
+function isAgentConversation(activeTab: WorkspaceTabDescriptor | null): boolean {
+  return activeTab?.kind === "agent";
+}
+
 function floatsHeaderOverContent(activeTab: WorkspaceTabDescriptor | null): boolean {
   return supportsStreamTopOverlay && activeTab?.kind === "agent";
 }
@@ -859,7 +874,8 @@ function resolveCompactHeaderLayout(input: {
   activeTab: WorkspaceTabDescriptor | null;
   composerFullscreen: boolean;
 }): { header: ReactNode; floating: boolean } {
-  if (input.composerFullscreen) return { header: null, floating: false };
+  if (input.composerFullscreen || isAgentConversation(input.activeTab))
+    return { header: null, floating: false };
   return { header: input.header, floating: floatsHeaderOverContent(input.activeTab) };
 }
 
@@ -3294,7 +3310,7 @@ function WorkspaceScreenContent({
   );
   const renderWorkspaceScreenHeader = useCallback(
     () =>
-      showScreenHeader ? (
+      showScreenHeader && !isAgentConversation(activeTabDescriptor) ? (
         <ScreenHeader
           left={
             <>
@@ -3320,6 +3336,7 @@ function WorkspaceScreenContent({
         />
       ) : null,
     [
+      activeTabDescriptor,
       canOpenImportSheet,
       currentBranchName,
       handleCopyBranchName,
@@ -3450,6 +3467,140 @@ function WorkspaceScreenContent({
       workspaceHeaderTitle,
     ],
   );
+  const conversationHeaderSlots = useMemo(
+    () => ({
+      left: <SidebarMenuToggle />,
+      ordinaryIdentity: isWorkspaceHeaderLoading ? (
+        <View style={styles.headerTitleSkeleton} />
+      ) : (
+        <View style={styles.conversationWorkspaceIdentity}>
+          <Text
+            testID="workspace-header-title"
+            style={styles.conversationWorkspaceTitle}
+            numberOfLines={1}
+          >
+            {workspaceHeaderTitle}
+          </Text>
+          <WorkspaceHeaderProjectRow
+            subtitle={workspaceHeaderSubtitle}
+            isSubtitleDistinct={isWorkspaceHeaderSubtitleDistinct}
+            serverId={normalizedServerId}
+          />
+          {currentBranchName ? (
+            <Text style={styles.conversationWorkspaceBranch} numberOfLines={1}>
+              {currentBranchName}
+            </Text>
+          ) : null}
+        </View>
+      ),
+      right: isMobile ? (
+        <>
+          <MobileWorkspaceTabSwitcher
+            tabs={tabs}
+            activeTabKey={activeTabKey}
+            normalizedServerId={normalizedServerId}
+            normalizedWorkspaceId={normalizedWorkspaceId}
+            onSelectSwitcherTab={handleSelectSwitcherTab}
+            createTerminalDisabled={createTerminalDisabled}
+            onCreateDraftTab={handleCreateDraftTab}
+            onCreateTerminal={handleCreateTerminal}
+            onCopyResumeCommand={handleCopyResumeCommand}
+            onCopyAgentId={handleCopyAgentId}
+            onCopyTerminalId={handleCopyTerminalId}
+            onCopyFilePath={handleCopyFilePath}
+            onReloadAgent={handleReloadAgent}
+            onRenameTab={handleRenameTab}
+            onCloseTab={handleCloseTabById}
+            onCloseTabsAbove={handleCloseTabsToLeft}
+            onCloseTabsBelow={handleCloseTabsToRight}
+            onCloseOtherTabs={handleCloseOtherTabs}
+          />
+          <WorkspaceHeaderMenuMobile
+            normalizedServerId={normalizedServerId}
+            normalizedWorkspaceId={normalizedWorkspaceId}
+            scripts={compactHeaderScripts}
+            currentBranchName={currentBranchName}
+            showWorkspaceSetup={showWorkspaceSetup}
+            showCreateBrowserTab={showCreateBrowserTab}
+            createTerminalDisabled={createTerminalDisabled}
+            importAgentDisabled={!canOpenImportSheet}
+            copyPathDisabled={!workspaceDirectory}
+            onCreateTerminalWithProfile={handleCreateTerminalWithProfile}
+            onCreateBrowser={handleCreateBrowserTab}
+            onOpenImportSheet={openImportSheet}
+            onCopyWorkspacePath={handleCopyWorkspacePath}
+            onCopyBranchName={handleCopyBranchName}
+            onOpenSetupTab={handleOpenSetupTab}
+          />
+          <WorkspaceExplorerToggle
+            onPress={handleToggleExplorerSidebar}
+            label={explorerSidebarToggleLabel}
+            tooltipLabel={t("workspace.tabs.explorerSidebar.toggle")}
+            tooltipKeys={EXPLORER_TOGGLE_KEYS}
+            accessibilityState={explorerSidebarToggleAccessibilityState}
+            mobile
+          />
+        </>
+      ) : (
+        <>
+          <WorkspaceHeaderMenuDesktop
+            currentBranchName={currentBranchName}
+            showWorkspaceSetup={showWorkspaceSetup}
+            importAgentDisabled={!canOpenImportSheet}
+            copyPathDisabled={!workspaceDirectory}
+            onOpenImportSheet={openImportSheet}
+            onCopyWorkspacePath={handleCopyWorkspacePath}
+            onCopyBranchName={handleCopyBranchName}
+            onOpenSetupTab={handleOpenSetupTab}
+          />
+          {headerRight}
+        </>
+      ),
+    }),
+    [
+      isMobile,
+      tabs,
+      activeTabKey,
+      normalizedServerId,
+      normalizedWorkspaceId,
+      handleSelectSwitcherTab,
+      createTerminalDisabled,
+      handleCreateDraftTab,
+      handleCreateTerminal,
+      handleCopyResumeCommand,
+      handleCopyAgentId,
+      handleCopyTerminalId,
+      handleCopyFilePath,
+      handleReloadAgent,
+      handleRenameTab,
+      handleCloseTabById,
+      handleCloseTabsToLeft,
+      handleCloseTabsToRight,
+      handleCloseOtherTabs,
+      compactHeaderScripts,
+      currentBranchName,
+      showWorkspaceSetup,
+      showCreateBrowserTab,
+      canOpenImportSheet,
+      workspaceDirectory,
+      handleCreateTerminalWithProfile,
+      handleCreateBrowserTab,
+      openImportSheet,
+      handleCopyWorkspacePath,
+      handleCopyBranchName,
+      handleOpenSetupTab,
+      handleToggleExplorerSidebar,
+      explorerSidebarToggleLabel,
+      explorerSidebarToggleAccessibilityState,
+      t,
+      headerRight,
+      isWorkspaceHeaderLoading,
+      workspaceHeaderTitle,
+      workspaceHeaderSubtitle,
+      isWorkspaceHeaderSubtitleDistinct,
+    ],
+  );
+
   const desktopSplitContent = useMemo(() => {
     if (!canRenderDesktopPaneSplits || !workspaceLayout || !persistenceKey) {
       return null;
@@ -3607,6 +3758,11 @@ function WorkspaceScreenContent({
     if (!workspaceLayout || !explorerSidebarPaneId || !persistenceKey) return null;
     const explorerPane = findPaneById(workspaceLayout.root, explorerSidebarPaneId);
     if (!explorerPane) return null;
+    const explorerState = deriveWorkspacePaneState({ pane: explorerPane, tabs: uiTabs });
+    const activeTarget = explorerState.tabs.find(
+      (tab) => tab.descriptor.tabId === explorerState.activeTabId,
+    )?.descriptor.target;
+    const profileOpen = isBotProfileTarget(activeTarget);
     const dock = (
       <ExplorerSidebarDock
         pane={explorerPane}
@@ -3641,6 +3797,7 @@ function WorkspaceScreenContent({
         isWorkspaceActive={isRouteFocused}
         persistenceKey={persistenceKey}
         containerWidth={workspaceViewportWidth}
+        fixedWidth={profileOpen ? 360 : undefined}
         isOpen={isExplorerSidebarShowing && !desktopFocusModeEnabled}
       >
         {dock}
@@ -3714,6 +3871,11 @@ function WorkspaceScreenContent({
     },
   );
 
+  const workspaceCenterWithHeaderSlots = (
+    <ConversationHeaderSlotsProvider value={conversationHeaderSlots}>
+      {workspaceCenterColumn}
+    </ConversationHeaderSlotsProvider>
+  );
   const renderedWorkspaceScreen = (
     <RenderProfile id="WorkspaceScreenContent">
       <View style={containerStyle}>
@@ -3741,7 +3903,7 @@ function WorkspaceScreenContent({
               onReorderTabsInPane={handleReorderTabsInPane}
               onSplitPane={handleSplitPane}
             >
-              {workspaceCenterColumn}
+              {workspaceCenterWithHeaderSlots}
               {sharedExplorer}
             </WorkspaceTabDragScope>
           </FloatingPanelPortalHostNameProvider>
@@ -3803,6 +3965,24 @@ const styles = StyleSheet.create((theme) => ({
   centerColumn: {
     flex: 1,
     minHeight: 0,
+  },
+  conversationWorkspaceIdentity: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  conversationWorkspaceTitle: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+    flexShrink: 1,
+  },
+  conversationWorkspaceBranch: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    flexShrink: 1,
   },
   headerTitleContainer: {
     flex: 1,

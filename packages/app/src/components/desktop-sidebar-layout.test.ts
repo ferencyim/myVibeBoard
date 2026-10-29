@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canDesktopAppSidebarShare,
+  isDesktopPageRailVisible,
   resolveDesktopAppChromeLayout,
   resolveDesktopAppContentMinimum,
   resolveDesktopSidebarVisibility,
@@ -8,6 +9,20 @@ import {
 } from "@/components/desktop-sidebar-layout";
 
 describe("desktop sidebar layout", () => {
+  it("keeps the page rail visible when the sidebar tree is closed", () => {
+    expect(isDesktopPageRailVisible(true, false)).toBe(true);
+    expect(
+      resolveDesktopSidebarVisibility({
+        chromeEnabled: true,
+        isCompactLayout: false,
+        isMounted: true,
+        isOpen: false,
+        canShare: true,
+      }),
+    ).toBe(false);
+    expect(isDesktopPageRailVisible(false, false)).toBe(false);
+    expect(isDesktopPageRailVisible(true, true)).toBe(false);
+  });
   it("keeps a retained sidebar hidden while app chrome is suppressed", () => {
     expect(
       resolveDesktopSidebarVisibility({
@@ -75,7 +90,9 @@ describe("desktop sidebar layout", () => {
     expect(atBreakpoint).toBe(320);
     expect(720 - atBreakpoint).toBe(400);
 
-    expect(resolveDesktopSidebarWidth({ requestedWidth: 600, viewportWidth: 1440 })).toBe(600);
+    expect(resolveDesktopSidebarWidth({ requestedWidth: 600, viewportWidth: 1440 })).toBe(400);
+    expect(resolveDesktopSidebarWidth({ requestedWidth: 109, viewportWidth: 1440 })).toBe(88);
+    expect(resolveDesktopSidebarWidth({ requestedWidth: 110, viewportWidth: 1440 })).toBe(128);
   });
 
   it("yields app navigation when settings needs the shell width", () => {

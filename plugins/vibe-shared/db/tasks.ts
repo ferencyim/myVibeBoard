@@ -7,6 +7,8 @@ import {
 } from "../contract/model-roles";
 import {
   TaskPhaseSchema,
+  FlowLevelSchema,
+  FlowSourceSchema,
   TaskPlanSchema,
   TaskSchema,
   TaskSubtaskRunSchema,
@@ -135,6 +137,8 @@ function planningControl(control: TaskControl | null | undefined): string | null
     "handledAcceptanceSource",
     "startedCommandRequests",
     "planReview",
+    "enabledRoles",
+    "highRiskFlow",
     "projectId",
     "archivedAt",
   ]) {
@@ -209,6 +213,25 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
           "INSERT INTO task (workspace_id, anchor_agent_id, conversation_id, phase, subtask_runs_json, summary) VALUES (?, ?, ?, 'planning', '[]', '')",
         ).run(parsed.workspaceId, parsed.anchorAgentId, parsed.conversationId ?? null);
         return changed(parsed.workspaceId, ["created"]);
+      });
+    },
+    setFlow(workspaceId: string, input: { level: "simple" | "medium" | "full"; source: "user" | "bot"; reason: string }): Task {
+      const level = FlowLevelSchema.parse(input.level);
+      const source = FlowSourceSchema.parse(input.source);
+      const reason = z.string().parse(input.reason);
+      return db.immediate(() => {
+        const task = requireTask(workspaceId);
+        assertEditable(task);
+        if (level === "simple" && task.control?.highRiskFlow === true)
+          throw new TaskCommandError("invalid", "高风险任务不得使用简单流程");
+        const control = { ...task.control };
+        delete control.enabledRoles;
+        delete control.simpleAutoExecute;
+        delete control.flowEvaluationPending;
+        delete control.flowEvaluationText;
+        db.prepare("UPDATE task SET flow_level = ?, flow_source = ?, flow_reason = ?, control_json = ? WHERE workspace_id = ?")
+          .run(level, source, reason, JSON.stringify(control), workspaceId);
+        return changed(workspaceId, ["flowLevel", "flowSource", "flowReason"]);
       });
     },
     bindConversation(workspaceId: string, conversationId: string): Task {

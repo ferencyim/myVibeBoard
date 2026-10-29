@@ -5,6 +5,8 @@ import {
   type PropsWithChildren,
   type ReactElement,
 } from "react";
+import { useIsCompactFormFactor } from "@/constants/layout";
+import { usePanelStore } from "@/stores/panel-store";
 
 interface ComposerKeyboardScopeValue {
   /**
@@ -43,4 +45,13 @@ export function ComposerKeyboardScopeProvider({
 
 export function useComposerKeyboardScope(): ComposerKeyboardScopeValue {
   return useContext(ComposerKeyboardScopeContext);
+}
+
+export function useComposerScopeState(isPaneFocused: boolean): ComposerKeyboardScopeValue {
+  const isCompact = useIsCompactFormFactor();
+  const overlayPanelRequested = usePanelStore((state) => state.mobilePanel.target !== "agent");
+  return {
+    isPaneFocused,
+    isActiveComposer: isPaneFocused && !(isCompact && overlayPanelRequested),
+  };
 }

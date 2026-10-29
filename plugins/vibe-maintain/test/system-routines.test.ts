@@ -12,4 +12,15 @@ describe("系统例程只读映射", () => {
     expect(rows.find((row) => row.title === "workload")).toMatchObject({ schedule: null, nextRunAt: null });
     expect(h.engine.status()).toEqual(before);
   });
+
+  it("预测超过一年的闰日，并保留维护规则的单值步长语义", async () => {
+    const h = setup({ yml: "rules:\n  - name: leap\n    trigger: { kind: time, cron: '0 0 29 2 *' }\n    check: { type: git }\n  - name: stepped\n    trigger: { kind: time, cron: '5/15 * * * *' }\n    check: { type: git }\n" });
+    await h.engine.syncRules();
+    const rows = systemRoutines(h.engine.status(), new Date(2026, 0, 1, 0, 5));
+    const leapAt = new Date(rows.find((row) => row.title === "leap")!.nextRunAt!);
+    expect([leapAt.getFullYear(), leapAt.getMonth(), leapAt.getDate(), leapAt.getHours()]).toEqual([2028, 1, 29, 0]);
+    const stepped = rows.find((row) => row.title === "stepped")!;
+    expect(stepped.schedule?.expression).toBe("5,20,35,50 * * * *");
+    expect(new Date(stepped.nextRunAt!).getMinutes()).toBe(20);
+  });
 });

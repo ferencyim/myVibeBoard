@@ -14,9 +14,9 @@ export interface DesktopSidebarState {
 
 export type SortOption = "name" | "modified" | "size";
 
-export const DEFAULT_SIDEBAR_WIDTH = 320;
-export const MIN_SIDEBAR_WIDTH = 200;
-export const MAX_SIDEBAR_WIDTH = 600;
+export const DEFAULT_SIDEBAR_WIDTH = 280;
+export const MIN_SIDEBAR_WIDTH = 128;
+export const MAX_SIDEBAR_WIDTH = 400;
 
 export const DEFAULT_TREE_RAIL_WIDTH = 260;
 export const MIN_TREE_RAIL_WIDTH = 180;
@@ -39,7 +39,7 @@ function clampNumber(value: number, min: number, max: number): number {
 }
 
 export function clampSidebarWidth(width: number): number {
-  return clampNumber(width, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+  return width < 110 ? 88 : clampNumber(width, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
 }
 
 export function clampTreeRailWidth(width: number): number {

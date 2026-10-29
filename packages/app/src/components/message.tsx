@@ -1,4 +1,5 @@
 import { useStableEvent } from "@/hooks/use-stable-event";
+import { decodeComposerQuote, type ComposerQuote } from "@/composer/quote";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { AssistantForkMenu, type AssistantForkTarget } from "@/components/assistant-fork-menu";
 import { AttachmentLightbox, type ImageLightboxSource } from "@/components/attachment-lightbox";
@@ -42,6 +43,7 @@ import {
   Info,
   MicVocal,
   Plus,
+  MessageSquareQuote,
   Scissors,
   TriangleAlertIcon,
   XCircle,
@@ -102,6 +104,9 @@ interface UserMessageProps {
   isLastInGroup?: boolean;
   isPending?: boolean;
   disableOuterSpacing?: boolean;
+  onQuote?: (quote: ComposerQuote) => void;
+  quoteMessageId?: string;
+  onJumpToQuote?: (messageId: string) => boolean;
 }
 
 const MessageOuterSpacingContext = createContext(false);
@@ -296,8 +301,11 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   },
   content: {
     alignItems: "flex-end",
-    maxWidth: "100%",
+    maxWidth: isNative ? "88%" : "80%",
     cursor: "auto",
+  },
+  attachmentContent: {
+    maxWidth: "100%",
   },
   containerSpacing: {
     marginBottom: theme.spacing[1],
@@ -309,20 +317,25 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     marginBottom: theme.spacing[4],
   },
   bubble: {
-    backgroundColor: theme.colors.surface3,
+    backgroundColor: theme.colors.bgSurfaceRaised,
     borderRadius: theme.borderRadius["2xl"],
-    borderTopRightRadius: theme.borderRadius.sm,
-    paddingHorizontal: theme.spacing[4],
-    paddingVertical: theme.spacing[4],
+    paddingHorizontal: isNative ? theme.spacing[4] : theme.spacing[3],
+    paddingVertical: isNative ? theme.spacing[3] : theme.spacing[2],
+    maxWidth: 720,
     minWidth: 0,
     flexShrink: 1,
   },
+  attachmentOnly: {
+    backgroundColor: "transparent",
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+  },
   text: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.content,
+    fontSize: theme.fontSize.base,
     ...(isWeb
       ? {
-          lineHeight: Math.round(theme.fontSize.content * 1.4),
+          lineHeight: theme.lineHeight.lg,
           overflowWrap: "anywhere" as const,
         }
       : {}),
@@ -386,6 +399,8 @@ function UserMessageImagePill({ image, onOpen, accessibilityLabel }: UserMessage
 
 const MESSAGE_TEXT_DATASET = { messageText: "true" };
 
+// The message keeps attachment, pending, and grouped action states together.
+// eslint-disable-next-line complexity
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
@@ -400,6 +415,9 @@ export const UserMessage = memo(function UserMessage({
   isLastInGroup = true,
   isPending = false,
   disableOuterSpacing,
+  onQuote,
+  quoteMessageId,
+  onJumpToQuote,
 }: UserMessageProps) {
   const isCompact = useIsCompactFormFactor();
   const { t } = useTranslation();
@@ -411,7 +429,9 @@ export const UserMessage = memo(function UserMessage({
     [lightboxMetadata],
   );
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
-  const hasText = message.trim().length > 0;
+  const decodedQuote = useMemo(() => decodeComposerQuote(message), [message]);
+  const displayMessage = decodedQuote?.text ?? message;
+  const hasText = displayMessage.trim().length > 0 || decodedQuote !== null;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
   const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
@@ -469,11 +489,14 @@ export const UserMessage = memo(function UserMessage({
   return (
     <View style={containerStyle} testID="user-message" aria-busy={isPending}>
       <View
-        style={userMessageStylesheet.content}
+        style={[userMessageStylesheet.content, !hasText && userMessageStylesheet.attachmentContent]}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
       >
-        <View style={userMessageStylesheet.bubble}>
+        <View
+          style={[userMessageStylesheet.bubble, !hasText && userMessageStylesheet.attachmentOnly]}
+        >
+          {decodedQuote ? <QuotePreview quote={decodedQuote.quote} onJump={onJumpToQuote} /> : null}
           {hasImages ? (
             <View style={imagePreviewContainerStyle}>
               {images.map((image) => (
@@ -506,7 +529,7 @@ export const UserMessage = memo(function UserMessage({
           ) : null}
           {hasText ? (
             <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
-              {message}
+              {displayMessage}
             </Text>
           ) : null}
         </View>
@@ -532,6 +555,14 @@ export const UserMessage = memo(function UserMessage({
               containerStyle={userMessageStylesheet.copyButton}
               accessibilityLabel={t("message.actions.copyMessage")}
             />
+            {onQuote && quoteMessageId ? (
+              <QuoteButton
+                onQuote={onQuote}
+                messageId={quoteMessageId}
+                author={t("agentStream.quoteYou", { defaultValue: "You" })}
+                text={displayMessage}
+              />
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -719,12 +750,100 @@ interface AssistantMessageProps {
   client?: DaemonClient | null;
   spacing?: "default" | "compactTop" | "compactBottom" | "compactBoth";
   phase: MarkdownPhase;
+  onQuote?: (quote: ComposerQuote) => void;
+  quoteMessageId?: string;
 }
+
+function QuoteButton({
+  onQuote,
+  messageId,
+  author,
+  text,
+}: {
+  onQuote: (quote: ComposerQuote) => void;
+  messageId: string;
+  author: string;
+  text: string;
+}) {
+  const { t } = useTranslation();
+  const onPress = useCallback(
+    () => onQuote({ messageId, author, text }),
+    [onQuote, messageId, author, text],
+  );
+  if (!text.trim()) return null;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={t("message.actions.reply", { defaultValue: "Reply" })}
+      style={quoteStyles.button}
+    >
+      <MessageSquareQuote size={ICON_SIZE.md} color={quoteStyles.icon.color} />
+    </Pressable>
+  );
+}
+
+function QuotePreview({
+  quote,
+  onJump,
+}: {
+  quote: ComposerQuote;
+  onJump?: (messageId: string) => boolean;
+}) {
+  const { t } = useTranslation();
+  const [unavailable, setUnavailable] = useState(false);
+  const handlePress = useCallback(
+    () => setUnavailable(!onJump?.(quote.messageId)),
+    [onJump, quote.messageId],
+  );
+  return (
+    <Pressable accessibilityRole="button" onPress={handlePress} style={quoteStyles.preview}>
+      <Text style={quoteStyles.author}>{quote.author}</Text>
+      <Text numberOfLines={2} style={quoteStyles.excerpt}>
+        {quote.text}
+      </Text>
+      {unavailable ? (
+        <Text accessibilityRole="alert" style={quoteStyles.excerpt}>
+          {t("agentStream.quoteUnavailable", { defaultValue: "Original message unavailable" })}
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+}
+
+const quoteStyles = StyleSheet.create((theme) => ({
+  button: { padding: theme.spacing[1] },
+  icon: { color: theme.colors.textMuted },
+  preview: {
+    borderLeftWidth: theme.borderWidth[2],
+    borderLeftColor: theme.colors.borderStrong,
+    paddingLeft: theme.spacing[2],
+    marginBottom: theme.spacing[2],
+  },
+  author: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+  },
+  excerpt: { color: theme.colors.textMuted, fontSize: theme.fontSize.sm },
+}));
 
 export const assistantMessageStylesheet = StyleSheet.create((theme) => ({
   container: {
     paddingVertical: theme.spacing[3],
     ...(isWeb ? { userSelect: "text" as const } : {}),
+  },
+  bubble: {
+    alignSelf: "flex-start",
+    maxWidth: isNative ? "100%" : "80%",
+    backgroundColor: isNative ? "transparent" : theme.colors.bgSurface,
+    borderRadius: theme.borderRadius["2xl"],
+    paddingHorizontal: isNative ? 0 : theme.spacing[3],
+    paddingVertical: isNative ? 0 : theme.spacing[2],
+  },
+  bubbleContent: {
+    maxWidth: 720,
+    minWidth: 0,
   },
   containerCompactTop: {
     paddingTop: 0,
@@ -1138,6 +1257,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   client,
   spacing = "default",
   phase,
+  onQuote,
+  quoteMessageId,
 }: AssistantMessageProps) {
   const { t } = useTranslation();
   const renderedMessage = useMemo(
@@ -1184,20 +1305,32 @@ export const AssistantMessage = memo(function AssistantMessage({
       style={assistantContainerStyle}
       onLayout={measureMessage}
     >
-      <MarkdownRenderer
-        text={revealedMessage}
-        streaming={phase !== "complete" || revealedMessage.length < renderedMessage.text.length}
-        client={client}
-        workspaceRoot={workspaceRoot}
-        serverId={serverId}
-      />
-      {fullMessageByteLength !== null ? (
-        <Text
-          testID="assistant-message-capped-notice"
-          style={assistantMessageStylesheet.cappedNotice}
-        >
-          {t("agentStream.messageCapped", { bytes: fullMessageByteLength })}
-        </Text>
+      <View style={assistantMessageStylesheet.bubble}>
+        <View style={assistantMessageStylesheet.bubbleContent}>
+          <MarkdownRenderer
+            text={revealedMessage}
+            streaming={phase !== "complete" || revealedMessage.length < renderedMessage.text.length}
+            client={client}
+            workspaceRoot={workspaceRoot}
+            serverId={serverId}
+          />
+          {fullMessageByteLength !== null ? (
+            <Text
+              testID="assistant-message-capped-notice"
+              style={assistantMessageStylesheet.cappedNotice}
+            >
+              {t("agentStream.messageCapped", { bytes: fullMessageByteLength })}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+      {onQuote && quoteMessageId && phase === "complete" ? (
+        <QuoteButton
+          onQuote={onQuote}
+          messageId={quoteMessageId}
+          author={t("agentStream.quoteAssistant", { defaultValue: "Assistant" })}
+          text={message}
+        />
       ) : null}
     </View>
   );

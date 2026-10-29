@@ -112,12 +112,13 @@ interface AttachmentLabelProps {
   icon?: ReactNode;
   title: string;
   subtitle: string;
+  composer?: boolean;
 }
 
 /** Two-line labelled pill body: attachment name over its type. */
-export function AttachmentLabel({ icon, title, subtitle }: AttachmentLabelProps) {
+export function AttachmentLabel({ icon, title, subtitle, composer = false }: AttachmentLabelProps) {
   return (
-    <View style={styles.labelBody}>
+    <View style={[styles.labelBody, composer && styles.composerLabelBody]}>
       {icon ? <View style={styles.labelIcon}>{icon}</View> : null}
       <View style={styles.labelTextColumn}>
         <Text style={styles.labelTitle} numberOfLines={1}>
@@ -132,13 +133,19 @@ export function AttachmentLabel({ icon, title, subtitle }: AttachmentLabelProps)
 }
 
 /** Square image preview pill body. */
-export function AttachmentThumbnail({ metadata }: { metadata: AttachmentMetadata }) {
+export function AttachmentThumbnail({
+  metadata,
+  composer = false,
+}: {
+  metadata: AttachmentMetadata;
+  composer?: boolean;
+}) {
   const uri = useAttachmentPreviewUrl(metadata);
   const source = useMemo(() => ({ uri: uri ?? "" }), [uri]);
   if (!uri) {
-    return <View style={styles.thumbnailPlaceholder} />;
+    return <View style={[styles.thumbnailPlaceholder, composer && styles.composerThumbnail]} />;
   }
-  return <Image source={source} style={styles.thumbnail} />;
+  return <Image source={source} style={[styles.thumbnail, composer && styles.composerThumbnail]} />;
 }
 
 const ThemedX = withUnistyles(X);
@@ -168,6 +175,10 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
   },
+  composerLabelBody: {
+    height: { xs: theme.spacing[24] + theme.spacing[6], md: ATTACHMENT_CONTENT_HEIGHT },
+    width: { xs: theme.spacing[24] + theme.spacing[6], md: undefined },
+  },
   labelTextColumn: {
     minWidth: 0,
     flexShrink: 1,
@@ -188,6 +199,10 @@ const styles = StyleSheet.create((theme) => ({
     width: ATTACHMENT_CONTENT_HEIGHT,
     height: ATTACHMENT_CONTENT_HEIGHT,
     backgroundColor: theme.colors.surface1,
+  },
+  composerThumbnail: {
+    width: { xs: theme.spacing[24] + theme.spacing[6], md: ATTACHMENT_CONTENT_HEIGHT },
+    height: { xs: theme.spacing[24] + theme.spacing[6], md: ATTACHMENT_CONTENT_HEIGHT },
   },
   closeButton: {
     position: "absolute",

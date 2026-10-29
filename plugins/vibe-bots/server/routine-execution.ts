@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import type { BotService } from "./service";
 import { nextRoutineTime } from "./vibe/contract/routine-schedule";
 import { createRoutineStore } from "./vibe/db/routines";
-import { resolveVibeHome, type VibeDb } from "./vibe/db/sqlite";
+import type { VibeDb } from "./vibe/db/sqlite";
 
 interface Admission {
   paused: boolean;
@@ -101,10 +100,12 @@ export function createRoutineExecution(db: VibeDb, service: BotService, server: 
         try {
           let target = main;
           if (routine.target === "new_thread") {
-            const cwd = bot.projectId ? (await server.paseo.projects.list()).projects.find((p) => p.projectId === bot.projectId)?.projectRootPath : join(resolveVibeHome(), "bots", bot.id);
-            if (!cwd || !current.model) throw new Error("无法确定旁线程目录或模型");
-            target = await server.paseo.agents.create({ cwd, title: routine.title, labels: { "vibe.bot": bot.id, "vibe.bot-thread": "routine" }, config: { provider: `${provider}/${current.model}`, systemPrompt: [service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n") } });
-            agentId = target.id;
+            const thread = service.threads.create(bot.id, routine.title);
+            const openedThread = await service.waitThread(bot.id, thread.id);
+            agentId = openedThread.agentId;
+            target = server.paseo.agents.ref(agentId);
+            await target.refresh();
+            if (target.current()?.provider !== provider) throw new Error("旁线程模型与已准入的 provider 不一致，请重试");
             db.prepare("UPDATE bot_routine_run SET agent_id=? WHERE id=?").run(agentId, id);
           }
           await target.send(routine.prompt, { sourceAgentId: agentId, messageId: id });
@@ -130,11 +131,23 @@ export function createRoutineExecution(db: VibeDb, service: BotService, server: 
     const run = db.prepare<Run>("SELECT id,routine_id,agent_id FROM bot_routine_run WHERE agent_id=? AND status='running' ORDER BY started_at LIMIT 1").get(agentId);
     if (!run || !turnId) return false;
     try {
-      const history = await server.paseo.agents.ref(agentId).timeline.refetch({ direction: "tail", limit: 100, projection: "canonical" });
-      const submitted = history.entries.find((entry) => entry.item.type === "user_message" && entry.item.clientMessageId === run.id);
-      if (!submitted || submitted.turnId !== turnId) return false;
-      finish(run, error);
-      return true;
+      const timeline = server.paseo.agents.ref(agentId).timeline;
+      let history = await timeline.refetch({ direction: "tail", limit: 100, projection: "canonical" });
+      const seen = new Set<string>();
+      for (;;) {
+        const submitted = history.entries.find((entry) => entry.item.type === "user_message" && entry.item.clientMessageId === run.id);
+        if (submitted) {
+          if (submitted.turnId !== turnId) return false;
+          finish(run, error);
+          return true;
+        }
+        if (!history.hasOlder || !history.startCursor) return false;
+        const cursor = history.startCursor;
+        const key = `${cursor.epoch}:${cursor.seq}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        history = await timeline.refetch({ direction: "before", cursor, limit: 100, projection: "canonical" });
+      }
     } catch {
       // Do not attribute an unrelated turn when history is unavailable.
       return false;

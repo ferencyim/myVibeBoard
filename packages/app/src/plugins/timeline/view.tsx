@@ -1,3 +1,4 @@
+import { VisualReply } from "@/visual-reply";
 import { PluginClientStateProvider } from "@getpaseo/plugin/client/host";
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import type { PluginTheme } from "@getpaseo/plugin";
@@ -60,6 +61,10 @@ function PluginTimelineItemBody({
   const host = useMemo(() => ({ id: serverId, label: hostLabel }), [hostLabel, serverId]);
   const layout = useMemo(() => ({ compact, platform: resolvePluginPlatform() }), [compact]);
   const stateSource = useMemo(() => createPluginClientStateSource(serverId), [serverId]);
+
+  if (item.pluginId === "vibe-bots" && item.itemKind === "visual-reply" && item.version === 1) {
+    return <VisualReply serverId={serverId} agentId={agentId} data={item.data} theme={theme} />;
+  }
 
   if (!plugin || !renderer || !parsed || !client) {
     return <TimelineItemUnavailable />;

@@ -67,8 +67,22 @@ CREATE TABLE bot_continuation_request (
 );
 `,
   },
-  // WP-141 owns v2; replace this reservation with its migration before integration.
-  { version: 2, name: "reserved_wp141", sql: "SELECT * FROM wp141_v2_migration_required" },
+  {
+    version: 2,
+    name: "bot_threads",
+    sql: `
+CREATE TABLE bot_thread (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bot(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  agent_id TEXT,
+  created_at TEXT NOT NULL,
+  archived_at TEXT
+);
+CREATE INDEX idx_bot_thread_bot ON bot_thread(bot_id,archived_at);
+CREATE UNIQUE INDEX idx_bot_thread_agent ON bot_thread(agent_id) WHERE agent_id IS NOT NULL;
+`,
+  },
   {
     version: 3, name: "bot_routines", sql: `
 CREATE TABLE bot_routine (

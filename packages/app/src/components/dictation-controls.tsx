@@ -248,7 +248,7 @@ export function DictationOverlay({
               onPress={onAccept}
               accessibilityRole="button"
               accessibilityLabel={t("message.dictation.insert")}
-              style={[overlayStyles.actionButton, OVERLAY_ACCEPT_BUTTON_BG]}
+              style={[overlayStyles.actionButton, overlayStyles.acceptButton]}
             >
               <Pencil
                 size={theme.iconSize.lg}
@@ -346,17 +346,17 @@ const overlayStyles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     width: "100%",
-    borderRadius: theme.borderRadius["2xl"],
+    borderRadius: { xs: theme.borderRadius["2xl"], md: theme.borderRadius.lg },
     justifyContent: "space-between",
     paddingHorizontal: theme.spacing[4],
     paddingVertical: OVERLAY_VERTICAL_PADDING,
     height: FOOTER_HEIGHT,
   },
   cancelButton: {
-    width: OVERLAY_BUTTON_SIZE,
-    height: OVERLAY_BUTTON_SIZE,
+    width: { xs: theme.spacing[12] + theme.spacing[2], md: OVERLAY_BUTTON_SIZE },
+    height: { xs: theme.spacing[12] + theme.spacing[2], md: OVERLAY_BUTTON_SIZE },
     borderRadius: theme.borderRadius.full,
-    backgroundColor: "rgba(0, 0, 0, 0.15)",
+    backgroundColor: theme.colors.accentSoftStrong,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -390,9 +390,14 @@ const overlayStyles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
   },
+  acceptButton: {
+    backgroundColor: theme.colors.accentSoftStrong,
+    width: { xs: theme.spacing[16], md: OVERLAY_BUTTON_SIZE },
+    height: { xs: theme.spacing[16], md: OVERLAY_BUTTON_SIZE },
+  },
   actionButton: {
-    width: OVERLAY_BUTTON_SIZE,
-    height: OVERLAY_BUTTON_SIZE,
+    width: { xs: theme.spacing[12] + theme.spacing[2], md: OVERLAY_BUTTON_SIZE },
+    height: { xs: theme.spacing[12] + theme.spacing[2], md: OVERLAY_BUTTON_SIZE },
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
@@ -407,5 +412,3 @@ const overlayStyles = StyleSheet.create((theme) => ({
     justifyContent: "center",
   },
 }));
-
-const OVERLAY_ACCEPT_BUTTON_BG = { backgroundColor: "rgba(255, 255, 255, 0.25)" };

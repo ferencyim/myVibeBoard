@@ -54,7 +54,7 @@ export const projectBotModelRpc = defineRpc({
 
 export const botModelsListRpc = defineRpc({
   name: "models.list",
-  input: z.object({ query: z.string().optional(), projectId: z.string().optional() }),
+  input: z.object({ query: z.string().optional(), projectId: z.string().optional(), refresh: z.boolean().optional() }),
   output: z.object({
     defaultPresetId: z.string().nullable().optional(),
     providers: z.array(z.object({

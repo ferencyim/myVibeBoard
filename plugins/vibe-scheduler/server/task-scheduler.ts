@@ -335,7 +335,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
         if (
           (row.frozen && agent && nativeStopped(agent)) ||
           (row.frozen && !agent && row.pendingCreate) ||
-          (!row.agentId && workspace.agents.every(nativeStopped))
+          (!row.agentId && !(row.hostOperation && row.access === "verify") && workspace.agents.every(nativeStopped))
         )
           release(row);
       }
@@ -618,10 +618,11 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
   }
   function requestKind(request: TaskResourceRequest, role: ResourceRole) {
     const master = role === "master";
-    const hostOperation = master && request.hostLease === true;
+    const hostOperation = (master || role === "verifier") && request.hostLease === true;
     if (request.files?.length && !hostOperation)
       block("只有显式 master hostLease 可申请插件文件写锁");
-    if (hostOperation && !request.files?.length) block("插件文件写锁必须声明文件范围");
+    if (hostOperation && master && !request.files?.length) block("插件文件写锁必须声明文件范围");
+    if (hostOperation && role === "verifier" && request.files?.length) block("验证写屏障覆盖整个仓库");
     if (
       request.subtaskId &&
       role !== "subagent" &&
@@ -662,12 +663,17 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     const role = request.role!;
     const { master, hostOperation } = requestKind(request, role);
     const { task, planning } = taskFor(request, role);
-    const { preset, model } = modelFor(request, role, task, planning);
+    const hostVerification = hostOperation && role === "verifier";
+    if (hostVerification && (task?.flowLevel !== "simple" || task.phase !== "executing"))
+      block("宿主自测写屏障仅用于执行中的简单流程");
+    const { preset, model } = hostVerification
+      ? { preset: null, model: { provider: "host", model: "verification" } }
+      : modelFor(request, role, task, planning);
     const existing = checkExisting(request, role, model);
-    const { workspace, paths, project } = await admissionWorkspace(request, master, hostOperation);
+    const { workspace, paths, project } = await admissionWorkspace(request, master, hostOperation && !hostVerification);
     const projectId = master ? null : workspace.projectId;
     checkCapacity(model.provider, projectId);
-    const access = request.operation === "compact" ? "read" : accessFor(role, hostOperation);
+    const access = hostVerification ? "verify" : request.operation === "compact" ? "read" : accessFor(role, hostOperation);
     const files = filesFor(request, role, task, planning);
     const ranges = master && !hostOperation ? [] : await normalizeTaskFiles(files, paths.directory);
     checkFiles(paths.repo, ranges, access, existing?.id);
@@ -860,7 +866,7 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     row: TaskResourceLease,
     workspace: NativeTaskWorkspace,
   ) {
-    if (row.hostOperation && request.action === "release" && !row.frozen) {
+    if (row.hostOperation && request.action === "release" && (!row.frozen || row.access === "verify")) {
       release(row);
       return result(request, true, "插件文件操作已完成，写锁已释放");
     }

@@ -1,12 +1,4 @@
-import {
-  Fragment,
-  type ReactElement,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   Platform,
@@ -44,6 +36,8 @@ import {
   type HistoryStartPaginationTransition,
 } from "./history-start-pagination";
 import { useStreamTopOverlayInset } from "./top-overlay";
+import { getStreamItemMessageId } from "./presentation";
+import { nativeQuoteOffset } from "./native-quote-position";
 import {
   createHistoryStartSettleScheduler,
   type HistoryStartSettleScheduler,
@@ -71,6 +65,29 @@ function keyExtractor(item: { id: string }): string {
   return item.id;
 }
 
+function NativeLiveRow({
+  item,
+  index,
+  items,
+  render,
+  onMeasure,
+}: {
+  item: StreamItem;
+  index: number;
+  items: StreamItem[];
+  render: StreamRenderInput["renderers"]["renderLiveHeadRow"];
+  onMeasure: (id: string, y: number, height: number) => void;
+}) {
+  const onLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const { y, height } = event.nativeEvent.layout;
+      onMeasure(getStreamItemMessageId(item), y, height);
+    },
+    [item, onMeasure],
+  );
+  return <View onLayout={onLayout}>{render(item, index, items)}</View>;
+}
+
 function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrategy }) {
   const {
     agentId,
@@ -95,6 +112,19 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
   } = props;
   const { renderHistoryMountedRow, renderLiveHeadRow, renderLiveAuxiliary } = renderers;
   const flatListRef = useRef<FlatList<StreamItem>>(null);
+  const liveRowLayoutsRef = useRef(new Map<string, { y: number; height: number }>());
+  const measureLiveRow = useCallback((id: string, y: number, height: number) => {
+    liveRowLayoutsRef.current.set(id, { y, height });
+  }, []);
+  const jumpRetryCountRef = useRef(0);
+  const jumpRetryFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    liveRowLayoutsRef.current.clear();
+    return () => {
+      if (jumpRetryFrameRef.current !== null) cancelAnimationFrame(jumpRetryFrameRef.current);
+      jumpRetryFrameRef.current = null;
+    };
+  }, [agentId]);
   const streamViewportMetricsRef = useRef({
     containerKey: "native-virtualized",
     contentHeight: 0,
@@ -361,6 +391,27 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         bottomAnchorController.prepareForStickyViewportChange();
         markNativeViewportSettling();
       },
+      scrollToMessage: (messageId) => {
+        if (jumpRetryFrameRef.current !== null) cancelAnimationFrame(jumpRetryFrameRef.current);
+        jumpRetryFrameRef.current = null;
+        if (segments.liveHead.some((item) => getStreamItemMessageId(item) === messageId)) {
+          const layout = liveRowLayoutsRef.current.get(messageId);
+          if (layout) {
+            const offset = nativeQuoteOffset(
+              layout.y,
+              layout.height,
+              streamViewportMetricsRef.current.viewportHeight,
+            );
+            flatListRef.current?.scrollToOffset({ offset, animated: false });
+          }
+          return;
+        }
+        const index = historyRows.findIndex((item) => getStreamItemMessageId(item) === messageId);
+        if (index >= 0) {
+          jumpRetryCountRef.current = 0;
+          flatListRef.current?.scrollToIndex({ index, animated: false });
+        }
+      },
     };
     viewportRef.current = handle;
     return () => {
@@ -368,7 +419,27 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
         viewportRef.current = null;
       }
     };
-  }, [agentId, bottomAnchorController, markNativeViewportSettling, viewportRef]);
+  }, [
+    agentId,
+    bottomAnchorController,
+    historyRows,
+    markNativeViewportSettling,
+    segments.liveHead,
+    viewportRef,
+  ]);
+
+  const handleScrollToIndexFailed = useCallback(
+    ({ index, averageItemLength }: { index: number; averageItemLength: number }) => {
+      if (jumpRetryCountRef.current >= 2) return;
+      jumpRetryCountRef.current += 1;
+      flatListRef.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+      jumpRetryFrameRef.current = requestAnimationFrame(() => {
+        jumpRetryFrameRef.current = null;
+        flatListRef.current?.scrollToIndex({ index, animated: false });
+      });
+    },
+    [],
+  );
 
   const isScrollEventNearBottom = useStableEvent(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -535,7 +606,14 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     // the memo invoke them again when that state changes.
     void liveHeadRowRevision;
     const liveHeadRows = segments.liveHead.map((item, index) => (
-      <Fragment key={item.id}>{renderLiveHeadRow(item, index, segments.liveHead)}</Fragment>
+      <NativeLiveRow
+        key={item.id}
+        item={item}
+        index={index}
+        items={segments.liveHead}
+        render={renderLiveHeadRow}
+        onMeasure={measureLiveRow}
+      />
     ));
     const liveAuxiliary = renderLiveAuxiliary();
     if (
@@ -547,15 +625,16 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
       return (listEmptyComponent ?? null) as ReactElement | null;
     }
     return (
-      <Fragment>
+      <View>
         {liveHeadRows}
         {liveAuxiliary}
-      </Fragment>
+      </View>
     );
   }, [
     boundary,
     listEmptyComponent,
     liveHeadRowRevision,
+    measureLiveRow,
     renderLiveAuxiliary,
     renderLiveHeadRow,
     segments.liveHead,
@@ -598,6 +677,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
       onMomentumScrollEnd={handleMomentumScrollEnd}
       scrollEventThrottle={16}
       onContentSizeChange={handleContentSizeChange}
+      onScrollToIndexFailed={handleScrollToIndexFailed}
       maintainVisibleContentPosition={maintainVisibleContentPosition}
       // Tall Markdown rows exhaust a shallow window during flings. Keep the initial
       // render small, then refill a deeper window in batches large enough to keep up.

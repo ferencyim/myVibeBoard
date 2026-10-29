@@ -1,4 +1,12 @@
 import { PluginProjectSidebarItems } from "@/plugins/project-sidebar-items";
+import { PluginSidebarGroups } from "@/components/sidebar/plugin-sidebar-groups";
+import { Avatar } from "@/ui/avatar";
+import { StatusIndicator } from "@/ui/status-indicator";
+import {
+  sidebarTaskStatus,
+  sidebarTreeGroupMode,
+  useSidebarWorkspaceClassification,
+} from "@/components/sidebar/sidebar-workspace-classification";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   View,
@@ -52,7 +60,6 @@ import {
   useSidebarWorkspacePinController,
   type ToggleSidebarWorkspacePin,
 } from "@/hooks/use-sidebar-workspace-pin";
-import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
 import { useHostFeatureMap } from "@/runtime/host-features";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useProjectIcons } from "@/projects/icons";
@@ -215,6 +222,7 @@ function selectionForSelectedWorkspace(
 }
 
 interface SidebarWorkspaceListProps {
+  compact?: boolean;
   workspaceGroups: SidebarWorkspaceGroup[];
   /** What `useProjectIcons` is asked for, straight from the projection. See `SidebarProjection`. */
   projectIconTargets: SidebarProjectIconTarget[];
@@ -1594,6 +1602,9 @@ function ProjectBlock({
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
+  const classification = useSidebarWorkspaceClassification(project);
+  const [otherCollapsed, setOtherCollapsed] = useState(true);
+  const toggleOtherCollapsed = useCallback(() => setOtherCollapsed((value) => !value), []);
   const visibilityPolicy = useMemo(
     () => createWorkspaceVisibilityPolicy<SidebarWorkspacePlacement>(workspaceEntriesByKey),
     [workspaceEntriesByKey],
@@ -1603,7 +1614,7 @@ function ProjectBlock({
     expanded: workspacesExpanded,
     canToggle: canToggleWorkspaces,
     toggleExpanded: toggleWorkspacesExpanded,
-  } = useLimitedSidebarGroup(project.workspaces, visibilityPolicy);
+  } = useLimitedSidebarGroup(classification.other, visibilityPolicy);
   const activeServerId = activeWorkspaceSelection?.serverId ?? null;
   const activeHostStatus = useHostRuntimeConnectionStatus(activeServerId ?? "");
   const preferredServerId = activeHostStatus === "online" ? activeServerId : null;
@@ -1764,36 +1775,75 @@ function ProjectBlock({
     if (project.workspaces.length > 0) {
       projectChildren = (
         <>
-          {manualSort ? (
-            <DraggableList
-              testID={`sidebar-workspace-list-${project.viewKey}`}
-              data={visibleWorkspaces}
-              keyExtractor={workspaceKeyExtractor}
-              renderItem={renderWorkspace}
-              onDragEnd={handleWorkspaceDragEnd}
-              extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
-              scrollEnabled={false}
-              useDragHandle
-              nestable={useNestable}
-              simultaneousGestureRef={parentGestureRef}
-              gestureHostPresented={dragGestureHostActive}
-              containerStyle={styles.workspaceListContainer}
-            />
-          ) : (
-            <View
-              testID={`sidebar-workspace-list-${project.viewKey}`}
-              style={styles.workspaceListContainer}
-            >
-              {visibleWorkspaces.map((item) => renderWorkspaceRow(item))}
+          {classification.tasks.length > 0 && <SidebarSectionHeader title="任务" />}
+          {classification.tasks.map(({ workspace, detail }) => (
+            <View key={workspace.workspaceKey}>
+              {renderWorkspaceRow(workspace)}
+              <View style={styles.taskDetail}>
+                {sidebarTaskStatus(
+                  workspaceEntriesByKey.get(workspace.workspaceKey)?.statusBucket,
+                ) ? (
+                  <StatusIndicator
+                    status={
+                      sidebarTaskStatus(
+                        workspaceEntriesByKey.get(workspace.workspaceKey)?.statusBucket,
+                      )!
+                    }
+                  />
+                ) : null}
+                <Text style={styles.taskDetailText} numberOfLines={2}>
+                  {[detail.phaseLabel, detail.blockingReason].filter(Boolean).join(" · ")}
+                </Text>
+              </View>
             </View>
+          ))}
+          {classification.unknown.length > 0 && (
+            <>
+              <SidebarSectionHeader title="会话（识别中或暂不可用）" />
+              {classification.unknown.map((workspace) => renderWorkspaceRow(workspace))}
+            </>
           )}
-          {canToggleWorkspaces ? (
-            <SidebarGroupToggleRow
-              expanded={workspacesExpanded}
-              onPress={toggleWorkspacesExpanded}
-              testID={`sidebar-project-show-more-${project.viewKey}`}
+          {classification.other.length > 0 && (
+            <SidebarSectionHeader
+              title="其他会话"
+              collapsed={otherCollapsed}
+              onToggle={toggleOtherCollapsed}
             />
-          ) : null}
+          )}
+          {!otherCollapsed && (
+            <>
+              {manualSort ? (
+                <DraggableList
+                  testID={`sidebar-workspace-list-${project.viewKey}`}
+                  data={visibleWorkspaces}
+                  keyExtractor={workspaceKeyExtractor}
+                  renderItem={renderWorkspace}
+                  onDragEnd={handleWorkspaceDragEnd}
+                  extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
+                  scrollEnabled={false}
+                  useDragHandle
+                  nestable={useNestable}
+                  simultaneousGestureRef={parentGestureRef}
+                  gestureHostPresented={dragGestureHostActive}
+                  containerStyle={styles.workspaceListContainer}
+                />
+              ) : (
+                <View
+                  testID={`sidebar-workspace-list-${project.viewKey}`}
+                  style={styles.workspaceListContainer}
+                >
+                  {visibleWorkspaces.map((item) => renderWorkspaceRow(item))}
+                </View>
+              )}
+              {canToggleWorkspaces ? (
+                <SidebarGroupToggleRow
+                  expanded={workspacesExpanded}
+                  onPress={toggleWorkspacesExpanded}
+                  testID={`sidebar-project-show-more-${project.viewKey}`}
+                />
+              ) : null}
+            </>
+          )}
         </>
       );
     } else if (rowModel.trailingAction.kind === "new_workspace") {
@@ -1937,6 +1987,7 @@ function areProjectBlockSelectionsEqual(
 const MemoProjectBlock = memo(ProjectBlock, areProjectBlockPropsEqual);
 
 export function SidebarWorkspaceList({
+  compact = false,
   workspaceGroups,
   projectIconTargets,
   pinnedGroups,
@@ -1947,7 +1998,7 @@ export function SidebarWorkspaceList({
   collapsedProjectKeys,
   onToggleProjectCollapsed,
   shortcutIndexByWorkspaceKey,
-  groupMode,
+  groupMode: storedGroupMode,
   isRefreshing: _isRefreshing = false,
   onRefresh: _onRefresh,
   onWorkspacePress,
@@ -1958,6 +2009,7 @@ export function SidebarWorkspaceList({
   parentGestureRef,
   dragGestureHostActive,
 }: SidebarWorkspaceListProps) {
+  const groupMode: SidebarGroupMode = sidebarTreeGroupMode(storedGroupMode);
   const pathname = usePathname();
   const hosts = useHosts();
   const rowItems = useSidebarRowItems();
@@ -2001,6 +2053,21 @@ export function SidebarWorkspaceList({
   // that produced the rows, so the question "what is on screen" is answered once.
   const projectIconByProjectViewKey = useProjectIcons({ projects: projectIconTargets });
 
+  if (compact) {
+    return (
+      <ScrollView style={styles.list} contentContainerStyle={styles.compactList}>
+        <PluginSidebarGroups onNavigate={onWorkspacePress} sidebarCompact />
+        {projects.map((project) => (
+          <CompactProject
+            key={project.viewKey}
+            project={project}
+            onWorkspacePress={onWorkspacePress}
+          />
+        ))}
+      </ScrollView>
+    );
+  }
+
   // A filter that matches nothing swaps the list's body and nothing above it. It used to replace
   // this whole subtree, which unmounted the header — and the header is where the display menu's
   // trigger lives, so filtering the last row away closed the menu you were filtering from.
@@ -2033,6 +2100,7 @@ export function SidebarWorkspaceList({
       />
     ) : (
       <ProjectModeList
+        compact={compact}
         projects={projects}
         pinnedGroups={pinnedGroups}
         workspaceEntriesByKey={workspaceEntriesByKey}
@@ -2059,6 +2127,91 @@ export function SidebarWorkspaceList({
     );
 
   return content;
+}
+
+function CompactProject({
+  project,
+  onWorkspacePress,
+}: {
+  project: SidebarProjectEntry;
+  onWorkspacePress?: () => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const classification = useSidebarWorkspaceClassification(project);
+  const [otherCollapsed, setOtherCollapsed] = useState(true);
+  const toggleOther = useCallback(() => setOtherCollapsed((value) => !value), []);
+  const toggle = useCallback(() => setCollapsed((value) => !value), []);
+  const accessibilityState = useMemo(() => ({ expanded: !collapsed }), [collapsed]);
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={project.projectName}
+        accessibilityState={accessibilityState}
+        onPress={toggle}
+        style={styles.compactRow}
+      >
+        <Avatar seed={project.viewKey} name={project.projectName} size={36} />
+      </Pressable>
+      {!collapsed && (
+        <>
+          <PluginProjectSidebarItems
+            hosts={project.hosts}
+            onNavigate={onWorkspacePress}
+            sidebarCompact
+          />
+          {classification.tasks.map(({ workspace }) => (
+            <CompactWorkspace
+              key={workspace.workspaceKey}
+              workspace={workspace}
+              onWorkspacePress={onWorkspacePress}
+            />
+          ))}
+          {classification.unknown.map((workspace) => (
+            <CompactWorkspace
+              key={workspace.workspaceKey}
+              workspace={workspace}
+              onWorkspacePress={onWorkspacePress}
+            />
+          ))}
+          {classification.other.length > 0 && (
+            <SidebarSectionHeader title="其他" collapsed={otherCollapsed} onToggle={toggleOther} />
+          )}
+          {!otherCollapsed &&
+            classification.other.map((workspace) => (
+              <CompactWorkspace
+                key={workspace.workspaceKey}
+                workspace={workspace}
+                onWorkspacePress={onWorkspacePress}
+              />
+            ))}
+        </>
+      )}
+    </View>
+  );
+}
+
+function CompactWorkspace({
+  workspace,
+  onWorkspacePress,
+}: {
+  workspace: SidebarWorkspacePlacement;
+  onWorkspacePress?: () => void;
+}) {
+  const open = useCallback(() => {
+    onWorkspacePress?.();
+    navigateToWorkspace({ serverId: workspace.serverId, workspaceId: workspace.workspaceId });
+  }, [onWorkspacePress, workspace.serverId, workspace.workspaceId]);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={workspace.name}
+      onPress={open}
+      style={styles.compactRow}
+    >
+      <Avatar seed={workspace.workspaceKey} name={workspace.name} size={36} />
+    </Pressable>
+  );
 }
 
 /**
@@ -2129,8 +2282,9 @@ function SidebarGroupedModeList({
 }
 
 function ProjectModeList({
+  compact = false,
   projects,
-  pinnedGroups,
+  pinnedGroups: _pinnedGroups,
   workspaceEntriesByKey,
   projectIconByProjectViewKey,
   collapsedProjectKeys,
@@ -2150,7 +2304,7 @@ function ProjectModeList({
   supportsMultiplicityByServerId,
   supportsPinningByServerId,
   onToggleWorkspacePin,
-  onPinnedWorkspaceReorder,
+  onPinnedWorkspaceReorder: _onPinnedWorkspaceReorder,
 }: Omit<
   SidebarWorkspaceListProps,
   | "workspaceGroups"
@@ -2170,18 +2324,14 @@ function ProjectModeList({
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
   onPinnedWorkspaceReorder: (workspaces: SidebarWorkspacePlacement[]) => void;
 }) {
-  const { t } = useTranslation();
+  const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const toggleProjectsCollapsed = useCallback(() => setProjectsCollapsed((value) => !value), []);
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
   const [creatingWorkspaceIds, setCreatingWorkspaceIds] = useState<Set<string>>(() => new Set());
   const creatingWorkspaceTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
   const showShortcutBadges = useShowShortcutBadges();
-  const pinnedCollapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedPinned);
-  const togglePinnedCollapsed = useSidebarCollapsedSectionsStore(
-    (state) => state.togglePinnedCollapsed,
-  );
-
   const manualSort = useSidebarViewStore((state) => state.workspaceSort === "manual");
   const getWorkspaceOrder = useSidebarOrderStore((state) => state.getWorkspaceOrder);
   const setWorkspaceOrder = useSidebarOrderStore((state) => state.setWorkspaceOrder);
@@ -2194,13 +2344,6 @@ function ProjectModeList({
   );
   const selectionEnabled = isWorkspaceRoute;
   const activeWorkspaceSelection = useActiveWorkspaceSelection();
-  const { pinnedChats, unpinnedProjects } = pinnedGroups;
-  const {
-    visibleItems: visiblePinnedChats,
-    expanded: pinnedChatsExpanded,
-    canToggle: canTogglePinnedChats,
-    toggleExpanded: togglePinnedChatsExpanded,
-  } = useLimitedSidebarGroup(pinnedChats);
   const nativeScrollGestureProps = useMemo(
     () =>
       parentGestureRef
@@ -2403,59 +2546,13 @@ function ProjectModeList({
     [renderProjectBlock],
   );
 
-  const renderPinnedChat = useCallback(
-    ({
-      item: workspace,
-      drag,
-      isActive,
-      dragHandleProps,
-    }: DraggableRenderItemInfo<SidebarWorkspacePlacement>) => {
-      return (
-        <MemoWorkspaceRowItem
-          workspace={workspace}
-          workspaceEntry={workspaceEntriesByKey.get(workspace.workspaceKey) ?? null}
-          hostBadge={hostBadgeByServerId.get(workspace.serverId) ?? null}
-          leadingProjectName={workspace.projectName}
-          leadingProjectIconDataUri={
-            projectIconByProjectViewKey.get(workspace.projectViewKey) ?? null
-          }
-          shortcutNumber={shortcutIndexByWorkspaceKey.get(workspace.workspaceKey) ?? null}
-          showShortcutBadge={showShortcutBadges}
-          canCopyBranchName={workspace.projectKind === "git"}
-          canPin={supportsPinningByServerId.get(workspace.serverId) === true}
-          onToggleWorkspacePin={onToggleWorkspacePin}
-          isCreating={creatingWorkspaceIds.has(workspace.workspaceId)}
-          selectionEnabled={selectionEnabled}
-          activeWorkspaceSelection={activeWorkspaceSelection}
-          onWorkspacePress={onWorkspacePress}
-          drag={drag}
-          isDragging={isActive}
-          dragHandleProps={dragHandleProps}
-        />
-      );
-    },
-    [
-      activeWorkspaceSelection,
-      creatingWorkspaceIds,
-      hostBadgeByServerId,
-      onWorkspacePress,
-      selectionEnabled,
-      shortcutIndexByWorkspaceKey,
-      showShortcutBadges,
-      supportsPinningByServerId,
-      onToggleWorkspacePin,
-      projectIconByProjectViewKey,
-      workspaceEntriesByKey,
-    ],
-  );
-
   const projectBody =
     projects.length === 0 ? (
       <SidebarProjectEmptyState onAddProject={onAddProject} onImportSession={onImportSession} />
     ) : (
       <DraggableList
         testID="sidebar-project-list"
-        data={unpinnedProjects}
+        data={projects}
         keyExtractor={projectViewKeyExtractor}
         renderItem={renderProject}
         onDragEnd={handleProjectDragEnd}
@@ -2471,54 +2568,17 @@ function ProjectModeList({
 
   const content = (
     <>
-      {pinnedChats.length > 0 ? (
-        <View style={styles.pinnedSection} testID="sidebar-pinned-section">
-          <SidebarSectionHeader
-            title={t("sidebar.pinned.title")}
-            collapsed={pinnedCollapsed}
-            onToggle={togglePinnedCollapsed}
-            testID="sidebar-pinned-section-header"
-          />
-          {pinnedCollapsed ? null : (
-            <>
-              <DraggableList
-                testID="sidebar-pinned-list"
-                data={visiblePinnedChats}
-                keyExtractor={workspaceKeyExtractor}
-                renderItem={renderPinnedChat}
-                onDragEnd={onPinnedWorkspaceReorder}
-                extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
-                scrollEnabled={false}
-                useDragHandle
-                nestable={platformIsNative}
-                simultaneousGestureRef={parentGestureRef}
-                gestureHostPresented={dragGestureHostActive}
-                containerStyle={styles.workspaceListContainer}
-              />
-              {canTogglePinnedChats ? (
-                <SidebarGroupToggleRow
-                  expanded={pinnedChatsExpanded}
-                  onPress={togglePinnedChatsExpanded}
-                  testID="sidebar-pinned-show-more"
-                />
-              ) : null}
-            </>
-          )}
-        </View>
-      ) : null}
-      {/* The header carries the display menu, which is the only way back out of a filter, so it
-        stays for as long as a filter is what emptied the list. It is absent only when the
-        sidebar is genuinely empty, where a section heading would sit over nothing.
-        Every filter that can empty this branch needs a term here: a project filter pinned to a
-        project whose chats are all pinned leaves `unpinnedProjects` empty, and without its term
-        the header would go with it, taking the only route back to the filter page. */}
-      {unpinnedProjects.length > 0 ||
-      hasActiveHostFilter ||
-      hasActiveProjectFilter ||
-      sidebarFilterEmpty
-        ? listHeaderComponent
-        : null}
-      {sidebarFilterEmpty ? <SidebarFilterEmptyState /> : projectBody}
+      <PluginSidebarGroups onNavigate={onWorkspacePress} sidebarCompact={compact} />
+      <SidebarSectionHeader
+        title="项目"
+        collapsed={projectsCollapsed}
+        onToggle={toggleProjectsCollapsed}
+      />
+      {!projectsCollapsed &&
+        (projects.length > 0 || hasActiveHostFilter || hasActiveProjectFilter || sidebarFilterEmpty
+          ? listHeaderComponent
+          : null)}
+      {!projectsCollapsed && (sidebarFilterEmpty ? <SidebarFilterEmptyState /> : projectBody)}
       {listFooterComponent}
     </>
   );
@@ -2550,6 +2610,15 @@ function ProjectModeList({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  taskDetail: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: theme.spacing[4],
+    gap: theme.spacing[1],
+  },
+  taskDetailText: { color: theme.colors.textMuted, fontSize: theme.fontSize.sm, flex: 1 },
+  compactList: { alignItems: "center", paddingBottom: theme.spacing[4] },
+  compactRow: { minHeight: 54, alignItems: "center", justifyContent: "center" },
   container: {
     flex: 1,
   },

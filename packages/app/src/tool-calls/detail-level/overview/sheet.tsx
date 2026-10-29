@@ -13,6 +13,8 @@ interface OverviewToolCallGroupSheetProps {
   summary: string;
   children: ReactNode;
   onClose: () => void;
+  targetOffset?: number | null;
+  waitingForTarget?: boolean;
 }
 
 const SNAP_POINTS = ["60%", "95%"];
@@ -26,6 +28,8 @@ export function OverviewToolCallGroupSheet({
   summary,
   children,
   onClose,
+  targetOffset,
+  waitingForTarget,
 }: OverviewToolCallGroupSheetProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<BottomSheetScrollViewMethods>(null);
@@ -42,9 +46,12 @@ export function OverviewToolCallGroupSheet({
     if (!visible) {
       return;
     }
-    const frame = requestAnimationFrame(scrollToLatest);
+    const frame = requestAnimationFrame(() => {
+      if (targetOffset != null) scrollRef.current?.scrollTo({ y: targetOffset, animated: false });
+      else if (!waitingForTarget) scrollToLatest();
+    });
     return () => cancelAnimationFrame(frame);
-  }, [children, scrollToLatest, visible]);
+  }, [children, scrollToLatest, targetOffset, visible, waitingForTarget]);
 
   return (
     <ToolCallSheetModal
