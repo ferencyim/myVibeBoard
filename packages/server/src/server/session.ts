@@ -4035,6 +4035,7 @@ export class Session {
       }`,
     );
 
+    messageId ??= uuidv4();
     const promptText = options?.spokenInput ? wrapSpokenInput(text) : text;
     const prompt = buildAgentPrompt(promptText, images, attachments);
 
@@ -4044,7 +4045,7 @@ export class Session {
       ) {
         return { ok: true };
       }
-      await sendPromptToAgent({
+      const result = await sendPromptToAgent({
         agentManager: this.agentManager,
         agentStorage: this.agentStorage,
         agentId,
@@ -4056,6 +4057,17 @@ export class Session {
         clearPendingPermissions: true,
         logger: this.sessionLogger,
       });
+      // Only a turn that actually started counts as received user input.
+      if (result.disposition === "turn_started") {
+        await waitForAgentRunStartWithTimeout(
+          this.agentManager,
+          agentId,
+          this.delivery.requestSignal,
+        );
+      }
+      if (!parsePluginClientId(this.clientId)) {
+        this.agentManager.userPromptReceived({ agentId, messageId, text, images, attachments });
+      }
       return { ok: true };
     } catch (error) {
       this.handleAgentRunError(agentId, error, "Failed to send agent message");
@@ -8417,12 +8429,13 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
+      const messageId = msg.messageId ?? uuidv4();
 
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       this.sessionLogger.trace(
         {
           agentId,
-          messageId: msg.messageId,
+          messageId,
           activeTurnBehavior: msg.activeTurnBehavior,
           textPrefix: msg.text.slice(0, 80),
         },
@@ -8464,7 +8477,7 @@ export class Session {
             attachments: msg.attachments,
             sessionMode: msg.sessionMode,
             prompt,
-            messageId: msg.messageId,
+            messageId,
           })
         ) {
           return;
@@ -8474,7 +8487,7 @@ export class Session {
           agentStorage: this.agentStorage,
           agentId,
           prompt,
-          messageId: msg.messageId,
+          messageId,
           activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
           sessionMode: msg.sessionMode,
           clearPendingPermissions: true,
@@ -8486,6 +8499,16 @@ export class Session {
             agentId,
             this.delivery.requestSignal,
           );
+        }
+        if (!parsePluginClientId(this.clientId)) {
+          this.agentManager.userPromptReceived({
+            agentId,
+            messageId,
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            sessionMode: msg.sessionMode,
+          });
         }
       };
       const sent = msg.messageId

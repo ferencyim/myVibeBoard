@@ -50,20 +50,31 @@ export const REMOVED_SETTING_KEYS = [
   "maxPlanLoops",
   "sweepDoneWindowHours",
   "projectBlockCardLimit",
+  "sweepOnStart",
+  "consolidateOnDone",
+  "maintainRequirements",
+  "requirementsExcerptChars",
 ] as const;
 
 export const masterSettings = defineSettings({
   id: "preferences",
   scope: "host",
-  version: 3,
+  version: 4,
   /** WP-105 / WP-114: remove retired card automation settings. */
   migrate: (values) => {
     if (!values || typeof values !== "object") return values;
     const next: Record<string, unknown> = { ...(values as Record<string, unknown>) };
+    next.legacyProjectMaintenance ??= Object.fromEntries(
+      ["consolidateOnDone", "maintainRequirements", "sweepOnStart"]
+        .filter((key) => typeof next[key] === "boolean")
+        .map((key) => [key, next[key]]),
+    );
     for (const key of REMOVED_SETTING_KEYS) delete next[key];
     return next;
   },
   schema: z.object({
+    // COMPAT(WP-134): added 2026-10-28; remove after 2027-04-01 once old master v3 settings have migrated to board.
+    legacyProjectMaintenance: z.record(z.string(), z.boolean()).optional(),
     enabled: z.boolean().default(true),
     /**
      * The agent preset the master runs on (WP-109; provider, model and thinking come from it).
@@ -93,15 +104,6 @@ export const masterSettings = defineSettings({
     /** Alert when the master's provider has at most this much quota left (percent). */
     quotaLowPct: z.number().min(1).max(90).default(20),
     quotaCheckSeconds: z.number().int().min(30).max(3600).default(300),
-    /** On start, consolidate recently finished tasks that have no memory update yet. */
-    sweepOnStart: z.boolean().default(true),
-
-    // ---- triggers (WP-93; WP-105 removed the draft review and worker-question wakes) ----
-    /** A task reached completed: the master consolidates project memory. */
-    consolidateOnDone: z.boolean().default(true),
-    /** At task completion the master may also return an update of the project's requirements document. */
-    maintainRequirements: z.boolean().default(true),
-
     // ---- prompts (WP-93, moved to the prompt registry by WP-98) ----
     // COMPAT(prompt-registry): added 2026-10-21, remove after 2027-04-01
     // These were edited here before the shared prompt registry existed. They are only read once,
@@ -109,12 +111,8 @@ export const masterSettings = defineSettings({
     // after that the "Agent behaviour" page is the only place to edit them.
     rulesSupplement: z.string().default(""),
 
-    // ---- project context (WP-93) ----
-    /** Max characters of the requirements document handed to the master in the project block. */
-    requirementsExcerptChars: z.number().int().min(0).max(50_000).default(6000),
-
     // ---- advanced automation parameters (WP-98) ----
-    /** How long one question to the master may take (memory consolidation). */
+    /** How long one structured question to the master may take. */
     askTimeoutMinutes: z.number().int().min(1).max(120).default(5),
     /** Extra asks after a reply failed validation (0 = take the first reply as it is). */
     jsonRepairRetries: z.number().int().min(0).max(5).default(1),

@@ -31,7 +31,6 @@ function runtimeFor(
   const settings = defaultSettings(over);
   const runtime = createMasterRuntime({
     admitMaster: async () => async () => undefined,
-    admitMemory: async () => async () => undefined,
     db: board.db,
     store: board.store,
     getPaseo: () => fake.paseo,
@@ -84,23 +83,18 @@ describe("registration", () => {
     await second.runtime.dispose();
   });
 
-  it("the task_done reply format follows the requirements switch", async () => {
+  it("does not register the retired completion prompt", async () => {
     const board = setupBoard();
-    const { runtime } = runtimeFor(board, () => "ok", { maintainRequirements: false });
-    const suffix = () =>
-      board.store.prompts.list().find((p) => p.key === "master.wake.task_done")!.fixedSuffix;
-    expect(suffix()).toContain("不要返回 requirementsUpdate");
+    const { runtime } = runtimeFor(board, () => "ok");
+    expect(board.store.prompts.list().some((p) => p.key === "master.wake.task_done")).toBe(false);
     await runtime.dispose();
-    const on = runtimeFor(board, () => "ok", { maintainRequirements: true });
-    expect(suffix()).toContain("requirementsUpdate");
-    await on.runtime.dispose();
   });
 
   it("default rendering without a database equals the registry without overrides", async () => {
     const board = setupBoard();
     const { runtime } = runtimeFor(board, () => "ok");
     const vars = { "card.key": "A-1", project: "P", pending: "hello" };
-    for (const key of ["master.wake.task_done", "master.repair_json"] as const) {
+    for (const key of ["master.rules_updated", "master.repair_json"] as const) {
       expect(defaultPromptPort().resolve(key, { vars })).toBe(
         board.store.prompts.resolve(key, { vars }),
       );
@@ -184,7 +178,7 @@ describe("migration of the old settings", () => {
     });
 
     // the owner resets one on the new page; a later start must not bring the old value back
-    board.store.prompts.clearOverride("master.wake.task_done");
+    board.store.prompts.clearOverride("master.rules_supplement");
     expect(
       migrateLegacyPromptSettings(
         board.db,
@@ -192,18 +186,18 @@ describe("migration of the old settings", () => {
         legacy({ templateCardDone: "D {{card.key}}" }),
       ),
     ).toEqual([]);
-    expect(info("master.wake.task_done").source).toBe("default");
+    expect(info("master.rules_supplement").source).toBe("default");
     await runtime.dispose();
   });
 
   it("never replaces an override that already exists, and an all-blank settings page migrates nothing", async () => {
     const board = setupBoard();
     const { runtime } = runtimeFor(board, () => "ok");
-    board.store.prompts.setOverride("master.wake.task_done", "already edited");
+    board.store.prompts.setOverride("master.rules_supplement", "already edited");
     expect(
       migrateLegacyPromptSettings(board.db, board.store, legacy({ templateCardDone: "old" })),
     ).toEqual([]);
-    expect(board.store.prompts.body("master.wake.task_done").text).toBe("already edited");
+    expect(board.store.prompts.body("master.rules_supplement").text).toBe("already edited");
     await runtime.dispose();
   });
 

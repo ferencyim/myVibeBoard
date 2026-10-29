@@ -5924,6 +5924,11 @@ describe("agent.user_prompt takeover", () => {
       beforeUserPrompt: vi.fn(async () => note),
       recordHandledUserPrompt: vi.fn(async () => {}),
       userPromptHandled: vi.fn(),
+      userPromptReceived: vi.fn(),
+      tryRunOutOfBand: vi.fn(() => false),
+      hasInFlightRun: vi.fn(() => false),
+      setAgentMode: vi.fn(async () => {}),
+      steerOrReplaceActiveTurn: vi.fn(async () => ({ status: "steered" as const })),
       waitForAgentClose: vi.fn(async () => {}),
       streamAgent: vi.fn(() => {
         throw new Error("turn started");
@@ -5967,6 +5972,7 @@ describe("agent.user_prompt takeover", () => {
       expect.objectContaining({ agentId, messageId: "msg-1", images }),
     );
     expect(agentManager.streamAgent).not.toHaveBeenCalled();
+    expect(agentManager.userPromptReceived).not.toHaveBeenCalled();
     expect(messages).toContainEqual({
       type: "send_agent_message_response",
       payload: { requestId: "send-1", agentId, accepted: true, error: null },
@@ -5982,10 +5988,12 @@ describe("agent.user_prompt takeover", () => {
     await pluginSession.handleMessage({
       type: "send_agent_message_request",
       requestId: "send-2",
+      activeTurnBehavior: "steer",
       agentId,
       text: "@#4 开始执行",
     });
     expect(pluginManager.beforeUserPrompt).not.toHaveBeenCalled();
+    expect(pluginManager.userPromptReceived).not.toHaveBeenCalled();
 
     const agentManager = managerFor({ note: null });
     const session = createSessionForTest({ agentManager });
@@ -5997,5 +6005,79 @@ describe("agent.user_prompt takeover", () => {
       sourceAgentId: "33333333-3333-4333-8333-333333333333",
     });
     expect(agentManager.beforeUserPrompt).not.toHaveBeenCalled();
+    expect(agentManager.userPromptReceived).not.toHaveBeenCalled();
+  });
+
+  test("ordinary delivery grants original user content only after successful dispatch", async () => {
+    const agentManager = managerFor(null);
+    let accept!: () => void;
+    agentManager.steerOrReplaceActiveTurn.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          accept = () => resolve({ status: "steered" });
+        }),
+    );
+    const session = createSessionForTest({ agentManager });
+    const images = [{ data: "aGk=", mimeType: "image/png" }];
+    const pending = session.handleMessage({
+      type: "send_agent_message_request",
+      requestId: "ordinary",
+      agentId,
+      text: "原话需求",
+      messageId: "original-user-message",
+      images,
+      activeTurnBehavior: "steer",
+      sessionMode: "plan",
+    });
+    await vi.waitFor(() => expect(agentManager.steerOrReplaceActiveTurn).toHaveBeenCalled());
+    expect(agentManager.userPromptReceived).not.toHaveBeenCalled();
+    accept();
+    await pending;
+    expect(agentManager.userPromptReceived).toHaveBeenCalledExactlyOnceWith({
+      agentId,
+      messageId: "original-user-message",
+      text: "原话需求",
+      images,
+      attachments: undefined,
+      sessionMode: "plan",
+    });
+    expect(agentManager.userPromptHandled).not.toHaveBeenCalled();
+  });
+
+  test("failed ordinary delivery does not authorize user forwarding", async () => {
+    const agentManager = managerFor(null);
+    agentManager.steerOrReplaceActiveTurn.mockRejectedValueOnce(new Error("dispatch failed"));
+    const session = createSessionForTest({ agentManager });
+    await session.handleMessage({
+      type: "send_agent_message_request",
+      requestId: "failed-ordinary",
+      agentId,
+      text: "不得转发",
+      activeTurnBehavior: "steer",
+    });
+    expect(agentManager.userPromptReceived).not.toHaveBeenCalled();
+  });
+  test("failed turn startup does not authorize a spoken user message", async () => {
+    const agentManager = {
+      ...managerFor(null),
+      streamAgent: vi.fn(async function* () {
+        yield { type: "turn_started" as const, turnId: "turn" };
+      }),
+      waitForAgentRunStart: vi.fn(async () => {
+        throw new Error("provider startup failed");
+      }),
+    };
+    const session = createSessionForTest({ agentManager });
+    const result = await asSessionInternals(session).handleSendAgentMessage(
+      agentId,
+      "用户口述原话",
+      "spoken-failed",
+      undefined,
+      undefined,
+      undefined,
+      { spokenInput: true },
+    );
+    expect(result.ok).toBe(false);
+    expect(agentManager.userPromptReceived).not.toHaveBeenCalled();
   });
 });

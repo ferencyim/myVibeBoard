@@ -29,6 +29,8 @@ export type {
   PluginProjectSettingsSectionContribution,
   PluginFirstMessageModelResolver,
   PluginProjectSettingsSectionProps,
+  PluginProjectSidebarItemProps,
+  PluginProjectSidebarItemContribution,
   PluginSurfaceContribution,
   PluginScreenContribution,
   PluginScreenTitle,

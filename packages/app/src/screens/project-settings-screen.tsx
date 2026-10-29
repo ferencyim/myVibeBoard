@@ -1,3 +1,4 @@
+import { ProjectDocumentsSection } from "@/projects/project-documents-section";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -125,10 +126,17 @@ export default function ProjectSettingsScreen({
 
   if (!project || !selectedHost || !client || !canEdit) {
     return (
-      <NoEditableTarget
-        onBackToProjects={onBackToProjects}
-        showBackToProjects={showBackToProjects}
-      />
+      <View style={styles.body}>
+        <ProjectDocumentsSection
+          key={serverId + projectId}
+          serverId={serverId}
+          projectId={projectId}
+        />
+        <NoEditableTarget
+          onBackToProjects={onBackToProjects}
+          showBackToProjects={showBackToProjects}
+        />
+      </View>
     );
   }
 
@@ -319,6 +327,10 @@ function ProjectSettingsBody({
         onBackToProjects,
         showBackToProjects,
       })}
+      <ProjectDocumentsSection
+        serverId={selectedHost.serverId}
+        projectId={selectedHost.projectId}
+      />
       <PluginProjectSettingsSections
         projectId={selectedHost.projectId}
         serverId={selectedHost.serverId}

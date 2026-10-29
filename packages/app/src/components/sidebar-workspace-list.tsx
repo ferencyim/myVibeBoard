@@ -1,3 +1,4 @@
+import { PluginProjectSidebarItems } from "@/plugins/project-sidebar-items";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   View,
@@ -1836,6 +1837,13 @@ function ProjectBlock({
         dragHandleProps={dragHandleProps}
       />
 
+      {!collapsed ? (
+        <PluginProjectSidebarItems
+          hosts={project.hosts}
+          preferredServerId={activeServerId}
+          onNavigate={onWorkspacePress}
+        />
+      ) : null}
       {projectChildren}
     </View>
   );

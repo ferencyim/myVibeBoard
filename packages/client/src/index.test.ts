@@ -1806,3 +1806,56 @@ test("qualified parents preserve foreign identity without resolving an equal loc
   await client.close();
   expect(localParent.address).toEqual({ serverId: "srv_sdk_test", agentId: "same-parent" });
 });
+
+test("projects config methods reuse existing revision-checked daemon RPCs", async () => {
+  const { client, ws } = await connectClient();
+  const reading = client.projects.readConfig("/repo/project", "read-config-sdk");
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "read_project_config_request",
+    repoRoot: "/repo/project",
+    requestId: "read-config-sdk",
+  });
+  const revision = { mtimeMs: 1, size: 20 };
+  const config = { worktree: { setup: ["npm ci"] } };
+  ws.message(
+    sessionMessage({
+      type: "read_project_config_response",
+      payload: {
+        requestId: "read-config-sdk",
+        repoRoot: "/repo/project",
+        ok: true,
+        config,
+        revision,
+      },
+    }),
+  );
+  await expect(reading).resolves.toMatchObject({ config, revision });
+  const writing = client.projects.writeConfig({
+    repoRoot: "/repo/project",
+    config,
+    expectedRevision: revision,
+    requestId: "write-config-sdk",
+  });
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "write_project_config_request",
+    repoRoot: "/repo/project",
+    config,
+    expectedRevision: revision,
+  });
+  ws.message(
+    sessionMessage({
+      type: "write_project_config_response",
+      payload: {
+        requestId: "write-config-sdk",
+        repoRoot: "/repo/project",
+        ok: false,
+        error: { code: "stale_project_config", currentRevision: null },
+      },
+    }),
+  );
+  await expect(writing).resolves.toMatchObject({
+    ok: false,
+    error: { code: "stale_project_config" },
+  });
+  await client.close();
+});

@@ -25,15 +25,9 @@ export default function contribute(server: PluginServerContext) {
 
   let current: MasterSettings = masterSettings.schema.parse({});
   let runtime: ReturnType<typeof createMasterRuntime> | null = null;
-  let maintainRequirements = current.maintainRequirements;
   const applySettings = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
     current = state.values;
-    // The task_done reply format depends on this switch: refresh the registered suffix.
-    if (current.maintainRequirements !== maintainRequirements) {
-      maintainRequirements = current.maintainRequirements;
-      runtime?.prompts.register();
-    }
     // Dispatch availability for the scheduler, and a newly chosen preset for a running master.
     void runtime?.onSettingsChanged();
   };
@@ -43,7 +37,6 @@ export default function contribute(server: PluginServerContext) {
       const state = await settingsReady;
       // Register with the persisted suffix before catch-up can send a prompt.
       if (state.status === "ready") current = state.values;
-      maintainRequirements = current.maintainRequirements;
       master.prompts.register();
       master.migrateLegacyPrompts();
       void startup.ready

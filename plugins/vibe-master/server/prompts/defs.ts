@@ -11,12 +11,9 @@ const PLUGIN = "vibe-master";
 export interface MasterDefOptions {
   /** Base rules text (default: the SKILL.md rules). */
   rules?: string;
-  /** Whether the task_done reply format offers the requirements update. */
-  maintainRequirements?: boolean;
 }
 
 export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
-  const maintain = options.maintainRequirements ?? true;
   return [
     {
       key: "master.task_dispatch",
@@ -35,31 +32,6 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
       fixedSuffix:
         '只回复一个 JSON 对象，放在 json 围栏里：{"order":["workspaceId"],"reason":"中文理由"}。workspaceId 必须来自候选，数量不超过空位，每项只出现一次，至少选一项。',
       order: 13,
-    },
-    {
-      key: "master.wake.task_done",
-      plugin: PLUGIN,
-      role: "master",
-      title: "任务完成整理",
-      description: "完成后整理项目记忆和需求文档，只将简短结果写回 anchor 摘要。",
-      whenSent: "任务完成或重启补扫尚未整理的完成任务时。",
-      audience: "总 agent",
-      defaultText:
-        "[wake:task_done]\n{{project}}\n\nworkspace：{{workspace}}\n方案：{{plan}}\n执行及验证摘要：{{summary}}\n子任务结果：{{runs}}\n\n当前项目记忆（含条目 ID）：\n{{memory}}\n只整理值得长期保留的决定、经验和当前状态；去重并保留负责人结构。不要改变任务方案或验收结论。",
-      placeholders: [
-        { name: "project", description: "项目及需求文档摘录" },
-        { name: "workspace", description: "原生 workspace ID" },
-        { name: "plan", description: "确认方案" },
-        { name: "summary", description: "任务摘要" },
-        { name: "runs", description: "子任务执行结果" },
-        { name: "memory", description: "当前项目记忆" },
-      ],
-      fixedSuffix:
-        '只回复 JSON 对象，放在 json 围栏里：{"summary":"中文摘要","state":"可选的完整项目状态","decisions":[],"lessons":[],"index":[],"archive":[]}。decisions 元素为 {"tag":"主题","body":"决定及原因","supersedes":[]}；lessons/index 元素为 {"tag":"主题","body":"正文"}；archive 元素为 {"file":"LESSONS.md","id":"条目ID"}。' +
-        (maintain
-          ? '仅需求发生变化且摘录完整时，可附 requirementsUpdate:{"content":"完整新需求文档","summary":"中文变更摘要"}。TRUNCATED 时绝不改写需求文档。'
-          : "不要返回 requirementsUpdate。"),
-      order: 14,
     },
     {
       key: "master.rules",
@@ -124,7 +96,7 @@ export function masterPromptDefs(options: MasterDefOptions = {}): PromptDef[] {
         "更换总 agent 后，新总 agent 首条消息附带的摘要框架；各段内容由插件根据任务快照生成。",
       whenSent: "更换总 agent 预设、更换权限模式等导致新总 agent 启动，并在它收到第一条消息时。",
       audience: "新的总 agent",
-      defaultText: `[handoff] 你接替上一任总 agent。以下摘要来自任务快照，不依赖旧会话。每次排序与整理以当前唤醒消息提供的快照为准，不凭旧会话记忆。
+      defaultText: `[handoff] 你接替上一任总 agent。以下摘要来自任务快照，不依赖旧会话。每次排序以当前唤醒消息提供的快照为准，不凭旧会话记忆。
 
 ## 最近的切换
 {{switches}}
@@ -146,6 +118,5 @@ export type MasterPromptKey =
   | "master.rules_supplement"
   | "master.rules_updated"
   | "master.task_dispatch"
-  | "master.wake.task_done"
   | "master.repair_json"
   | "master.handoff_summary";

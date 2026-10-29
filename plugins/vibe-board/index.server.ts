@@ -1,3 +1,10 @@
+import { readLegacyMaintenance } from "./server/project-agent/settings-migration";
+import { createProjectAgents } from "./server/project-agent/service";
+import { registerProjectAgents } from "./server/project-agent/register";
+import { registerProjectConfigTool } from "./server/project-agent/config";
+import { createProjectDocuments, registerProjectDocumentRpcs } from "./server/project-documents";
+import { registerEnvironmentMonitor } from "./server/environment";
+import { createProjectCompletion } from "./server/project-agent/completion";
 import { deferStartup } from "./server/vibe/db/startup";
 import { registerResourceTool } from "./server/resource-tool";
 import type { PaseoApi } from "@getpaseo/client";
@@ -30,7 +37,11 @@ export default function contribute(server: PluginServerContext) {
 
   let paseo: PaseoApi | null = server.paseo ?? null;
   // Owner settings, read on every use.
-  const settings = server.registerSettings(boardSettings);
+  const settings = server.registerSettings({
+    ...boardSettings,
+    schema: z.preprocess(readLegacyMaintenance, boardSettings.schema),
+    migrate: readLegacyMaintenance,
+  });
   let preferences: BoardSettingsValues = boardSettings.schema.parse({});
   const applySettings = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status === "ready") preferences = boardSettings.schema.parse(state.values);
@@ -45,7 +56,44 @@ export default function contribute(server: PluginServerContext) {
     getPaseo: () => paseo,
     onPaseo: (api) => {
       paseo = api;
+      environment.observe(api);
     },
+  });
+  const projects = createProjectAgents({
+    db: runtime.db,
+    store: runtime.store,
+    getPaseo: () => paseo,
+    tabs: tasks.tabs,
+    flow: tasks.flow,
+  });
+  const stopProjects = registerProjectAgents(server, projects);
+  registerProjectConfigTool(server, projects);
+  const documents = createProjectDocuments({
+    db: runtime.db,
+    listProjects: async () => {
+      if (!paseo) throw new Error("项目宿主尚未连接");
+      return (await paseo.projects.list()).projects;
+    },
+    notifyMerge: projects.sendProject,
+  });
+  registerProjectDocumentRpcs(server, documents, projects.callerProject);
+  void startup.ready
+    .then(() => documents.start())
+    .catch((error) => console.error("[vibe-board] 项目文档同步失败", error));
+  const environment = registerEnvironmentMonitor(server, {
+    store: runtime.store,
+    projects,
+    getPaseo: () => paseo,
+    tasks,
+  });
+  if (paseo) environment.observe(paseo);
+  const completion = createProjectCompletion({
+    db: runtime.db,
+    store: runtime.store,
+    getPaseo: () => paseo,
+    settings: () => preferences,
+    sendProject: projects.sendProject,
+    ready: startup.ready,
   });
   registerBoardRpcs(server, createBoardService(runtime));
   const evidence = createTaskEvidenceReader(runtime.db);
@@ -107,11 +155,16 @@ export default function contribute(server: PluginServerContext) {
     input: projectPlansInput,
     handler: async (input, { callerAgentId }) => {
       if (!callerAgentId) throw new Error("vibe_project_plans 只能由任务 tab 或其子代理调用");
+      if (await projects.projectForAgent(callerAgentId)) return projects.tasksFor(callerAgentId);
       return tasks.coordination.projectPlansFor(callerAgentId, projectPlansInput.parse(input));
     },
   });
   return async () => {
     stopSettings();
+    stopProjects();
+    await completion.close();
+    await environment.close();
+    await documents.close();
     await startup.close();
     await tasks.close();
     runtime.close();

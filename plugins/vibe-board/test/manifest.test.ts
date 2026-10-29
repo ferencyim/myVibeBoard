@@ -7,11 +7,11 @@ const pluginDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file: string) => JSON.parse(readFileSync(join(pluginDir, file), "utf8"));
 
 describe("plugin manifest", () => {
-  it("declares the Paseo range of this checkout (bump after each upstream merge)", () => {
+  it("requires this fork’s project sidebar and lifecycle APIs from 0.13.2", () => {
     const [major, minor] = read("../../package.json").version.split(".");
-    expect(read("paseo-plugin.json").requirements.paseo).toBe(
-      `>=${major}.${minor}.0 <${major}.${Number(minor) + 1}.0`,
-    );
+    const range = read("paseo-plugin.json").requirements.paseo;
+    expect(range).toBe(">=0.13.2 <0.14.0");
+    expect(range.endsWith(`<${major}.${Number(minor) + 1}.0`)).toBe(true);
   });
 
   it("uses the vibe-board id and ships its entry points", () => {

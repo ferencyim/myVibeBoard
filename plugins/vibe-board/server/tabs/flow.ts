@@ -1,3 +1,5 @@
+import { PROJECT_COMPLETION_PROMPT } from "../project-agent/completion-prompt";
+import { PROJECT_AGENT_PROMPT } from "../project-agent/prompts";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -2052,6 +2054,8 @@ export function createTaskFlow(options: {
   function registerPrompts() {
     store.prompts.register(
       [
+        PROJECT_AGENT_PROMPT,
+        PROJECT_COMPLETION_PROMPT,
         TASK_PLAN_PROMPT,
         ...TASK_HOST_PROMPTS,
         ...TASK_FLOW_PROMPTS,

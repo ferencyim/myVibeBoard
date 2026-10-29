@@ -196,6 +196,9 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   /** Play a base64-encoded audio file on this client; resolves when playback ends. */
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
   addFirstMessageModelResolver(contribution: PluginFirstMessageModelResolver): PluginCleanup;
+  addProjectSidebarItem(
+    contribution: PluginProjectSidebarItemContribution<PluginText>,
+  ): PluginCleanup;
   addProjectSettingsSection(
     contribution: PluginProjectSettingsSectionContribution<PluginText>,
   ): PluginCleanup;
@@ -258,6 +261,21 @@ export interface PluginFirstMessageModelResolver {
     thinkingOptionId?: string;
     featureValues?: Record<string, unknown>;
   } | null>;
+}
+
+/** Fixed rows below a project heading, before its reorderable workspaces. */
+export interface PluginProjectSidebarItemProps {
+  projectId: string;
+  serverId: string;
+  theme: PluginTheme;
+  compact: boolean;
+  openAgent(agentId: string): void;
+}
+export interface PluginProjectSidebarItemContribution<Text extends PluginText = string> {
+  id: string;
+  title: Text;
+  order?: number;
+  Component: ComponentType<PluginProjectSidebarItemProps>;
 }
 
 export interface PluginProjectSettingsSectionProps {

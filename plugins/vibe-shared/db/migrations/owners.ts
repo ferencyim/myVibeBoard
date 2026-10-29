@@ -135,6 +135,32 @@ CREATE INDEX idx_memory_entry_file ON memory_entry(project_id, file, archived, t
   },
 ];
 
+CONTEXT_MIGRATIONS.push({
+  version: 2,
+  name: "project_document_snapshots",
+  sql: `
+CREATE TABLE project_document (
+  project_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  content TEXT NOT NULL,
+  total_bytes INTEGER NOT NULL,
+  truncated INTEGER NOT NULL CHECK (truncated IN (0,1)),
+  revision TEXT NOT NULL,
+  synced_at TEXT NOT NULL,
+  PRIMARY KEY (project_id,path)
+);
+CREATE TABLE project_brief_change (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  documents_json TEXT NOT NULL CHECK (json_valid(documents_json)),
+  created_at TEXT NOT NULL,
+  delivered_at TEXT,
+  merged_at TEXT
+);
+CREATE INDEX idx_project_brief_change_pending ON project_brief_change(project_id,merged_at);
+`,
+});
+
 export const SCHEDULER_MIGRATIONS: Migration[] = [
   {
     version: 1,

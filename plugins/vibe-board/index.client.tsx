@@ -1,3 +1,5 @@
+import { ProjectAgentSettingsSection } from "./client/project-settings";
+import { ProjectAgentSidebarItem } from "./client/project-agent";
 import { resolveMainConfigRpc } from "./shared/rpc";
 import { TaskDefaultsScreen, ProjectTaskDefaultsSection } from "./client/presets/defaults-screen";
 import type { PluginClientContext } from "@getpaseo/plugin/client";
@@ -47,6 +49,12 @@ const COMMANDS: readonly {
 
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
+    client.addProjectSidebarItem({
+      id: "project-agent",
+      title: "项目 agent",
+      order: -100,
+      Component: ProjectAgentSidebarItem,
+    }),
     client.addFirstMessageModelResolver({
       async resolve(input) {
         return (await client.rpc(resolveMainConfigRpc, input)).config ?? null;
@@ -99,6 +107,11 @@ export default function contribute(client: PluginClientContext) {
       Component: BehaviourSidebarItem,
     }),
 
+    client.addProjectSettingsSection({
+      id: "project-agent",
+      title: "项目 agent 全局策略（本主机）",
+      Component: ProjectAgentSettingsSection,
+    }),
     client.addProjectSettingsSection({
       id: "task-default-models",
       title: "任务默认模型",
