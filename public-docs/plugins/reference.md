@@ -851,18 +851,19 @@ plans, and mode changes; requesting permission does not end the turn.
 
 ### Events
 
-| Name                         | Event fields                                             | Trigger                                                                    |
-| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `agent.created`              | `agent`                                                  | Ordinary creation finishes; excludes import/resume                         |
-| `agent.closed`               | `agent`                                                  | A live agent runtime closes                                                |
-| `agent.turn_started`         | `agent`, `turnId`                                        | Live turn starts                                                           |
-| `agent.turn_ended`           | `agent`, `turnId`, `outcome`, deprecated `timeline: []`  | Live turn completes, fails, or is canceled                                 |
-| `agent.permission_requested` | `agent`, `request`                                       | Permission or question becomes pending                                     |
-| `agent.permission_resolved`  | `agent`, `requestId`, `resolution`                       | Pending request is answered or cleared                                     |
-| `agent.archived`             | `agent`, `archivedAt`                                    | Archive state is saved                                                     |
-| `workspace.created`          | `workspace`                                              | Record created; directory available                                        |
-| `workspace.archived`         | `workspace`                                              | Archive state is saved                                                     |
-| `agent.user_prompt_handled`  | `agentId`, `messageId`, optional `images`, `attachments` | A plugin took an `agent.user_prompt` message over and the host recorded it |
+| Name                         | Event fields                                                                                   | Trigger                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `agent.created`              | `agent`                                                                                        | Ordinary creation finishes; excludes import/resume                         |
+| `agent.closed`               | `agent`                                                                                        | A live agent runtime closes                                                |
+| `agent.turn_started`         | `agent`, `turnId`                                                                              | Live turn starts                                                           |
+| `agent.turn_ended`           | `agent`, `turnId`, `outcome`, deprecated `timeline: []`                                        | Live turn completes, fails, or is canceled                                 |
+| `agent.permission_requested` | `agent`, `request`                                                                             | Permission or question becomes pending                                     |
+| `agent.permission_resolved`  | `agent`, `requestId`, `resolution`                                                             | Pending request is answered or cleared                                     |
+| `agent.archived`             | `agent`, `archivedAt`                                                                          | Archive state is saved                                                     |
+| `workspace.created`          | `workspace`                                                                                    | Record created; directory available                                        |
+| `workspace.archived`         | `workspace`                                                                                    | Archive state is saved                                                     |
+| `agent.user_prompt_handled`  | `agentId`, `messageId`, optional `images`, `attachments`                                       | A plugin took an `agent.user_prompt` message over and the host recorded it |
+| `agent.user_prompt_received` | `agentId`, `workspaceId`, `messageId`, `text`, optional `images`, `attachments`, `sessionMode` | Ordinary user delivery succeeded; plugin and agent sends are excluded      |
 
 Agent events exclude the daemon's private disposable helpers. Public background workspaces and
 their ordinary agents run the same lifecycle hooks as other workspaces. Archive events can precede
@@ -930,6 +931,8 @@ reject the prompt: the calling agent receives the error. User prompts do not run
 `agent.permission_response` runs when an agent calls `respond_to_permission` on this host, before the response is applied. `agentId` is the agent that owns the request. Throw to reject: the calling agent receives the error. Answers from the app or CLI do not run this hook.
 
 `agent.user_prompt` runs when a person sends a message to an agent on this host (app composer, phone, CLI, voice), before it is delivered. Agent-to-agent messages, plugin sends, and an agent's first prompt at creation do not run it, and the host skips it entirely when no plugin registered it. `attachments` describes what is attached (`type`, optional `name`, `mimeType`; images are `{ type: "image", mimeType }`) without the content. Return `{ handled: true, note }` to take the message over: the host records the message in the recipient's timeline with `note` as an info notification, starts no turn, and then emits `agent.user_prompt_handled` with the same `messageId` and the original `images` and `attachments`. Do the slow part, such as forwarding with `paseo.agents.ref(id).send(...)`, after that event. The host waits 5 seconds for this hook; a hook that has not answered by then, returns nothing, or throws gets the message delivered as usual, so a plugin never loses a person's message. The first plugin that takes the message over ends the chain.
+
+`agent.user_prompt_received` observes a user message that follows ordinary delivery instead of a hook takeover. It fires after successful dispatch (and turn startup for normal message requests), includes the original text and full image/attachment content, and does not consume the message or prevent the model from responding. Failed dispatch, plugin sessions, agent-to-agent sends, and creation-time initial prompts do not emit it. A plugin that forwards as the user must verify the recipient role and bind authorization to this event's message ID, rather than trusting model-supplied text or a claimed source. This event is internal to the daemon plugin lifecycle; it adds no WebSocket message.
 
 **`agent.create.config`** uses `AgentSessionConfig`:
 
@@ -2956,3 +2959,11 @@ Use `paseo plugin ls` to read the current status and error.
 | Edited code does not appear                                           | Run `npm run typecheck`, then `paseo plugin reload <id>`.                                                                                          |
 | Reload fails                                                          | Read `paseo plugin ls` and `paseo plugin logs <id>`, fix the source error, then reload; Paseo does not restore the previous bundle.                |
 | Plugin exits unexpectedly                                             | Read `paseo plugin logs <id>` for retained initialization, cleanup, stderr, and final crash output.                                                |
+
+## Project sidebar item
+
+Register a fixed row under each expanded project with client.addProjectSidebarItem({ id, title, order, Component }). Lower order values appear first; equal values preserve registration order. The returned cleanup removes the row and releases its ID. Duplicate IDs, empty titles, invalid order values and invalid components are rejected.
+
+The Component receives PluginProjectSidebarItemProps: projectId, serverId, theme, compact, and openAgent(agentId). The host supplies installation RPC, query and translation contexts. Use openAgent to navigate to the selected project host’s agent through the shared navigation owner; it also dismisses the compact sidebar. A selected project host remains authoritative while offline. These rows precede workspace sorting and its show-more limit, and disappear when the project group is collapsed.
+
+Project sidebar items are a myVibeBoard fork extension introduced with its 0.13.2 host and SDK. Upgrade both together and require Paseo >=0.13.2 when using the API; upstream releases are not assumed to expose this fork extension.

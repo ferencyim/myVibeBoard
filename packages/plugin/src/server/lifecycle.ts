@@ -68,6 +68,16 @@ export interface PluginLifecycleEvents {
   "agent.closed": { agent: PluginHookAgent };
   "workspace.created": { workspace: PluginHookWorkspace };
   "workspace.archived": { workspace: PluginHookWorkspace };
+  /** A real user message accepted by ordinary delivery; plugin and agent sends are excluded. */
+  "agent.user_prompt_received": {
+    agentId: string;
+    workspaceId: string | null;
+    messageId: string;
+    text: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: SendAgentMessageRequest["attachments"];
+    sessionMode?: string;
+  };
   /**
    * A plugin took an `agent.user_prompt` message over and the host recorded it. Carries what the
    * hook request left out, so the plugin can pass the message on unchanged.

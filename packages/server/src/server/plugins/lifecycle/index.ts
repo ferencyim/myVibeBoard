@@ -26,6 +26,7 @@ export const lifecycleEventNames = [
   "workspace.created",
   "workspace.archived",
   "agent.user_prompt_handled",
+  "agent.user_prompt_received",
 ] as const;
 export const beforeHookNames = [
   "agent.create",

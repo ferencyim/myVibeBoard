@@ -1326,6 +1326,23 @@ export class AgentManager {
     });
   }
 
+  /** Called only by human ingress after ordinary delivery succeeds. */
+  userPromptReceived(input: {
+    agentId: string;
+    messageId: string;
+    text: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    attachments?: AgentAttachment[];
+    sessionMode?: string;
+  }): void {
+    const agent = this.agents.get(input.agentId);
+    if (!agent || agent.internal) return;
+    this.pluginLifecycle?.emit("agent.user_prompt_received", {
+      ...input,
+      workspaceId: agent.workspaceId ?? null,
+    });
+  }
+
   getAgent(id: string): ManagedAgent | null {
     const agent = this.agents.get(id);
     return agent ? { ...agent } : null;

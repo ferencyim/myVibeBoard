@@ -199,6 +199,10 @@ export interface PaseoWorkspaceHandle {
 }
 
 export interface PaseoProjectActions {
+  /** Read the existing project paseo.json, including its optimistic write revision. */
+  readConfig: DaemonClient["readProjectConfig"];
+  /** Write project configuration through the existing validated, revision-checked RPC. */
+  writeConfig: DaemonClient["writeProjectConfig"];
   list(options?: PaseoProjectListOptions): Promise<PaseoProjectListResult>;
   subscribe(handler: PaseoProjectUpdateHandler): () => void;
 }
@@ -734,6 +738,8 @@ export function createPaseoApi(
     observeEvents,
     terminals,
     projects: {
+      readConfig: (repoRoot, requestId) => daemonClient.readProjectConfig(repoRoot, requestId),
+      writeConfig: (input) => daemonClient.writeProjectConfig(input),
       list: (options) => daemonClient.listProjects(options),
       subscribe: (handler) => {
         return subscribeEvent("project.update", (message) => {

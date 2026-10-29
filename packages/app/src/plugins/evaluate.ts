@@ -137,6 +137,7 @@ export function runPluginClientBundle(
     surfaces: [],
     settingsScreens: [],
     projectSettingsSections: [],
+    projectSidebarItems: [],
     firstMessageModelResolvers: [],
     sidebarItems: { header: [], footer: [] },
     legacySidebarItems: [],
@@ -151,6 +152,7 @@ export function runPluginClientBundle(
   };
   const surfaceIds = new Set<string>();
   const settingsScreenIds = new Set<string>();
+  const projectSidebarItemIds = new Set<string>();
   const projectSettingsSectionIds = new Set<string>();
   const sidebarItemIds: Record<PluginSidebarSection, Set<string>> = {
     header: new Set(),
@@ -260,6 +262,23 @@ export function runPluginClientBundle(
       if (typeof contribution.resolve !== "function")
         throw new Error("Invalid first message model resolver");
       return register(collector.firstMessageModelResolvers, contribution, () => {});
+    },
+    addProjectSidebarItem(contribution) {
+      const sectionId = requireId(contribution.id, "project sidebar item id");
+      if (projectSidebarItemIds.has(sectionId))
+        throw new Error(`Duplicate project sidebar item: ${sectionId}`);
+      const title = normalizePluginText(contribution.title);
+      if (!title) throw new Error(`Project sidebar item ${sectionId} has no title`);
+      if (!isComponentType(contribution.Component))
+        throw new Error(`Project sidebar item ${sectionId} is not a component`);
+      if (contribution.order !== undefined && !Number.isFinite(contribution.order))
+        throw new Error(`Project sidebar item ${sectionId} has invalid order`);
+      projectSidebarItemIds.add(sectionId);
+      return register(
+        collector.projectSidebarItems!,
+        { id: sectionId, title, order: contribution.order, Component: contribution.Component },
+        () => projectSidebarItemIds.delete(sectionId),
+      );
     },
     addProjectSettingsSection(contribution) {
       const sectionId = requireId(contribution.id, "project settings section id");
@@ -621,6 +640,7 @@ export function runPluginClientBundle(
     surfaces: collector.surfaces,
     settingsScreens: collector.settingsScreens,
     projectSettingsSections: collector.projectSettingsSections,
+    projectSidebarItems: collector.projectSidebarItems,
     firstMessageModelResolvers: collector.firstMessageModelResolvers,
     sidebarItems: collector.sidebarItems,
     legacySidebarItems: collector.legacySidebarItems,

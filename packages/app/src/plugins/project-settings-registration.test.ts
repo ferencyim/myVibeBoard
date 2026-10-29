@@ -20,6 +20,32 @@ function evaluatePluginClientBundle(id: string, source: string) {
 }
 
 describe("project settings registration", () => {
+  it("registers fixed project rows and releases ids on cleanup", async () => {
+    const plugin = evaluatePluginClientBundle(
+      "rows",
+      bundle(`
+      const row = { id: "agent", title: "Project agent", Component() {} };
+      const remove = plugin.addProjectSidebarItem(row);
+      remove();
+      plugin.addProjectSidebarItem(row);
+    `),
+    );
+    expect(plugin.projectSidebarItems?.map((row) => row.id)).toEqual(["agent"]);
+    await plugin.cleanup();
+    expect(plugin.projectSidebarItems).toEqual([]);
+  });
+  it("rejects duplicate fixed project rows", () => {
+    expect(() =>
+      evaluatePluginClientBundle(
+        "rows",
+        bundle(`
+      const row = { id: "agent", title: "Project agent", Component() {} };
+      plugin.addProjectSidebarItem(row);
+      plugin.addProjectSidebarItem(row);
+    `),
+      ),
+    ).toThrow("Duplicate project sidebar item");
+  });
   it("registers a default first-message resolver and removes it on cleanup", async () => {
     const plugin = evaluatePluginClientBundle(
       "models",

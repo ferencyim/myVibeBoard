@@ -17,6 +17,7 @@ import type {
   PluginScreenContribution as SDKPluginScreenContribution,
   PluginSettingsScreenContribution as SDKPluginSettingsScreenContribution,
   PluginProjectSettingsSectionContribution as SDKPluginProjectSettingsSectionContribution,
+  PluginProjectSidebarItemContribution as SDKPluginProjectSidebarItemContribution,
   PluginFirstMessageModelResolver,
   PluginTimelineRendererContribution,
   PluginTimelineTransformerContribution,
@@ -35,6 +36,7 @@ type PluginSidebarItemContribution = SDKPluginSidebarItemContribution<PluginText
 type PluginScreenContribution = SDKPluginScreenContribution<PluginText>;
 type PluginProjectSettingsSectionContribution =
   SDKPluginProjectSettingsSectionContribution<PluginText>;
+type PluginProjectSidebarItemContribution = SDKPluginProjectSidebarItemContribution<PluginText>;
 type PluginSettingsScreenContribution = SDKPluginSettingsScreenContribution<PluginText>;
 type WorkspacePanelInput = SDKPluginWorkspacePanelContribution<PluginText>;
 type PluginWorkspacePanelContribution =
@@ -53,6 +55,7 @@ export interface EvaluatedPlugin {
   surfaces: PluginScreenContribution[];
   settingsScreens: PluginSettingsScreenContribution[];
   projectSettingsSections: PluginProjectSettingsSectionContribution[];
+  projectSidebarItems?: PluginProjectSidebarItemContribution[];
   firstMessageModelResolvers: PluginFirstMessageModelResolver[];
   sidebarItems: Record<PluginSidebarSection, PluginSidebarItemContribution[]>;
   // COMPAT(pluginSidebarAliases): added in v0.11.0, remove after 2027-03-29
