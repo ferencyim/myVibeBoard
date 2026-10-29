@@ -23,6 +23,26 @@ describe("task workspace placeholders", () => {
     expect(result[3]!.setup).toEqual({ provider: "codex", model: "default-model" });
   });
 
+  it("sorts fixed roles and exposes their model and status", () => {
+    const worker = roleTab("worker", 4);
+    worker.status = "排队";
+    const scout = roleTab("scout", 3);
+    scout.status = "未启用";
+    const result = taskWorkspaceTabs([worker, scout]);
+    expect(result.map((tab) => tab.order)).toEqual([3, 4]);
+    expect(result[0]!.title).toContain("本流程未启用");
+    expect(result[1]!.title).toContain("default-model · 排队");
+  });
+
+  it("keeps status visible for existing agents", () => {
+    const worker = roleTab("worker", 4);
+    worker.agentId = "worker-agent";
+    worker.status = "运行中";
+    expect(taskWorkspaceTabs([worker])[0]!.title).toContain("default-model · 忙碌");
+    worker.status = "待审批";
+    expect(taskWorkspaceTabs([worker])[0]!.title).toContain("default-model · 待审批");
+  });
+
   it("uses raw model IDs and leaves unresolved models for the composer to select", () => {
     const tab = roleTab("worker", 4);
     tab.model = "模型显示名";

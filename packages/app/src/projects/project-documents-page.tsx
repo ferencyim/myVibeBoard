@@ -3,15 +3,14 @@ import { Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
-import { PageLayout } from "@/components/page-layout";
 import { Button } from "@/components/ui/button";
 import { NavigationRow } from "@/components/ui/navigation-row";
 import { EditingTextInput } from "@/components/ui/text-input";
-import { buildProjectSettingsRoute } from "@/utils/host-routes";
 import { flushProjectDocuments } from "@/runtime/project-documents";
 import type { BriefDocumentEdit, DocumentSnapshot } from "./document-cache";
 import {
   buildProjectDocumentRoute,
+  buildProjectDocumentBackRoute,
   projectDocumentEntries,
   type ProjectDocumentPage,
 } from "./document-navigation";
@@ -35,21 +34,17 @@ export function ProjectDocumentsPage({
   const documents = useProjectDocuments(serverId, projectId);
   const { state, loaded, error, connected } = documents;
   const entries = projectDocumentEntries(state, connected);
-  const backToSettings = useCallback(
-    () => router.dismissTo(buildProjectSettingsRoute(serverId, projectId)),
-    [router, serverId, projectId],
-  );
   const back = useCallback(() => {
-    if (path) router.dismissTo(buildProjectDocumentRoute(serverId, projectId, "documents"));
-    else backToSettings();
-  }, [router, serverId, projectId, path, backToSettings]);
+    router.dismissTo(buildProjectDocumentBackRoute(serverId, projectId, path));
+  }, [router, serverId, projectId, path]);
   const selected = state.documents.find((doc) => doc.path === path);
   return (
-    <PageLayout title={page === "brief" ? "项目简介" : (path ?? "项目文档")} onBack={back}>
+    <View>
       <View style={styles.stack}>
-        <Button variant="ghost" onPress={back}>
+        <Button variant="ghost" onPress={back} style={styles.backButton}>
           {path ? "返回项目文档" : "返回项目设置"}
         </Button>
+        <Text style={styles.title}>{page === "brief" ? "项目简介" : (path ?? "项目文档")}</Text>
         <Text style={styles.muted}>
           {entries.syncStatus}
           {!connected ? "；离线编辑将保存在本机，联网后交给项目 agent 合并。" : ""}
@@ -76,7 +71,7 @@ export function ProjectDocumentsPage({
             <Text style={styles.muted}>尚无此文档的缓存。</Text>
           ))}
       </View>
-    </PageLayout>
+    </View>
   );
 }
 
@@ -246,6 +241,13 @@ function DocumentReader({ doc }: { doc: Document }) {
   );
 }
 const styles = StyleSheet.create((theme) => ({
+  title: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.xl,
+    lineHeight: theme.lineHeight.xl,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  backButton: { alignSelf: "flex-start", paddingHorizontal: 0 },
   stack: { gap: theme.spacing[3] },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: theme.spacing[2] },
   text: { color: theme.colors.foreground, fontSize: theme.fontSize.base },

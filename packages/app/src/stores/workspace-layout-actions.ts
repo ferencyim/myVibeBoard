@@ -1754,7 +1754,15 @@ export function replaceTabTargetInLayout(
   const layout = asInternalLayout(input.layout);
   if (!findPaneContainingTab(layout.root, input.tabId)) return null;
   const currentTab = collectAllTabs(layout.root).find((tab) => tab.tabId === input.tabId) ?? null;
-  if (currentTab && workspaceTabTargetsEqual(currentTab.target, input.target)) {
+  const flowMetadataChanged =
+    currentTab?.target.kind === "agent" &&
+    input.target.kind === "agent" &&
+    JSON.stringify(currentTab.target.flowTab) !== JSON.stringify(input.target.flowTab);
+  if (
+    currentTab &&
+    workspaceTabTargetsEqual(currentTab.target, input.target) &&
+    !flowMetadataChanged
+  ) {
     if (input.state === undefined) {
       return { layout: input.layout, tabId: input.tabId };
     }

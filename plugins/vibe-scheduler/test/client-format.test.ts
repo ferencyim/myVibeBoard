@@ -26,12 +26,17 @@ describe("scheduler screen helpers", () => {
       resources: { cpu: 0.2, mem: 0.91 },
       quota: { codex: { level: "tight", remainingPct: 20, resetsAt: null } },
       pool: { devices: { pixel: { kind: "emulator", leased: true } } },
+      hosts: [{ name: "本机", cpu: 0.2, availableBytes: 4096, totalBytes: 8192, load1: 1.5, cores: 4 }, { name: "远程", error: "等待采样" }],
     });
     expect(view.pending[0]).toMatchObject({ id: "lease-1", workspaceId: "DEMO-1", role: "worker" });
     expect(view.running).toEqual({ total: 2, byProvider: { claude: 2 } });
     expect(view.deferred).toEqual([{ workspaceId: "DEMO-2", reason: "global limit 4 reached" }]);
     expect(view.quota[0]).toMatchObject({ provider: "codex", level: "tight", remainingPct: 20 });
     expect(view.pool[0]).toMatchObject({ name: "pixel", leased: true });
+    expect(view.hosts).toEqual([
+      { name: "本机", cpu: 0.2, availableBytes: 4096, totalBytes: 8192, load1: 1.5, cores: 4, error: null },
+      { name: "远程", cpu: null, availableBytes: null, totalBytes: null, load1: null, cores: null, error: "等待采样" },
+    ]);
     expect(pauseReason(view, 0.85)).toContain("内存 91%，阈值 85%");
     expect(pauseReason({ ...view, paused: false }, 0.85)).toBeNull();
   });

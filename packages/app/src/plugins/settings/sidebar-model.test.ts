@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { collectSettingsSidebarScreens } from "./sidebar-model";
+import {
+  collectSettingsSidebarScreens,
+  settingsPluginCategory,
+  settingsSearchMatches,
+} from "./sidebar-model";
 
 const Component = () => null;
 function makeScreen(id: string, order?: number) {
@@ -41,5 +45,20 @@ describe("settings sidebar plugin screens", () => {
         ({ plugin, screen }) => plugin.id + "/" + screen.id,
       ),
     ).toEqual(["a/a", "a/b", "b/a"]);
+  });
+});
+
+describe("settings categories and search", () => {
+  it("places task and automation plugins in their categories", () => {
+    expect(settingsPluginCategory("vibe-board")).toBe("task");
+    expect(settingsPluginCategory("vibe-bots")).toBe("task");
+    expect(settingsPluginCategory("vibe-scheduler")).toBe("automation");
+    expect(settingsPluginCategory("vibe-maintain")).toBe("automation");
+    expect(settingsPluginCategory("custom")).toBe("other");
+  });
+  it("matches translated labels without case or surrounding whitespace", () => {
+    expect(settingsSearchMatches("任务默认模型", "默认")).toBe(true);
+    expect(settingsSearchMatches("Agent Settings", " agent ")).toBe(true);
+    expect(settingsSearchMatches("调度器", "模型")).toBe(false);
   });
 });

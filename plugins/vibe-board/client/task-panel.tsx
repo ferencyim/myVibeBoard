@@ -158,6 +158,7 @@ function TaskFlowPanelBody({
         {task.summary ? <Muted size={13}>{task.summary}</Muted> : null}
       </View>
 
+      <Text testID="task-flow-section-progress" style={[hint, { fontSize: 12, fontWeight: "600" }]}>进度</Text>
       <View style={{ gap: 6 }}>
         <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>流程档位</Text>
         <Text style={heading}>
@@ -245,18 +246,21 @@ function TaskFlowPanelBody({
         <Muted>当前宿主不支持从面板切换 tab；请使用顶部 tab 打开。</Muted>
       ) : null}
 
-      {data.board?.length ? (
-        <>
-          <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>
-            {`任务看板 · 完成 ${data.board.filter((item) => item.status === "done").length}/${data.board.length}`}
-          </Text>
-          {data.board.map((item) => (
-            <BoardRow key={item.id} item={item} />
-          ))}
-        </>
-      ) : null}
+      <Text testID="task-flow-section-subtasks" style={[hint, { fontSize: 12, fontWeight: "600" }]}>
+        {`子任务 · 完成 ${data.board?.filter((item) => item.status === "done").length ?? 0}/${data.board?.length ?? 0}`}
+      </Text>
+      {data.board?.length ? data.board.map((item) => (
+        <BoardRow key={item.id} item={item} />
+      )) : <Muted>还没有子任务。</Muted>}
 
-      <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>各步结论</Text>
+      <Text testID="task-flow-section-plans" style={[hint, { fontSize: 12, fontWeight: "600" }]}>其他方案</Text>
+      {data.otherPlans?.length ? (
+        data.otherPlans.map((plan) => <ProjectPlanRow key={plan.workspaceId} plan={plan} />)
+      ) : (
+        <Muted>同项目没有其它任务的方案。</Muted>
+      )}
+
+      <Text testID="task-flow-section-evidence" style={[hint, { fontSize: 12, fontWeight: "600" }]}>证据与各步结论</Text>
       {data.steps.length === 0 ? <Muted>还没有可查看的结论。</Muted> : null}
       {data.steps.map((step) => (
         <View key={step.kind} style={{ gap: 6 }}>
@@ -279,12 +283,6 @@ function TaskFlowPanelBody({
         </View>
       ))}
 
-      <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>同项目其它方案</Text>
-      {data.otherPlans?.length ? (
-        data.otherPlans.map((plan) => <ProjectPlanRow key={plan.workspaceId} plan={plan} />)
-      ) : (
-        <Muted>同项目没有其它任务的方案。</Muted>
-      )}
     </ScrollView>
   );
 }
@@ -430,6 +428,11 @@ function BoardRow({ item }: { item: TaskBoardItemData }) {
       <Text numberOfLines={2} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
         {meta}
       </Text>
+      {item.outOfScope.length ? (
+        <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+          {`可能超出子任务范围：${item.outOfScope.join("、")}`}
+        </Text>
+      ) : null}
       {item.summary ? (
         <Text numberOfLines={3} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
           {item.summary}

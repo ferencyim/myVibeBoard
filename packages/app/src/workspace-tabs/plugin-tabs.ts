@@ -81,7 +81,22 @@ function resolveRoleTarget(
       : undefined;
   let target: WorkspaceTabTarget;
   if (agentId) {
-    target = { kind: "agent", agentId };
+    target = {
+      kind: "agent",
+      agentId,
+      ...(contribution.providerId === "task-flow"
+        ? {
+            flowTab: {
+              pluginId: contribution.pluginId,
+              providerId: contribution.providerId,
+              tabId: descriptor.id,
+              title: descriptor.title,
+              order: descriptor.order,
+              disabled: descriptor.disabled,
+            },
+          }
+        : {}),
+    };
   } else {
     const setup = descriptor.setup;
     target = {
@@ -154,7 +169,12 @@ function mergeRole(
   });
   if (existing) {
     orders.set(existing.tabId, descriptor.order);
-    if (!workspaceTabTargetsEqual(existing.target, target)) {
+    if (
+      !workspaceTabTargetsEqual(existing.target, target) ||
+      (existing.target.kind === "agent" &&
+        target.kind === "agent" &&
+        JSON.stringify(existing.target.flowTab) !== JSON.stringify(target.flowTab))
+    ) {
       layout =
         replaceTabTargetInLayout({
           layout,

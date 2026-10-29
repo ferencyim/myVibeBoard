@@ -1,3 +1,4 @@
+import { buildProjectSettingsRoute } from "@/utils/host-routes";
 import type { DocumentSnapshot, LocalBriefChange } from "./document-cache";
 
 export type ProjectDocumentPage = "brief" | "documents";
@@ -19,6 +20,12 @@ export function buildProjectDocumentRoute(
     pathname,
     params: { serverId, projectId, ...(path ? { path } : {}) },
   };
+}
+
+export function buildProjectDocumentBackRoute(serverId: string, projectId: string, path?: string) {
+  return path
+    ? buildProjectDocumentRoute(serverId, projectId, "documents")
+    : buildProjectSettingsRoute(serverId, projectId);
 }
 
 export function projectDocumentEntries(

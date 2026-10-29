@@ -72,6 +72,7 @@ function isSubagent(agent: Pick<PaseoAgent, "labels">): boolean {
 }
 function statusOf(agent: PaseoAgent): string {
   if (agent.archivedAt) return "已归档";
+  if ((agent.pendingPermissions?.length ?? 0) > 0) return "待审批";
   if (agent.activeTurn) return "运行中";
   if (agent.status === "idle") return "空闲";
   if (agent.status === "error") return "错误";
@@ -702,7 +703,7 @@ export function createTaskTabs(options: {
           provider: agent?.provider ?? current.provider,
           model: agent?.model ?? current.model,
           modelId: agent?.model ?? current.model,
-          status: agent ? statusOf(agent) : "已关闭",
+          status: agent ? statusOf(agent) : !refresh && task.phase === "queued" && current.role === "worker" ? "排队" : "已关闭",
           title: agent?.title ?? tabTitle(current),
           busy: !!agent?.activeTurn,
           thinking: current.thinking,

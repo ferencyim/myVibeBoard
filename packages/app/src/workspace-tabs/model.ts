@@ -49,7 +49,7 @@ export type WorkspaceTabTarget =
       setup?: WorkspaceDraftTabSetup;
       placeholder?: WorkspaceTabPlaceholder;
     }
-  | { kind: "agent"; agentId: string }
+  | { kind: "agent"; agentId: string; flowTab?: WorkspaceTabPlaceholder }
   | { kind: "provider_subagent"; parentAgentId: string; subagentId: string }
   | { kind: "terminal"; terminalId: string }
   | { kind: "browser"; browserId: string }

@@ -28,14 +28,13 @@ export const settingsStyles = StyleSheet.create((theme) => ({
   card: {
     backgroundColor: theme.colors.surface1,
     borderRadius: theme.borderRadius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     overflow: "hidden",
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    minHeight: 64,
     paddingVertical: theme.spacing[4],
     paddingHorizontal: theme.spacing[4],
   },

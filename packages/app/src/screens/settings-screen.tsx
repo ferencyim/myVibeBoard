@@ -118,13 +118,20 @@ import {
 import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
 import { PluginIconView } from "@/plugins/icons";
-import { collectSettingsSidebarScreens } from "@/plugins/settings/sidebar-model";
+import {
+  collectSettingsSidebarScreens,
+  settingsPluginCategory,
+  settingsSearchMatches,
+} from "@/plugins/settings/sidebar-model";
+import { EditingTextInput } from "@/components/ui/text-input";
+import { buildProjectDocumentBackRoute } from "@/projects/document-navigation";
 import { buildPluginSettingsRoute } from "@/plugins/settings/routes";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
 import { PromptLibraryPage } from "@/prompt-library/page";
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
+import { ProjectDocumentsPage } from "@/projects/project-documents-page";
 import { SETTINGS_DESKTOP_SIDEBAR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
 import { densityIconBox, densityIconProps, densityIconSize } from "@/styles/density";
 import type { Theme } from "@/styles/theme";
@@ -1001,6 +1008,8 @@ function SettingsSidebar({
 }: SettingsSidebarProps) {
   const { theme, rt } = useUnistyles();
   const { t } = useTranslation();
+  const [query, setQuery] = useState("");
+  const matches = (label: string) => settingsSearchMatches(label, query);
   const hosts = useHosts();
   const localServerId = useLocalDaemonServerId();
   const sortedHosts = useSortedHosts(hosts, localServerId);
@@ -1021,23 +1030,25 @@ function SettingsSidebar({
   const selectedSectionId = view.kind === "section" ? view.section : null;
   let selectedHostSection: HostSectionSlug | null = null;
   if (view.kind === "host") selectedHostSection = view.section;
-  if (view.kind === "project") selectedHostSection = "projects";
+  if (view.kind === "project" || view.kind === "document") selectedHostSection = "projects";
   const installedPlugins = useInstalledPlugins();
   const pluginSettingsScreens = collectSettingsSidebarScreens(installedPlugins, activeHostServerId);
 
   const sidebarBody = (
     <>
       <SidebarGroup label={t("settings.groups.app")}>
-        {items.map((item) => (
-          <SidebarSectionButton
-            key={item.id}
-            itemId={item.id}
-            label={t(item.labelKey)}
-            icon={item.icon}
-            isSelected={selectedSectionId === item.id}
-            onSelect={onSelectSection}
-          />
-        ))}
+        {items
+          .filter((item) => matches(t(item.labelKey)))
+          .map((item) => (
+            <SidebarSectionButton
+              key={item.id}
+              itemId={item.id}
+              label={t(item.labelKey)}
+              icon={item.icon}
+              isSelected={selectedSectionId === item.id}
+              onSelect={onSelectSection}
+            />
+          ))}
       </SidebarGroup>
       {hasHosts ? (
         <SidebarGroup label={t("settings.groups.host")}>
@@ -1048,7 +1059,7 @@ function SettingsSidebar({
             onAddHost={onAddHost}
             enableBuiltInDaemonOption={enableBuiltInDaemonOption}
           />
-          {HOST_SECTION_ITEMS.map((item) => (
+          {HOST_SECTION_ITEMS.filter((item) => matches(t(item.labelKey))).map((item) => (
             <SidebarHostSectionButton
               key={item.id}
               itemId={item.id}
@@ -1058,16 +1069,35 @@ function SettingsSidebar({
               onSelect={onSelectHostSection}
             />
           ))}
-          {pluginSettingsScreens.map(({ plugin, screen }) => (
-            <SidebarPluginSettingsButton
-              key={`${plugin.id}:${screen.id}`}
-              plugin={plugin}
-              screen={screen}
-              view={view}
-              layout={layout}
-            />
-          ))}
         </SidebarGroup>
+      ) : null}
+      {hasHosts ? (
+        (["task", "automation", "other"] as const).map((category) => {
+          const screens = pluginSettingsScreens.filter(
+            ({ plugin, screen }) =>
+              settingsPluginCategory(plugin.id) === category &&
+              matches(plugin.i18n.resolve(screen.title, plugin.locale)),
+          );
+          if (!screens.length) return null;
+          const label = {
+            task: t("settings.groups.taskBots", { defaultValue: "任务与 bot" }),
+            automation: t("settings.groups.automation", { defaultValue: "调度与维护" }),
+            other: t("settings.hostSections.plugins"),
+          }[category];
+          return (
+            <SidebarGroup key={category} label={label}>
+              {screens.map(({ plugin, screen }) => (
+                <SidebarPluginSettingsButton
+                  key={`${plugin.id}:${screen.id}`}
+                  plugin={plugin}
+                  screen={screen}
+                  view={view}
+                  layout={layout}
+                />
+              ))}
+            </SidebarGroup>
+          );
+        })
       ) : (
         <SidebarGroup>
           <Pressable
@@ -1128,6 +1158,15 @@ function SettingsSidebar({
               testID="settings-back-to-workspace"
             />
           </View>
+          <EditingTextInput
+            initialValue={query}
+            onChangeText={setQuery}
+            placeholder={t("common.search", { defaultValue: "搜索设置" })}
+            placeholderTextColor={theme.colors.foregroundMuted}
+            accessibilityLabel={t("common.search", { defaultValue: "搜索设置" })}
+            style={sidebarStyles.search}
+            testID="settings-search"
+          />
           <ScrollView
             style={sidebarStyles.scrollBody}
             showsVerticalScrollIndicator={false}
@@ -1175,7 +1214,10 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const sortedHosts = useSortedHosts(hosts, localServerId);
   const lastWorkspaceSelection = useLastWorkspaceSelection();
   const routedSettingsHostServerId =
-    view.kind === "host" || view.kind === "project" || view.kind === "plugin"
+    view.kind === "host" ||
+    view.kind === "project" ||
+    view.kind === "document" ||
+    view.kind === "plugin"
       ? view.serverId
       : null;
   const [selectedSettingsHostServerId, setSelectedSettingsHostServerId] = useState<string | null>(
@@ -1192,7 +1234,12 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   // The host the four sections scope to: the host on the active view, otherwise
   // the picker choice, otherwise the connected local daemon, otherwise the first host.
   const activeHostServerId = useMemo(() => {
-    if (view.kind === "host" || view.kind === "project" || view.kind === "plugin")
+    if (
+      view.kind === "host" ||
+      view.kind === "project" ||
+      view.kind === "document" ||
+      view.kind === "plugin"
+    )
       return view.serverId;
     return resolveActiveHostServerId({
       selectedServerId: selectedSettingsHostServerId,
@@ -1364,8 +1411,12 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   }, [isCompactLayout, router]);
 
   const handleBackFromDetail = useCallback(() => {
+    if (view.kind === "document" && view.path) {
+      router.dismissTo(buildProjectDocumentBackRoute(view.serverId, view.projectId, view.path));
+      return;
+    }
     returnFromSettings(view);
-  }, [view]);
+  }, [router, view]);
 
   const handleBackToWorkspace = useCallback(() => {
     returnFromSettings({ kind: "root" });
@@ -1388,6 +1439,8 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
       const item = SIDEBAR_SECTION_ITEMS.find((s) => s.id === view.section);
       return item ? t(item.labelKey) : undefined;
     }
+    if (view.kind === "document")
+      return view.page === "brief" ? "项目简介" : (view.path ?? "项目文档");
     if (view.kind === "project") {
       return t("settings.projects");
     }
@@ -1407,6 +1460,16 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
       );
     if (view.kind === "host") {
       return renderHostSettingsContent(view, handleHostRemoved, handleBackFromDetail);
+    }
+    if (view.kind === "document") {
+      return (
+        <ProjectDocumentsPage
+          serverId={view.serverId}
+          projectId={view.projectId}
+          page={view.page}
+          path={view.path}
+        />
+      );
     }
     if (view.kind === "project") {
       return (
@@ -1524,7 +1587,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         {fullBleed ? (
           content
         ) : (
-          <PageLayout title={detailTitle} onBack={handleBackFromDetail}>
+          <PageLayout settings title={detailTitle} onBack={handleBackFromDetail}>
             {content}
           </PageLayout>
         )}
@@ -1556,7 +1619,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             {fullBleed ? (
               content
             ) : (
-              <PageLayout title={detailTitle} titleTestID="settings-detail-header-title">
+              <PageLayout
+                settings
+                title={
+                  view.kind === "project" || view.kind === "document" ? undefined : detailTitle
+                }
+                titleTestID="settings-detail-header-title"
+              >
                 {content}
               </PageLayout>
             )}
@@ -1641,6 +1710,16 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   },
   scrollBody: {
     flex: 1,
+  },
+  search: {
+    marginHorizontal: theme.spacing[3],
+    marginVertical: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.surface1,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.md,
   },
   sidebarDragArea: {
     position: "relative",

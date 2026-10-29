@@ -1,7 +1,8 @@
+import { useMemo } from "react";
 import { useLocalSearchParams } from "expo-router";
 import { HostRouteBootstrapBoundary } from "@/components/host-route-bootstrap-boundary";
 import { normalizeProjectSettingsRouteId } from "@/utils/host-routes";
-import { ProjectDocumentsPage } from "./project-documents-page";
+import SettingsScreen from "@/screens/settings-screen";
 import type { ProjectDocumentPage } from "./document-navigation";
 
 export function ProjectDocumentsRoute({ page }: { page: ProjectDocumentPage }) {
@@ -10,14 +11,20 @@ export function ProjectDocumentsRoute({ page }: { page: ProjectDocumentPage }) {
     projectId?: string | string[];
     path?: string | string[];
   }>();
+  const view = useMemo(
+    () =>
+      ({
+        kind: "document",
+        serverId: normalizeProjectSettingsRouteId(params.serverId),
+        projectId: normalizeProjectSettingsRouteId(params.projectId),
+        path: normalizeProjectSettingsRouteId(params.path) || undefined,
+        page,
+      }) as const,
+    [params.serverId, params.projectId, params.path, page],
+  );
   return (
     <HostRouteBootstrapBoundary>
-      <ProjectDocumentsPage
-        serverId={normalizeProjectSettingsRouteId(params.serverId)}
-        projectId={normalizeProjectSettingsRouteId(params.projectId)}
-        path={normalizeProjectSettingsRouteId(params.path) || undefined}
-        page={page}
-      />
+      <SettingsScreen view={view} />
     </HostRouteBootstrapBoundary>
   );
 }

@@ -25,6 +25,7 @@ export interface WorkspaceTabPresentation {
   titleState: "ready" | "loading";
   icon: React.ComponentType<PanelIconProps>;
   statusBucket: SidebarStateBucket | null;
+  flow?: boolean;
 }
 
 interface WorkspaceTabPresentationResolverProps {
@@ -75,21 +76,36 @@ function WorkspaceTabPresentationResolverInner({
   });
   const attributes = usePanelInstanceAttributes({ serverId, workspaceId, tabId: tab.tabId });
 
+  let flowTab: import("@/workspace-tabs/model").WorkspaceTabPlaceholder | undefined;
+  if (tab.target.kind === "agent") flowTab = tab.target.flowTab;
+  if (tab.target.kind === "draft" && tab.target.placeholder?.providerId === "task-flow") {
+    flowTab = tab.target.placeholder;
+  }
+  let flowStatus: string | null = null;
+  if (descriptor.statusBucket === "needs_input") flowStatus = "待审批";
+  else if (descriptor.statusBucket === "running") flowStatus = "忙碌";
+  const flowLabel =
+    flowTab && tab.target.kind === "agent" && flowStatus
+      ? `${flowTab.title.replace(/ · [^·]+$/, "")} · ${flowStatus}`
+      : flowTab?.title;
   const presentation = useMemo(
     () => ({
       disabled: tab.target.kind === "draft" && tab.target.placeholder?.disabled === true,
       key: tab.key,
       kind: tab.kind,
-      label: descriptor.label,
+      label: flowLabel ?? descriptor.label,
       subtitle: descriptor.subtitle,
       tooltip: descriptor.tooltip,
       modified: attributes.modified,
-      showCloseButton: registration.showCloseButton,
+      showCloseButton: !flowTab && registration.showCloseButton,
       titleState: descriptor.titleState,
       icon: descriptor.icon,
       statusBucket: descriptor.statusBucket,
+      flow: Boolean(flowTab),
     }),
     [
+      flowTab,
+      flowLabel,
       descriptor.icon,
       descriptor.label,
       descriptor.tooltip,
@@ -197,7 +213,7 @@ export function WorkspaceTabOptionRow({
                 />
               </View>
               <View style={styles.optionContent}>
-                <Text numberOfLines={1} style={styles.optionLabel}>
+                <Text style={styles.optionLabel}>
                   {presentation.titleState === "loading"
                     ? t("workspace.tabs.loading")
                     : presentation.label}
