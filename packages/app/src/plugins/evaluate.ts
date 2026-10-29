@@ -138,6 +138,10 @@ export function runPluginClientBundle(
     settingsScreens: [],
     projectSettingsSections: [],
     projectSidebarItems: [],
+    pageRailItems: [],
+    sidebarGroups: [],
+    sidebarWorkspaceProviders: [],
+    projectSidebarGroups: [],
     workspaceTabProviders: [],
     firstMessageModelResolvers: [],
     sidebarItems: { header: [], footer: [] },
@@ -154,6 +158,9 @@ export function runPluginClientBundle(
   const surfaceIds = new Set<string>();
   const settingsScreenIds = new Set<string>();
   const projectSidebarItemIds = new Set<string>();
+  const pageRailItemIds = new Set<string>();
+  const sidebarGroupIds = new Set<string>();
+  const projectSidebarGroupIds = new Set<string>();
   const projectSettingsSectionIds = new Set<string>();
   const sidebarItemIds: Record<PluginSidebarSection, Set<string>> = {
     header: new Set(),
@@ -257,6 +264,15 @@ export function runPluginClientBundle(
   }
   const pluginContext: PluginClientContext = {
     ...runtime,
+    addSidebarWorkspaceProvider(contribution) {
+      const normalizedId = requireId(contribution.id, "sidebar workspace provider id");
+      if (typeof contribution.resolve !== "function")
+        throw new Error("Invalid sidebar workspace provider");
+      const providers = collector.sidebarWorkspaceProviders!;
+      if (providers.some((provider) => provider.id === normalizedId))
+        throw new Error("Duplicate sidebar workspace provider");
+      return register(providers, { ...contribution, id: normalizedId }, () => {});
+    },
     addWorkspaceTabProvider(contribution) {
       const normalizedId = requireId(contribution.id, "workspace tab provider id");
       if (typeof contribution.resolve !== "function" || typeof contribution.create !== "function")
@@ -272,6 +288,54 @@ export function runPluginClientBundle(
       if (typeof contribution.resolve !== "function")
         throw new Error("Invalid first message model resolver");
       return register(collector.firstMessageModelResolvers, contribution, () => {});
+    },
+    addPageRailItem(contribution) {
+      const itemId = requireId(contribution.id, "page rail item id");
+      if (pageRailItemIds.has(itemId)) throw new Error(`Duplicate page rail item: ${itemId}`);
+      const title = normalizePluginText(contribution.title);
+      if (!title) throw new Error(`Page rail item ${itemId} has no title`);
+      const screenId = requireId(contribution.screenId, "page rail screen id");
+      const icon = parsePluginIcon(`Page rail item ${itemId}`, contribution.icon);
+      if (contribution.order !== undefined && !Number.isFinite(contribution.order))
+        throw new Error(`Page rail item ${itemId} has invalid order`);
+      pageRailItemIds.add(itemId);
+      return register(
+        collector.pageRailItems!,
+        { id: itemId, title, icon, screenId, order: contribution.order },
+        () => pageRailItemIds.delete(itemId),
+      );
+    },
+    addProjectSidebarGroup(contribution) {
+      const itemId = requireId(contribution.id, "project sidebar group id");
+      if (projectSidebarGroupIds.has(itemId))
+        throw new Error(`Duplicate project sidebar group: ${itemId}`);
+      const title = normalizePluginText(contribution.title);
+      if (!title || !isComponentType(contribution.Component))
+        throw new Error(`Invalid project sidebar group: ${itemId}`);
+      if (contribution.order !== undefined && !Number.isFinite(contribution.order))
+        throw new Error(`Project sidebar group ${itemId} has invalid order`);
+      projectSidebarGroupIds.add(itemId);
+      return register(
+        collector.projectSidebarGroups!,
+        { id: itemId, title, order: contribution.order, Component: contribution.Component },
+        () => projectSidebarGroupIds.delete(itemId),
+      );
+    },
+    addSidebarGroup(contribution) {
+      const itemId = requireId(contribution.id, "sidebar group id");
+      if (sidebarGroupIds.has(itemId)) throw new Error(`Duplicate sidebar group: ${itemId}`);
+      const title = normalizePluginText(contribution.title);
+      if (!title) throw new Error(`Sidebar group ${itemId} has no title`);
+      if (!isComponentType(contribution.Component))
+        throw new Error(`Sidebar group ${itemId} is not a component`);
+      if (contribution.order !== undefined && !Number.isFinite(contribution.order))
+        throw new Error(`Sidebar group ${itemId} has invalid order`);
+      sidebarGroupIds.add(itemId);
+      return register(
+        collector.sidebarGroups!,
+        { id: itemId, title, order: contribution.order, Component: contribution.Component },
+        () => sidebarGroupIds.delete(itemId),
+      );
     },
     addProjectSidebarItem(contribution) {
       const sectionId = requireId(contribution.id, "project sidebar item id");
@@ -651,6 +715,10 @@ export function runPluginClientBundle(
     settingsScreens: collector.settingsScreens,
     projectSettingsSections: collector.projectSettingsSections,
     projectSidebarItems: collector.projectSidebarItems,
+    pageRailItems: collector.pageRailItems,
+    sidebarGroups: collector.sidebarGroups,
+    sidebarWorkspaceProviders: collector.sidebarWorkspaceProviders,
+    projectSidebarGroups: collector.projectSidebarGroups,
     workspaceTabProviders: collector.workspaceTabProviders,
     firstMessageModelResolvers: collector.firstMessageModelResolvers,
     sidebarItems: collector.sidebarItems,

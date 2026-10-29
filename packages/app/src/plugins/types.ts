@@ -14,6 +14,10 @@ import type {
   PluginComposerPillContribution as SDKPluginComposerPillContribution,
   PluginSidebarContribution as SDKPluginSidebarContribution,
   PluginSidebarItemContribution as SDKPluginSidebarItemContribution,
+  PluginPageRailItemContribution,
+  PluginSidebarGroupContribution,
+  PluginSidebarWorkspaceProvider,
+  PluginProjectSidebarGroupContribution,
   PluginScreenContribution as SDKPluginScreenContribution,
   PluginSettingsScreenContribution as SDKPluginSettingsScreenContribution,
   PluginProjectSettingsSectionContribution as SDKPluginProjectSettingsSectionContribution,
@@ -57,6 +61,10 @@ export interface EvaluatedPlugin {
   settingsScreens: PluginSettingsScreenContribution[];
   projectSettingsSections: PluginProjectSettingsSectionContribution[];
   projectSidebarItems?: PluginProjectSidebarItemContribution[];
+  pageRailItems?: PluginPageRailItemContribution<PluginText>[];
+  sidebarGroups?: PluginSidebarGroupContribution<PluginText>[];
+  sidebarWorkspaceProviders?: PluginSidebarWorkspaceProvider[];
+  projectSidebarGroups?: PluginProjectSidebarGroupContribution<PluginText>[];
   workspaceTabProviders?: PluginWorkspaceTabProvider[];
   firstMessageModelResolvers: PluginFirstMessageModelResolver[];
   sidebarItems: Record<PluginSidebarSection, PluginSidebarItemContribution[]>;

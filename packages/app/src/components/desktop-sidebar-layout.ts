@@ -3,6 +3,7 @@ import { SETTINGS_DESKTOP_SPLIT_MIN_WIDTH } from "@/constants/layout";
 import { MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "@/stores/panel-store";
 
 const MIN_DESKTOP_CENTER_WIDTH = 400;
+export const PAGE_RAIL_WIDTH = 52;
 
 export function resolveDesktopSidebarVisibility(input: {
   chromeEnabled: boolean;
@@ -56,6 +57,7 @@ export function resolveDesktopSidebarWidth(input: {
   viewportWidth: number;
 }): number {
   "worklet";
+  if (input.requestedWidth < 110) return 88;
   return resolveDesktopPanelWidth({
     ...input,
     minimumWidth: MIN_SIDEBAR_WIDTH,
@@ -84,4 +86,12 @@ export function canDesktopAppSidebarShare(input: {
       }) >=
     input.contentMinimumWidth
   );
+}
+
+/** The page rail is independent of the collapsible tree. */
+export function isDesktopPageRailVisible(
+  chromeEnabled: boolean,
+  isCompactLayout: boolean,
+): boolean {
+  return chromeEnabled && !isCompactLayout;
 }

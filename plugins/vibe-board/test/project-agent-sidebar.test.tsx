@@ -6,6 +6,7 @@ import {
   openProjectAgentRequest,
   projectAgentPollInterval,
   projectAgentPresentation,
+  projectBotWorkspaceProjection,
   receiveProjectAgentState,
 } from "../client/project-agent-sidebar";
 
@@ -158,4 +159,10 @@ describe("项目 agent 侧栏创建流程", () => {
     expect(current.ports.open).toHaveBeenCalledExactlyOnceWith("other-project");
     expect(current.openAgent).toHaveBeenCalledExactlyOnceWith("project-agent");
   });
+});
+
+it("projects only listed bot workspaces and propagates failed lookups", async () => {
+  const read = vi.fn(async (id: string) => ({ workspaceId: id === "a" ? "workspace" : "foreign" }));
+  await expect(projectBotWorkspaceProjection(["a", "b"], ["workspace"], read)).resolves.toEqual([{ workspaceId: "workspace", kind: "bot" }]);
+  await expect(projectBotWorkspaceProjection(["a"], ["workspace"], async () => { throw new Error("offline"); })).rejects.toThrow("offline");
 });

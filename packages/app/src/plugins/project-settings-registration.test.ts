@@ -20,6 +20,39 @@ function evaluatePluginClientBundle(id: string, source: string) {
 }
 
 describe("project settings registration", () => {
+  it("registers project groups and workspace providers and cleans up", async () => {
+    const plugin = evaluatePluginClientBundle(
+      "shell",
+      bundle(`
+      plugin.addProjectSidebarGroup({ id: "project-bots", title: "Bots", Component() {} });
+      plugin.addSidebarWorkspaceProvider({ id: "workspace-kind", resolve: async () => [] });
+    `),
+    );
+    expect(plugin.projectSidebarGroups?.map(({ id }) => id)).toEqual(["project-bots"]);
+    expect(plugin.sidebarWorkspaceProviders?.map(({ id }) => id)).toEqual(["workspace-kind"]);
+    await plugin.cleanup();
+    expect(plugin.projectSidebarGroups).toEqual([]);
+    expect(plugin.sidebarWorkspaceProviders).toEqual([]);
+  });
+  it("registers page rail items and host sidebar groups and cleans them up", async () => {
+    const plugin = evaluatePluginClientBundle(
+      "shell",
+      bundle(`
+      plugin.addPageRailItem({ id: "page", title: "Page", icon: "Bot", screenId: "main", order: 2 });
+      plugin.addSidebarGroup({ id: "bots", title: "Bots", order: 1, Component() {} });
+    `),
+    );
+    expect(
+      plugin.pageRailItems?.map(({ id, order, screenId }) => ({ id, order, screenId })),
+    ).toEqual([{ id: "page", order: 2, screenId: "main" }]);
+    expect(plugin.sidebarGroups?.map(({ id, order }) => ({ id, order }))).toEqual([
+      { id: "bots", order: 1 },
+    ]);
+    await plugin.cleanup();
+    expect(plugin.pageRailItems).toEqual([]);
+    expect(plugin.sidebarGroups).toEqual([]);
+  });
+
   it("registers fixed project rows and releases ids on cleanup", async () => {
     const plugin = evaluatePluginClientBundle(
       "rows",

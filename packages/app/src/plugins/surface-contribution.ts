@@ -26,7 +26,11 @@ export function resolvePluginSurfaceContribution(
     identity.kind === "sidebar"
       ? (plugin.legacySidebarItems.find((contribution) => contribution.id === identity.id) ?? null)
       : null;
-  const surfaceId = sidebarItem ? sidebarItem.surface : identity.id;
+  const railItem =
+    identity.kind === "sidebar"
+      ? plugin.pageRailItems?.find((item) => item.id === identity.id)
+      : undefined;
+  const surfaceId = sidebarItem ? sidebarItem.surface : (railItem?.screenId ?? identity.id);
   const surface = surfaceId
     ? (plugin.surfaces.find((contribution) => contribution.id === surfaceId) ?? null)
     : null;

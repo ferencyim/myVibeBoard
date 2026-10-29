@@ -108,6 +108,65 @@ export interface PluginSidebarItemContribution<Text extends PluginText = string>
   Component: ComponentType<PluginSidebarItemProps>;
 }
 
+/** A plugin page displayed in the host page rail. */
+export interface PluginPageRailItemContribution<Text extends PluginText = string> {
+  id: string;
+  title: Text;
+  icon: PluginIcon;
+  order?: number;
+  screenId: string;
+}
+
+export interface PluginSidebarWorkspaceProvider {
+  id: string;
+  resolve(input: { projectId: string; workspaceIds: readonly string[] }): Promise<
+    Array<{
+      workspaceId: string;
+      kind: "task" | "bot";
+      phaseLabel?: string;
+      blockingReason?: string | null;
+    }>
+  >;
+}
+
+export interface PluginSidebarAgentActivity {
+  agentId: string;
+  status?: "working" | "responded" | "unread" | "waiting" | "failed" | "routine";
+  count?: number;
+  lastMessage?: { text: string; timestamp: string };
+}
+
+export interface PluginSidebarGroupProps extends PluginSurfaceProps {
+  sidebarCompact: boolean;
+  agents: readonly PluginSidebarAgentActivity[];
+  requestAgentPreview(agentId: string): void;
+  Avatar: ComponentType<{ seed: string; name: string; hue?: number; size?: number }>;
+  StatusIndicator: ComponentType<{
+    status: "working" | "responded" | "unread" | "waiting" | "failed" | "routine";
+    count?: number;
+    label?: string;
+  }>;
+}
+
+export interface PluginProjectSidebarGroupProps extends PluginSidebarGroupProps {
+  projectId: string;
+}
+
+export interface PluginProjectSidebarGroupContribution<Text extends PluginText = string> {
+  id: string;
+  title: Text;
+  order?: number;
+  Component: ComponentType<PluginProjectSidebarGroupProps>;
+}
+
+/** A host-scoped sidebar group rendered by the plugin. */
+export interface PluginSidebarGroupContribution<Text extends PluginText = string> {
+  id: string;
+  title: Text;
+  order?: number;
+  Component: ComponentType<PluginSidebarGroupProps>;
+}
+
 /**
  * A Lucide icon name, inline SVG markup, or a component. Components receive the surface's size
  * and color; buttons widen the props with their host and target context.
@@ -205,6 +264,12 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   ): PluginCleanup;
   addSettingsScreen(contribution: PluginSettingsScreenContribution<PluginText>): PluginCleanup;
   addScreen(contribution: PluginScreenContribution<PluginText>): PluginCleanup;
+  addPageRailItem(contribution: PluginPageRailItemContribution<PluginText>): PluginCleanup;
+  addProjectSidebarGroup(
+    contribution: PluginProjectSidebarGroupContribution<PluginText>,
+  ): PluginCleanup;
+  addSidebarWorkspaceProvider(contribution: PluginSidebarWorkspaceProvider): PluginCleanup;
+  addSidebarGroup(contribution: PluginSidebarGroupContribution<PluginText>): PluginCleanup;
   addSidebarHeaderItem(contribution: PluginSidebarItemContribution<PluginText>): PluginCleanup;
   addSidebarFooterItem(contribution: PluginSidebarItemContribution<PluginText>): PluginCleanup;
   addAgentPanel(contribution: PluginAgentPanelContribution<PluginText>): PluginCleanup;

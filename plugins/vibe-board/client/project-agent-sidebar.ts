@@ -77,3 +77,16 @@ export function projectAgentPresentation(
   if (creating && displayName === "项目 agent") label = "正在创建项目 agent…";
   return { label, error, disabled: opening || creating };
 }
+
+export async function projectBotWorkspaceProjection(
+  botIds: readonly string[], workspaceIds: readonly string[],
+  read: (id: string) => Promise<{ workspaceId: string | null }>,
+) {
+  const states: Array<{ workspaceId: string | null }> = [];
+  for (let offset = 0; offset < botIds.length; offset += 4) {
+    states.push(...await Promise.all(botIds.slice(offset, offset + 4).map(read)));
+  }
+  const allowed = new Set(workspaceIds);
+  return states.flatMap((state) => state.workspaceId && allowed.has(state.workspaceId)
+    ? [{ workspaceId: state.workspaceId, kind: "bot" as const }] : []);
+}

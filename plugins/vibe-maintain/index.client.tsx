@@ -1,9 +1,8 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
-import { MaintainScreen, MaintainSettingsScreen, MaintainSidebarItem } from "./client/screen";
+import { MaintainScreen, MaintainSettingsScreen } from "./client/screen";
 
 export default function contribute(client: PluginClientContext) {
   client.addScreen({ id: "main", title: "自动维护", Component: MaintainScreen });
-  client.addSidebarHeaderItem({ id: "maintain", title: "自动维护", Component: MaintainSidebarItem });
   client.addSettingsScreen({
     order: -10,
     id: "preferences",
