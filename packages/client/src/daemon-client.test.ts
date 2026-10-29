@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
+import { legacyUsageIcon } from "./legacy-usage-icons.js";
 import {
   DaemonClient,
   DaemonConnectionError,
@@ -7129,10 +7129,7 @@ test.each([
           id: "claude",
           sourceId: "claude",
           sourceLabel: "Claude",
-          icon: readFileSync(
-            new URL("../../../plugins/claude-usage-source/icon.svg", import.meta.url),
-            "utf8",
-          ),
+          icon: legacyUsageIcon("claude"),
           account: {},
           fetchedAt: "2026-09-30T00:00:00.000Z",
           report,
