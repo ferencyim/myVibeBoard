@@ -24,6 +24,13 @@ import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import { useForgeSearchQuery } from "@/git/use-forge-search-query";
 import { useCheckoutStatusQuery } from "@/git/use-status-query";
 import { ensureCheckoutStatus } from "@/git/checkout-status-cache";
+import {
+  readCachedBranchSuggestions,
+  cacheBranchSuggestions,
+} from "@/data/branch-suggestions-cache";
+import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
+import type { MaterializedAgentProfile } from "@/agent-profiles";
+import type { ProviderSelectorProvider } from "@/provider-selection/provider-selection";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { resolveTerminalProfiles } from "@getpaseo/protocol/terminal-profiles";
 import type { TerminalProfile } from "@getpaseo/protocol/messages";
@@ -97,6 +104,7 @@ import {
 import { buildNewWorkspaceProjectIconTargets } from "./new-workspace/project-icon-targets";
 import { useNewWorkspaceProjectPicker } from "./new-workspace/project-picker";
 import { useNewWorkspaceForm } from "./new-workspace/form";
+import { buildFirstMessageModel } from "./new-workspace/first-message-config";
 import { ImportSessionButton } from "./new-workspace/import-session-button";
 import { useImportSession } from "@/hooks/use-import-session";
 import {
@@ -106,6 +114,25 @@ import {
 } from "./workspace/terminals/state";
 import { captureWorkspaceDraftCleanup } from "./new-workspace/background-handoff";
 import { useNewWorkspaceScreenPresence } from "./new-workspace/screen-presence";
+
+const DEFAULT_MODEL_PROVIDER = "paseo:task-default";
+const DEFAULT_MODEL_OPTION: ProviderSelectorProvider = {
+  id: DEFAULT_MODEL_PROVIDER,
+  label: "默认模型",
+  modelSelection: {
+    kind: "models",
+    rows: [
+      {
+        favoriteKey: "paseo:task-default:default",
+        provider: DEFAULT_MODEL_PROVIDER,
+        providerLabel: "默认模型",
+        modelId: "default",
+        modelLabel: "默认模型（联网后按项目设置）",
+        isDefault: true,
+      },
+    ],
+  },
+};
 
 function useIsNewWorkspaceDraftHandoffActive(input: {
   draftId: string | undefined;
@@ -158,6 +185,7 @@ interface FirstWorkspaceMessageInput {
   composerState: ReturnType<typeof useAgentInputDraft>["composerState"];
   formPreferences: FormPreferences;
   isConnected: boolean;
+  useDefaultModel: boolean;
   selectedProject: HostProjectListItem | null;
   selectedSourceDirectory: string | null;
   selectedServerId: string;
@@ -165,42 +193,6 @@ interface FirstWorkspaceMessageInput {
   selectedItem: PickerItem | null;
   checkoutStatus: { currentBranch: string | null; upstreamRef?: string | null } | undefined;
   identity: { draftId: string; worktreeSlug: string };
-}
-
-function resolveFirstMessageConfig(
-  input: Pick<
-    FirstWorkspaceMessageInput,
-    "composerState" | "formPreferences" | "payload" | "isConnected"
-  >,
-): Parameters<typeof firstMessageOutbox.enqueue>[0]["config"] {
-  const current = input.composerState;
-  if (current?.selectedProvider && input.isConnected) {
-    return {
-      provider: current.selectedProvider,
-      cwd: input.payload.cwd,
-      model: current.effectiveModelId || undefined,
-      modeId: current.effectiveModeId || undefined,
-      thinkingOptionId: current.effectiveThinkingOptionId || undefined,
-      featureValues: current.featureValues,
-    };
-  }
-  const provider = current?.selectedProvider || input.formPreferences.provider;
-  if (!provider) throw new Error("请先联网选择规划模型，再保存离线首消息。");
-  return resolveSavedFirstMessageConfig(input, provider);
-}
-
-function resolveSavedFirstMessageConfig(
-  input: Pick<FirstWorkspaceMessageInput, "composerState" | "formPreferences" | "payload">,
-  provider: string,
-): Parameters<typeof firstMessageOutbox.enqueue>[0]["config"] {
-  const current = input.composerState;
-  const saved = input.formPreferences.providerPreferences?.[provider];
-  const model = current?.selectedModel || saved?.model;
-  const modeId = current?.selectedMode || saved?.mode;
-  const savedThinking = model ? saved?.thinkingByModel?.[model] : undefined;
-  const thinkingOptionId = current?.selectedThinkingOptionId || savedThinking;
-  const featureValues = current?.featureValues ?? saved?.featureValues;
-  return { provider, cwd: input.payload.cwd, model, modeId, thinkingOptionId, featureValues };
 }
 
 function buildFirstWorkspaceMessage(
@@ -214,7 +206,7 @@ function buildFirstWorkspaceMessage(
   }
   const hostProjectId = getHostProjectId(input.selectedProject, input.selectedServerId);
   if (!hostProjectId) throw new Error("所选主机上没有此项目，正文已保留。");
-  const config = resolveFirstMessageConfig(input);
+  const model = buildFirstMessageModel({ ...input, cwd: input.payload.cwd });
   const checkoutStatus = input.checkoutStatus ?? { currentBranch: null };
   const checkoutRequest = pickerItemToCheckoutRequest(
     input.selectedItem ?? defaultBasePickerItem(checkoutStatus),
@@ -230,10 +222,44 @@ function buildFirstWorkspaceMessage(
       worktreeSlug: input.identity.worktreeSlug,
       ...checkoutRequest,
     },
-    config,
+    ...model,
     text: input.payload.text,
     attachments: input.payload.attachments,
   };
+}
+
+function useNewWorkspaceBranchSuggestions(input: {
+  isOpen: boolean;
+  serverId: string;
+  cwd: string | null;
+  query: string;
+}) {
+  const client = useHostRuntimeClient(input.serverId);
+  const isConnected = useHostRuntimeIsConnected(input.serverId);
+  return useQuery({
+    queryKey: ["branch-suggestions", input.serverId, input.cwd, input.query],
+    queryFn: async () => {
+      if (!input.cwd) throw new Error("Choose a project");
+      if (!isConnected || !client)
+        return (
+          (await readCachedBranchSuggestions(input.serverId, input.cwd, input.query)) ?? {
+            branches: [],
+            error: null,
+            requestId: "offline-cache",
+          }
+        );
+      const result = await client.getBranchSuggestions({
+        cwd: input.cwd,
+        query: input.query || undefined,
+        limit: 20,
+      });
+      if (!input.query)
+        await cacheBranchSuggestions(input.serverId, input.cwd, result).catch(() => {});
+      return result;
+    },
+    enabled: input.isOpen && Boolean(input.cwd),
+    staleTime: 15_000,
+  });
 }
 
 function newTaskFormVisibility(input: {
@@ -253,6 +279,28 @@ function NewTaskOutboxHint({ isTerminalLaunch }: { isTerminalLaunch: boolean }) 
       worktree；离线首消息保存在本机，联网后自动发送。离线未选分支时使用主机工作副本的默认分支。
     </Text>
   );
+}
+
+function useFirstMessageModelIntent(selectedServerId: string, isConnected: boolean) {
+  const [modelIntent, setModelIntent] = useState<{ serverId: string; useDefault: boolean } | null>(
+    null,
+  );
+  const useDefaultModel =
+    modelIntent?.serverId === selectedServerId ? modelIntent.useDefault : !isConnected;
+  return { useDefaultModel, setModelIntent };
+}
+
+function NewTaskProviderCacheHint({
+  isTerminalLaunch,
+  isConnected,
+  lastSyncedAt,
+}: {
+  isTerminalLaunch: boolean;
+  isConnected: boolean;
+  lastSyncedAt?: string;
+}) {
+  if (isTerminalLaunch || isConnected || !lastSyncedAt) return null;
+  return <Text style={styles.outboxHint}>上次同步：{new Date(lastSyncedAt).toLocaleString()}</Text>;
 }
 
 interface NewWorkspaceScreenProps {
@@ -747,6 +795,10 @@ export function NewWorkspaceScreen({
   const { workspace } = creationResult;
   const client = useHostRuntimeClient(selectedServerId);
   const isConnected = useHostRuntimeIsConnected(selectedServerId);
+  const { useDefaultModel, setModelIntent } = useFirstMessageModelIntent(
+    selectedServerId,
+    isConnected,
+  );
   const {
     selectedProject,
     selectedSourceDirectory,
@@ -763,6 +815,7 @@ export function NewWorkspaceScreen({
     lastActiveProject,
     allowAllProjects: supportsWorkspaceMultiplicity,
   });
+  const { lastSyncedAt } = useProvidersSnapshot(selectedServerId, { cwd: selectedSourceDirectory });
   const projectIconTargets = useMemo(
     () => buildNewWorkspaceProjectIconTargets(projects, selectedServerId),
     [projects, selectedServerId],
@@ -832,26 +885,11 @@ export function NewWorkspaceScreen({
       worktreeSupport,
     });
 
-  const branchSuggestionsQuery = useQuery({
-    queryKey: [
-      "branch-suggestions",
-      selectedServerId,
-      selectedSourceDirectory,
-      debouncedPickerSearchQuery,
-    ],
-    queryFn: async () => {
-      if (!selectedSourceDirectory) {
-        throw new Error("Choose a project");
-      }
-      const connectedClient = withConnectedClient();
-      return connectedClient.getBranchSuggestions({
-        cwd: selectedSourceDirectory,
-        query: debouncedPickerSearchQuery || undefined,
-        limit: 20,
-      });
-    },
-    enabled: pickerQueryEnabled,
-    staleTime: 15_000,
+  const branchSuggestionsQuery = useNewWorkspaceBranchSuggestions({
+    isOpen: pickerOpen,
+    serverId: selectedServerId,
+    cwd: selectedSourceDirectory,
+    query: debouncedPickerSearchQuery,
   });
 
   const githubPrSearchQuery = useForgeSearchQuery({
@@ -1120,6 +1158,7 @@ export function NewWorkspaceScreen({
           composerState,
           formPreferences,
           isConnected,
+          useDefaultModel,
           selectedProject,
           selectedSourceDirectory,
           selectedServerId,
@@ -1156,6 +1195,7 @@ export function NewWorkspaceScreen({
       ensureWorkspace,
       formPreferences,
       isConnected,
+      useDefaultModel,
       isStillOnCreateScreen,
       launchTarget,
       leaveFullscreen,
@@ -1288,9 +1328,36 @@ export function NewWorkspaceScreen({
         ? {
             ...composerState.agentControls,
             disabled: isPending,
+            selectedProvider: useDefaultModel
+              ? DEFAULT_MODEL_PROVIDER
+              : composerState.agentControls.selectedProvider,
+            selectedModel: useDefaultModel ? "default" : composerState.agentControls.selectedModel,
+            modelSelectorProviders: [
+              DEFAULT_MODEL_OPTION,
+              ...composerState.agentControls.modelSelectorProviders,
+            ],
+            isModelLoading: useDefaultModel ? false : composerState.agentControls.isModelLoading,
+            isAllModelsLoading: useDefaultModel
+              ? false
+              : composerState.agentControls.isAllModelsLoading,
+            ...(useDefaultModel
+              ? { models: [], modeOptions: [], thinkingOptions: [], features: [] }
+              : {}),
+            onSelectProviderAndModel: (provider: string, modelId: string) => {
+              setModelIntent({
+                serverId: selectedServerId,
+                useDefault: provider === DEFAULT_MODEL_PROVIDER,
+              });
+              if (provider !== DEFAULT_MODEL_PROVIDER)
+                composerState.agentControls.onSelectProviderAndModel(provider, modelId);
+            },
+            onApplyAgentProfile: (profile: MaterializedAgentProfile) => {
+              setModelIntent({ serverId: selectedServerId, useDefault: false });
+              composerState.agentControls.onApplyAgentProfile(profile);
+            },
           }
         : undefined,
-    [composerState, isPending],
+    [composerState, isPending, selectedServerId, useDefaultModel, setModelIntent],
   );
 
   const pickerEmptyText =
@@ -1439,6 +1506,11 @@ export function NewWorkspaceScreen({
         onImportSession={importSession.open}
       >
         <NewTaskOutboxHint isTerminalLaunch={isTerminalLaunch} />
+        <NewTaskProviderCacheHint
+          isTerminalLaunch={isTerminalLaunch}
+          isConnected={isConnected}
+          lastSyncedAt={lastSyncedAt}
+        />
         {composer}
         <FirstMessageOutboxView
           entries={outbox.entries}

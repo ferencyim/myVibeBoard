@@ -4,7 +4,10 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { FirstMessageOutbox, type FirstMessageOutboxPort } from "@/composer/outbox/queue";
 import { prepareOutboxAttachments } from "@/composer/outbox/attachments";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
+import { fetchProvidersSnapshot } from "@/data/providers-snapshot";
 import { normalizeWorkspaceDescriptor } from "@/stores/session-store";
+
+import { getFirstMessageModelResolver, hasInstalledPluginCatalog } from "@/plugins/registry";
 
 export const firstMessageOutbox = new FirstMessageOutbox({
   storage: AsyncStorage,
@@ -13,6 +16,18 @@ export const firstMessageOutbox = new FirstMessageOutbox({
 
 function createOutboxPort(hostId: string, client: DaemonClient): FirstMessageOutboxPort {
   return {
+    resolveDefaultConfig: async (entry) => {
+      const resolver = getFirstMessageModelResolver(hostId);
+      if (!resolver && !hasInstalledPluginCatalog(hostId)) return null;
+      const cwd = entry.source.kind === "worktree" ? (entry.source.cwd ?? "") : "";
+      const resolved = await resolver?.({ projectId: entry.projectId });
+      if (resolved) return { ...resolved, cwd };
+      const snapshot = await fetchProvidersSnapshot({ client, serverId: hostId, cwd: cwd || null });
+      const available = snapshot.entries.find(
+        (provider) => provider.enabled && provider.status === "ready",
+      );
+      return available ? { provider: available.provider, cwd } : null;
+    },
     getCreation: (key) => client.getWorkspaceCreation(key),
     prepareAttachments: (entry) => prepareOutboxAttachments(entry),
     createWorkspace: async (input) => {

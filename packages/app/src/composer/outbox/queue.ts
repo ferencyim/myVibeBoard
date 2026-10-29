@@ -7,6 +7,11 @@ import {
   type FirstMessageOutboxInput,
 } from "./model";
 
+function persistedIntent(input: FirstMessageOutboxInput): FirstMessageOutboxInput {
+  // A resolved config belongs to delivery; retries still identify the original default intent.
+  return input.modelSelection === "default" ? { ...input, config: undefined } : input;
+}
+
 export const FIRST_MESSAGE_OUTBOX_STORAGE_KEY = "paseo:first-message-outbox:v1";
 
 export interface FirstMessageOutboxStorage {
@@ -20,6 +25,9 @@ export interface PreparedFirstMessageAttachments {
 }
 
 export interface FirstMessageOutboxPort {
+  resolveDefaultConfig?(
+    entry: FirstMessageOutboxEntry,
+  ): Promise<NonNullable<CreateWorkspaceRequestOptions["agent"]>["config"] | null>;
   getCreation(idempotencyKey: string): Promise<CreationSnapshot | null>;
   prepareAttachments(entry: FirstMessageOutboxEntry): Promise<PreparedFirstMessageAttachments>;
   createWorkspace(
@@ -81,7 +89,9 @@ export class FirstMessageOutbox {
       const existing = entries.find((entry) => entry.id === validated.id);
       if (existing) {
         const previous = FirstMessageOutboxInputSchema.parse(existing);
-        if (JSON.stringify(previous) !== JSON.stringify(validated)) {
+        if (
+          JSON.stringify(persistedIntent(previous)) !== JSON.stringify(persistedIntent(validated))
+        ) {
           throw new Error("待发送项已存在，不能替换其首消息或目标主机");
         }
         enqueued = existing;
@@ -190,8 +200,10 @@ export class FirstMessageOutbox {
       });
       return;
     }
+    const config = await this.resolveConfig(entry, port);
+    if (!config) return;
     // This write must complete before the daemon receives any creation request.
-    await this.patch(entry.id, { status: "sending", submitted: true, error: null });
+    await this.patch(entry.id, { status: "sending", submitted: true, error: null, config });
     let result: WorkspaceCreateResponse["payload"];
     try {
       result = await port.createWorkspace({
@@ -200,7 +212,7 @@ export class FirstMessageOutbox {
         requestId: entry.requestId,
         firstAgentContext: { prompt: entry.text, attachments: prepared.attachments ?? [] },
         agent: {
-          config: entry.config,
+          config,
           initialPrompt: entry.text,
           clientMessageId: entry.clientMessageId,
           ...prepared,
@@ -230,6 +242,27 @@ export class FirstMessageOutbox {
       replayBlocked: true,
       error: "创建或首消息发送失败，内容已保留：" + (result.error ?? "缺少正式回执"),
     });
+  }
+
+  private async resolveConfig(entry: FirstMessageOutboxEntry, port: FirstMessageOutboxPort) {
+    let config = entry.config;
+    if (entry.modelSelection === "default" && !config) {
+      try {
+        if (!port.resolveDefaultConfig) throw new Error("主机尚未提供默认模型解析");
+        const resolved = await port.resolveDefaultConfig(entry);
+        if (!resolved) return null;
+        config = resolved;
+      } catch (error) {
+        await this.patch(entry.id, {
+          status: "failed",
+          error: error instanceof Error ? error.message : "默认模型解析失败",
+        });
+        return null;
+      }
+    }
+    if (!config) throw new Error("首消息缺少模型配置");
+
+    return config;
   }
 
   private async applyCreation(

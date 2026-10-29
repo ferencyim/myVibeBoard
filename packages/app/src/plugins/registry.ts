@@ -11,6 +11,7 @@ import { resolveAppVersion } from "@/utils/app-version";
 import { createPluginClientRuntime } from "./client-runtime";
 import { invokeConnectedPluginRpc } from "./rpc";
 import { runPluginClientBundle } from "./evaluate";
+import { selectFirstMessageModelResolver } from "./first-message-model";
 import type { InstalledPlugin } from "./types";
 
 export type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
@@ -39,6 +40,10 @@ export class PluginRegistry {
   };
 
   getSnapshot = (): InstalledPlugin[] => this.snapshot;
+
+  hasCatalog(serverId: string): boolean {
+    return this.byHost.has(serverId);
+  }
 
   getEvaluationError(serverId: string, pluginId: string): string | undefined {
     return this.evaluationErrors.get(`${serverId}/${pluginId}`);
@@ -100,6 +105,8 @@ export class PluginRegistry {
           cleanup: () => undefined,
           surfaces: [],
           settingsScreens: [],
+          projectSettingsSections: [],
+          firstMessageModelResolvers: [],
           sidebarItems: { header: [], footer: [] },
           legacySidebarItems: [],
           filePanels: [],
@@ -262,4 +269,12 @@ export function useInstalledPlugin(serverId: string, pluginId: string): Installe
 export function usePluginInstallations(pluginId: string): InstalledPlugin[] {
   const installed = useInstalledPlugins();
   return useMemo(() => installed.filter((plugin) => plugin.id === pluginId), [installed, pluginId]);
+}
+
+export function getFirstMessageModelResolver(serverId: string) {
+  return selectFirstMessageModelResolver(pluginRegistry.getSnapshot(), serverId);
+}
+
+export function hasInstalledPluginCatalog(serverId: string): boolean {
+  return pluginRegistry.hasCatalog(serverId);
 }

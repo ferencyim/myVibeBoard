@@ -195,6 +195,10 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   readonly i18n: import("./translations.js").PluginI18n;
   /** Play a base64-encoded audio file on this client; resolves when playback ends. */
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
+  addFirstMessageModelResolver(contribution: PluginFirstMessageModelResolver): PluginCleanup;
+  addProjectSettingsSection(
+    contribution: PluginProjectSettingsSectionContribution<PluginText>,
+  ): PluginCleanup;
   addSettingsScreen(contribution: PluginSettingsScreenContribution<PluginText>): PluginCleanup;
   addScreen(contribution: PluginScreenContribution<PluginText>): PluginCleanup;
   addSidebarHeaderItem(contribution: PluginSidebarItemContribution<PluginText>): PluginCleanup;
@@ -243,6 +247,32 @@ export interface PluginAgentPanelContribution<
   Text extends PluginText = string,
 > extends PluginWorkspacePanelBase<Text> {
   Component: ComponentType<PluginAgentPanelProps>;
+}
+
+/** Resolved when a queued default-model first message is sent after reconnecting. */
+export interface PluginFirstMessageModelResolver {
+  resolve(input: { projectId: string }): Promise<{
+    provider: string;
+    model?: string;
+    modeId?: string;
+    thinkingOptionId?: string;
+    featureValues?: Record<string, unknown>;
+  } | null>;
+}
+
+export interface PluginProjectSettingsSectionProps {
+  projectId: string;
+  serverId: string;
+  theme: PluginTheme;
+  compact: boolean;
+}
+
+export interface PluginProjectSettingsSectionContribution<Text extends PluginText = string> {
+  id: string;
+  title: Text;
+  /** Lower values appear first; equal values retain registration order. Defaults to zero. */
+  order?: number;
+  Component: ComponentType<PluginProjectSettingsSectionProps>;
 }
 
 export interface PluginSettingsScreenContribution<Text extends PluginText = string> {

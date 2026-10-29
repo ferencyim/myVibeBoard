@@ -8,10 +8,13 @@ import {
   type PluginWorkspaceSnapshot,
 } from "@getpaseo/plugin";
 import { type PluginCommandCenterItemContribution } from "@getpaseo/plugin/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { InstalledPlugin } from "../types";
 import { buildPluginCommandCenterContributions } from "./contributions";
+
+// Contribution assembly receives installations explicitly; it does not query the app registry.
+vi.mock("../registry", () => ({ pluginRegistry: { getSnapshot: () => [] } }));
 
 const workspace: PluginWorkspaceSnapshot = {
   id: "workspace-1",
@@ -78,6 +81,8 @@ function plugin(onAgentSelect: AgentCommandItem["onSelect"]): InstalledPlugin {
     queryClient: new QueryClient(),
     cleanup: () => {},
     settingsScreens: [],
+    projectSettingsSections: [],
+    firstMessageModelResolvers: [],
     surfaces: [{ id: "main", title: "Main", Component: () => null }],
     sidebarItems: { header: [], footer: [] },
     legacySidebarItems: [],

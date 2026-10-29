@@ -77,11 +77,15 @@ export const FirstMessageOutboxInputSchema = z
     hostId: z.string().min(1),
     projectId: z.string().min(1),
     source: WorkspaceCreateRequestSchema.shape.source,
-    config: AgentCreateRequestSchema.shape.config,
+    config: AgentCreateRequestSchema.shape.config.optional(),
+    modelSelection: z.literal("default").optional(),
     text: z.string(),
     attachments: z.array(ComposerAttachmentSchema),
   })
   .superRefine((input, ctx) => {
+    if (!input.config && input.modelSelection !== "default") {
+      ctx.addIssue({ code: "custom", message: "请选择模型或默认模型" });
+    }
     if (input.source.kind !== "worktree" || input.source.projectId !== input.projectId) {
       ctx.addIssue({ code: "custom", message: "离线新任务必须属于所选项目的独立 worktree" });
     }

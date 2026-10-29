@@ -109,6 +109,7 @@ export async function fetchProvidersSnapshot(input: {
       cwd: input.cwd,
       hash: snapshot.snapshotHash,
       generatedAt: snapshot.generatedAt,
+      syncedAt: new Date().toISOString(),
       fetchedAt: snapshot.fetchedAt,
       compactSnapshot: snapshot.compactSnapshot,
       signal: input.signal,

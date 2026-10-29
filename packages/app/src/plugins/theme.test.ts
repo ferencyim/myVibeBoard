@@ -1,11 +1,15 @@
 import { PluginTranslationRuntime } from "@getpaseo/plugin/client/host";
 import { QueryClient } from "@tanstack/react-query";
 import type { PluginThemeContribution } from "@getpaseo/plugin";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { darkTheme, lightTheme } from "@/styles/theme";
 import { collectPluginThemes, rememberPluginThemeHost } from "./themes";
 import { toPluginTheme } from "./theme";
 import type { InstalledPlugin } from "./types";
+
+// Palette collection does not mount host or registry subscription hooks.
+vi.mock("./registry", () => ({ useInstalledPlugins: () => [] }));
+vi.mock("@/runtime/host-features", () => ({ useHostFeatureMap: () => ({}) }));
 
 const MOCHA: PluginThemeContribution = {
   id: "mocha",
@@ -57,6 +61,8 @@ function installed(serverId: string, themes: PluginThemeContribution[]): Install
     paseo: {} as InstalledPlugin["paseo"],
     invoke: async () => undefined,
     settingsScreens: [],
+    projectSettingsSections: [],
+    firstMessageModelResolvers: [],
     surfaces: [],
     sidebarItems: { header: [], footer: [] },
     legacySidebarItems: [],

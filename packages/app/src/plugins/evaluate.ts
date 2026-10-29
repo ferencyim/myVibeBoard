@@ -136,6 +136,8 @@ export function runPluginClientBundle(
   const collector: Omit<EvaluatedPlugin, "id" | "cleanup"> = {
     surfaces: [],
     settingsScreens: [],
+    projectSettingsSections: [],
+    firstMessageModelResolvers: [],
     sidebarItems: { header: [], footer: [] },
     legacySidebarItems: [],
     filePanels: [],
@@ -149,6 +151,7 @@ export function runPluginClientBundle(
   };
   const surfaceIds = new Set<string>();
   const settingsScreenIds = new Set<string>();
+  const projectSettingsSectionIds = new Set<string>();
   const sidebarItemIds: Record<PluginSidebarSection, Set<string>> = {
     header: new Set(),
     footer: new Set(),
@@ -251,6 +254,30 @@ export function runPluginClientBundle(
   }
   const pluginContext: PluginClientContext = {
     ...runtime,
+    addFirstMessageModelResolver(contribution) {
+      if (collector.firstMessageModelResolvers.length)
+        throw new Error("Duplicate first message model resolver");
+      if (typeof contribution.resolve !== "function")
+        throw new Error("Invalid first message model resolver");
+      return register(collector.firstMessageModelResolvers, contribution, () => {});
+    },
+    addProjectSettingsSection(contribution) {
+      const sectionId = requireId(contribution.id, "project settings section id");
+      if (projectSettingsSectionIds.has(sectionId))
+        throw new Error(`Duplicate project settings section: ${sectionId}`);
+      const title = normalizePluginText(contribution.title);
+      if (!title) throw new Error(`Project settings section ${sectionId} has no title`);
+      if (!isComponentType(contribution.Component))
+        throw new Error(`Project settings section ${sectionId} is not a component`);
+      if (contribution.order !== undefined && !Number.isFinite(contribution.order))
+        throw new Error(`Project settings section ${sectionId} has invalid order`);
+      projectSettingsSectionIds.add(sectionId);
+      return register(
+        collector.projectSettingsSections,
+        { id: sectionId, title, order: contribution.order, Component: contribution.Component },
+        () => projectSettingsSectionIds.delete(sectionId),
+      );
+    },
     addSettingsScreen(contribution) {
       const screenId = requireId(contribution.id, "settings screen id");
       if (settingsScreenIds.has(screenId))
@@ -593,6 +620,8 @@ export function runPluginClientBundle(
     cleanup,
     surfaces: collector.surfaces,
     settingsScreens: collector.settingsScreens,
+    projectSettingsSections: collector.projectSettingsSections,
+    firstMessageModelResolvers: collector.firstMessageModelResolvers,
     sidebarItems: collector.sidebarItems,
     legacySidebarItems: collector.legacySidebarItems,
     filePanels: collector.filePanels,

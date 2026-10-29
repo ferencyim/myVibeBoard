@@ -35,6 +35,7 @@ interface StoredProviderSnapshot {
   version: typeof CACHE_VERSION;
   hash: string;
   generatedAt: string;
+  syncedAt?: string;
   compactSnapshot?: CompactProviderSnapshot;
   fetchedAt?: Record<string, string>;
 }
@@ -49,6 +50,7 @@ const StoredProviderSnapshotSchema: z.ZodType<StoredProviderSnapshot> = z.strict
   version: z.literal(CACHE_VERSION),
   hash: z.string(),
   generatedAt: z.string().datetime({ offset: true }),
+  syncedAt: z.string().datetime({ offset: true }).optional(),
   compactSnapshot: CompactProviderSnapshotSchema.optional(),
   fetchedAt: z.record(z.string(), z.string()).optional(),
 });
@@ -60,6 +62,7 @@ export interface CachedProviderSnapshot extends StoredProviderSnapshot {
 
 export interface ProviderSnapshotCache {
   read(serverId: string, cwd: string | null): Promise<CachedProviderSnapshot | null>;
+  readLatest(serverId: string): Promise<CachedProviderSnapshot | null>;
   readHash(serverId: string, hash: string): Promise<CachedProviderSnapshot | null>;
   materialize(serverId: string, snapshot: SnapshotPayload): Promise<SnapshotPayload>;
   write(input: {
@@ -67,6 +70,7 @@ export interface ProviderSnapshotCache {
     cwd: string | null;
     hash: string;
     generatedAt: string;
+    syncedAt?: string;
     compactSnapshot: CompactProviderSnapshot;
     fetchedAt?: Record<string, string>;
     signal?: AbortSignal;
@@ -162,7 +166,11 @@ export function createProviderSnapshotCache(
           continue;
         }
         const [serverId, kind] = decodeCacheKey(key);
-        entries.push({ key, bytes: storedBytes(key, value), writtenAt: stored.generatedAt });
+        entries.push({
+          key,
+          bytes: storedBytes(key, value),
+          writtenAt: stored.syncedAt ?? stored.generatedAt,
+        });
         if (kind === "cwd")
           references.push({
             key,
@@ -231,7 +239,7 @@ export function createProviderSnapshotCache(
       return {
         key: recordKey,
         bytes: storedBytes(recordKey, value),
-        writtenAt: record.generatedAt,
+        writtenAt: record.syncedAt ?? record.generatedAt,
         value,
       };
     }
@@ -251,7 +259,7 @@ export function createProviderSnapshotCache(
       admitted = [
         {
           ...body,
-          writtenAt: body.writtenAt > input.generatedAt ? body.writtenAt : input.generatedAt,
+          writtenAt: body.writtenAt > incoming.writtenAt ? body.writtenAt : incoming.writtenAt,
         },
         incoming,
       ];
@@ -376,6 +384,24 @@ export function createProviderSnapshotCache(
           : body.entries,
       };
     },
+    readLatest(serverId) {
+      return safely(async () => {
+        const current = await ensureCacheIndex();
+        const candidates = current
+          .filter((entry) => {
+            const [host, kind] = decodeCacheKey(entry.key);
+            return host === serverId && kind === "cwd";
+          })
+          .sort((a, b) => b.writtenAt.localeCompare(a.writtenAt));
+        for (const candidate of candidates) {
+          const association = await readRecord(candidate.key);
+          if (!association) continue;
+          const body = await readBody(serverId, association.hash);
+          if (body) return { ...body, ...association, compactSnapshot: body.compactSnapshot };
+        }
+        return null;
+      }, null);
+    },
     readHash(serverId, hash) {
       return safely(() => readBody(serverId, hash), null);
     },
@@ -411,6 +437,7 @@ export function createProviderSnapshotCache(
             version: CACHE_VERSION,
             hash: input.hash,
             generatedAt: input.generatedAt,
+            syncedAt: input.syncedAt,
             fetchedAt: input.fetchedAt,
           },
           {

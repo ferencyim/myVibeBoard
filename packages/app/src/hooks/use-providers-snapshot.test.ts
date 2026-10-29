@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
@@ -18,6 +18,12 @@ import {
   selectorOpenRefetchDecision,
   type ProvidersSnapshotClient,
 } from "./use-providers-snapshot";
+
+vi.mock("@/runtime/host-runtime", () => ({
+  useHostRuntimeClient: () => null,
+  useHostRuntimeIsConnected: () => false,
+}));
+vi.mock("@/components/retained-panel", () => ({ useRetainedPanelActive: () => true }));
 
 type GetProvidersSnapshotResult = Awaited<ReturnType<DaemonClient["getProvidersSnapshot"]>>;
 type RefreshProvidersSnapshotResult = Awaited<ReturnType<DaemonClient["refreshProvidersSnapshot"]>>;
@@ -94,6 +100,9 @@ function createCache(
   const writes: Parameters<ProviderSnapshotCache["write"]>[0][] = [];
   return {
     writes,
+    async readLatest() {
+      return initial;
+    },
     async readHash(_serverId, hash) {
       return bodyResident && initial?.hash === hash ? initial : null;
     },
@@ -222,15 +231,17 @@ describe("fetchProvidersSnapshot", () => {
 
     await fetchProvidersSnapshot({ client, serverId, cwd: "/repo-a", cache });
 
-    expect(cache.writes.map(({ signal: _signal, ...write }) => write)).toEqual([
-      {
-        serverId,
-        cwd: "/repo-a",
-        hash: "next-hash",
-        generatedAt: "2026-01-02T00:00:00.000Z",
-        compactSnapshot,
-      },
-    ]);
+    expect(cache.writes.map(({ signal: _signal, syncedAt: _syncedAt, ...write }) => write)).toEqual(
+      [
+        {
+          serverId,
+          cwd: "/repo-a",
+          hash: "next-hash",
+          generatedAt: "2026-01-02T00:00:00.000Z",
+          compactSnapshot,
+        },
+      ],
+    );
   });
 });
 
@@ -414,15 +425,17 @@ describe("applyProvidersSnapshotUpdate", () => {
       cache,
     });
 
-    expect(cache.writes.map(({ signal: _signal, ...write }) => write)).toEqual([
-      {
-        serverId,
-        cwd: "/repo-a",
-        hash: "push-hash",
-        generatedAt: "2026-01-01T00:00:01.000Z",
-        compactSnapshot,
-      },
-    ]);
+    expect(cache.writes.map(({ signal: _signal, syncedAt: _syncedAt, ...write }) => write)).toEqual(
+      [
+        {
+          serverId,
+          cwd: "/repo-a",
+          hash: "push-hash",
+          generatedAt: "2026-01-01T00:00:01.000Z",
+          compactSnapshot,
+        },
+      ],
+    );
   });
 
   it("applies Windows daemon updates to app-normalized workspace paths", async () => {

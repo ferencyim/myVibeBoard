@@ -72,6 +72,117 @@ function port(): FirstMessageOutboxPort {
 }
 
 describe("手机新任务首消息 outbox", () => {
+  it("离线无模型列表时保存默认意图，联网才解析并冻结发送配置", async () => {
+    const f = fixture();
+    const q = f.queue();
+    const native = port();
+    const draft = { ...input(), config: undefined, modelSelection: "default" as const };
+    await q.enqueue(draft);
+    const restarted = f.queue();
+    await restarted.hydrate();
+    expect(restarted.getSnapshot()[0]).toMatchObject({
+      modelSelection: "default",
+      status: "queued",
+    });
+    expect(restarted.getSnapshot()[0].config).toBeUndefined();
+    native.resolveDefaultConfig = vi.fn(async () => ({
+      provider: "claude",
+      cwd: "/repo",
+      model: "project-model",
+    }));
+    vi.mocked(native.createWorkspace).mockRejectedValueOnce(new Error("回执丢失"));
+    await restarted.flushHost("host-one", native);
+    expect(restarted.getSnapshot()[0]).toMatchObject({
+      status: "unknown",
+      config: { model: "project-model" },
+    });
+    await restarted.flushHost("host-one", native);
+    expect(native.resolveDefaultConfig).toHaveBeenCalledTimes(1);
+    expect(native.createWorkspace).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          config: { provider: "claude", cwd: "/repo", model: "project-model" },
+        }),
+      }),
+    );
+    expect(restarted.getSnapshot()[0].status).toBe("sent");
+  });
+
+  it("default intent can enqueue again after its send config is frozen without replacing message or target", async () => {
+    const q = fixture().queue();
+    const native = port();
+    const draft: FirstMessageOutboxInput = {
+      ...input(),
+      config: undefined,
+      modelSelection: "default",
+    };
+    native.resolveDefaultConfig = vi.fn(async () => ({
+      provider: "claude",
+      cwd: "/repo",
+      model: "frozen-model",
+    }));
+    await q.enqueue(draft);
+    await q.flushHost("host-one", native);
+    const sent = q.getSnapshot()[0];
+    expect(sent.config?.model).toBe("frozen-model");
+    await expect(q.enqueue(draft)).resolves.toEqual(sent);
+    expect(q.getSnapshot()).toHaveLength(1);
+    expect(native.createWorkspace).toHaveBeenCalledTimes(1);
+    const changed: FirstMessageOutboxInput[] = [
+      { ...draft, text: "changed message" },
+      { ...draft, hostId: "another-host" },
+      { ...draft, source: { kind: "worktree", projectId: draft.projectId, cwd: "/another-repo" } },
+      {
+        ...draft,
+        attachments: [
+          {
+            kind: "image",
+            metadata: {
+              id: "new-image",
+              mimeType: "image/png",
+              storageType: "web-indexeddb",
+              storageKey: "new-image-key",
+              createdAt: 1,
+            },
+          },
+        ],
+      },
+    ];
+    for (const changedIntent of changed)
+      await expect(q.enqueue(changedIntent)).rejects.toThrow("不能替换其首消息或目标主机");
+    expect(q.getSnapshot()[0]).toEqual(sent);
+  });
+
+  it("默认模型解析器还未安装时保持排队，下一次 flush 自动发送", async () => {
+    const q = fixture().queue();
+    const native = port();
+    native.resolveDefaultConfig = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ provider: "codex", cwd: "/repo" });
+    await q.enqueue({ ...input(), config: undefined, modelSelection: "default" });
+    await q.flushHost("host-one", native);
+    expect(q.getSnapshot()[0]).toMatchObject({ status: "queued", submitted: false, error: null });
+    expect(native.createWorkspace).not.toHaveBeenCalled();
+    await q.flushHost("host-one", native);
+    expect(q.getSnapshot()[0].status).toBe("sent");
+  });
+
+  it("默认模型解析失败保留首消息且没有创建请求", async () => {
+    const q = fixture().queue();
+    const native = port();
+    native.resolveDefaultConfig = vi.fn(async () => {
+      throw new Error("请配置主会话模型");
+    });
+    await q.enqueue({ ...input(), config: undefined, modelSelection: "default" });
+    await q.flushHost("host-one", native);
+    expect(q.getSnapshot()[0]).toMatchObject({
+      status: "failed",
+      submitted: false,
+      error: "请配置主会话模型",
+    });
+    expect(native.createWorkspace).not.toHaveBeenCalled();
+  });
   it("冷启动恢复正文、附件本机引用、主机项目和规划模型，不读取旧看板键", async () => {
     const f = fixture();
     f.values.set("vibe:old-card-replies", JSON.stringify([{ text: "不得导入" }]));

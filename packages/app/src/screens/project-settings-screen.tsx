@@ -31,6 +31,7 @@ import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { SettingsGroup } from "@/components/settings/headings/settings-group";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { settingsStyles } from "@/styles/settings";
+import { PluginProjectSettingsSections } from "@/plugins/settings/project-sections-view";
 import { useProjects } from "@/hooks/use-projects";
 import type { ProjectEditFormSnapshot } from "@/projects/edit-form";
 import { useProjectIcons } from "@/projects/icons";
@@ -318,6 +319,10 @@ function ProjectSettingsBody({
         onBackToProjects,
         showBackToProjects,
       })}
+      <PluginProjectSettingsSections
+        projectId={selectedHost.projectId}
+        serverId={selectedHost.serverId}
+      />
     </View>
   );
 }
