@@ -1,8 +1,14 @@
 import { memo, useMemo, useCallback, useState, type ReactNode } from "react";
 import { Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { CircleAlert, Folder, FolderGit2, Monitor } from "lucide-react-native";
-import { ProjectStatusIndicator } from "@/components/sidebar/project-leading-visual";
+import {
+  CircleAlert,
+  ClipboardList,
+  Folder,
+  FolderGit2,
+  MessageSquare,
+  Monitor,
+} from "lucide-react-native";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import {
   WorkspaceMetaRow,
@@ -89,15 +95,14 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   workspace,
   hostBadge,
   leadingProjectName = null,
-  leadingProjectIconDataUri = null,
   serviceSummary = null,
-  backdrop,
   isHovered,
   isLoading,
   isCreating = false,
   shortcutNumber = null,
   showShortcutBadge = false,
   reserveIdleStatusIndicatorSpace = true,
+  itemKind = "session",
   children,
 }: {
   workspace: SidebarWorkspaceEntry;
@@ -115,6 +120,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   showShortcutBadge?: boolean;
   /** Keep the empty leading slot when the workspace has no active status. */
   reserveIdleStatusIndicatorSpace?: boolean;
+  itemKind?: "task" | "session";
   children?: ReactNode;
 }) {
   const {
@@ -136,30 +142,27 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   return (
     <View style={styles.workspaceRowContent}>
       <View style={styles.workspaceRowMain}>
-        {leadingProjectName ? (
-          <ProjectStatusIndicator
-            iconDataUri={leadingProjectIconDataUri}
-            displayName={leadingProjectName}
-            projectViewKey={workspace.projectViewKey}
-            statusBucket={workspace.statusBucket}
-            backdrop={backdrop}
-            loading={isLoading}
-            testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
+        <View style={itemKind === "task" ? styles.taskAvatar : styles.sessionAvatar}>
+          <DensityIcon
+            icon={itemKind === "task" ? ClipboardList : MessageSquare}
+            size="sm"
+            color="foregroundMuted"
           />
-        ) : (
-          <WorkspaceStatusIndicator
-            bucket={workspace.statusBucket}
-            workspaceKind={workspace.workspaceKind}
-            loading={isLoading}
-            reserveIdleSpace={reserveIdleStatusIndicatorSpace}
-          />
-        )}
+        </View>
         <View style={styles.workspaceContentColumn}>
           <View style={styles.workspaceTitleRow}>
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
               {workspaceLabel}
             </Text>
-            <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
+            <View style={sidebarWorkspaceRowStyles.rowRight}>
+              <WorkspaceStatusIndicator
+                bucket={workspace.statusBucket}
+                workspaceKind={workspace.workspaceKind}
+                loading={isLoading}
+                reserveIdleSpace={reserveIdleStatusIndicatorSpace}
+              />
+              {children}
+            </View>
           </View>
           <WorkspaceMetaRow
             currentBranch={workspace.currentBranch}
@@ -465,6 +468,20 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "flex-start",
     gap: theme.spacing[2],
     width: "100%",
+  },
+  taskAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.surface2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sessionAvatar: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
   },
   workspaceContentColumn: {
     flex: 1,

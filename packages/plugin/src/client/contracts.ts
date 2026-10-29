@@ -1,5 +1,5 @@
 import type { PluginText } from "../text.js";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { PaseoApi } from "@getpaseo/client";
 import type { AgentTimelineItem, JsonValue } from "@getpaseo/protocol/agent-types";
 import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
@@ -136,8 +136,22 @@ export interface PluginSidebarAgentActivity {
   lastMessage?: { text: string; timestamp: string };
 }
 
+/** A plugin-owned row that can be grouped with host sidebar entries. */
+export interface PluginSidebarListItem {
+  id: string;
+  kind: "bot";
+  projectId?: string | null;
+  isDefaultBot?: boolean;
+  lastActivityAt?: string | null;
+  status: "needs_attention" | "running" | "idle" | "other";
+  agentId?: string | null;
+  render(options: { projectName?: string; selected?: boolean }): ReactNode;
+}
+
 export interface PluginSidebarGroupProps extends PluginSurfaceProps {
   sidebarCompact: boolean;
+  /** When supplied, publish rows for host grouping instead of rendering them in place. */
+  onItemsChange?(items: readonly PluginSidebarListItem[]): void;
   /** Increments when the user requests creation from the group header. */
   createRequest?: number;
   onCreateHandled?(): void;
