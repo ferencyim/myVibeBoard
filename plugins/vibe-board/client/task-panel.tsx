@@ -348,6 +348,9 @@ function TabRow({
 }) {
   const { theme } = useHost();
   const open = useCallback(() => openAgent?.({ agentId: tab.agentId }), [openAgent, tab.agentId]);
+  let statusColor = theme.colors.statusSuccess;
+  if (tab.busy) statusColor = theme.colors.statusWarning;
+  if (tab.status === "未启用") statusColor = theme.colors.foregroundMuted;
   return (
     <Pressable
       accessibilityRole="button"
@@ -367,13 +370,12 @@ function TabRow({
         paddingVertical: 9,
       }}
     >
-      <Dot
-        color={tab.busy ? theme.colors.statusWarning : theme.colors.statusSuccess}
-        size={8}
-      />
-      <Text style={{ flexShrink: 1, color: theme.colors.foreground, fontSize: 13 }}>
-        {tab.title ??
-          `#${tab.number} ${tab.roleLabel}${tab.model ? ` · ${tab.model}` : ""}`}
+      <Dot color={statusColor} size={8} />
+      <Text
+        numberOfLines={1}
+        style={{ flexShrink: 1, color: theme.colors.foreground, fontSize: 13 }}
+      >
+        {`#${tab.number} ${tab.roleLabel}`}
       </Text>
       <Text
         style={{

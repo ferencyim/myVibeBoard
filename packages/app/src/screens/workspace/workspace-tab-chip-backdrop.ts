@@ -25,6 +25,6 @@ export function resolveWorkspaceTabChipBackdrop({
     if (isActiveFocused) return "surfaceSidebarSelected";
     return isFilled ? "surfaceSidebarHover" : "surfaceSidebar";
   }
-  if (isActiveFocused) return "surface2";
+  if (isActiveFocused) return "surface4";
   return isFilled ? "surface1" : "surface0";
 }
