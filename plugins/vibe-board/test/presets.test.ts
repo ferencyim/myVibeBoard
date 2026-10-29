@@ -1,3 +1,12 @@
+import { cleanDefaults, resolveTaskRoles } from "../shared/vibe/contract";
+import { getProjectDefaults, setProjectDefaults } from "../server/project-defaults";
+import {
+  openDefaultsForm,
+  setModelDefault,
+  inheritedDefaultLabel,
+  INHERIT,
+  DISABLED,
+} from "../client/presets/defaults-model";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   draftToPayload,
@@ -12,6 +21,7 @@ import {
 } from "../client/presets/logic";
 import { presetsCreateRpc, presetsUpdateRpc } from "../shared/rpc";
 import { createBoardService, openBoardRuntime } from "../server/service";
+import { resolveMainConfig } from "../server/main-model";
 const runtimes: Array<ReturnType<typeof openBoardRuntime>> = [];
 afterEach(() => {
   for (const runtime of runtimes.splice(0)) runtime.close();
@@ -48,6 +58,67 @@ describe("quota display (providers.listUsage)", () => {
 });
 
 describe("preset persistence round trip", () => {
+  it("resolves #1 project preset over global and leaves missing defaults to the host", () => {
+    const { board } = setupBoard();
+    expect(resolveMainConfig(board.store, "native-project")).toEqual({});
+    const global = board.store.presets.create({
+      name: "Global",
+      provider: "codex",
+      model: "global-model",
+      thinking: "high",
+    });
+    const project = board.store.presets.create({
+      name: "Project",
+      provider: "claude",
+      model: "project-model",
+      thinking: "",
+    });
+    board.store.modelDefaults.setGlobal({ main: global.id });
+    expect(resolveMainConfig(board.store, "native-project")).toEqual({
+      config: { provider: "codex", model: "global-model", thinkingOptionId: "high" },
+    });
+    board.store.projects.create({
+      name: "Project",
+      prefix: "PRJ",
+      repoPath: "/repo",
+      paseoProjectId: "native-project",
+      defaultPresets: { main: project.id },
+    });
+    expect(resolveMainConfig(board.store, "native-project")).toEqual({
+      config: { provider: "claude", model: "project-model" },
+    });
+  });
+  it("resolves legacy project defaults by repository path before a native link exists", () => {
+    const { board } = setupBoard();
+    const global = board.store.presets.create({
+      name: "Global",
+      provider: "codex",
+      model: "global-model",
+    });
+    const local = board.store.presets.create({
+      name: "Local",
+      provider: "claude",
+      model: "local-model",
+    });
+    board.store.modelDefaults.setGlobal({ main: global.id });
+    board.store.projects.create({
+      name: "Legacy",
+      prefix: "LEG",
+      repoPath: "/legacy",
+      defaultPresets: { main: local.id },
+    });
+    expect(resolveMainConfig(board.store, "native-project", "/legacy")).toEqual({
+      config: { provider: "claude", model: "local-model" },
+    });
+    expect(() =>
+      resolveMainConfig(
+        { ...board.store, presets: { ...board.store.presets, get: () => undefined } },
+        "native-project",
+        "/legacy",
+      ),
+    ).toThrow("#1 主会话预设不存在");
+  });
+
   it("reorders candidates with their settings and mirrors the first model in the payload", () => {
     const first = {
       provider: "claude",
@@ -127,5 +198,100 @@ describe("WP-130 方案模型列表编辑", () => {
     expect(value.planners).toEqual(["x", "c"]);
     value = setPlanner(setPlanner(value, 0, null), 0, null);
     expect(value).toEqual({ worker: "w" });
+  });
+});
+
+describe("WP-133 任务默认模型", () => {
+  it("表单只允许探路/复核关闭，继承清除覆盖，保存与放弃有独立基准", () => {
+    const model = openDefaultsForm({ main: "m", project: "p" });
+    model.change(setModelDefault(model.getState().value, "scout", DISABLED));
+    expect(model.getState()).toEqual({
+      value: { main: "m", project: "p", scout: null },
+      dirty: true,
+    });
+    model.reset();
+    expect(model.getState().dirty).toBe(false);
+    model.change(setModelDefault(model.getState().value, "main", INHERIT));
+    model.saved(model.getState().value);
+    expect(model.getState()).toEqual({ value: { project: "p" }, dirty: false });
+    expect(setModelDefault({}, "worker", DISABLED)).toEqual({});
+    expect(cleanDefaults({ main: " m ", project: " p " })).toEqual({ main: "m", project: "p" });
+  });
+  it("全局及原生项目覆盖读写，未覆盖角色继续全局及主会话回退", () => {
+    const { board } = setupBoard();
+    const main = board.presets.create({
+      name: "main",
+      provider: "codex",
+      model: "main-model",
+    }).preset;
+    const worker = board.presets.create({
+      name: "worker",
+      provider: "codex",
+      model: "worker-model",
+    }).preset;
+    board.defaults.set({ main: main.id, project: main.id, worker: main.id });
+    expect(getProjectDefaults(board, "native")).toEqual({
+      global: { main: main.id, project: main.id, worker: main.id },
+      project: {},
+    });
+    const result = setProjectDefaults(board, {
+      projectId: "native",
+      name: "Project",
+      rootPath: "/project",
+      defaults: { worker: worker.id, scout: null },
+    });
+    expect(result.project).toEqual({ worker: worker.id, scout: null });
+    expect(inheritedDefaultLabel("main", result.global, () => "Main")).toBe("沿用全局：Main");
+    const resolved = resolveTaskRoles({}, result.project, result.global, board.store.presets.get, {
+      provider: "codex",
+      model: "session",
+      thinking: "high",
+    });
+    expect(resolved.worker.presetId).toBe(worker.id);
+    expect(resolved.scout).toBeNull();
+    expect(resolved.verifier.models[0]?.model).toBe("session");
+    setProjectDefaults(board, {
+      projectId: "native",
+      name: "Project",
+      rootPath: "/project",
+      defaults: {},
+    });
+    expect(getProjectDefaults(board, "native").project).toEqual({});
+    expect(board.store.projects.list(true)).toHaveLength(1);
+    board.presets.delete(main.id);
+    expect(board.defaults.get().global).toEqual({});
+  });
+  it("打开原生设置读取按路径关联的旧项目；保存失败不改变关联和其它字段", () => {
+    const { board } = setupBoard();
+    const p = board.presets.create({ name: "P", provider: "codex", model: "model" }).preset;
+    const legacy = board.projects.create({
+      name: "Legacy",
+      prefix: "LEG",
+      repoPath: "/legacy",
+      description: "keep",
+      defaultPresets: { main: p.id },
+    }).project;
+    expect(getProjectDefaults(board, "native", "/legacy").project).toEqual({ main: p.id });
+    expect(() =>
+      setProjectDefaults(board, {
+        projectId: "native",
+        name: "Native",
+        rootPath: "/legacy",
+        defaults: { main: "missing" },
+      }),
+    ).toThrow();
+    expect(board.store.projects.get(legacy.id)?.paseoProjectId).toBeNull();
+    setProjectDefaults(board, {
+      projectId: "native",
+      name: "Native",
+      rootPath: "/legacy",
+      defaults: { project: p.id },
+    });
+    expect(board.store.projects.get(legacy.id)).toMatchObject({
+      description: "keep",
+      name: "Legacy",
+      paseoProjectId: "native",
+      defaultPresets: { project: p.id },
+    });
   });
 });

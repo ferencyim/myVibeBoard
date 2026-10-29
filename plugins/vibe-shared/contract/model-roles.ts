@@ -21,6 +21,9 @@ export const ModelRoleSchema = z.enum(MODEL_ROLES);
 /** Missing key inherits; a preset ID selects; null disables an optional role. Round 8: the #2 方案
  *  tab runs an ordered model list (`planners`): the first writes the plan, the rest review it. */
 export const ModelDefaultsSchema = z.object({
+  // COMPAT(task-main-defaults): added WP-133; optional for older stored defaults.
+  main: z.string().optional(),
+  project: z.string().optional(),
   scout: z.string().nullable().optional(),
   planners: z.array(z.string()).optional(),
   // COMPAT(planner-list): single planner + plan reviewer before round 8. Core migration 19 and
@@ -80,7 +83,7 @@ export function cleanDefaults(value: unknown): ModelDefaults {
   const parsed = ModelDefaultsSchema.safeParse(value);
   if (!parsed.success) return {};
   const out: ModelDefaults = {};
-  for (const role of MODEL_ROLES) {
+  for (const role of ["main", "project", ...MODEL_ROLES] as const) {
     if (role === "planner" || role === "plan_reviewer") continue;
     const presetId = parsed.data[role];
     if (presetId === null) {
@@ -98,7 +101,7 @@ export function cleanDefaults(value: unknown): ModelDefaults {
 /** Every preset id a defaults level names (validation and preset deletion). */
 export function defaultsPresetIds(defaults: ModelDefaults): string[] {
   const ids = new Set<string>(plannerList(defaults) ?? []);
-  for (const role of MODEL_ROLES) {
+  for (const role of ["main", "project", ...MODEL_ROLES] as const) {
     if (role === "planner" || role === "plan_reviewer") continue;
     const id = defaults[role]?.trim();
     if (id) ids.add(id);

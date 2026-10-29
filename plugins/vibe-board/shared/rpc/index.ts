@@ -257,9 +257,7 @@ export const promptsListRpc = defineRpc({
     /** Unarchived projects, for the scope switcher. */
     projects: z.array(z.object({ id: z.string(), name: z.string(), prefix: z.string() })),
     /** Overrides whose prompt was merged or removed; shown as stale on the Agent behaviour page. */
-    orphans: z
-      .array(z.object({ key: z.string(), projectId: z.string().nullable() }))
-      .default([]),
+    orphans: z.array(z.object({ key: z.string(), projectId: z.string().nullable() })).default([]),
   }),
 });
 
@@ -274,4 +272,30 @@ export const promptsClearRpc = defineRpc({
   name: "vibe.prompts.clear",
   input: z.object({ key: z.string().min(1), projectId: promptScope }),
   output: z.object({ ok: z.literal(true) }),
+});
+
+export const projectDefaultsGetRpc = defineRpc({
+  name: "vibe.defaults.project.get",
+  input: z.object({ projectId: nonBlank }),
+  output: z.object({ global: ModelDefaultsSchema, project: ModelDefaultsSchema }),
+});
+export const projectDefaultsSetRpc = defineRpc({
+  name: "vibe.defaults.project.set",
+  input: z.object({ projectId: nonBlank, defaults: ModelDefaultsSchema }),
+  output: z.object({ global: ModelDefaultsSchema, project: ModelDefaultsSchema }),
+});
+
+export const resolveMainConfigRpc = defineRpc({
+  name: "vibe.presets.resolve_main_config",
+  input: z.object({ projectId: nonBlank }),
+  output: z.object({
+    config: z
+      .object({
+        provider: nonBlank,
+        model: z.string().optional(),
+        thinkingOptionId: z.string().optional(),
+        modeId: z.string().optional(),
+      })
+      .optional(),
+  }),
 });

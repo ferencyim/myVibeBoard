@@ -10,12 +10,11 @@ import {
   PRESET_PERMISSION_MODES,
   PROJECT_TYPES,
   presetModels,
-  type ModelDefaults,
   type Preset,
   type Project,
 } from "../../shared/vibe/contract";
 import { errorMessage, projectColor } from "../common/logic";
-import { queryKey, useGlobalDefaults, type BoardApi } from "../common/api";
+import { queryKey, type BoardApi } from "../common/api";
 import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Chip, Dot, Field, Muted, TextField } from "../common/ui";
 import {
@@ -40,7 +39,7 @@ import {
   type ProjectDraft,
   type ProviderUsageLike,
 } from "./logic";
-import { DefaultModelsEditor, GlobalDefaultsPanel } from "./defaults";
+
 import { RequirementsPanel } from "./requirements";
 import { QuotaBadge } from "./usage";
 
@@ -106,15 +105,12 @@ function ProjectForm({
   mode,
   draft,
   onChange,
-  presets,
-  globalDefaults,
 }: {
   mode: "create" | "edit";
   draft: ProjectDraft;
   onChange: (patch: Partial<ProjectDraft>) => void;
-  presets: readonly Preset[];
-  globalDefaults: ModelDefaults;
 }) {
+  const { openTaskDefaults } = useHost();
   return (
     <View style={{ gap: 10 }}>
       <Field label="名称">
@@ -174,14 +170,7 @@ function ProjectForm({
           autoCapitalize="none"
         />
       </Field>
-      <Field label="默认模型（覆盖全局；不选则沿用全局）">
-        <DefaultModelsEditor
-          value={draft.defaultPresets}
-          presets={presets}
-          inherited={globalDefaults}
-          onChange={(defaultPresets) => onChange({ defaultPresets })}
-        />
-      </Field>
+      {openTaskDefaults ? <Btn label="打开任务默认模型设置" onPress={openTaskDefaults} /> : null}
       <Field label="并发上限（留空不限）">
         <TextField
           value={draft.concurrencyLimit}
@@ -213,14 +202,13 @@ function ProjectForm({
   );
 }
 
-function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
+function ProjectsTab({ api, projects, refresh }: ManageProps) {
   const toast = useToast();
   const nextColor = (n: number) => COLOR_CHOICES[n % COLOR_CHOICES.length]!;
   const [createDraft, setCreateDraft] = useState<ProjectDraft>(() =>
     emptyProjectDraft(nextColor(projects.length)),
   );
   const [edit, setEdit] = useState<{ id: string; draft: ProjectDraft } | null>(null);
-  const globalDefaults = useGlobalDefaults();
 
   const run = async (fn: () => Promise<unknown>) => {
     try {
@@ -262,8 +250,6 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
             <ProjectForm
               mode="edit"
               draft={edit.draft}
-              presets={presets}
-              globalDefaults={globalDefaults}
               onChange={(patch) =>
                 setEdit((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e))
               }
@@ -304,8 +290,6 @@ function ProjectsTab({ api, projects, presets, refresh }: ManageProps) {
         <ProjectForm
           mode="create"
           draft={createDraft}
-          presets={presets}
-          globalDefaults={globalDefaults}
           onChange={(patch) => setCreateDraft((d) => ({ ...d, ...patch }))}
         />
         <Btn
@@ -392,6 +376,7 @@ function PresetModelEditor({
 }
 
 function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
+  const { openTaskDefaults } = useHost();
   const toast = useToast();
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [draft, setDraft] = useState<PresetDraft>(EMPTY_PRESET_DRAFT);
@@ -524,7 +509,7 @@ function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
 
   return (
     <View style={{ gap: 10 }}>
-      <GlobalDefaultsPanel api={api} presets={presets} />
+      {openTaskDefaults ? <Btn label="打开任务默认模型设置" onPress={openTaskDefaults} /> : null}
       <Text style={{ fontWeight: "600", marginTop: 8 }}>预设列表</Text>
       {presets.map((p) => (
         <View key={p.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
