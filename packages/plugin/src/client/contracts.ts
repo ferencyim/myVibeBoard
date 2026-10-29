@@ -195,6 +195,7 @@ export interface PluginClientContext extends PluginCommandCapabilities, PluginCl
   readonly i18n: import("./translations.js").PluginI18n;
   /** Play a base64-encoded audio file on this client; resolves when playback ends. */
   playAudio(source: { base64: string; mimeType: string }): Promise<void>;
+  addWorkspaceTabProvider(contribution: PluginWorkspaceTabProvider): PluginCleanup;
   addFirstMessageModelResolver(contribution: PluginFirstMessageModelResolver): PluginCleanup;
   addProjectSidebarItem(
     contribution: PluginProjectSidebarItemContribution<PluginText>,
@@ -252,6 +253,35 @@ export interface PluginAgentPanelContribution<
   Component: ComponentType<PluginAgentPanelProps>;
 }
 
+/** Agent tabs supplied before the corresponding session exists. */
+export interface PluginWorkspaceTabDescriptor {
+  id: string;
+  title: string;
+  order: number;
+  agentId?: string;
+  disabled?: boolean;
+  setup?: {
+    provider: string;
+    model?: string;
+    modeId?: string;
+    thinkingOptionId?: string;
+  };
+}
+export interface PluginWorkspaceTabProvider {
+  id: string;
+  resolve(input: { workspaceId: string }): Promise<PluginWorkspaceTabDescriptor[]>;
+  /** Create only; the host delivers the first message through its native user path. */
+  create(input: {
+    workspaceId: string;
+    tabId: string;
+    provider: string;
+    model?: string;
+    modeId?: string;
+    thinkingOptionId?: string;
+  }): Promise<{ agentId: string }>;
+  enable?(input: { workspaceId: string; tabId: string }): Promise<void>;
+}
+
 /** Resolved when a queued default-model first message is sent after reconnecting. */
 export interface PluginFirstMessageModelResolver {
   resolve(input: { projectId: string }): Promise<{
@@ -294,6 +324,8 @@ export interface PluginProjectSettingsSectionContribution<Text extends PluginTex
 }
 
 export interface PluginSettingsScreenContribution<Text extends PluginText = string> {
+  /** Lower values appear first in the host settings sidebar. Defaults to zero. */
+  order?: number;
   id: string;
   title: Text;
   icon: PluginIcon;

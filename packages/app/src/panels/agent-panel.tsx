@@ -350,6 +350,7 @@ function DraftPanel() {
       tabId={tabId}
       draftId={target.draftId}
       initialSetup={target.setup}
+      placeholder={target.placeholder}
       isPaneFocused={isInteractive}
       onOpenWorkspaceFile={openFileInWorkspace}
       onCreated={handleCreated}
@@ -375,7 +376,7 @@ export const agentPanelRegistration = definePanel("agent", {
 });
 
 export function useDraftPanelDescriptor(
-  target: { kind: "draft"; draftId: string },
+  target: Extract<import("@/workspace-tabs/model").WorkspaceTabTarget, { kind: "draft" }>,
   context: { serverId: string },
 ) {
   const createDescriptorState = useCreateFlowStore(
@@ -396,6 +397,8 @@ export function useDraftPanelDescriptor(
 
   return buildDraftPanelDescriptor({
     ...createDescriptorState,
+    title: target.placeholder?.title,
+    disabled: target.placeholder?.disabled,
     icon: SquarePen,
   });
 }

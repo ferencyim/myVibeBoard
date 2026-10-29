@@ -2,6 +2,15 @@ import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type { WorkspaceFileTabTarget } from "@/workspace/file-open";
 
+export interface WorkspaceTabPlaceholder {
+  pluginId: string;
+  providerId: string;
+  tabId: string;
+  title: string;
+  order: number;
+  disabled?: boolean;
+}
+
 export interface WorkspaceDraftTabSetup {
   provider: AgentProvider;
   cwd: string;
@@ -34,7 +43,12 @@ export type PluginWorkspaceTabTarget =
 
 export type WorkspaceTabTarget =
   | { kind: "new_tab" }
-  | { kind: "draft"; draftId: string; setup?: WorkspaceDraftTabSetup }
+  | {
+      kind: "draft";
+      draftId: string;
+      setup?: WorkspaceDraftTabSetup;
+      placeholder?: WorkspaceTabPlaceholder;
+    }
   | { kind: "agent"; agentId: string }
   | { kind: "provider_subagent"; parentAgentId: string; subagentId: string }
   | { kind: "terminal"; terminalId: string }

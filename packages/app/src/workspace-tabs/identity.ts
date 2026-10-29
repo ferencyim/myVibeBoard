@@ -13,7 +13,12 @@ export function normalizeWorkspaceTabTarget(
       return null;
     }
     const setup = normalizeWorkspaceDraftTabSetup(value.setup);
-    return setup ? { kind: "draft", draftId, setup } : { kind: "draft", draftId };
+    return {
+      kind: "draft",
+      draftId,
+      ...(setup ? { setup } : {}),
+      ...(value.placeholder ? { placeholder: value.placeholder } : {}),
+    };
   }
   if (value.kind === "new_tab") {
     return { kind: "new_tab" };
@@ -104,7 +109,11 @@ export function workspaceTabTargetsEqual(
     return false;
   }
   if (left.kind === "draft" && right.kind === "draft") {
-    return left.draftId === right.draftId && workspaceDraftTabSetupsEqual(left.setup, right.setup);
+    return (
+      left.draftId === right.draftId &&
+      workspaceDraftTabSetupsEqual(left.setup, right.setup) &&
+      JSON.stringify(left.placeholder) === JSON.stringify(right.placeholder)
+    );
   }
   if (left.kind === "agent" && right.kind === "agent") {
     return left.agentId === right.agentId;

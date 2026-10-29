@@ -105,7 +105,7 @@ afterEach(() => {
 
 describe("首消息 outbox 冷重启自动恢复", () => {
   it.each([true, false])(
-    "unconfigured defaults use the first enabled ready provider without fixing a model (plugin resolver: %s)",
+    "unconfigured defaults use the first enabled ready provider with its catalog default model (plugin resolver: %s)",
     async (hasResolver) => {
       const { default: storage } = await import("@react-native-async-storage/async-storage");
       await storage.clear();
@@ -116,7 +116,22 @@ describe("首消息 outbox 冷重启自动恢复", () => {
         entries: [
           { provider: "disabled", enabled: false, status: "ready" },
           { provider: "loading", enabled: true, status: "loading" },
-          { provider: "codex", enabled: true, status: "ready" },
+          {
+            provider: "codex",
+            enabled: true,
+            status: "ready",
+            models: [
+              { provider: "codex", id: "other-model", label: "Other" },
+              {
+                provider: "codex",
+                id: "internal-model",
+                label: "Internal",
+                isDefault: true,
+                isSelectable: false,
+              },
+              { provider: "codex", id: "default-model", label: "Default", isDefault: true },
+            ],
+          },
         ],
       });
       host.client.createWorkspace.mockImplementation(async (input) => ({
@@ -134,7 +149,9 @@ describe("首消息 outbox 冷重启自动恢复", () => {
       await runtime.flushFirstMessageOutbox();
       expect(host.client.createWorkspace).toHaveBeenCalledWith(
         expect.objectContaining({
-          agent: expect.objectContaining({ config: { provider: "codex", cwd: "/repo" } }),
+          agent: expect.objectContaining({
+            config: { provider: "codex", model: "default-model", cwd: "/repo" },
+          }),
         }),
       );
     },
@@ -150,7 +167,15 @@ describe("首消息 outbox 冷重启自动恢复", () => {
       snapshotHash: "compact-fallback",
       generatedAt: "2026-01-01T00:00:00Z",
       compactSnapshot: compactProviderSnapshot([
-        { provider: "codex", enabled: true, status: "ready" },
+        {
+          provider: "codex",
+          enabled: true,
+          status: "ready",
+          models: [
+            { provider: "codex", id: "other-model", label: "Other" },
+            { provider: "codex", id: "default-model", label: "Default", isDefault: true },
+          ],
+        },
       ]),
     });
     host.client.createWorkspace.mockImplementation(async (input) => ({
@@ -168,10 +193,83 @@ describe("首消息 outbox 冷重启自动恢复", () => {
     await runtime.flushFirstMessageOutbox();
     expect(host.client.createWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({
-        agent: expect.objectContaining({ config: { provider: "codex", cwd: "/repo" } }),
+        agent: expect.objectContaining({
+          config: { provider: "codex", model: "default-model", cwd: "/repo" },
+        }),
       }),
     );
   });
+
+  it("uses the first selectable model when the provider has no marked default", async () => {
+    const { default: storage } = await import("@react-native-async-storage/async-storage");
+    await storage.clear();
+    const runtime = await import("./first-message-outbox");
+    resolveModel.mockResolvedValue(null);
+    host.client.getProvidersSnapshot.mockResolvedValue({
+      entries: [
+        {
+          provider: "codex",
+          enabled: true,
+          status: "ready",
+          models: [
+            { provider: "codex", id: "internal", label: "Internal", isSelectable: false },
+            { provider: "codex", id: "available", label: "Available" },
+          ],
+        },
+      ],
+    });
+    host.client.createWorkspace.mockImplementation(async (input) => ({
+      creation: { ...completed, idempotencyKey: input.idempotencyKey },
+    }));
+    await runtime.firstMessageOutbox.enqueue({
+      id: "default-draft",
+      hostId: "host-one",
+      projectId: "project-one",
+      source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+      modelSelection: "default",
+      text: "首消息",
+      attachments: [],
+    });
+    await runtime.flushFirstMessageOutbox();
+    expect(host.client.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          config: { provider: "codex", model: "available", cwd: "/repo" },
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    { models: [] },
+    { models: [{ provider: "codex", id: "internal", label: "Internal", isSelectable: false }] },
+  ])(
+    "missing selectable fallback models retain the first message and guide to task defaults ($models)",
+    async ({ models }) => {
+      const { default: storage } = await import("@react-native-async-storage/async-storage");
+      await storage.clear();
+      const runtime = await import("./first-message-outbox");
+      resolveModel.mockResolvedValue(null);
+      host.client.getProvidersSnapshot.mockResolvedValue({
+        entries: [{ provider: "codex", enabled: true, status: "ready", models }],
+      });
+      await runtime.firstMessageOutbox.enqueue({
+        id: "default-draft",
+        hostId: "host-one",
+        projectId: "project-one",
+        source: { kind: "worktree", projectId: "project-one", cwd: "/repo" },
+        modelSelection: "default",
+        text: "离线首消息",
+        attachments: [],
+      });
+      await runtime.flushFirstMessageOutbox();
+      expect(host.client.createWorkspace).not.toHaveBeenCalled();
+      expect(runtime.firstMessageOutbox.getSnapshot()[0]).toMatchObject({
+        text: "离线首消息",
+        error: expect.stringContaining("任务默认模型"),
+      });
+    },
+  );
 
   it("waits for a plugin catalog and then a ready provider before automatically sending", async () => {
     const { default: storage } = await import("@react-native-async-storage/async-storage");
@@ -197,7 +295,17 @@ describe("首消息 outbox 冷重启自动恢复", () => {
       submitted: false,
     });
     host.client.getProvidersSnapshot.mockResolvedValue({
-      entries: [{ provider: "codex", enabled: true, status: "ready" }],
+      entries: [
+        {
+          provider: "codex",
+          enabled: true,
+          status: "ready",
+          models: [
+            { provider: "codex", id: "other-model", label: "Other" },
+            { provider: "codex", id: "default-model", label: "Default", isDefault: true },
+          ],
+        },
+      ],
     });
     host.client.createWorkspace.mockImplementation(async (input) => ({
       creation: { ...completed, idempotencyKey: input.idempotencyKey },

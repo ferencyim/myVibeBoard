@@ -28,6 +28,8 @@ export type {
   PluginSettingsScreenContribution,
   PluginProjectSettingsSectionContribution,
   PluginFirstMessageModelResolver,
+  PluginWorkspaceTabDescriptor,
+  PluginWorkspaceTabProvider,
   PluginProjectSettingsSectionProps,
   PluginProjectSidebarItemProps,
   PluginProjectSidebarItemContribution,

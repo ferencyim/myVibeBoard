@@ -138,6 +138,7 @@ export function runPluginClientBundle(
     settingsScreens: [],
     projectSettingsSections: [],
     projectSidebarItems: [],
+    workspaceTabProviders: [],
     firstMessageModelResolvers: [],
     sidebarItems: { header: [], footer: [] },
     legacySidebarItems: [],
@@ -256,6 +257,15 @@ export function runPluginClientBundle(
   }
   const pluginContext: PluginClientContext = {
     ...runtime,
+    addWorkspaceTabProvider(contribution) {
+      const normalizedId = requireId(contribution.id, "workspace tab provider id");
+      if (typeof contribution.resolve !== "function" || typeof contribution.create !== "function")
+        throw new Error("Workspace tab provider requires an id, resolve, and create");
+      const providers = collector.workspaceTabProviders!;
+      if (providers.some((provider) => provider.id === normalizedId))
+        throw new Error("Duplicate workspace tab provider");
+      return register(providers, { ...contribution, id: normalizedId }, () => {});
+    },
     addFirstMessageModelResolver(contribution) {
       if (collector.firstMessageModelResolvers.length)
         throw new Error("Duplicate first message model resolver");
@@ -641,6 +651,7 @@ export function runPluginClientBundle(
     settingsScreens: collector.settingsScreens,
     projectSettingsSections: collector.projectSettingsSections,
     projectSidebarItems: collector.projectSidebarItems,
+    workspaceTabProviders: collector.workspaceTabProviders,
     firstMessageModelResolvers: collector.firstMessageModelResolvers,
     sidebarItems: collector.sidebarItems,
     legacySidebarItems: collector.legacySidebarItems,

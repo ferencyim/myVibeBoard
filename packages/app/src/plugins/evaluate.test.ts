@@ -30,6 +30,26 @@ function bundle(body: string): string {
 }
 
 describe("evaluatePluginClientBundle", () => {
+  it("normalizes workspace tab provider IDs and rejects duplicates", () => {
+    const plugin = evaluatePluginClientBundle(
+      "flow-tabs",
+      bundle(`
+      plugin.addWorkspaceTabProvider({ id: " flow ", async resolve() { return []; }, async create() { return { agentId: "worker" }; } });
+    `),
+    );
+    expect(plugin.workspaceTabProviders?.map((provider) => provider.id)).toEqual(["flow"]);
+    expect(() =>
+      evaluatePluginClientBundle(
+        "duplicate-flow",
+        bundle(`
+      const provider = { id: "flow", async resolve() { return []; }, async create() { return { agentId: "worker" }; } };
+      plugin.addWorkspaceTabProvider(provider);
+      plugin.addWorkspaceTabProvider({ ...provider, id: " flow " });
+    `),
+      ),
+    ).toThrow("Duplicate workspace tab provider");
+  });
+
   it("accepts Chinese slash command names and normalizes ASCII ones", () => {
     const names = ["制定方案", "复核方案", "执行", "复核", "验证", "通过", "停止任务"];
     const plugin = evaluatePluginClientBundle(
@@ -118,6 +138,7 @@ describe("evaluatePluginClientBundle", () => {
         globalThis.__pluginRemovals = [
           plugin.addScreen({ id: "main", title: "Main", Component }),
           plugin.addSettingsScreen({ id: "display", title: "Display", icon: "Settings", Component }),
+          plugin.addWorkspaceTabProvider({ id: "flow", async resolve() { return []; }, async create() { return { agentId: "worker" }; } }),
           plugin.addSidebarHeaderItem({ id: "main", title: "Main", Component }),
           plugin.addSidebarFooterItem({ id: "status", title: "Status", Component }),
           plugin.addWorkspacePanel({ id: "panel", title: "Panel", icon: "Blocks", context: "workspace", Component }),
@@ -149,6 +170,7 @@ describe("evaluatePluginClientBundle", () => {
       [
         plugin.surfaces,
         plugin.settingsScreens,
+        plugin.workspaceTabProviders ?? [],
         plugin.sidebarItems.header,
         plugin.sidebarItems.footer,
         plugin.workspacePanels,
@@ -169,6 +191,7 @@ describe("evaluatePluginClientBundle", () => {
       [
         plugin.surfaces,
         plugin.settingsScreens,
+        plugin.workspaceTabProviders ?? [],
         plugin.sidebarItems.header,
         plugin.sidebarItems.footer,
         plugin.workspacePanels,

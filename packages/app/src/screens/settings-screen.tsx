@@ -11,7 +11,7 @@ import {
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "expo-router/react-navigation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Buffer } from "buffer";
@@ -117,13 +117,17 @@ import {
 } from "@/screens/settings/host-page";
 import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
+import { PluginIconView } from "@/plugins/icons";
+import { collectSettingsSidebarScreens } from "@/plugins/settings/sidebar-model";
+import { buildPluginSettingsRoute } from "@/plugins/settings/routes";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
 import { PromptLibraryPage } from "@/prompt-library/page";
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
 import { SETTINGS_DESKTOP_SIDEBAR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
-import { densityIconBox, densityIconSize } from "@/styles/density";
+import { densityIconBox, densityIconProps, densityIconSize } from "@/styles/density";
+import type { Theme } from "@/styles/theme";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
   type EnableBuiltInDaemonOption,
@@ -826,6 +830,61 @@ function SidebarHostSectionButton({
   );
 }
 
+interface SidebarPluginSettingsButtonProps {
+  plugin: ReturnType<typeof useInstalledPlugins>[number];
+  screen: ReturnType<typeof useInstalledPlugins>[number]["settingsScreens"][number];
+  view: SettingsView;
+  layout: "desktop" | "mobile";
+}
+
+const ThemedPluginSettingsIcon = withUnistyles(PluginIconView);
+const pluginSettingsIconMapping = densityIconProps("md", (theme: Theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
+const selectedPluginSettingsIconMapping = densityIconProps("md", (theme: Theme) => ({
+  color: theme.colors.foreground,
+}));
+
+function SidebarPluginSettingsButton({
+  plugin,
+  screen,
+  view,
+  layout,
+}: SidebarPluginSettingsButtonProps) {
+  const router = useRouter();
+  const isSelected =
+    view.kind === "plugin" &&
+    view.serverId === plugin.serverId &&
+    view.pluginId === plugin.id &&
+    view.screenId === screen.id;
+  const open = useCallback(() => {
+    const target = buildPluginSettingsRoute(plugin.serverId, plugin.id, screen.id);
+    if (layout === "mobile") router.push(target);
+    else router.replace(target);
+  }, [layout, plugin.serverId, plugin.id, router, screen.id]);
+  const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={accessibilityState}
+      onPress={open}
+      testID={`settings-plugin-${plugin.id}-${screen.id}`}
+      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
+    >
+      <ThemedPluginSettingsIcon
+        icon={screen.icon}
+        uniProps={isSelected ? selectedPluginSettingsIconMapping : pluginSettingsIconMapping}
+      />
+      <Text
+        style={[sidebarStyles.label, isSelected && sidebarStyles.selectedLabel]}
+        numberOfLines={1}
+      >
+        {plugin.i18n.resolve(screen.title, plugin.locale)}
+      </Text>
+    </Pressable>
+  );
+}
+
 interface HostPickerProps {
   activeServerId: string | null;
   sortedHosts: HostProfile[];
@@ -963,7 +1022,8 @@ function SettingsSidebar({
   let selectedHostSection: HostSectionSlug | null = null;
   if (view.kind === "host") selectedHostSection = view.section;
   if (view.kind === "project") selectedHostSection = "projects";
-  if (view.kind === "plugin") selectedHostSection = "plugins";
+  const installedPlugins = useInstalledPlugins();
+  const pluginSettingsScreens = collectSettingsSidebarScreens(installedPlugins, activeHostServerId);
 
   const sidebarBody = (
     <>
@@ -996,6 +1056,15 @@ function SettingsSidebar({
               icon={item.icon}
               isSelected={selectedHostSection === item.id}
               onSelect={onSelectHostSection}
+            />
+          ))}
+          {pluginSettingsScreens.map(({ plugin, screen }) => (
+            <SidebarPluginSettingsButton
+              key={`${plugin.id}:${screen.id}`}
+              plugin={plugin}
+              screen={screen}
+              view={view}
+              layout={layout}
             />
           ))}
         </SidebarGroup>
@@ -1623,6 +1692,9 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.normal,
     flex: 1,
+  },
+  selectedLabel: {
+    color: theme.colors.foreground,
   },
   pickerTrigger: {
     flexDirection: "row",

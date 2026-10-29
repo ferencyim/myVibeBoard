@@ -46,8 +46,10 @@ import { isWeb } from "@/constants/platform";
 import {
   buildWorkspaceTabPersistenceKey,
   type WorkspaceDraftTabSetup,
+  type WorkspaceTabPlaceholder,
 } from "@/workspace-tabs/model";
 import { openWorkspaceChanges } from "@/workspace-tabs/open-supporting-view";
+import { useWorkspaceTabPlaceholder } from "./workspace-tab-placeholder";
 import { useSettings } from "@/hooks/use-settings";
 
 const EMPTY_PENDING_PERMISSIONS = new Map();
@@ -276,6 +278,7 @@ interface WorkspaceDraftAgentTabProps {
   tabId: string;
   draftId: string;
   initialSetup?: WorkspaceDraftTabSetup;
+  placeholder?: WorkspaceTabPlaceholder;
   isPaneFocused: boolean;
   onCreated: (snapshot: AgentSnapshotPayload) => void;
   onOpenWorkspaceFile: (request: WorkspaceFileOpenRequest) => void;
@@ -298,12 +301,14 @@ export function WorkspaceDraftAgentTab({
   tabId,
   draftId,
   initialSetup = undefined,
+  placeholder,
   isPaneFocused,
   onCreated,
   onOpenWorkspaceFile,
   onOpenImportSheet,
 }: WorkspaceDraftAgentTabProps) {
   const { t } = useTranslation();
+  const placeholderFlow = useWorkspaceTabPlaceholder({ serverId, workspaceId, placeholder });
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
   const workspaceFields = useWorkspaceFields(serverId, workspaceId, (w) => ({
@@ -466,6 +471,16 @@ export function WorkspaceDraftAgentTab({
         selectModelMessage: t("workspaceSetup.errors.selectModel"),
       }),
     createRequest: async ({ attempt, text, images, attachments, cwd }) => {
+      if (placeholder)
+        return placeholderFlow.submit(
+          client,
+          { ...attempt, text, images, attachments },
+          {
+            provider: composerState.selectedProvider,
+            model: composerState.effectiveModelId,
+            thinkingOptionId: composerState.effectiveThinkingOptionId,
+          },
+        );
       if (pendingAutoSubmit?.agentCreation) {
         const result = await pendingAutoSubmit.agentCreation.result;
         return { agentId: result.id, result };
@@ -634,6 +649,7 @@ export function WorkspaceDraftAgentTab({
       <ComposerDock fullscreen={isComposerFullscreen}>
         {dockContent}
         <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
+          {!isComposerFullscreen ? placeholderFlow.controls(isSubmitting) : null}
           {importPillPress && !isComposerFullscreen ? (
             <View style={styles.importPillRow}>
               <View style={styles.importPillContent}>

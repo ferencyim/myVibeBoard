@@ -26,7 +26,15 @@ function createOutboxPort(hostId: string, client: DaemonClient): FirstMessageOut
       const available = snapshot.entries.find(
         (provider) => provider.enabled && provider.status === "ready",
       );
-      return available ? { provider: available.provider, cwd } : null;
+      if (!available) return null;
+      const models =
+        available.models?.filter((candidate) => candidate.isSelectable !== false) ?? [];
+      const model = models.find((candidate) => candidate.isDefault) ?? models[0];
+      if (!model?.id.trim())
+        throw new Error(
+          "无法取得主机 provider 的默认模型，请到「任务默认模型」选择具体模型；首消息已保留",
+        );
+      return { provider: available.provider, model: model.id, cwd };
     },
     getCreation: (key) => client.getWorkspaceCreation(key),
     prepareAttachments: (entry) => prepareOutboxAttachments(entry),

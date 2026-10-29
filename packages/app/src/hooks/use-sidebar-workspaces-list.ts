@@ -1,3 +1,4 @@
+import { createProjectAgentWorkspaceSelector } from "./sidebar-project-agent-workspaces";
 import { useHostFeatureMap } from "@/runtime/host-features";
 import { useCallback, useEffect, useMemo } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
@@ -150,10 +151,24 @@ export function useSidebarWorkspacesList(options?: {
       : undefined;
   const { projects: hostProjects } = useWorkspaceStructure(directoryServerIds, sort);
 
+  const selectProjectAgentWorkspaces = useMemo(createProjectAgentWorkspaceSelector, []);
+  const hiddenWorkspaceKeys = useSessionStore((state) =>
+    selectProjectAgentWorkspaces(state.sessions, directoryServerIds),
+  );
+  const visibleHostProjects = useMemo(
+    () =>
+      hostProjects.map((project) => {
+        const workspaceKeys = project.workspaceKeys.filter((key) => !hiddenWorkspaceKeys.has(key));
+        return workspaceKeys.length === project.workspaceKeys.length
+          ? project
+          : { ...project, workspaceKeys };
+      }),
+    [hiddenWorkspaceKeys, hostProjects],
+  );
   const selectPlacements = useMemo(createSidebarWorkspacePlacementSelector, []);
   const sidebarModel = useMemo(
-    () => selectPlacements(hostProjects),
-    [hostProjects, selectPlacements],
+    () => selectPlacements(visibleHostProjects),
+    [visibleHostProjects, selectPlacements],
   );
 
   const projects = sidebarModel.projects.length > 0 ? sidebarModel.projects : EMPTY_PROJECTS;

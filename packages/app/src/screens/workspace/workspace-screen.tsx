@@ -211,6 +211,7 @@ import {
   WorkspaceHeaderMenuMobile,
 } from "@/screens/workspace/workspace-header-menu";
 import { PluginHeaderButtons } from "@/plugins";
+import { usePluginWorkspaceTabs } from "@/plugins/workspace-tabs";
 import {
   createWorkspaceFileTabTarget,
   normalizeWorkspaceFileLocation,
@@ -1306,6 +1307,17 @@ function WorkspaceScreenContent({
   });
   const lastMainPaneId = lastMainPaneRef.current.paneId;
   const hasHydratedWorkspaceLayoutStore = useWorkspaceLayoutStoreHydrated();
+  usePluginWorkspaceTabs({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+    workspaceKey: persistenceKey,
+    cwd: workspaceDirectory,
+    enabled: hasHydratedWorkspaceLayoutStore,
+    isRouteFocused,
+    hasHydratedAgents,
+    agentTabOrderKeys: workspaceAgentVisibility.tabOrderKeys,
+    activeAgentIds: workspaceAgentVisibility.activeAgentIds,
+  });
   const workspaceSetupStatus = getWorkspaceSetupStatus(workspaceDescriptor);
   const claimFailedSetupSurface = useWorkspaceSetupStore((state) => state.claimFailedSetupSurface);
   const supportsSetupObservation = useHostFeature(normalizedServerId, "workspaceSetupObservation");
@@ -1526,7 +1538,8 @@ function WorkspaceScreenContent({
         return false;
       }
       const pending = pendingByDraftId[tab.target.draftId];
-      return pending?.serverId === normalizedServerId && pending.lifecycle === "active";
+      if (pending?.serverId !== normalizedServerId) return false;
+      return tab.target.placeholder ? pending.lifecycle !== "sent" : pending.lifecycle === "active";
     });
 
     reconcileWorkspaceTabs(

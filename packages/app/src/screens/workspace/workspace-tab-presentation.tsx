@@ -19,6 +19,7 @@ export interface WorkspaceTabPresentation {
   label: string;
   subtitle: string;
   tooltip: string;
+  disabled?: boolean;
   modified: boolean;
   showCloseButton: boolean;
   titleState: "ready" | "loading";
@@ -76,6 +77,7 @@ function WorkspaceTabPresentationResolverInner({
 
   const presentation = useMemo(
     () => ({
+      disabled: tab.target.kind === "draft" && tab.target.placeholder?.disabled === true,
       key: tab.key,
       kind: tab.kind,
       label: descriptor.label,
@@ -94,6 +96,7 @@ function WorkspaceTabPresentationResolverInner({
       descriptor.statusBucket,
       descriptor.subtitle,
       descriptor.titleState,
+      tab.target,
       tab.key,
       tab.kind,
       attributes.modified,
@@ -172,8 +175,12 @@ export function WorkspaceTabOptionRow({
     [isOptionActive],
   );
   const optionRowStyle = useMemo(
-    () => [styles.optionRow, active && styles.optionRowActive],
-    [active],
+    () => [
+      styles.optionRow,
+      active && styles.optionRowActive,
+      presentation.disabled && styles.disabled,
+    ],
+    [active, presentation.disabled],
   );
   return (
     <View style={optionRowStyle}>
@@ -216,6 +223,7 @@ export function WorkspaceTabOptionRow({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  disabled: { opacity: 0.5 },
   iconActive: {
     color: theme.colors.foreground,
   },

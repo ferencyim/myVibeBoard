@@ -4,12 +4,16 @@ import type { PanelDescriptor, PanelIconProps } from "@/panels/panel-registry";
 
 export function buildDraftPanelDescriptor(input: {
   isCreating: boolean;
+  title?: string;
+  disabled?: boolean;
   pendingPrompt?: string | null;
   icon: ComponentType<PanelIconProps>;
 }): PanelDescriptor {
   const { icon, isCreating, pendingPrompt } = input;
-  const newAgentLabel = i18n.t("panels.draft.newAgent");
-  const creatingLabel = pendingPrompt?.trim() || newAgentLabel;
+  const newAgentLabel = input.title
+    ? input.title + (input.disabled ? " · 未启用" : "")
+    : i18n.t("panels.draft.newAgent");
+  const creatingLabel = input.title ? newAgentLabel : pendingPrompt?.trim() || newAgentLabel;
   if (isCreating) {
     return {
       label: creatingLabel,

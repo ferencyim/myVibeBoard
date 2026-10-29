@@ -687,7 +687,10 @@ function TabHandleContent({
   );
 
   return (
-    <View style={styles.tabHandle} dataSet={tabHandleDataSet}>
+    <View
+      style={[styles.tabHandle, presentation.disabled && styles.tabDisabled]}
+      dataSet={tabHandleDataSet}
+    >
       <View style={styles.tabIcon}>
         <WorkspaceTabIcon presentation={presentation} active={isHighlighted} backdrop={backdrop} />
       </View>
@@ -1666,6 +1669,7 @@ const styles = StyleSheet.create((theme) => ({
     overflow: "visible",
     marginHorizontal: TAB_CHIP_GAP / 2,
   },
+  tabDisabled: { opacity: 0.5 },
   tabHandle: {
     flexDirection: "row",
     alignItems: "center",

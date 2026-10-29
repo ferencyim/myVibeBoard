@@ -19,6 +19,7 @@ import type {
   PluginProjectSettingsSectionContribution as SDKPluginProjectSettingsSectionContribution,
   PluginProjectSidebarItemContribution as SDKPluginProjectSidebarItemContribution,
   PluginFirstMessageModelResolver,
+  PluginWorkspaceTabProvider,
   PluginTimelineRendererContribution,
   PluginTimelineTransformerContribution,
   PluginPanelLocation,
@@ -56,6 +57,7 @@ export interface EvaluatedPlugin {
   settingsScreens: PluginSettingsScreenContribution[];
   projectSettingsSections: PluginProjectSettingsSectionContribution[];
   projectSidebarItems?: PluginProjectSidebarItemContribution[];
+  workspaceTabProviders?: PluginWorkspaceTabProvider[];
   firstMessageModelResolvers: PluginFirstMessageModelResolver[];
   sidebarItems: Record<PluginSidebarSection, PluginSidebarItemContribution[]>;
   // COMPAT(pluginSidebarAliases): added in v0.11.0, remove after 2027-03-29
