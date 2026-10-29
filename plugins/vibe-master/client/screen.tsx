@@ -1,8 +1,9 @@
+import { BotCreateForm } from "./create-form";
 import { useRpc, type PluginScreenProps, type PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View, StyleSheet } from "react-native";
+import { Pressable, ScrollView, Text, View, StyleSheet } from "react-native";
 import { botsListRpc, botsCreateRpc, botsArchiveRpc } from "../shared/rpc";
 import { useBotConversation } from "./use-bot-conversation";
 
@@ -10,7 +11,7 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
   const list = useRpc(botsListRpc);
   const create = useRpc(botsCreateRpc);
   const client = useQueryClient();
-  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const query = useQuery({ queryKey: ["vibe-bots", "independent"], queryFn: () => list({ kind: "independent" }), refetchInterval: 15000 });
@@ -36,7 +37,10 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
     input: { color: theme.colors.foreground, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 10 },
   }), [theme, busy]);
   const retry = useCallback(() => { void query.refetch(); }, [query]);
-  const createBot = useCallback(() => { void act(async () => { await create({ kind: "independent", name: name.trim() }); setName(""); }); }, [act, create, name]);
+  const createBot = useCallback((value: Parameters<typeof create>[0]) => { void act(async () => { await create(value); setCreating(false); }); }, [act, create]);
+  const showForm = useCallback(() => setCreating(true), []);
+  const hideForm = useCallback(() => setCreating(false), []);
+  const submitForm = useCallback((value: Omit<Parameters<typeof create>[0], "kind" | "projectId">) => createBot({ ...value, kind: "independent" }), [createBot]);
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.content}>
       <Text style={styles.text}>bot</Text>
@@ -47,8 +51,8 @@ export function MasterScreen({ theme, navigation }: PluginScreenProps) {
       {error ? <Text style={styles.danger}>{error}</Text> : null}
       {(query.data?.bots ?? []).map((bot) => <BotRow key={bot.id} bot={bot} theme={theme} navigation={navigation} busy={busy} />)}
       {query.data?.bots.length === 0 ? <Text style={styles.text}>还没有 bot，请新建。</Text> : null}
-      <TextInput accessibilityLabel="新 bot 名字" placeholder="新 bot 名字" placeholderTextColor={theme.colors.foregroundMuted} value={name} onChangeText={setName} style={styles.input} />
-      <Pressable accessibilityRole="button" disabled={busy || !name.trim()} style={styles.button} onPress={createBot}><Text style={styles.text}>{busy ? "正在处理…" : "+ 新建 bot"}</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={busy} style={styles.button} onPress={showForm}><Text style={styles.text}>+ 新建 bot</Text></Pressable>
+      {creating ? <BotCreateForm error={error} theme={theme} busy={busy} onCancel={hideForm} onSubmit={submitForm} /> : null}
     </ScrollView>
   );
 }

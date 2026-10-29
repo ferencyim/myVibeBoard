@@ -92,8 +92,9 @@ export const memoriesRemoveRpc = defineRpc({
 });
 export const modelsListRpc = defineRpc({
   name: "models.list",
-  input: z.object({ query: z.string().optional() }),
+  input: z.object({ query: z.string().optional(), projectId: z.string().optional() }),
   output: z.object({
+    defaultPresetId: z.string().nullable().optional(),
     providers: z.array(z.object({
       provider: z.string(),
       defaultModel: z.string().nullable(),

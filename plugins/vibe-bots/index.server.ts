@@ -53,7 +53,10 @@ export default function contribute(server: PluginServerContext) {
     service.bots.defaultSet(input.projectId, input.botId);
     return { ok: true as const };
   });
-  server.handle(rpc.modelsListRpc, (input) => service.models(input.query));
+  server.handle(rpc.modelsListRpc, async (input) => ({
+    ...await service.models(input.query, true),
+    defaultPresetId: await service.defaultPreset(input.projectId),
+  }));
   server.handle(rpc.memoriesListRpc, async (input, ctx) => {
     userOnly(ctx.callerAgentId);
     await service.ready();
@@ -108,7 +111,7 @@ export default function contribute(server: PluginServerContext) {
     input: modelQuery,
     handler: async (input, ctx) => {
       await service.caller(ctx.callerAgentId);
-      return service.models(modelQuery.parse(input).query);
+      return service.models(modelQuery.parse(input).query, true);
     },
   });
   server.registerAgentTool({

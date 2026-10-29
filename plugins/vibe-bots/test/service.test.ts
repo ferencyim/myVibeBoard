@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -43,8 +44,10 @@ function fixture() {
   const send = vi.fn(async (_id: string, _text: string, _options?: PaseoAgentSendOptions) => {});
   const setLabels = vi.fn(async (id: string, labels: Record<string, string>) => {
     const current = agents.get(id)!;
+    if (current.archivedAt) throw new Error("归档 agent 不接受标签修改");
     current.labels = { ...current.labels, ...labels };
   });
+  const setTitle = vi.fn(async (_id: string, _title: string) => {});
   function handle(id: string) {
     return {
       id,
@@ -56,7 +59,7 @@ function fixture() {
       setModel: (model: string | null) => setModel(id, model),
       setThinkingOption: (thinking: string | null) => setThinking(id, thinking),
       setMode: async (_mode: string) => {},
-      setTitle: async (_title: string) => {},
+      setTitle: (title: string) => setTitle(id, title),
       send: (text: string, options?: PaseoAgentSendOptions) => send(id, text, options),
       resume: async () => { agents.get(id)!.status = "idle"; },
     };
@@ -80,7 +83,10 @@ function fixture() {
     agents: {
       ref: handle,
       create: createAgent,
-      list: async () => ({ entries: [...agents.values()].map(agent => ({ agent })), pageInfo: { nextCursor: null } }),
+      list: async (options?: { filter?: { includeArchived?: boolean } }) => ({
+        entries: [...agents.values()].filter(agent => options?.filter?.includeArchived || !agent.archivedAt).map(agent => ({ agent })),
+        pageInfo: { nextCursor: null },
+      }),
     },
     plugins: { invoke },
     providers: {
@@ -113,7 +119,7 @@ function fixture() {
   function seedLegacy(id: string, labels: Record<string, string>) {
     agents.set(id, { id, workspaceId: "project-root", cwd: "/project-repo", provider: "codex", model: "initial", thinkingOptionId: "high", status: "idle", labels, updatedAt: "2026-10-28T00:00:00.000Z", archivedAt: null });
   }
-  return { api, db, service, start, createProjectBot, agents, createAgent, setModel, setThinking, send, setLabels, invoke, seedLegacy };
+  return { api, db, service, start, createProjectBot, agents, createAgent, setModel, setThinking, send, setLabels, setTitle, invoke, seedLegacy };
 }
 
 describe("bot 服务主对话与模型变更", () => {
@@ -181,15 +187,28 @@ describe("bot 服务主对话与模型变更", () => {
 
   it("创建资料不创建会话，首次并发打开只创建一次并复用主对话", async () => {
     const f = fixture();
+    f.api.providers.listAvailable.mockImplementation(() => new Promise(() => {}));
+    f.api.providers.listModels.mockImplementation(() => new Promise(() => {}));
+    f.api.providers.listModes.mockImplementation(() => new Promise(() => {}));
     const bot = await f.createProjectBot();
     expect(bot.mainAgentId).toBeNull();
     expect(f.createAgent).not.toHaveBeenCalled();
+    expect(f.api.providers.listAvailable).not.toHaveBeenCalled();
+    expect(f.api.providers.listModels).not.toHaveBeenCalled();
+    expect(f.api.providers.listModes).not.toHaveBeenCalled();
     const [first, concurrent] = await Promise.all([f.service.waitOpen(bot.id), f.service.waitOpen(bot.id)]);
     expect(first).toEqual(concurrent);
     expect(await f.service.waitOpen(bot.id)).toEqual(first);
     expect(f.createAgent).toHaveBeenCalledTimes(1);
     expect(f.createAgent).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/project-repo", labels: { "vibe.bot": bot.id, "vibe.bot-thread": "main", "vibe.role": "project", "vibe.project_id": "p" } }));
     expect(f.service.bots.require(bot.id).mainAgentId).toBe(first.agentId);
+  });
+
+  it("缓存目录存在时拒绝未知模型", async () => {
+    const f = fixture();
+    await expect(f.service.create({ kind: "project", projectId: "p", name: "助理", provider: "codex", model: "unknown" }))
+      .rejects.toThrow("未知模型");
+    expect(f.createAgent).not.toHaveBeenCalled();
   });
 
   it("主对话归档后同 bot 重建，新的创建代次不复用旧幂等键", async () => {
@@ -203,6 +222,8 @@ describe("bot 服务主对话与模型变更", () => {
     expect(f.service.bots.require(bot.id).mainAgentId).toBe(rebuilt.agentId);
     expect(f.createAgent.mock.calls[1][0].idempotencyKey).not.toBe(f.createAgent.mock.calls[0][0].idempotencyKey);
     expect(f.agents.get(previous.agentId)?.archivedAt).toBe("2026-10-29T01:00:00.000Z");
+    expect(f.invoke).toHaveBeenCalledWith("vibe-board", "vibe.bot.handoff", { agentId: previous.agentId });
+    expect(f.send).toHaveBeenCalledWith(rebuilt.agentId, "交接包：未决问题与下一步", { sourceAgentId: rebuilt.agentId });
   });
 
   it("同 provider 换模型调用宿主 setModel，保留 bot、主会话、记忆与历史入口", async () => {
@@ -210,7 +231,9 @@ describe("bot 服务主对话与模型变更", () => {
     const bot = await f.createProjectBot();
     const opened = await f.service.waitOpen(bot.id);
     const memory = f.service.bots.memoryAdd(bot.id, "先解释原因", true);
-    const updated = await f.service.update(bot.id, { model: "replacement", thinking: "high" });
+    await f.service.update(bot.id, { model: "replacement", thinking: "high" });
+    await f.service.apply(bot.id);
+    const updated = f.service.view(f.service.bots.require(bot.id));
     expect(f.setModel).toHaveBeenCalledWith(opened.agentId, "replacement");
     expect(f.setThinking).toHaveBeenCalledWith(opened.agentId, "high");
     expect(updated).toMatchObject({ id: bot.id, mainAgentId: opened.agentId, provider: "codex", model: "replacement", thinking: "high", pendingModel: false });
@@ -225,7 +248,9 @@ describe("bot 服务主对话与模型变更", () => {
     const bot = await f.createProjectBot();
     const opened = await f.service.waitOpen(bot.id);
     f.agents.get(opened.agentId)!.status = "closed";
-    const updated = await f.service.update(bot.id, { model: "replacement" });
+    await f.service.update(bot.id, { model: "replacement" });
+    await f.service.apply(bot.id);
+    const updated = f.service.view(f.service.bots.require(bot.id));
     expect(f.agents.get(opened.agentId)?.status).toBe("idle");
     expect(f.setModel).toHaveBeenCalledWith(opened.agentId, "replacement");
     expect(updated).toMatchObject({ mainAgentId: opened.agentId, provider: "codex", model: "replacement", pendingModel: false });
@@ -253,7 +278,9 @@ describe("bot 服务主对话与模型变更", () => {
     const bot = await f.createProjectBot();
     const before = await f.service.waitOpen(bot.id);
     const memory = f.service.bots.memoryAdd(bot.id, "使用中文");
-    const updated = await f.service.update(bot.id, { provider: "claude", model: "replacement" });
+    await f.service.update(bot.id, { provider: "claude", model: "replacement" });
+    await f.service.apply(bot.id);
+    const updated = f.service.view(f.service.bots.require(bot.id));
     expect(f.invoke).toHaveBeenCalledWith("vibe-board", "vibe.bot.handoff", { agentId: before.agentId });
     expect(f.createAgent).toHaveBeenCalledTimes(2);
     expect(updated.mainAgentId).not.toBe(before.agentId);
@@ -264,6 +291,17 @@ describe("bot 服务主对话与模型变更", () => {
     expect(f.agents.get(updated.mainAgentId!)).toMatchObject({ provider: "claude", labels: expect.objectContaining({ "vibe.bot": bot.id }) });
     expect((await f.service.waitOpen(bot.id)).agentId).toBe(updated.mainAgentId);
     expect(f.setModel).not.toHaveBeenCalled();
+  });
+
+  it("修改 provider 立即保存，后台创建不会阻塞更新", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    const before = await f.service.waitOpen(bot.id);
+    const updated = await f.service.update(bot.id, { provider: "claude", model: "replacement" });
+    expect(updated).toMatchObject({ mainAgentId: before.agentId, pendingModel: true });
+    expect(f.createAgent).toHaveBeenCalledTimes(1);
+    await f.service.apply(bot.id);
+    expect(f.createAgent).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -279,10 +317,13 @@ it("真实旧总 agent 与项目 agent 无损迁移，重启不重复建 bot 且
   expect(f.service.prompt(master)).toContain("你不自动派发");
   expect(f.service.prompt(master)).toContain("按需使用");
   expect(project).toMatchObject({ name: "项目 bot", mainAgentId: "legacy-project" });
+  expect(f.setTitle).toHaveBeenCalledWith("legacy-master", "助手");
+  expect(f.setTitle).toHaveBeenCalledWith("legacy-project", "项目 bot");
   expect(await f.service.defaultBot("p")).toEqual({ botId: project.id, mainAgentId: "legacy-project" });
   expect(await f.service.waitOpen(master.id)).toEqual({ agentId: "legacy-master", workspaceId: "project-root" });
   expect(await f.service.waitOpen(project.id)).toEqual({ agentId: "legacy-project", workspaceId: "project-root" });
   await f.service.update(master.id, { name: "我的总助理", instructions: "保留说明" });
+  expect(f.setTitle).toHaveBeenCalledWith("legacy-master", "我的总助理");
   const memory = f.service.bots.memoryAdd(master.id, "保留经验");
   await f.service.close();
   const restarted = f.start();
@@ -296,6 +337,32 @@ it("真实旧总 agent 与项目 agent 无损迁移，重启不重复建 bot 且
   expect(f.createAgent).not.toHaveBeenCalled();
 });
 
+it("归档的权威旧总 agent 在重启后补迁，打开时交接到新主对话", async () => {
+  const f = fixture();
+  f.seedLegacy("archived-master", { role: "master" });
+  f.agents.get("archived-master")!.archivedAt = "2026-10-26T00:00:00.000Z";
+  f.seedLegacy("newer-master", { role: "master" });
+  const masterDir = join(process.env.VIBE_HOME!, "master");
+  mkdirSync(masterDir, { recursive: true });
+  writeFileSync(join(masterDir, "state.json"), JSON.stringify({ agent: { agentId: "archived-master" } }));
+  await f.service.ready();
+  const bot = f.service.bots.list({ kind: "independent" })[0]!;
+  expect(bot).toMatchObject({ name: "助手", mainAgentId: "archived-master" });
+  expect(f.setLabels).not.toHaveBeenCalledWith("archived-master", expect.anything());
+  expect(f.db.prepare("SELECT bot_id FROM bot_legacy_migration WHERE source='master'").get()).toEqual({ bot_id: bot.id });
+  await f.service.update(bot.id, { name: "新助手" });
+  expect(f.setTitle).not.toHaveBeenCalledWith("archived-master", "新助手");
+  const opened = await f.service.waitOpen(bot.id);
+  expect(opened.agentId).not.toBe("archived-master");
+  expect(f.createAgent).toHaveBeenCalledWith(expect.objectContaining({ title: "新助手" }));
+  expect(f.send).toHaveBeenCalledWith(opened.agentId, "交接包：未决问题与下一步", { sourceAgentId: opened.agentId });
+  await f.service.close();
+  const restarted = f.start();
+  await restarted.ready();
+  expect(restarted.bots.list({ kind: "independent" })).toHaveLength(1);
+  expect(restarted.bots.require(bot.id).mainAgentId).toBe(opened.agentId);
+});
+
 
 describe("个人记忆送达", () => {
   it("主对话创建和换 provider 重建都把已有记忆写入 system prompt", async () => {
@@ -306,6 +373,7 @@ describe("个人记忆送达", () => {
     expect(f.createAgent.mock.calls[0][0].config.systemPrompt).toContain("回答优先使用中文");
     expect(f.service.memoryDelivery.prepare(bot.id, first.agentId, f.service.bots.memories(bot.id), [f.service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n"))).toBeUndefined();
     await f.service.update(bot.id, { provider: "claude", model: "replacement" });
+    await f.service.apply(bot.id);
     expect(f.createAgent.mock.calls[1][0].config.systemPrompt).toContain("回答优先使用中文");
     const agentId = f.service.bots.require(bot.id).mainAgentId!;
     expect(f.service.memoryDelivery.prepare(bot.id, agentId, f.service.bots.memories(bot.id), [f.service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n"))).toBeUndefined();

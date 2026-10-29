@@ -51,3 +51,22 @@ export const projectBotModelRpc = defineRpc({
     runtimeEnv: z.string().optional(),
   }),
 });
+
+export const botModelsListRpc = defineRpc({
+  name: "models.list",
+  input: z.object({ query: z.string().optional(), projectId: z.string().optional() }),
+  output: z.object({
+    defaultPresetId: z.string().nullable().optional(),
+    providers: z.array(z.object({
+      provider: z.string(),
+      defaultModel: z.string().nullable(),
+      models: z.array(z.object({
+        id: z.string(),
+        name: z.string(),
+        isDefault: z.boolean(),
+        thinkingOptions: z.array(z.object({ id: z.string(), name: z.string() })),
+      })),
+    })),
+    presets: z.array(z.object({ id: z.string(), name: z.string() })),
+  }),
+});

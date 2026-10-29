@@ -23,6 +23,7 @@ function build(
     usage?: ReturnType<typeof usageOf>[];
     failCreate?: (p: string) => string | null;
     settings?: Parameters<typeof defaultSettings>[0];
+    managedByBots?: boolean;
   } = {},
 ) {
   const board = setupBoard();
@@ -41,6 +42,7 @@ function build(
     clock,
     pollIntervalMs: 3_600_000,
     log: () => undefined,
+    managedByBots: over.managedByBots,
   });
   return { board, clock, fake, runtime, dataDir, settings };
 }
@@ -116,7 +118,7 @@ describe("master session", () => {
   it("sends the rules in the conversation for providers that ignore the system prompt", async () => {
     const t = build(() => "ok", { settings: { provider: "codex" } });
     await askMaster(t.runtime, "hello");
-    expect(t.fake.agents[0]!.prompts[0]).toContain("# Vibe 总 agent");
+    expect(t.fake.agents[0]!.prompts[0]).toContain(MASTER_RULES);
     expect(t.fake.agents[0]!.prompts[0]).toContain("hello");
     await t.runtime.dispose();
   });
@@ -332,6 +334,22 @@ describe("status", () => {
 });
 
 describe("scheduler signals", () => {
+  it("does not monitor or emit master quota alerts when bots own the conversations", async () => {
+    const t = build(() => "ok", { managedByBots: true, usage: [usageOf("claude", 0)] });
+    t.runtime.startQuotaMonitor();
+    t.clock.advance(300_000);
+    await t.runtime.checkQuota();
+    publishEvent(t.board.db, {
+      type: "scheduler.quota_low",
+      payload: { provider: "claude", level: "exhausted", remainingPct: 0 },
+    });
+    await t.runtime.triggers.consumer.poll();
+    await tick(20);
+    expect(alerts(t.board)).toEqual([]);
+    expect(t.fake.agents).toHaveLength(0);
+    await t.runtime.dispose();
+  });
+
   it("reminds when the scheduler reports low quota on the master's provider and tracks pauses", async () => {
     const t = build(() => "ok");
     await askMaster(t.runtime); // master is now live on claude

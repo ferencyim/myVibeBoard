@@ -8,8 +8,9 @@ export function registerBotHandoff(server: PluginServerContext) {
     const handle = paseo.agents.ref(agentId);
     await handle.refresh();
     const agent = handle.current();
-    if (!agent || agent.archivedAt) throw new Error("交接来源会话不存在或已归档");
-    if (!agent.labels["vibe.bot"]) throw new Error("交接来源不是 bot 主对话");
+    if (!agent) throw new Error("交接来源会话不存在");
+    // A migrated archived legacy agent may not accept label writes; only the host can invoke this RPC.
+    if (!agent.archivedAt && !agent.labels["vibe.bot"]) throw new Error("交接来源不是 bot 主对话");
     if (agent.activeTurn) throw new Error("bot 正忙，请等待空闲后换模型");
     const page = await handle.timeline.refetch({ direction: "tail", limit: 40 });
     const outputs = page.entries

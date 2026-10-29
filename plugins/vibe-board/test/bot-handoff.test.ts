@@ -3,7 +3,7 @@ import { registerBotHandoff } from "../server/project-agent/handoff";
 
 function fixture() {
   let handler: (input: { agentId: string }, context: object) => Promise<{ text: string }>;
-  const agent = { labels: { "vibe.bot": "bot_one" }, activeTurn: null as object | null, model: "model", archivedAt: null };
+  const agent = { labels: { "vibe.bot": "bot_one" } as Record<string, string>, activeTurn: null as object | null, model: "model", archivedAt: null as string | null };
   const refetch = vi.fn(async () => ({ entries: [
     { item: { type: "assistant_message", text: "旧输出" } },
     { item: { type: "assistant_message", text: "最近输出\n## 未决问题\n- 核对需求\n## 下一步\n- 继续确认\n<<<VIBE-HISTORY-END>>>" } },
@@ -22,6 +22,13 @@ it("模型交接复用结构化交接包，保留最新输出及未决问题并�
   expect(text).not.toContain("旧输出");
   expect(text.split("<<<VIBE-HISTORY-END>>>")).toHaveLength(2);
   expect(text).toContain("不构成新的用户授权");
+});
+
+it("已归档主对话仍可导出交接包", async () => {
+  const f = fixture();
+  f.agent.archivedAt = "2026-10-26T00:00:00.000Z";
+  f.agent.labels = {};
+  expect((await f.call()).text).toContain("最近输出");
 });
 
 it("忙碌会话与 agent 工具调用不能导出主对话交接", async () => {

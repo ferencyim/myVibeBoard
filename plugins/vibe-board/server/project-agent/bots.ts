@@ -1,3 +1,4 @@
+import { botModelsListRpc } from "../../shared/project-bots";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   projectBotsArchiveRpc,
@@ -8,6 +9,10 @@ import {
 } from "../../shared/project-bots";
 
 export function registerProjectBotRpcs(server: PluginServerContext) {
+  server.handle(botModelsListRpc, async (input, { paseo, callerAgentId }) => {
+    if (callerAgentId) throw new Error("模型目录仅供用户使用");
+    return botModelsListRpc.output.parse(await paseo.plugins.invoke("vibe-bots", "models.list", input));
+  });
   server.handle(projectBotsListRpc, async (input, context) => {
     if (context.callerAgentId) throw new Error("项目 bot 入口仅供用户使用");
     return projectBotsListRpc.output.parse(

@@ -17,17 +17,15 @@ describe("rules", () => {
     expect(run.status).toBe(0);
   });
 
-  it("ships a skill that only adjusts queue order on user request", () => {
+  it("ships independent bot rules that leave dispatch to the scheduler", () => {
     const skill = readFileSync(
       join(pluginDir, "../../skills/vibe-master/SKILL.md"),
       "utf8",
     ).replace(/\r\n/g, "\n");
     expect(skill).toMatch(/^---\nname: vibe-master\n/);
-    expect(skill).toContain("仅在用户明确要求调整顺序时");
-    expect(skill).toContain("vibe_queue_reorder");
-    for (const removed of ["assess_draft", "session_help", "plan_discussion"])
+    expect(skill).toContain("派发只由调度器规则执行，你不自动派发");
+    for (const removed of ["assess_draft", "session_help", "plan_discussion", "总 agent", "跨项目助理", "总调度"])
       expect(skill).not.toContain(removed);
-    expect(skill).toContain("跨项目排队派发只由调度器规则执行");
     expect(existsSync(join(pluginDir, "server/master/rules.generated.ts"))).toBe(true);
   });
 });

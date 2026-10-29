@@ -1,3 +1,4 @@
+import { botModelsListRpc } from "./shared/rpc";
 import { deferStartup } from "./server/vibe/db/startup";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -112,6 +113,10 @@ export default function contribute(server: PluginServerContext) {
     return master.botMigrationSnapshot();
   });
 
+  server.handle(botModelsListRpc, async (input, { paseo: api, callerAgentId }) => {
+    if (callerAgentId) throw new Error("模型目录仅供用户使用");
+    return botModelsListRpc.output.parse(await api.plugins.invoke("vibe-bots", "models.list", input));
+  });
   server.handle(botsListRpc, async (input, { paseo: api, callerAgentId }) => {
     if (callerAgentId) throw new Error("bot 请使用不含个人记忆的 vibe_bot_read 工具");
     return botsListRpc.output.parse(await api.plugins.invoke("vibe-bots", botsListRpc.name, input));

@@ -186,6 +186,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
       else if (signal.kind === "resumed") schedulerPaused = false;
       else if (signal.kind === "quota_low") {
         quota.invalidate();
+        if (deps.managedByBots) return;
         const own = ownProvider();
         if (own && own.toLowerCase() === signal.provider.toLowerCase()) {
           alerts.raise(
@@ -225,6 +226,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
   let stopMonitor: (() => void) | null = null;
   let monitoring = false;
   async function checkQuota(): Promise<void> {
+    if (deps.managedByBots) return;
     const provider = ownProvider();
     if (!provider) return;
     const levels = await quota.get();
@@ -238,7 +240,7 @@ export function createMasterRuntime(deps: RuntimeDeps) {
     if (q.level === "exhausted") await switchExhausted(provider);
   }
   function startQuotaMonitor(): void {
-    if (monitoring) return;
+    if (deps.managedByBots || monitoring) return;
     monitoring = true;
     const arm = () => {
       stopMonitor = clock.setTimeout(() => {

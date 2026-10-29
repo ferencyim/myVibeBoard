@@ -11,6 +11,7 @@ import {
 } from "./vibe/contract/bots";
 import { presetModels, presetModeId } from "./vibe/contract/preset-models";
 import { isModelUnavailableError } from "./vibe/contract/error-class";
+import { findProjectConfig } from "./vibe/db/project-config";
 import { createBotStore } from "./vibe/db/bots";
 import { createVibeStore } from "./vibe/db/commands";
 import { createTaskRuntimeCommands } from "./vibe/db/task-runtime";
@@ -160,6 +161,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     do {
       const page = await paseo.agents.list({
         includeBackground: true,
+        filter: { includeArchived: true },
         page: { limit: 200, ...(cursor ? { cursor } : {}) },
       });
       entries.push(...page.entries.map((entry) => entry.agent));
@@ -190,8 +192,9 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         kind: "independent", name: "助手", instructions: "", provider: legacyMaster.provider, model: legacyMaster.model,
         thinking: legacyMaster.thinkingOptionId ?? "", permissionMode: legacyPermission(legacyMaster),
       }, legacyMaster.id);
-      if (bot.mainAgentId) {
+      if (bot.mainAgentId && !legacyMaster.archivedAt) {
         await paseo.agents.ref(bot.mainAgentId).setLabels({ "vibe.bot": bot.id, "vibe.bot-thread": "main" });
+        await paseo.agents.ref(bot.mainAgentId).setTitle(bot.name);
       }
     }
     for (const native of await hostProjects()) {
@@ -202,7 +205,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         ? entries.find((entry) => entry.id === bots.require(migrated.bot_id).mainAgentId)
         : entries.filter((entry) =>
             entry.labels["vibe.role"] === "project" &&
-            entry.labels["vibe.project_id"] === native.projectId && !entry.labels["vibe.bot"],
+            entry.labels["vibe.project_id"] === native.projectId && !entry.labels["vibe.bot"] && !entry.archivedAt,
           ).toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
       if (!previous) continue;
       const bot = bots.legacy("project:" + native.projectId, {
@@ -210,8 +213,9 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         provider: previous.provider, model: previous.model, thinking: previous.thinkingOptionId ?? "",
         permissionMode: legacyPermission(previous),
       }, previous.id);
-      if (bot.mainAgentId) {
+      if (bot.mainAgentId && !previous.archivedAt) {
         await paseo.agents.ref(bot.mainAgentId).setLabels({ "vibe.bot": bot.id, "vibe.bot-thread": "main" });
+        await paseo.agents.ref(bot.mainAgentId).setTitle(bot.name);
       }
       if (!bots.defaultGet(native.projectId) && !bot.archivedAt) bots.defaultSet(native.projectId, bot.id);
     }
@@ -449,26 +453,32 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     return true;
   }
 
+  function validateCandidate(
+    candidate: Awaited<ReturnType<typeof candidates>>[number],
+    catalog: Awaited<ReturnType<typeof models>>,
+    cachedOnly: boolean,
+  ) {
+    const provider = catalog.providers.find((entry) => entry.provider === candidate.provider);
+    const model = provider?.models.find((entry) => entry.id === candidate.model);
+    if (!candidate.model && provider?.defaultModel) return;
+    if (!model && cachedOnly && !provider?.models.length) return;
+    if (!model) {
+      const choices = provider?.models.map((entry) => entry.id) ??
+        catalog.providers.flatMap((entry) => entry.models.map((item) => entry.provider + "/" + item.id));
+      throw new Error("未知模型「" + candidate.provider + "/" + candidate.model + "」。可选值：" + choices.join("、"));
+    }
+    if (candidate.thinking && !model.thinkingOptions.some((option) => option.id === candidate.thinking)) {
+      throw new Error("未知思考强度「" + candidate.thinking + "」。可选值：" +
+        model.thinkingOptions.map((option) => option.id).join("、"));
+    }
+  }
+
   async function validate(bot: Bot, all = true, reset = false, cachedOnly = false) {
     if (bot.avatarPath) validateAvatar(bot.avatarPath);
     if (!!bot.provider !== !!bot.model) throw new Error("provider 与模型必须同时指定，或同时清空以使用默认模型");
     const active = await selected(bot, reset);
     const catalog = await models("", cachedOnly, bot.projectId ? (await project(bot.projectId)).projectRootPath : undefined);
-    for (const candidate of all ? await candidates(bot) : [active]) {
-      const provider = catalog.providers.find((entry) => entry.provider === candidate.provider);
-      const model = provider?.models.find((entry) => entry.id === candidate.model);
-      if (!candidate.model && provider?.defaultModel) continue;
-      if (!model && cachedOnly) continue;
-      if (!model) {
-        const choices = provider?.models.map((entry) => entry.id) ??
-          catalog.providers.flatMap((entry) => entry.models.map((item) => entry.provider + "/" + item.id));
-        throw new Error("未知模型「" + candidate.provider + "/" + candidate.model + "」。可选值：" + choices.join("、"));
-      }
-      if (candidate.thinking && !model.thinkingOptions.some((option) => option.id === candidate.thinking)) {
-        throw new Error("未知思考强度「" + candidate.thinking + "」。可选值：" +
-          model.thinkingOptions.map((option) => option.id).join("、"));
-      }
-    }
+    for (const candidate of all ? await candidates(bot) : [active]) validateCandidate(candidate, catalog, cachedOnly);
     return active;
   }
 
@@ -483,7 +493,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     await validate({
       ...value, id: "bot_validation", mainAgentId: null, pendingModel: false,
       createdAt: "", updatedAt: "", archivedAt: null,
-    });
+    }, true, false, true);
     const bot = db.immediate(() => {
       const next = bots.create(value);
       if (next.projectId && !bots.defaultGet(next.projectId)) bots.defaultSet(next.projectId, next.id);
@@ -625,7 +635,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         return;
       }
       if (current.archivedAt) {
-        await spawn(bot);
+        await spawnWithHandoff(bot, current.id);
         return;
       }
       const target = await validate(bot, false, false, true);
@@ -650,6 +660,13 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     }
   }
 
+  async function spawnWithHandoff(bot: Bot, agentId: string) {
+    const packet = z.object({ text: z.string() }).parse(
+      await paseo.plugins.invoke("vibe-board", "vibe.bot.handoff", { agentId }),
+    );
+    return spawn(bot, packet.text);
+  }
+
   async function changeModel(bot: Bot, current: BotAgent, target: Awaited<ReturnType<typeof selected>>) {
     const handle = paseo.agents.ref(current.id);
     if (current.status === "closed") {
@@ -666,7 +683,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     await handle.setThinkingOption(target.thinking || null);
     const permission = legacyPermission(current) === bot.permissionMode
       ? current.currentModeId
-      : await mode(target.provider, bot.permissionMode);
+      : await mode(target.provider, bot.permissionMode, true);
     if (!permission && bot.permissionMode === "accept-edits" &&
         ["full-access", "bypassPermissions", "auto", "auto-review"].includes(current.currentModeId ?? "")) {
       throw new Error("无法解析 provider 的默认权限模式，暂未应用权限收紧；请检查 provider 模式目录");
@@ -701,7 +718,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
       const latest = bots.require(id);
       if (latest.mainAgentId) {
         const current = await agent(latest.mainAgentId);
-        if (current?.archivedAt) return spawn(latest);
+        if (current?.archivedAt) return spawnWithHandoff(latest, current.id);
         if (current) {
           if (current.status === "closed") await paseo.agents.ref(current.id).resume();
           return { agentId: current.id, workspaceId: current.workspaceId ?? null };
@@ -776,7 +793,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     }
     const changesRuntime = ["provider", "model", "thinking", "presetId", "backupModels", "permissionMode"]
       .some((key) => key in value);
-    if (changesRuntime) await validate({ ...current, ...value }, true, true);
+    if (changesRuntime) await validate({ ...current, ...value }, true, true, true);
     else if (value.avatarPath) validateAvatar(value.avatarPath);
     const next = db.immediate(() => {
       if (current.kind === "independent" && Object.keys(value).length) {
@@ -798,8 +815,11 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
       }
       return result;
     });
-    await apply(id);
-    if (value.name && next.mainAgentId) await paseo.agents.ref(next.mainAgentId).setTitle(value.name);
+    if (changesRuntime) scheduleApply(id);
+    if (value.name && next.mainAgentId) {
+      const main = await agent(next.mainAgentId);
+      if (main && !main.archivedAt) await paseo.agents.ref(next.mainAgentId).setTitle(value.name);
+    }
     return view(bots.require(id));
   }
 
@@ -865,7 +885,9 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
   }
 
   return {
-    bots, memoryDelivery, ready, view, caller, models, create, defaultBot, open, state, waitOpen, update, apply, prompt,
+    bots, memoryDelivery, ready, view, caller, models,
+    defaultPreset: async (projectId?: string) => (projectId ? findProjectConfig(store.projects.list(true), projectId, (await project(projectId)).projectRootPath)?.defaultPresets.project : undefined) ?? store.modelDefaults.global().project ?? null,
+    create, defaultBot, open, state, waitOpen, update, apply, prompt,
     live, failover, close, continueConversation,
   };
 }
