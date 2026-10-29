@@ -167,6 +167,7 @@ interface AgentControlsProps {
   registrationOnly?: boolean;
   onDropdownClose?: () => void;
   isCompactLayout?: boolean;
+  hideModeControl?: boolean;
 }
 
 function AgentControlCommandCenterRegistration({
@@ -1557,6 +1558,7 @@ export const AgentControls = memo(function AgentControls({
   registrationOnly = false,
   onDropdownClose,
   isCompactLayout,
+  hideModeControl = false,
 }: AgentControlsProps) {
   const { updatePreferences } = useFormPreferences();
   const agent = useSessionStore(
@@ -1820,13 +1822,28 @@ export const AgentControls = memo(function AgentControls({
         isRetryingModelProvider={snapshotIsRefreshing}
         onDropdownClose={onDropdownClose}
         disabled={!client}
-        modeControl={modeControl}
+        modeControl={hideModeControl ? null : modeControl}
         modelSelectorServerId={serverId}
         isCompactLayout={isCompactLayout}
       />
     </>
   );
 });
+
+export function LiveAgentModeControl({
+  agentId,
+  serverId,
+  onClose,
+}: {
+  agentId: string;
+  serverId: string;
+  onClose?: () => void;
+}) {
+  const modeControl = useLiveAgentModeControl(serverId, agentId);
+  return modeControl ? (
+    <AgentModeControl {...modeControl} surface="sheet" onClose={onClose} />
+  ) : null;
+}
 
 export function DraftAgentControls({
   providerDefinitions,

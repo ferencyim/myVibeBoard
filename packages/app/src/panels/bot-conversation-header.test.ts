@@ -7,9 +7,14 @@ import {
 } from "./bot-conversation-header";
 
 describe("conversation bot identity", () => {
-  it("matches only the bot's main agent", () => {
-    const bots = [{ mainAgentId: null }, { mainAgentId: "agent-a" }, { mainAgentId: "agent-b" }];
+  it("matches the main agent or a side thread's bot label", () => {
+    const bots = [
+      { id: "a", mainAgentId: null },
+      { id: "b", mainAgentId: "agent-a" },
+      { id: "c", mainAgentId: "agent-b" },
+    ];
     expect(findConversationBot(bots, "agent-b")).toBe(bots[2]);
+    expect(findConversationBot(bots, "thread-agent", "b")).toBe(bots[1]);
     expect(findConversationBot(bots, "other")).toBeUndefined();
   });
 

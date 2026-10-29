@@ -38,6 +38,7 @@ import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { type TabDropPreview } from "@/components/split-container-tab-drop-preview";
 import { SplitDropZone, type SplitDropZoneHover } from "@/components/split-drop-zone";
 import { deriveWorkspacePaneState } from "@/screens/workspace/workspace-pane-state";
+import { useShowWorkspaceTabRow } from "@/screens/workspace/conversation-header-layout";
 import type { WorkspacePaneContentModel } from "@/screens/workspace/workspace-pane-content";
 import { WorkspacePanelHost } from "@/screens/workspace/workspace-panel-host";
 import {
@@ -621,6 +622,7 @@ const SplitPaneView = memo(function SplitPaneView({
   );
   const paneTabs = useMemo(() => paneState.tabs.map((tab) => tab.descriptor), [paneState.tabs]);
   const activeTabDescriptor = paneState.activeTab?.descriptor ?? null;
+  const showTabRow = useShowWorkspaceTabRow(normalizedServerId, activeTabDescriptor);
   const desktopTabRowItems = useMemo<WorkspaceDesktopTabRowItem[]>(
     () =>
       paneTabs.map((tab) => ({
@@ -708,43 +710,45 @@ const SplitPaneView = memo(function SplitPaneView({
         style={styles.pane}
         testID={`workspace-pane-${pane.id}`}
       >
-        <WindowChromeSafeArea placement="inline" style={styles.paneTabs}>
-          <TitlebarDragRegion />
-          <WorkspaceDesktopTabsRow
-            paneId={pane.id}
-            isFocused={isFocused && isWorkspaceFocused}
-            tabs={desktopTabRowItems}
-            normalizedServerId={normalizedServerId}
-            normalizedWorkspaceId={normalizedWorkspaceId}
-            setHoveredCloseTabKey={setHoveredCloseTabKey}
-            onNavigateTab={onNavigateTab}
-            onCloseTab={onCloseTab}
-            onCopyResumeCommand={onCopyResumeCommand}
-            onCopyAgentId={onCopyAgentId}
-            onCopyTerminalId={onCopyTerminalId}
-            onCopyFilePath={onCopyFilePath}
-            onReloadAgent={onReloadAgent}
-            onRenameTab={onRenameTab}
-            onCloseTabsToLeft={handleCloseTabsToLeft}
-            onCloseTabsToRight={handleCloseTabsToRight}
-            onCloseOtherTabs={handleCloseOtherTabs}
-            onCreateNewTab={onCreateNewTab}
-            onReorderTabs={handleReorderTabs}
-            externalDndContext
-            activeDragTabId={activeDragTabId}
-            tabDropPreviewIndex={
-              tabDropPreview?.paneId === pane.id ? tabDropPreview.indicatorIndex : null
-            }
-            showPaneSplitActions={!focusModeEnabled}
-            showPaneMaximizeAction={workspaceHasMultiplePanes && !focusModeEnabled}
-            paneMaximized={paneId === maximizedPaneId}
-            onTogglePaneMaximized={handleTogglePaneMaximized}
-            onSplitRight={handleSplitRight}
-            onSplitDown={handleSplitDown}
-            focusModeEnabled={Boolean(focusModeEnabled)}
-            onExitFocusMode={onExitFocusMode}
-          />
-        </WindowChromeSafeArea>
+        {showTabRow ? (
+          <WindowChromeSafeArea placement="inline" style={styles.paneTabs}>
+            <TitlebarDragRegion />
+            <WorkspaceDesktopTabsRow
+              paneId={pane.id}
+              isFocused={isFocused && isWorkspaceFocused}
+              tabs={desktopTabRowItems}
+              normalizedServerId={normalizedServerId}
+              normalizedWorkspaceId={normalizedWorkspaceId}
+              setHoveredCloseTabKey={setHoveredCloseTabKey}
+              onNavigateTab={onNavigateTab}
+              onCloseTab={onCloseTab}
+              onCopyResumeCommand={onCopyResumeCommand}
+              onCopyAgentId={onCopyAgentId}
+              onCopyTerminalId={onCopyTerminalId}
+              onCopyFilePath={onCopyFilePath}
+              onReloadAgent={onReloadAgent}
+              onRenameTab={onRenameTab}
+              onCloseTabsToLeft={handleCloseTabsToLeft}
+              onCloseTabsToRight={handleCloseTabsToRight}
+              onCloseOtherTabs={handleCloseOtherTabs}
+              onCreateNewTab={onCreateNewTab}
+              onReorderTabs={handleReorderTabs}
+              externalDndContext
+              activeDragTabId={activeDragTabId}
+              tabDropPreviewIndex={
+                tabDropPreview?.paneId === pane.id ? tabDropPreview.indicatorIndex : null
+              }
+              showPaneSplitActions={!focusModeEnabled}
+              showPaneMaximizeAction={workspaceHasMultiplePanes && !focusModeEnabled}
+              paneMaximized={paneId === maximizedPaneId}
+              onTogglePaneMaximized={handleTogglePaneMaximized}
+              onSplitRight={handleSplitRight}
+              onSplitDown={handleSplitDown}
+              focusModeEnabled={Boolean(focusModeEnabled)}
+              onExitFocusMode={onExitFocusMode}
+            />
+          </WindowChromeSafeArea>
+        ) : null}
 
         <View style={styles.paneContent}>
           <WorkspacePanelHost

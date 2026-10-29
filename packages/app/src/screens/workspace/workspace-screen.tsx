@@ -228,6 +228,7 @@ import {
 } from "@/workspace/file-open";
 import { RenderProfile } from "@/utils/render-profiler";
 import { useWorkspaceCheckoutStatus } from "@/screens/workspace/use-workspace-checkout-status";
+import { useShowWorkspaceTabRow } from "@/screens/workspace/conversation-header-layout";
 import { useWorkspacePullRequestDiscovery } from "@/panels/pull-request";
 
 const NO_SHEETS: readonly SheetTab[] = [];
@@ -3009,6 +3010,7 @@ function WorkspaceScreenContent({
   });
 
   const activeTabDescriptor = useMemo(() => activeTab?.descriptor ?? null, [activeTab]);
+  const showWorkspaceTabRow = useShowWorkspaceTabRow(normalizedServerId, activeTabDescriptor);
   const activeFileFields = getWorkspaceFileLocationFields(activeTabDescriptor);
   const activeFilePath = activeFileFields.path;
   const activeFileLineStart = activeFileFields.lineStart;
@@ -3823,7 +3825,7 @@ function WorkspaceScreenContent({
     <View style={styles.centerColumn}>
       {rendersDesktopSplitContent ? null : renderWorkspaceScreenHeader()}
 
-      {shouldRenderDesktopPaneFallback ? (
+      {shouldRenderDesktopPaneFallback && showWorkspaceTabRow ? (
         <NewTabLauncherProvider value={newTabLauncher}>
           <WorkspaceDesktopTabsRow
             paneId={focusedPaneIdOrUndefined}

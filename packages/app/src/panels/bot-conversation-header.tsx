@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
-import { PanelRight } from "lucide-react-native";
+import { Ellipsis, PanelRight, Settings2 } from "lucide-react-native";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { z } from "zod";
 import { useAgentDescriptor } from "@/agent-presentation";
-import { AgentControls } from "@/composer/agent-controls";
+import { AgentControls, LiveAgentModeControl } from "@/composer/agent-controls";
 import { ComposerKeyboardScopeProvider, useComposerScopeState } from "@/composer/keyboard-scope";
 import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
 import { PressHighlight } from "@/components/ui/press-highlight";
@@ -26,6 +26,8 @@ import {
 import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { Avatar } from "@/ui/avatar";
 import { IconButton } from "@/ui/icon-button";
+import { ConversationHeaderAccessories } from "@/plugins/conversation-header-accessories";
+import { useSessionStore } from "@/stores/session-store";
 
 const botListSchema = z.object({
   bots: z.array(
@@ -40,14 +42,21 @@ const botListSchema = z.object({
   ),
 });
 
-export function findConversationBot<T extends { mainAgentId: string | null }>(
+export function findConversationBot<T extends { id?: string; mainAgentId: string | null }>(
   bots: T[],
   agentId: string,
+  botId?: string,
 ) {
-  return bots.find((bot) => bot.mainAgentId === agentId);
+  return bots.find((bot) => bot.mainAgentId === agentId || (botId && bot.id === botId));
 }
 
 export function useConversationBot(serverId: string, agentId: string) {
+  const botId = useSessionStore((state) => {
+    const session = state.sessions[serverId];
+    return (session?.agents.get(agentId) ?? session?.agentDetails.get(agentId))?.labels?.[
+      "vibe.bot"
+    ];
+  });
   const client = useHostRuntimeClient(serverId);
   const plugin = useInstalledPlugin(serverId, "vibe-bots");
   const query = useFetchQuery(
@@ -72,7 +81,7 @@ export function useConversationBot(serverId: string, agentId: string) {
     },
     plugin?.queryClient,
   );
-  return findConversationBot(query.data ?? [], agentId);
+  return findConversationBot(query.data ?? [], agentId, botId);
 }
 
 export function conversationBotQueryKey(serverId: string) {
@@ -97,19 +106,25 @@ export function BotConversationHeader({
   workspaceId,
   agentId,
   isPaneFocused,
+  isBot,
 }: {
   bot: ConversationBot | undefined;
   serverId: string;
   workspaceId: string;
   agentId: string;
   isPaneFocused: boolean;
+  isBot: boolean;
 }) {
   const compact = useIsCompactFormFactor();
   const [runtimeOpen, setRuntimeOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const openMore = useCallback(() => setMoreOpen(true), []);
+  const closeMore = useCallback(() => setMoreOpen(false), []);
   const placement = conversationControlsPlacement(compact, false, runtimeOpen);
   const openRuntime = useCallback(() => setRuntimeOpen(true), []);
   const closeRuntime = useCallback(() => setRuntimeOpen(false), []);
   const runtimeHeader = useMemo(() => ({ title: "运行设置" }), []);
+  const moreHeader = useMemo(() => ({ title: "更多" }), []);
   const insets = useSafeAreaInsets();
   const safeAreaStyle = useMemo(
     () => (compact ? { paddingTop: insets.top } : undefined),
@@ -119,6 +134,7 @@ export function BotConversationHeader({
   const scope = useComposerScopeState(isPaneFocused);
   const descriptor = useAgentDescriptor({ kind: "agent", agentId }, { serverId });
   const workspaceKey = `${serverId}:${workspaceId}`;
+  const profileAgentId = bot?.mainAgentId ?? agentId;
   const profileOpen = useWorkspaceLayoutStore((state) => {
     if (compact || !selectIsExplorerSidebarVisible(state, workspaceKey)) return false;
     const layout = state.layoutByWorkspace[workspaceKey];
@@ -126,7 +142,7 @@ export function BotConversationHeader({
     const pane = findPaneById(layout.root, selectExplorerSidebarPaneId(state, workspaceKey));
     return isProfileTarget(
       collectAllTabs(layout.root).find((tab) => tab.tabId === pane?.focusedTabId)?.target,
-      agentId,
+      profileAgentId,
     );
   });
   const openProfile = useCallback(() => {
@@ -135,21 +151,21 @@ export function BotConversationHeader({
       createPluginNavigation({ serverId, workspaceId }).openAgentPanel(
         "vibe-bots",
         "profile",
-        agentId,
+        profileAgentId,
         "explorer",
       );
-  }, [profileOpen, workspaceKey, serverId, workspaceId, agentId]);
+  }, [profileOpen, workspaceKey, serverId, workspaceId, profileAgentId]);
   const profileAccessibilityState = useMemo(() => ({ expanded: profileOpen }), [profileOpen]);
-  const identityAction = compact ? openRuntime : undefined;
-  const desktopIdentityAction = bot ? openProfile : undefined;
+  const identityAction = isBot ? openProfile : undefined;
+  const compactIdentityAction = compact ? openRuntime : undefined;
   return (
     <View style={safeAreaStyle}>
       <View style={styles.header} testID="conversation-header">
         {isPaneFocused ? slots.left : null}
         <PressHighlight
-          style={styles.identity}
-          onPress={identityAction ?? desktopIdentityAction}
-          accessibilityRole={compact || bot ? "button" : undefined}
+          style={isBot ? styles.botIdentity : styles.identity}
+          onPress={identityAction ?? compactIdentityAction}
+          accessibilityRole={compact || isBot ? "button" : undefined}
         >
           {bot ? (
             <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={24} />
@@ -167,6 +183,11 @@ export function BotConversationHeader({
             </Text>
           ) : null}
         </PressHighlight>
+        {isBot ? (
+          <View style={styles.threads} testID="conversation-header-threads">
+            <ConversationHeaderAccessories serverId={serverId} agentId={agentId} />
+          </View>
+        ) : null}
         {placement !== "runtime" ? (
           <ComposerKeyboardScopeProvider {...scope}>
             <AgentControls
@@ -174,10 +195,20 @@ export function BotConversationHeader({
               serverId={serverId}
               isCompactLayout={compact}
               registrationOnly={placement === "registration"}
+              hideModeControl={isBot}
             />
           </ComposerKeyboardScopeProvider>
         ) : null}
-        {bot ? (
+        {isBot && compact ? (
+          <IconButton
+            label="运行设置"
+            icon={Settings2}
+            size="xs"
+            variant="ghost"
+            onPress={openRuntime}
+          />
+        ) : null}
+        {isBot ? (
           <IconButton
             label="bot 资料"
             icon={PanelRight}
@@ -187,6 +218,9 @@ export function BotConversationHeader({
             onPress={openProfile}
           />
         ) : null}
+        {isBot ? (
+          <IconButton label="更多" icon={Ellipsis} size="xs" variant="ghost" onPress={openMore} />
+        ) : null}
         {isPaneFocused ? slots.right : null}
       </View>
       <AdaptiveModalSheet
@@ -195,8 +229,16 @@ export function BotConversationHeader({
         onClose={closeRuntime}
       >
         <ComposerKeyboardScopeProvider {...scope}>
-          <AgentControls agentId={agentId} serverId={serverId} isCompactLayout />
+          <AgentControls
+            agentId={agentId}
+            serverId={serverId}
+            isCompactLayout
+            hideModeControl={isBot}
+          />
         </ComposerKeyboardScopeProvider>
+      </AdaptiveModalSheet>
+      <AdaptiveModalSheet header={moreHeader} visible={moreOpen} onClose={closeMore}>
+        <LiveAgentModeControl agentId={agentId} serverId={serverId} onClose={closeMore} />
       </AdaptiveModalSheet>
     </View>
   );
@@ -220,6 +262,14 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
   },
+  botIdentity: {
+    maxWidth: "30%",
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  threads: { flex: 1, minWidth: 0 },
   name: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,

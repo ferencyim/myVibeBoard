@@ -315,7 +315,6 @@ function AgentPanel() {
 
   return (
     <RetainedChatContent>
-      <ConversationHeaderAccessories serverId={serverId} agentId={target.agentId} />
       <AgentPanelContent
         serverId={serverId}
         workspaceId={workspaceId}
@@ -482,6 +481,14 @@ function AgentPanelContent({
   const runtimeConnectionStatus = useHostRuntimeConnectionStatus(runtimeServerId);
   const runtimeLastError = useHostRuntimeLastError(runtimeServerId);
   const bot = useConversationBot(runtimeServerId, resolvedAgentId ?? "");
+  const hasBotLabel = useSessionStore((state) => {
+    const session = state.sessions[runtimeServerId];
+    const agent = resolvedAgentId
+      ? (session?.agents.get(resolvedAgentId) ?? session?.agentDetails.get(resolvedAgentId))
+      : undefined;
+    return Boolean(agent?.labels?.["vibe.bot"]);
+  });
+  const isBot = hasBotLabel || Boolean(bot);
   const emptyIdentity = useMemo(
     () =>
       bot
@@ -542,13 +549,17 @@ function AgentPanelContent({
     );
   return (
     <View style={styles.root}>
-      {showsHeader && !fullscreen && resolvedServerId && resolvedAgentId ? (
+      {!isBot && resolvedServerId && resolvedAgentId ? (
+        <ConversationHeaderAccessories serverId={resolvedServerId} agentId={resolvedAgentId} />
+      ) : null}
+      {(showsHeader || isBot) && !fullscreen && resolvedServerId && resolvedAgentId ? (
         <BotConversationHeader
           bot={bot}
           serverId={resolvedServerId}
           workspaceId={workspaceId}
           agentId={resolvedAgentId}
           isPaneFocused={isPaneFocused}
+          isBot={isBot}
         />
       ) : null}
       {content}
