@@ -115,6 +115,8 @@ cd android
 产物：`packages/app/android/app/build/outputs/apk/release/app-release.apk`（包名 `sh.paseo.debug`，应用名 `Paseo Debug`，不会覆盖官方 Paseo；不含 `google-services.json`，所以没有 FCM 推送能力）。
 产物本身不入库；构建结果见文末「构建记录」。
 
+上游的 `npm run build:apk:arm64`（scripts/build-apk.mjs）在 Windows 上直接 `spawnSync('npm')`，报 `spawnSync npm ENOENT`，不能用；按上面的步骤构建（2026-10-29 实测 arm64-v8a 单架构约 158 MB）。重任务一律经 `ci-dashboard/queue/win-heavy-guard` 排队。
+
 两个必须知道的坑：
 
 1. **monorepo 入口解析失败**：RN 的 Gradle 插件把入口文件以相对路径 `index.ts` 传给 `expo export:embed`，而 Expo 的 Metro 以 monorepo 根为 server root，报 `Unable to resolve module ./index.ts`。`scripts/vibe/android-release-entry.init.gradle` 是一个 Gradle init script，把入口改成绝对路径，不用改任何生成文件或上游文件。
