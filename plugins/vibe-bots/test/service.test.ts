@@ -90,6 +90,7 @@ function fixture() {
     },
     plugins: { invoke },
     providers: {
+      refresh: vi.fn(async (_options?: unknown) => ({})),
       listAvailable: vi.fn(async () => ({ providers: [{ provider: "codex", available: true }, { provider: "claude", available: true }] })),
       listModels: vi.fn(async (_provider: string) => ({ models: [
         { id: "initial", label: "初始模型", isDefault: true, thinkingOptions: [{ id: "high", label: "高" }] },
@@ -122,7 +123,34 @@ function fixture() {
   return { api, db, service, start, createProjectBot, agents, createAgent, setModel, setThinking, send, setLabels, setTitle, invoke, seedLegacy };
 }
 
+function modelIds(entry: { provider: string; models: Array<{ id: string }> }) {
+  return [entry.provider, entry.models.map((model) => model.id)];
+}
+
 describe("bot 服务主对话与模型变更", () => {
+  it("项目模型目录读取项目与全局缓存并保留全部可选模型", async () => {
+    const f = fixture();
+    f.api.providers.snapshot.mockImplementation(async (options) => ({
+      generatedAt: "2026-10-29T00:00:00.000Z", requestId: "fixture",
+      entries: (options as { cwd?: string })?.cwd ? [
+        { provider: "claude", enabled: true, status: "ready", models: [
+          { provider: "claude", id: "opus", label: "Opus", isDefault: true },
+          { provider: "claude", id: "sonnet", label: "Sonnet", isDefault: false },
+          { provider: "claude", id: "hidden", label: "Hidden", isSelectable: false },
+        ] },
+      ] : [{ provider: "codex", enabled: true, status: "ready", models: [
+        { provider: "codex", id: "one", label: "One", isDefault: true },
+        { provider: "codex", id: "two", label: "Two", isDefault: false },
+      ] }],
+    }));
+    const result = await f.service.modelsForProject(undefined, "p");
+    expect(result.providers.map(modelIds)).toEqual([
+      ["codex", ["one", "two"]], ["claude", ["opus", "sonnet"]],
+    ]);
+    await f.service.modelsForProject(undefined, "p", true);
+    expect(f.api.providers.refresh).toHaveBeenCalledWith({ cwd: "/project-repo" });
+  });
+
   it("慢创建立即返回创建中，同 bot 单飞且同项目其他 bot 独立创建", async () => {
     const f = fixture();
     const one = await f.createProjectBot();
