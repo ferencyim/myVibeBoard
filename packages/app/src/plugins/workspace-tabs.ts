@@ -19,7 +19,8 @@ export function usePluginWorkspaceTabs(input: {
   agentTabOrderKeys?: ReadonlyMap<string, string>;
   activeAgentIds?: ReadonlySet<string>;
 }) {
-  const enabled = input.enabled && input.isRouteFocused;
+  // Let the host directory populate real tabs before plugins compete for RPC capacity.
+  const enabled = input.enabled && input.isRouteFocused && input.hasHydratedAgents;
   const activeAgentIds = input.hasHydratedAgents ? input.activeAgentIds : undefined;
   const plugins = useInstalledPlugins();
   const pendingByDraftId = useCreateFlowStore((state) => state.pendingByDraftId);
@@ -52,9 +53,10 @@ export function usePluginWorkspaceTabs(input: {
       ],
       queryFn: () => provider.resolve({ workspaceId: input.workspaceId }),
       dataShape: "list",
-      staleTimeMs: 5000,
+      staleTimeMs: 30000,
       enabled,
-      refetchInterval: 5000,
+      refetchInterval: 30000,
+      retry: false,
     })),
   );
   const contributionsRef = useRef<PluginWorkspaceTabs[]>([]);

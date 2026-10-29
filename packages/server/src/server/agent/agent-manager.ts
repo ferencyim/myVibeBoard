@@ -1576,16 +1576,39 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
-    const session = await client.resumeSession(
-      handle,
-      providerLaunchConfig,
-      launchContext,
-      currentResumeOptions,
-    );
+    let session: AgentSession;
+    let persistence: AgentPersistenceHandle | undefined = handle;
+    try {
+      session = await client.resumeSession(
+        handle,
+        providerLaunchConfig,
+        launchContext,
+        currentResumeOptions,
+      );
+    } catch (error) {
+      // Codex allocates thread IDs before its first turn writes a rollout. An
+      // unopened prebuilt session can therefore have nothing to resume after exit.
+      // Never replace a session with known or unknown conversation history.
+      const isUnstartedCodexThread =
+        handle.provider === "codex" &&
+        record?.lastUserMessageAt === null &&
+        !record.archivedAt &&
+        purpose === "interactive";
+      const hasMissingRollout =
+        error instanceof Error &&
+        error.message.includes(`no rollout found for thread id ${handle.sessionId}`);
+      if (!isUnstartedCodexThread || !hasMissingRollout) throw error;
+      session = await client.createSession(providerLaunchConfig, launchContext);
+      persistence = undefined;
+      this.logger.info(
+        { agentId: resolvedAgentId },
+        "Recreated unstarted Codex session without a rollout",
+      );
+    }
     await this.requireExternalMcpSupport(session, storedConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
       ...options,
-      persistence: handle,
+      persistence,
       restoring: true,
     });
   }

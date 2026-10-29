@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
@@ -17,6 +17,95 @@ import type {
   AgentSessionConfig,
 } from "./agent-sdk-types.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
+
+test.each([
+  { lastUserMessageAt: null, archived: false, missingRollout: true, recovers: true },
+  {
+    lastUserMessageAt: "2026-01-01T00:00:00.000Z",
+    archived: false,
+    missingRollout: true,
+    recovers: false,
+  },
+  { lastUserMessageAt: undefined, archived: false, missingRollout: true, recovers: false },
+  { lastUserMessageAt: null, archived: true, missingRollout: true, recovers: false },
+  { lastUserMessageAt: null, archived: false, missingRollout: false, recovers: false },
+])("recovers only a known unstarted active Codex rollout: %j", async (scenario) => {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-loading-unstarted-"));
+  const logger = createTestLogger();
+  const storage = new AgentStorage(path.join(root, "agents"), logger);
+  const baseClient = createTestAgentClients().codex;
+  if (!baseClient) throw new Error("expected Codex test client");
+  const createSession = vi.fn(baseClient.createSession.bind(baseClient));
+  const resumeSession = vi.fn(async (handle: AgentPersistenceHandle): Promise<AgentSession> => {
+    const detail = scenario.missingRollout
+      ? `no rollout found for thread id ${handle.sessionId}`
+      : "provider unavailable";
+    throw new Error(`Failed to resume Codex thread ${handle.sessionId}: ${detail}`);
+  });
+  const client: AgentClient = {
+    provider: baseClient.provider,
+    capabilities: baseClient.capabilities,
+    createSession,
+    resumeSession,
+    fetchCatalog: (options) => baseClient.fetchCatalog(options),
+    isAvailable: () => baseClient.isAvailable(),
+  };
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const agentId = "00000000-0000-4000-8000-000000000601";
+  try {
+    await manager.createAgent(
+      { provider: "codex", cwd: root, model: "configured-model" },
+      agentId,
+      {
+        workspaceId: "project-workspace",
+        labels: { "paseo.parent-agent-id": "parent", "custom-label": "retained" },
+        owner: { kind: "daemon", daemonId: "test-daemon", executionId: "test-execution" },
+      },
+    );
+    await manager.closeAgent(agentId);
+    await manager.flush();
+    await storage.flush();
+    const stored = await storage.get(agentId);
+    if (!stored) throw new Error("expected stored agent");
+    await storage.upsert({
+      ...stored,
+      lastUserMessageAt: scenario.lastUserMessageAt,
+      archivedAt: scenario.archived ? "2026-01-02T00:00:00.000Z" : null,
+    });
+    createSession.mockClear();
+    const loading = ensureAgentLoaded(agentId, {
+      agentManager: manager,
+      agentStorage: storage,
+      logger,
+    });
+    if (scenario.recovers) {
+      const restored = await loading;
+      expect(restored).toMatchObject({
+        id: agentId,
+        workspaceId: stored.workspaceId,
+        labels: stored.labels,
+        owner: stored.owner,
+        config: { model: "configured-model" },
+        lastUserMessageAt: null,
+      });
+      expect(restored.createdAt.toISOString()).toBe(stored.createdAt);
+      expect(restored.persistence?.sessionId).not.toBe(stored.persistence?.sessionId);
+      expect(manager.fetchTimeline(agentId).rows).toEqual([]);
+      expect(createSession).toHaveBeenCalledTimes(1);
+      await ensureAgentLoaded(agentId, { agentManager: manager, agentStorage: storage, logger });
+      expect(resumeSession).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(loading).rejects.toThrow("Failed to resume Codex thread");
+      expect(createSession).not.toHaveBeenCalled();
+      expect((await storage.get(agentId))?.persistence).toEqual(stored.persistence);
+    }
+  } finally {
+    await manager.closeAgent(agentId).catch(() => undefined);
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("loads archived records for history and active records with the interactive default", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "agent-loading-purpose-"));
