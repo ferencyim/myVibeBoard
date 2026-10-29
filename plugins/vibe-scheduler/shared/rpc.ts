@@ -1,3 +1,4 @@
+import { REMOTE_TARGET_PATTERN } from "./vibe/contract";
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
@@ -19,6 +20,7 @@ export const schedulerSettings = defineSettings({
     devPortSpan: z.number().int().min(10).max(5000).default(900),
     tickSeconds: z.number().int().min(1).max(600).default(5),
     sampleSeconds: z.number().int().min(5).max(3600).default(15),
+    remoteSampleSeconds: z.number().int().min(15).max(3600).default(60),
     sampleRetentionDays: z.number().int().min(1).max(365).default(7),
   }),
 });
@@ -101,4 +103,14 @@ export const taskTickRpc = defineRpc({
   name: "scheduler.task_tick",
   input: z.object({}),
   output: z.record(z.string(), z.unknown()),
+});
+
+const remoteHost = z.object({
+  name: z.string().trim().min(1).max(80),
+  target: z.string().regex(REMOTE_TARGET_PATTERN),
+});
+export const remoteHostsRpc = defineRpc({
+  name: "scheduler.remote_hosts",
+  input: z.object({ hosts: z.array(remoteHost).max(32).optional() }),
+  output: z.object({ hosts: z.array(remoteHost) }),
 });

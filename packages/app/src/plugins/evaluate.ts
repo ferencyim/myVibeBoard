@@ -214,10 +214,13 @@ export function runPluginClientBundle(
     if (!isComponentType(contribution.Component)) {
       throw new Error(`Sidebar item ${normalizedId} is not a component`);
     }
+    if (contribution.order !== undefined && !Number.isFinite(contribution.order)) {
+      throw new Error(`Sidebar item ${normalizedId} has invalid order`);
+    }
     ids.add(normalizedId);
     return register(
       collector.sidebarItems[section],
-      { id: normalizedId, title, Component: contribution.Component },
+      { id: normalizedId, title, order: contribution.order, Component: contribution.Component },
       () => ids.delete(normalizedId),
     );
   }

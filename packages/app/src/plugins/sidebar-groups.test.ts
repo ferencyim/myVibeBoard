@@ -45,6 +45,30 @@ function installed(
 }
 
 describe("groupPluginSidebarItems", () => {
+  it("orders header entries independently of plugin arrival order", () => {
+    const master = installed("host-a", "master", [], "vibe-master");
+    master.sidebarItems.header[0]!.order = -30;
+    master.sidebarItems.header.push({
+      id: "prompt-library",
+      title: "提示词仓库",
+      order: -20,
+      Component: () => null,
+    });
+    const scheduler = installed("host-a", "scheduler", [], "vibe-scheduler");
+    scheduler.sidebarItems.header[0]!.order = -10;
+    for (const plugins of [
+      [master, scheduler],
+      [scheduler, master],
+    ]) {
+      expect(
+        groupPluginSidebarItems(plugins, "header").map((group) => group.contributionId),
+      ).toEqual(["master", "prompt-library", "scheduler"]);
+    }
+    expect(
+      groupPluginSidebarItems([scheduler, master], "footer").map((group) => group.pluginId),
+    ).toEqual(["vibe-scheduler", "vibe-master"]);
+  });
+
   it("coalesces the same plugin contribution across hosts", () => {
     const groups = groupPluginSidebarItems([installed("host-a"), installed("host-b")], "header");
 

@@ -5,6 +5,9 @@ import type { PluginBeforeRequests } from "@getpaseo/plugin/server";
 import type { VibeStore } from "../vibe/db";
 import {
   OPTIONAL_TASK_ROLES,
+  MAIN_FALLBACK_PRESET_ID,
+  mainFallbackSnapshot,
+  type MainTabModel,
   TASK_PHASE_LABELS,
   TASK_TAB_ROLE_LABEL,
   TASK_TAB_ROLE_LABELS,
@@ -43,8 +46,7 @@ export interface TaskTabView {
 }
 
 /** The whole message must be one of the two user-native handoff forms. */
-export const HANDOFF_PATTERN =
-  /^\s*(?:[/／]?\s*接手\s*#?(\d+)|继续\s*#(\d+)\s*的工作)\s*$/;
+export const HANDOFF_PATTERN = /^\s*(?:[/／]?\s*接手\s*#?(\d+)|继续\s*#(\d+)\s*的工作)\s*$/;
 
 /** The app keeps agents carrying this label in label order (TAB_ORDER_LABEL in the app's
  *  workspace-tabs/agent-visibility.ts): task tabs show as #1, #2, … */
@@ -107,26 +109,39 @@ function snapshotOf(
 }
 
 /** The #2 方案 model list (writer first, then reviewers in order), resolved live: reviews run
- *  before confirmation freezes anything. Empty when no planner is configured anywhere. */
+ *  before confirmation freezes anything; an unconfigured writer inherits the main tab. */
 export function resolvePlannerPresets(
   store: DefaultsStore,
-  input: { selections?: TaskRoleSelections | null; projectId?: string | null } = {},
+  input: {
+    selections?: TaskRoleSelections | null;
+    projectId?: string | null;
+    main?: MainTabModel;
+  } = {},
 ): TaskPresetSnapshot[] {
   const project = input.projectId
     ? store.projectConfigs.get(input.projectId)?.defaultPresets
     : undefined;
-  const { ids, source } = resolvePlannerIds(input.selections, project, store.modelDefaults.global());
+  const { ids, source } = resolvePlannerIds(
+    input.selections,
+    project,
+    store.modelDefaults.global(),
+  );
+  if (!ids.length && input.main) return [mainFallbackSnapshot(input.main)];
   return ids.map((id, index) =>
     snapshotOf(store, index === 0 ? "planner" : "plan_reviewer", id, source),
   );
 }
 
 /** Resolve one role preset (task selection > project default > global default) without requiring
- *  the other roles to be configured; optional roles resolve to null when disabled or missing. */
+ *  the other roles to be configured; only explicit optional-role disables resolve to null. */
 export function resolveRolePreset(
   store: DefaultsStore,
   role: ModelRole,
-  input: { selections?: TaskRoleSelections | null; projectId?: string | null } = {},
+  input: {
+    selections?: TaskRoleSelections | null;
+    projectId?: string | null;
+    main?: MainTabModel;
+  } = {},
 ): TaskPresetSnapshot | null {
   if (role === "planner") {
     const writer = resolvePlannerPresets(store, input)[0];
@@ -150,6 +165,8 @@ export function resolveRolePreset(
       source = "global";
     }
   }
+  if (id === undefined && input.main && role !== "plan_reviewer")
+    return mainFallbackSnapshot(input.main);
   if (!id) {
     if (OPTIONAL_TASK_ROLES.includes(role)) return null;
     throw new Error("角色 " + role + " 未配置可用预设");
@@ -172,7 +189,7 @@ export interface PlannedTabView {
 export function roleTabPreset(
   store: Pick<VibeStore, "projectConfigs" | "modelDefaults" | "presets">,
   role: FlowRole,
-  input: { task?: Task; projectId?: string | null },
+  input: { task?: Task; projectId?: string | null; main?: MainTabModel },
   onError?: (error: unknown) => void,
 ): { snapshot: TaskPresetSnapshot; model: TaskPresetSnapshot["models"][number] } | null {
   let snapshot: TaskPresetSnapshot | null;
@@ -182,6 +199,7 @@ export function roleTabPreset(
       : resolveRolePreset(store, role, {
           selections: input.task?.roleSelections,
           projectId: input.projectId,
+          main: input.task?.tabs.find((tab) => tab.role === "main") ?? input.main,
         });
   } catch (error) {
     onError?.(error);
@@ -198,6 +216,7 @@ export function plannedTaskTabs(input: {
   task?: Task;
   projectId?: string | null;
   selfRole: TaskTabRole;
+  main?: MainTabModel;
 }): { tabs: PlannedTabView[]; selfNumber: number } {
   const existing = [...(input.task?.tabs ?? [])].sort((a, b) => a.number - b.number);
   const tabs: PlannedTabView[] = existing.map((tab) => ({
@@ -220,7 +239,8 @@ export function plannedTaskTabs(input: {
       role,
       roleLabel: TASK_TAB_ROLE_LABELS[role],
       provider: preset.model.provider,
-      model: preset.model.model,
+      model:
+        preset.model.model + (preset.snapshot.source === "main-fallback" ? " · 沿用 #1 模型" : ""),
     });
     present.add(role);
   }
@@ -228,7 +248,14 @@ export function plannedTaskTabs(input: {
 }
 
 /** The roles task prompts name through `{{main}}`, `{{planner}}` … placeholders. */
-export const ROLE_VAR_NAMES = ["main", "planner", "scout", "worker", "reviewer", "verifier"] as const;
+export const ROLE_VAR_NAMES = [
+  "main",
+  "planner",
+  "scout",
+  "worker",
+  "reviewer",
+  "verifier",
+] as const;
 export type RoleVarName = (typeof ROLE_VAR_NAMES)[number];
 
 /** `#n 标签` of the latest tab of each role, or `标签（未启用）` when the task has none. Shared by the
@@ -287,13 +314,16 @@ export function createTaskTabs(options: {
 }) {
   const { store } = options;
   const now = options.now ?? (() => Date.now());
-  const log = options.log ?? ((message, error) => console.error("[vibe-board]", message, error ?? ""));
+  const log =
+    options.log ?? ((message, error) => console.error("[vibe-board]", message, error ?? ""));
   function paseo(): PaseoApi {
     const api = options.getPaseo();
     if (!api) throw new Error("任务宿主尚未连接");
     return api;
   }
-  async function refreshAgent(agentId: string): Promise<{ handle: PaseoAgentHandle; agent: PaseoAgent }> {
+  async function refreshAgent(
+    agentId: string,
+  ): Promise<{ handle: PaseoAgentHandle; agent: PaseoAgent }> {
     const handle = paseo().agents.ref(agentId);
     await handle.refresh();
     const agent = handle.current();
@@ -463,7 +493,12 @@ export function createTaskTabs(options: {
       }
       await syncTabOrder(handle, agent, existing);
       if (Object.keys(updates).length === 0) {
-        await registerTabSession(workspaceId, existing, agent, placement.current()?.projectId ?? null);
+        await registerTabSession(
+          workspaceId,
+          existing,
+          agent,
+          placement.current()?.projectId ?? null,
+        );
         return existing;
       }
       const updated = store.tasks.updateTab(workspaceId, agentId, updates);
@@ -521,7 +556,9 @@ export function createTaskTabs(options: {
           number: current.number,
           agentId: current.agentId,
           role: current.role,
-          roleLabel: TASK_TAB_ROLE_LABELS[current.role],
+          roleLabel:
+            TASK_TAB_ROLE_LABELS[current.role] +
+            (current.presetId === MAIN_FALLBACK_PRESET_ID ? " · 沿用 #1 模型" : ""),
           provider: agent?.provider ?? current.provider,
           model: agent?.model ?? current.model,
           status: agent ? statusOf(agent) : "已关闭",
@@ -600,6 +637,15 @@ export function createTaskTabs(options: {
       ...(task ? { task } : {}),
       projectId,
       selfRole: role,
+      ...(role === "main"
+        ? {
+            main: {
+              provider: slash >= 0 ? providerSpec.slice(0, slash) : providerSpec,
+              model: modelId,
+              thinking: request.config.thinkingOptionId ?? undefined,
+            },
+          }
+        : {}),
     });
     // The role placeholders see the roster this tab will join, itself included.
     const roles = roleVars([...planned, { number: selfNumber, role }]);
@@ -620,8 +666,7 @@ export function createTaskTabs(options: {
             ...roles,
             ...(role === "worker"
               ? {
-                  plan:
-                    "（尚未收到执行确认。插件发来执行确认（方案与调度准入结果）之前不要修改任何文件；用户发送 /执行、在任务流程面板点「执行」，或直接在本 tab 发消息，插件完成调度准入后会发来执行确认。用户只是提问时先回答，不要改文件。）",
+                  plan: "（尚未收到执行确认。插件发来执行确认（方案与调度准入结果）之前不要修改任何文件；用户发送 /执行、在任务流程面板点「执行」，或直接在本 tab 发消息，插件完成调度准入后会发来执行确认。用户只是提问时先回答，不要改文件。）",
                   reason: "",
                 }
               : {}),
@@ -660,8 +705,7 @@ export function createTaskTabs(options: {
     if (board.length) lines.push(boardProgress(board));
     if (task.control?.blockingReason) lines.push(`阻塞：${String(task.control.blockingReason)}`);
     if (task.summary) lines.push(`最新结论：${task.summary}`);
-    for (const artifact of artifacts)
-      lines.push(`沉淀（${artifact.kind}）：${artifact.summary}`);
+    for (const artifact of artifacts) lines.push(`沉淀（${artifact.kind}）：${artifact.summary}`);
     return { task, tabs, text: lines.join("\n") };
   }
   // Every user-visible status is its own row (unique id): the daemon merges same-id rows at the
@@ -685,15 +729,13 @@ export function createTaskTabs(options: {
     const previous = lastStatus.get(agentId);
     if (previous && previous.text === text) return undefined;
     const id = options.replace ?? "task-status:" + randomUUID();
-    await paseo()
-      .agents.ref(agentId)
-      .timeline.append({
-        type: "plugin",
-        id,
-        kind: "task-status",
-        version: 1,
-        data: { text },
-      });
+    await paseo().agents.ref(agentId).timeline.append({
+      type: "plugin",
+      id,
+      kind: "task-status",
+      version: 1,
+      data: { text },
+    });
     lastStatus.set(agentId, { text, at: nowMs });
     lastRow.set(agentId, id);
     return id;
@@ -730,7 +772,12 @@ export function createTaskTabs(options: {
   /** Opens a plugin-owned tab. Agents cannot reach this surface; `vibe_open_tab` enforces the role. */
   async function openTab(
     callerAgentId: string,
-    input: { role: "scout" | "plan_reviewer" | "session"; task: string; provider?: string; presetId?: string },
+    input: {
+      role: "scout" | "plan_reviewer" | "session";
+      task: string;
+      provider?: string;
+      presetId?: string;
+    },
   ) {
     const { agent: caller } = await refreshAgent(callerAgentId);
     const workspaceId = caller.workspaceId;
@@ -745,31 +792,33 @@ export function createTaskTabs(options: {
       (preset ? `${preset.provider}/${preset.model}` : "") ||
       (caller.model ? `${caller.provider}/${caller.model}` : "");
     if (!/^[^/]+\/[^/]+$/.test(spec))
-      throw new Error("无法解析当前 tab 的 provider/model，请在调用时指定 provider（provider/model）");
+      throw new Error(
+        "无法解析当前 tab 的 provider/model，请在调用时指定 provider（provider/model）",
+      );
     const placement = await taskWorkspace(workspaceId);
     const projectId = placement.projectId;
     const roleKey = rolePromptKey(input.role);
     const roleText = roleKey
       ? store.prompts.resolve(roleKey, { projectId, vars: roleVars(task.tabs) })
       : "";
-    const prompt = [roleText, preset?.instructions, input.task.trim()]
-      .filter(Boolean)
-      .join("\n\n");
+    const prompt = [roleText, preset?.instructions, input.task.trim()].filter(Boolean).join("\n\n");
     const config: Record<string, unknown> = { provider: spec };
     if (preset?.thinking && preset.thinking !== "default")
       config.thinkingOptionId = preset.thinking;
-    const handle = await paseo().workspaces.ref(workspaceId).agents.create({
-      config: config as never,
-      env: {
-        VIBE_ROLE: input.role,
-        VIBE_WORKSPACE_ID: workspaceId,
-        ...(preset?.runtimeEnv ? { VIBE_RUNTIME_ENV: preset.runtimeEnv } : {}),
-      },
-      labels: {
-        [TASK_TAB_ROLE_LABEL]: input.role,
-        ...(input.presetId ? { [TASK_TAB_PRESET_LABEL]: input.presetId } : {}),
-      },
-    });
+    const handle = await paseo()
+      .workspaces.ref(workspaceId)
+      .agents.create({
+        config: config as never,
+        env: {
+          VIBE_ROLE: input.role,
+          VIBE_WORKSPACE_ID: workspaceId,
+          ...(preset?.runtimeEnv ? { VIBE_RUNTIME_ENV: preset.runtimeEnv } : {}),
+        },
+        labels: {
+          [TASK_TAB_ROLE_LABEL]: input.role,
+          ...(input.presetId ? { [TASK_TAB_PRESET_LABEL]: input.presetId } : {}),
+        },
+      });
     const tab = await ensureTab(handle.id, { role: input.role, presetId: input.presetId });
     if (!tab) throw new Error("新 tab 未登记到任务");
     // The task text is agent-to-agent context, never a user turn: provenance keeps it out of

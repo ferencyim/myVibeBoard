@@ -7,7 +7,7 @@
 
 import { execFile } from "node:child_process";
 import { statfs } from "node:fs/promises";
-import { cpus, freemem, totalmem } from "node:os";
+import { cpus, freemem, totalmem, loadavg } from "node:os";
 
 export interface ProcInfo {
   pid: number;
@@ -26,6 +26,8 @@ export interface CpuTimes {
 
 export interface SystemProbe {
   cpuTimes(): CpuTimes;
+  memoryCommit?(): Promise<number | undefined>;
+  load1?(): number;
   cpuCount(): number;
   totalMem(): number;
   freeMem(): number;
@@ -50,6 +52,11 @@ export interface SessionUsage {
 
 export interface ResourceSnapshot {
   ts: string;
+  totalBytes: number;
+  availableBytes: number;
+  cores: number;
+  load1?: number;
+  committedRatio?: number;
   /** 0-1 */
   cpu: number;
   /** 0-1 used physical memory. */
@@ -99,10 +106,16 @@ export function createResourceSampler(options: {
       const perSession = attribute(procs, perPid, targets);
       const total = probe.totalMem();
       const disk = options.diskPath ? await probe.disk(options.diskPath).catch(() => null) : null;
+      const availableBytes = probe.freeMem();
       return {
         ts: at.toISOString(),
+        totalBytes: total,
+        availableBytes,
+        cores,
+        load1: probe.load1?.(),
+        committedRatio: await probe.memoryCommit?.().catch(() => undefined),
         cpu,
-        mem: total > 0 ? clamp01(1 - probe.freeMem() / total) : 0,
+        mem: total > 0 ? clamp01(1 - availableBytes / total) : 0,
         disk,
         perSession,
       };
@@ -169,7 +182,13 @@ export const runCommand: CommandRunner = (command, args) =>
       command,
       [...args],
       { maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: 20_000 },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      (error, stdout) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(stdout);
+      },
     );
   });
 
@@ -231,6 +250,18 @@ export function createSystemProbe(run: CommandRunner = runCommand): SystemProbe 
       return { idle, total };
     },
     cpuCount: () => Math.max(1, cpus().length),
+    load1: () => loadavg()[0]!,
+    async memoryCommit() {
+      if (process.platform !== "win32") return undefined;
+      const output = await run("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory | Select-Object CommittedBytes,CommitLimit | ConvertTo-Json -Compress",
+      ]);
+      const row = JSON.parse(output) as { CommittedBytes: number; CommitLimit: number };
+      return row.CommitLimit > 0 ? Number(row.CommittedBytes) / Number(row.CommitLimit) : undefined;
+    },
     totalMem: totalmem,
     freeMem: freemem,
     async disk(path) {

@@ -3,7 +3,12 @@ import { SchedulerScreen, SchedulerSettingsScreen, SchedulerSidebarItem } from "
 
 export default function contribute(client: PluginClientContext) {
   client.addScreen({ id: "main", title: "调度器", Component: SchedulerScreen });
-  client.addSidebarHeaderItem({ id: "scheduler", title: "调度器", Component: SchedulerSidebarItem });
+  client.addSidebarHeaderItem({
+    id: "scheduler",
+    title: "调度器",
+    order: -10,
+    Component: SchedulerSidebarItem,
+  });
   client.addSettingsScreen({
     id: "preferences",
     title: "调度器",

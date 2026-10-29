@@ -9,6 +9,9 @@ const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback
 
 export interface SchedulerView {
   paused: boolean;
+  briefing: string;
+  tightItems: string[];
+  hostErrors: string[];
   running: { total: number; byProvider: Record<string, number> };
   /** Native task resource leases. */
   pending: Array<{ id: string; workspaceId: string; role: string; provider: string; port: number }>;
@@ -32,6 +35,14 @@ export function parseStatus(raw: unknown): SchedulerView {
   const pool = isObj(o.pool) && isObj(o.pool.devices) ? o.pool.devices : {};
   return {
     paused: o.paused === true,
+    briefing: str(o.briefing, "资源：等待采样"),
+    tightItems: (Array.isArray(o.tightItems) ? o.tightItems : []).filter(
+      (v): v is string => typeof v === "string",
+    ),
+    hostErrors: (Array.isArray(o.hosts) ? o.hosts : [])
+      .filter(isObj)
+      .filter((h) => typeof h.error === "string")
+      .map((h) => str(h.name) + "：" + str(h.error)),
     running: {
       total: num(running.total),
       byProvider: Object.fromEntries(Object.entries(byProvider).map(([k, v]) => [k, num(v)])),

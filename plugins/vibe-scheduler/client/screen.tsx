@@ -1,3 +1,4 @@
+import { REMOTE_TARGET_PATTERN } from "../shared/vibe/contract";
 import type { PluginTheme } from "@getpaseo/plugin";
 import {
   useRpc,
@@ -18,6 +19,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
 import {
   devicesRpc,
+  remoteHostsRpc,
   registerDeviceRpc,
   removeDeviceRpc,
   schedulerSettings,
@@ -162,12 +164,11 @@ function Field({
   );
 }
 
-const levelColor = (theme: PluginTheme, level: string) =>
-  level === "exhausted"
-    ? theme.colors.statusDanger
-    : level === "tight"
-      ? theme.colors.statusWarning
-      : theme.colors.foregroundMuted;
+const levelColor = (theme: PluginTheme, level: string) => {
+  if (level === "exhausted") return theme.colors.statusDanger;
+  if (level === "tight") return theme.colors.statusWarning;
+  return theme.colors.foregroundMuted;
+};
 
 export function SchedulerScreen({ theme }: PluginScreenProps) {
   const queryClient = useQueryClient();
@@ -220,6 +221,7 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
       {!s ? <Muted theme={theme}>加载中...</Muted> : null}
       {s ? (
         <>
+          <ResourceStatus theme={theme} />
           <Section theme={theme} title="并发">
             <Row
               theme={theme}
@@ -435,6 +437,8 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
   );
   return (
     <SettingsSection title="调度器">
+      <ResourceStatus theme={theme} />
+      <RemoteHosts theme={theme} />
       <SettingsCard>
         {field("同时运行的 worker 上限（所有 provider 合计）", "globalLimit", 1, 64)}
         <SettingsInput
@@ -457,8 +461,103 @@ export function SchedulerSettingsScreen({ theme }: PluginSurfaceProps) {
         {field("开发服务器端口范围大小", "devPortSpan", 10, 5000)}
         {field("放行检查间隔（秒）", "tickSeconds", 1, 600)}
         {field("资源采样间隔（秒）", "sampleSeconds", 5, 3600)}
+        {field("远程主机采样间隔（秒）", "remoteSampleSeconds", 15, 3600)}
         {field("采样保留天数", "sampleRetentionDays", 1, 365)}
       </SettingsCard>
     </SettingsSection>
+  );
+}
+
+function ResourceStatus({ theme }: { theme: PluginTheme }) {
+  const statusCall = useRpc(statusRpc);
+  const status = useQuery({
+    queryKey: ["vibe-scheduler", "resource-status"],
+    queryFn: async () => parseStatus(await statusCall({})),
+    refetchInterval: 5000,
+  });
+  return (
+    <Section theme={theme} title="主机资源">
+      <Text
+        style={{
+          color: status.data?.tightItems.length
+            ? theme.colors.statusWarning
+            : theme.colors.foreground,
+        }}
+      >
+        {status.data?.briefing ?? "资源：等待采样"}
+      </Text>
+      {status.data?.tightItems.map((reason) => (
+        <Muted key={reason} theme={theme}>
+          {reason}
+        </Muted>
+      ))}
+      {status.data?.hostErrors.map((reason) => (
+        <Muted key={reason} theme={theme}>
+          {reason}
+        </Muted>
+      ))}
+      {status.error ? <Muted theme={theme}>{formatRpcError(status.error)}</Muted> : null}
+    </Section>
+  );
+}
+function RemoteHosts({ theme }: { theme: PluginTheme }) {
+  const call = useRpc(remoteHostsRpc);
+  const queryClient = useQueryClient();
+  const query = useQuery({ queryKey: ["vibe-scheduler", "remote-hosts"], queryFn: () => call({}) });
+  const [name, setName] = useState("");
+  const [target, setTarget] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const save = async (hosts: Array<{ name: string; target: string }>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await call({ hosts });
+      await queryClient.invalidateQueries({ queryKey: ["vibe-scheduler"] });
+      setName("");
+      setTarget("");
+    } catch (e) {
+      setError(formatRpcError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Section theme={theme} title="远程主机">
+      {query.data?.hosts.map((host) => (
+        <View key={host.target} style={{ gap: 8 }}>
+          <Row theme={theme} left={host.name} right={host.target} />
+          <Button
+            theme={theme}
+            label="移除"
+            disabled={busy}
+            onPress={() => void save(query.data!.hosts.filter((h) => h.target !== host.target))}
+          />
+        </View>
+      ))}
+      {query.data?.hosts.length === 0 ? <Muted theme={theme}>尚未配置远程主机。</Muted> : null}
+      <Field theme={theme} value={name} onChangeText={setName} placeholder="显示名" />
+      <Field
+        theme={theme}
+        value={target}
+        onChangeText={setTarget}
+        placeholder="user@example-host"
+      />
+      <Button
+        theme={theme}
+        label="添加"
+        disabled={busy || !query.data || !name.trim() || !REMOTE_TARGET_PATTERN.test(target.trim())}
+        onPress={() =>
+          void save([...(query.data?.hosts ?? []), { name: name.trim(), target: target.trim() }])
+        }
+      />
+      {busy ? <Muted theme={theme}>保存中...</Muted> : null}
+      {error || query.error ? (
+        <Text style={{ color: theme.colors.statusDanger }}>
+          {error ?? formatRpcError(query.error)}
+        </Text>
+      ) : null}
+      <Muted theme={theme}>使用已有 SSH 密钥，无交互连接；默认每 60 秒采样。</Muted>
+    </Section>
   );
 }

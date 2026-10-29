@@ -92,7 +92,12 @@ export function createPlanReview(options: {
   projectId(workspaceId: string): Promise<string | null>;
   log(message: string, error?: unknown): void;
   /** A progress row in the task's #1 (merged with the previous review row there). */
-  report(workspaceId: string, key: string, text: string, mode?: "append" | "progress"): Promise<void>;
+  report(
+    workspaceId: string,
+    key: string,
+    text: string,
+    mode?: "append" | "progress",
+  ): Promise<void>;
   /** Per-reviewer timeout (the owner setting); defaults to 20 minutes. */
   timeoutMs?: () => number;
   now?: () => number;
@@ -135,7 +140,8 @@ export function createPlanReview(options: {
     };
   }
   function opinion(workspaceId: string, cycle: string, index: number): string | undefined {
-    const text = store.taskArtifacts.get(workspaceId, "plan_review", keyOf(cycle, index))?.data?.text;
+    const text = store.taskArtifacts.get(workspaceId, "plan_review", keyOf(cycle, index))?.data
+      ?.text;
     return typeof text === "string" ? text : undefined;
   }
   function label(reviewer: PlanReviewer, total: number) {
@@ -205,6 +211,7 @@ export function createPlanReview(options: {
     try {
       presets = resolvePlannerPresets(store, {
         selections: task.roleSelections,
+        main: task.tabs.find((tab) => tab.role === "main"),
         projectId: await options.projectId(task.workspaceId),
       });
     } catch (error) {
@@ -269,7 +276,10 @@ export function createPlanReview(options: {
         goal: input.plan.goal,
         draftPlan: input.plan,
       }));
-      await status([tab.agentId], `审阅进行中，已改用 #${tab.number} 的新稿；后续审阅者会读到新稿。`);
+      await status(
+        [tab.agentId],
+        `审阅进行中，已改用 #${tab.number} 的新稿；后续审阅者会读到新稿。`,
+      );
       return;
     }
     // One automatic cycle per round: later plans (small edits too) are saved without review.
@@ -406,7 +416,10 @@ export function createPlanReview(options: {
       return true;
     } catch (error) {
       log("方案审阅者启动失败", error);
-      await fail(workspaceId, cycle, index, "启动失败：" + reasonOf(error), { retry: true, agentId });
+      await fail(workspaceId, cycle, index, "启动失败：" + reasonOf(error), {
+        retry: true,
+        agentId,
+      });
       return false;
     }
   }
@@ -448,7 +461,12 @@ export function createPlanReview(options: {
   }
 
   /** A reviewer finished with an opinion. */
-  async function complete(workspaceId: string, cycle: string, reviewer: PlanReviewer, text: string) {
+  async function complete(
+    workspaceId: string,
+    cycle: string,
+    reviewer: PlanReviewer,
+    text: string,
+  ) {
     const state = current(workspaceId, cycle);
     if (!state) return;
     const total = state.reviewers.length;
@@ -512,7 +530,8 @@ export function createPlanReview(options: {
         log("读取审阅意见失败", error);
       }
       if (text) await complete(workspaceId, state.cycle, reviewer, text);
-      else await fail(workspaceId, state.cycle, reviewer.index, "审阅者没有输出意见", { retry: true });
+      else
+        await fail(workspaceId, state.cycle, reviewer.index, "审阅者没有输出意见", { retry: true });
     } else {
       await fail(
         workspaceId,
@@ -694,7 +713,9 @@ export function createPlanReview(options: {
         ? `审阅中：${running ? label(running, total) : "准备下一位"}（已完成 ${doneCount}/${total}）`
         : state.status === "revising"
           ? `审阅完成（${doneCount}/${total} 位给出意见），等待 #${state.plannerTab} 修订` +
-            (state.reviseSentAt ? "" : `；修订请求尚未送达${state.reviseError ? `（${state.reviseError}）` : ""}，插件会重试`) +
+            (state.reviseSentAt
+              ? ""
+              : `；修订请求尚未送达${state.reviseError ? `（${state.reviseError}）` : ""}，插件会重试`) +
             "；之后的方案按修订稿（未再审阅）定稿"
           : state.status === "done"
             ? (state.note ??

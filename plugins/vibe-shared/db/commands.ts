@@ -571,10 +571,17 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
         for (const p of projects.list(true)) {
           const defaults = cleanDefaults(p.defaultPresets);
           if (defaultsPresetIds(defaults).includes(id))
-            patchRow("project", p.id, PROJECT_FIELDS, { defaultPresets: withoutPreset(defaults, id) }, hlc);
+            patchRow(
+              "project",
+              p.id,
+              PROJECT_FIELDS,
+              { defaultPresets: withoutPreset(defaults, id) },
+              hlc,
+            );
         }
         const globals = modelDefaults.global();
-        if (defaultsPresetIds(globals).includes(id)) writeGlobalDefaults(withoutPreset(globals, id));
+        if (defaultsPresetIds(globals).includes(id))
+          writeGlobalDefaults(withoutPreset(globals, id));
         db.prepare("DELETE FROM preset WHERE id = ?").run(id);
         // Drop the deleted id from other presets' fallback chains.
         for (const other of presets.list()) {
@@ -949,7 +956,9 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
       );
     const value = text.trim() ? text : "";
     const id = promptOverrideId(key, projectId);
-    const row = db.prepare<{ text: string }>("SELECT text FROM prompt_override WHERE id = ?").get(id);
+    const row = db
+      .prepare<{ text: string }>("SELECT text FROM prompt_override WHERE id = ?")
+      .get(id);
     if (row ? row.text === value : !value) return;
     db.prepare(
       `INSERT INTO prompt_override (id, key, project_id, text, created_at, updated_at, updated_hlc)
@@ -1186,13 +1195,18 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
   }
 
   const modelDefaults = {
-    resolveTask(selections: TaskRoleSelections, paseoProjectId?: string): TaskRoleSnapshot {
+    resolveTask(
+      selections: TaskRoleSelections,
+      paseoProjectId?: string,
+      main?: Parameters<typeof resolveTaskRoles>[4],
+    ): TaskRoleSnapshot {
       return db.immediate(() =>
         resolveTaskRoles(
           selections,
           paseoProjectId ? projectConfigs.get(paseoProjectId)?.defaultPresets : undefined,
           modelDefaults.global(),
           presets.get,
+          main,
         ),
       );
     },

@@ -386,3 +386,48 @@ describe("task roles and native project extensions", () => {
     }
   });
 });
+
+describe("WP132 主会话模型回退", () => {
+  it("缺省角色冻结主会话模型，只有方案审阅者缺省不启用", () => {
+    const main = { provider: "codex", model: "main-model", thinking: "high" };
+    const roles = resolveTaskRoles({}, {}, {}, () => undefined, main);
+    for (const role of ["planner", "scout", "worker", "subagent", "reviewer", "verifier"] as const)
+      expect(roles[role]).toMatchObject({
+        presetId: "task-main-fallback",
+        source: "main-fallback",
+        models: [{ ...main, permissionMode: "full" }],
+      });
+    expect(roles.plan_reviewer).toBeNull();
+    expect(
+      resolveTaskRoles({ scout: { mode: "disabled" } }, {}, {}, () => undefined, main).scout,
+    ).toBeNull();
+    expect(resolveTaskRoles({}, { reviewer: null }, {}, () => undefined, main).reviewer).toBeNull();
+    expect(resolveTaskRoles({}, {}, { scout: null }, () => undefined, main).scout).toBeNull();
+    expect(() =>
+      resolveTaskRoles(
+        { worker: { mode: "preset", presetId: "deleted" } },
+        {},
+        {},
+        () => undefined,
+        main,
+      ),
+    ).toThrow(/worker.*deleted/);
+  });
+  it("数据库解析入口传递主会话模型", () => {
+    const { store, db } = setup();
+    try {
+      expect(
+        store.modelDefaults.resolveTask({}, undefined, {
+          provider: "claude",
+          model: "main",
+          thinking: "low",
+        }).verifier,
+      ).toMatchObject({
+        source: "main-fallback",
+        models: [{ provider: "claude", model: "main", thinking: "low" }],
+      });
+    } finally {
+      db.close();
+    }
+  });
+});

@@ -86,7 +86,9 @@ export function groupPluginSidebarItems(
       }
     }
   }
-  return [...groups.values()];
+  const order = (group: PluginSidebarGroup) =>
+    group.kind === "item" ? (group.targets[0]?.item.order ?? 0) : 0;
+  return [...groups.values()].sort((a, b) => order(a) - order(b));
 }
 
 /**
