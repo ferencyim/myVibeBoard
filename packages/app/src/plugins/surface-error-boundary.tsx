@@ -35,6 +35,8 @@ export class SurfaceErrorBoundary extends Component<
         previous.resetKey !== this.props.resetKey ||
         previous.Surface !== this.props.Surface)
     ) {
+      // Resetting the boundary when its inputs change is the documented error-boundary pattern.
+      // oxlint-disable-next-line react/no-did-update-set-state
       this.setState({ error: null });
     }
   }
