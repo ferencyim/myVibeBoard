@@ -89,7 +89,7 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true as const };
   });
   server.handle(rpc.modelsListRpc, async (input) => ({
-    ...await service.models(input.query, true),
+    ...await service.modelsForProject(input.query, input.projectId, input.refresh),
     defaultPresetId: await service.defaultPreset(input.projectId),
   }));
   server.handle(rpc.memoriesListRpc, async (input, ctx) => {

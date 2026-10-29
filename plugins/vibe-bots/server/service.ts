@@ -70,6 +70,7 @@ export interface BotHost {
   };
   providers: {
     snapshot(options?: { cwd?: string; cachedOnly?: boolean }): Promise<PaseoProviderSnapshotResult>;
+    refresh(options?: { cwd?: string }): Promise<unknown>;
     listAvailable(): Promise<{ providers: Array<{ provider: string; available: boolean }> }>;
     listModels(provider: string): Promise<{
       models?: Array<{
@@ -956,6 +957,11 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
 
   return {
     bots, threads, openThread, waitThread, memoryDelivery, ready, view, caller, models,
+    modelsForProject: async (query?: string, projectId?: string, refresh = false) => {
+      const cwd = projectId ? (await project(projectId)).projectRootPath : undefined;
+      if (refresh) await paseo.providers.refresh(cwd ? { cwd } : {});
+      return models(query, true, cwd);
+    },
     defaultPreset: async (projectId?: string) => (projectId ? findProjectConfig(store.projects.list(true), projectId, (await project(projectId)).projectRootPath)?.defaultPresets.project : undefined) ?? store.modelDefaults.global().project ?? null,
     create, defaultBot, open, state, waitOpen, update, apply, prompt,
     live, failover, close, continueConversation,
