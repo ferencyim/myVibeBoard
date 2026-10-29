@@ -25,6 +25,7 @@ import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { useRetainedPanelActive } from "@/components/retained-panel";
+import { ConversationHeaderAccessories } from "@/plugins/conversation-header-accessories";
 import { RetainedChatContent } from "./retained-chat-content";
 import { Composer } from "@/composer";
 import {
@@ -309,6 +310,7 @@ function AgentPanel() {
 
   return (
     <RetainedChatContent>
+      <ConversationHeaderAccessories serverId={serverId} agentId={target.agentId} />
       <AgentPanelContent
         serverId={serverId}
         workspaceId={workspaceId}

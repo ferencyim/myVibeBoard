@@ -1,5 +1,7 @@
 export type {
   PluginHostProps,
+  PluginConversationHeaderAccessory,
+  PluginConversationHeaderAccessoryProps,
   PluginTab,
   PluginPanelProps,
   PluginWorkspacePanelParams,
