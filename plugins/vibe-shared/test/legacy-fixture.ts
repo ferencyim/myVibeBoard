@@ -32,6 +32,7 @@ export function legacyFixture(db: VibeDb): void {
       stats: 1,
       maintain: 1,
       "vibe-bots": 1,
+      "vibe-board": 0,
     }[owner];
     for (const migration of MIGRATIONS[owner].filter((m) => m.version <= historicalVersion)) {
       if (migration.foreignKeysOff) db.exec("PRAGMA foreign_keys = OFF");

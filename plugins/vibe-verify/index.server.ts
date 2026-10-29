@@ -270,6 +270,7 @@ export default function contribute(server: PluginServerContext) {
         if (
           event.payload.fields.includes("phase") &&
           task &&
+          task.flowLevel !== "simple" &&
           ["reviewing", "verifying"].includes(task.phase)
         )
           startTask(task.workspaceId);

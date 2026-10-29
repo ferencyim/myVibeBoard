@@ -39,6 +39,7 @@ interface ProjectAgentOptions {
   flow: Pick<TaskFlow, "provisionTabs">;
 }
 type UserInput = PluginLifecycleEvents["agent.user_prompt_received"];
+const highRiskFlow = (text: string) => /迁移|协议|删.{0,12}数据|清空.{0,12}数据|权限|发布|migration|protocol|delet.{0,20}data|permission|release/i.test(text);
 interface Grant {
   input: UserInput;
   spent: boolean;
@@ -311,7 +312,25 @@ export function createProjectAgents(options: ProjectAgentOptions) {
         .map((entry) => ({ messageId: entry.input.messageId, text: entry.input.text })),
     };
   }
+  async function evaluateIncomingTask(input: UserInput): Promise<boolean> {
+    if (!input.workspaceId) return false;
+    const task = store.tasks.get(input.workspaceId);
+    if (!task || task.anchorAgentId !== input.agentId) return false;
+    const projectId = task.control?.projectId;
+    if (highRiskFlow(input.text)) {
+      store.tasks.updateControl(input.workspaceId, { highRiskFlow: true });
+      if (task.flowLevel === "simple") {
+        store.tasks.setFlow(input.workspaceId, { level: "medium", source: "user", reason: "高风险任务不得使用简单流程" });
+        await options.tabs.appendStatus(input.agentId, "该任务涉及迁移、协议、删数据、权限或发布，流程已从简单升为中等。");
+      }
+    }
+    if (task.control?.flowEvaluationPending !== true || typeof projectId !== "string") return false;
+    store.tasks.updateControl(input.workspaceId, { flowEvaluationText: input.text });
+    await sendProject(projectId, `请评估任务 ${input.workspaceId} 的流程档位，仅用 vibe_set_task_flow 提交档位和理由。用户需求：\n${input.text}`);
+    return true;
+  }
   async function received(input: UserInput) {
+    if (await evaluateIncomingTask(input)) return;
     if (!(await projectForAgent(input.agentId)) && !(await independentBot(input.agentId))) return;
     const inputs = inputsFor(input.agentId);
     if (inputs.has(input.messageId)) return;
@@ -425,7 +444,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
 
   async function create(
     callerAgentId: string,
-    input: { text: string; name?: string; sourceMessageId?: string; projectId?: string },
+    input: { text: string; name?: string; sourceMessageId?: string; projectId?: string; flowLevel: "simple" | "medium" | "full"; flowReason: string },
   ) {
     const projectId = await targetProject(callerAgentId, input.projectId);
     const source = grant(callerAgentId, input.text, input.sourceMessageId);
@@ -446,6 +465,9 @@ export function createProjectAgents(options: ProjectAgentOptions) {
       source.workspaceId = workspace.id;
       persist(callerAgentId);
       store.tasks.markTaskWorkspace(workspace.id);
+      const highRisk = highRiskFlow(input.text);
+      const upgraded = input.flowLevel === "simple" && highRisk;
+      options.tabs.setInitialFlow(workspace.id, { level: upgraded ? "medium" : input.flowLevel, reason: input.flowReason });
       const main = source.mainId
         ? paseo().agents.ref(source.mainId)
         : await workspace.agents.create({
@@ -456,6 +478,8 @@ export function createProjectAgents(options: ProjectAgentOptions) {
       source.mainId = main.id;
       persist(callerAgentId);
       await options.tabs.ensureTab(main.id);
+      if (highRisk) store.tasks.updateControl(workspace.id, { highRiskFlow: true });
+      if (upgraded) await options.tabs.appendStatus(main.id, "该任务涉及迁移、协议、删数据、权限或发布，流程已从简单升为中等。");
       await options.flow.provisionTabs(workspace.id);
       await main.send(source.input.text, sendOptions(source.input));
       source.spent = true;
@@ -465,6 +489,20 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     } finally {
       source.busy = false;
     }
+  }
+
+  async function setTaskFlow(callerAgentId: string, input: { workspaceId: string; flowLevel: "simple" | "medium" | "full"; flowReason: string }) {
+    const projectId = await callerProject(callerAgentId);
+    const task = store.tasks.get(input.workspaceId);
+    if (!task || task.control?.projectId !== projectId || task.control?.flowEvaluationPending !== true)
+      throw new Error("任务不存在、非本项目或不再等待自动定档");
+    const upgraded = input.flowLevel === "simple" && highRiskFlow(String(task.control.flowEvaluationText ?? ""));
+    store.tasks.updateControl(input.workspaceId, { flowEvaluationPending: false, flowEvaluationText: null });
+    const updated = store.tasks.setFlow(input.workspaceId, { level: upgraded ? "medium" : input.flowLevel, source: "bot", reason: input.flowReason });
+    if (upgraded) await options.tabs.appendStatus(updated.anchorAgentId, "该任务涉及迁移、协议、删数据、权限或发布，流程已从简单升为中等。");
+    await options.tabs.appendStatus(updated.anchorAgentId, `项目 bot 已评估流程：${input.flowLevel}。${input.flowReason}`);
+    await options.flow.provisionTabs(input.workspaceId);
+    return { task: updated };
   }
 
   async function sendProject(projectId: string, text: string): Promise<void> {
@@ -492,6 +530,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     route,
     create,
     sendProject,
+    setTaskFlow,
     appendStatus,
     setError(projectId: string, error: string | null) {
       if (error) errors.set(projectId, error);

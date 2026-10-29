@@ -63,6 +63,16 @@ function tableNames(db: ReturnType<typeof openVibeDb>): string[] {
 }
 
 describe("migrations", () => {
+  it("defaults existing tasks to full when vibe-board adds flow levels", () => {
+    const { db } = openTestDb();
+    migrateOwner(db, "core");
+    db.prepare("INSERT INTO task (workspace_id, anchor_agent_id, phase, subtask_runs_json, summary) VALUES (?, ?, 'planning', '[]', '')").run("old", "agent");
+    migrateOwner(db, "vibe-board");
+    expect(db.prepare("SELECT flow_level, flow_source, flow_reason FROM task WHERE workspace_id = ?").get("old"))
+      .toMatchObject({ flow_level: "full", flow_source: "user", flow_reason: "" });
+    db.close();
+  });
+
   it("migrates from zero to latest and creates every table", () => {
     const { db } = openTestDb();
     expect(tableNames(db)).toEqual([]);

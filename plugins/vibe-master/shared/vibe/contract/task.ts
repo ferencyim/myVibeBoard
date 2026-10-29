@@ -242,7 +242,14 @@ export const TaskArtifactSchema = z.object({
     .nullable(),
 });
 export type TaskArtifact = z.infer<typeof TaskArtifactSchema>;
+export const FlowLevelSchema = z.enum(["simple", "medium", "full"]);
+export type FlowLevel = z.infer<typeof FlowLevelSchema>;
+export const FlowSourceSchema = z.enum(["user", "bot"]);
+
 export const TaskSchema = z.object({
+  flowLevel: FlowLevelSchema.default("full"),
+  flowSource: FlowSourceSchema.default("user"),
+  flowReason: z.string().default(""),
   workspaceId: Text,
   anchorAgentId: Text,
   phase: TaskPhaseSchema,
