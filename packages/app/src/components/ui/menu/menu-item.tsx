@@ -14,6 +14,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { useReducedMotion } from "react-native-reanimated";
 import { Check, CheckCircle } from "lucide-react-native";
 import { AdaptiveTextInput } from "@/components/adaptive-modal-sheet";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -30,20 +31,7 @@ const foregroundMapping = (theme: Theme) => ({ color: theme.colors.foreground })
 const mutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const successMapping = (theme: Theme) => ({ color: theme.colors.palette.green[500] });
 
-/**
- * Height of the filled part of a row, which is also its hit target.
- *
- * A pointer aims; a thumb lands, so the row is sized by what is driving it. The split is on
- * breakpoint rather than on `presentation`, because the compact popover — what `compactMode`
- * defaults to — is worked with a thumb just as a sheet is, and would keep the desktop height if
- * the sheet were the thing being asked about. `md` is where `useIsCompactFormFactor` divides, so
- * this and the popover/sheet choice always turn over together.
- *
- * On desktop the number is exactly the content: 18 line + 8 padding + 2 border. Leave the text's
- * `lineHeight` to the platform and the content outgrows `minHeight`, which then does nothing and
- * the rows drift taller again. On compact, `minHeight` leads instead and the label centres in it.
- */
-const MENU_ITEM_LINE_HEIGHT = 18;
+const MENU_ITEM_LINE_HEIGHT = 20;
 
 /**
  * Space between two rows, owned by the page rather than the rows. Zero because only one row is
@@ -274,6 +262,7 @@ export function MenuItem({
   tooltip,
 }: PropsWithChildren<MenuItemProps>): ReactElement {
   const { selectItem } = useMenuContext("MenuItem");
+  const reducedMotion = useReducedMotion();
   const isPending = status === "pending" || loading;
   const isSuccess = status === "success";
   const isDisabled = disabled || isPending || isSuccess;
@@ -308,16 +297,22 @@ export function MenuItem({
       pressed,
       hovered = false,
       focused = false,
-    }: PressableStateCallbackType & { hovered?: boolean; focused?: boolean }) => [
-      styles.item,
-      active ? styles.itemActive : null,
-      isDisabled ? styles.itemDisabled : null,
-      muted && !isDisabled ? styles.itemMuted : null,
-      hovered && !pressed && !isDisabled ? styles.itemHovered : null,
-      focused && !isDisabled ? styles.itemHovered : null,
-      pressed && !isDisabled ? styles.itemPressed : null,
-    ],
-    [active, isDisabled, muted],
+    }: PressableStateCallbackType & { hovered?: boolean; focused?: boolean }) => {
+      const showPress = pressed && !isDisabled;
+      return [
+        styles.item,
+        destructive ? styles.itemDestructive : null,
+        active ? styles.itemActive : null,
+        isDisabled ? styles.itemDisabled : null,
+        muted && !isDisabled ? styles.itemMuted : null,
+        hovered && !pressed && !isDisabled ? styles.itemHovered : null,
+        destructive && hovered && !isDisabled ? styles.itemDestructiveHovered : null,
+        focused && !isDisabled ? styles.itemFocused : null,
+        showPress ? styles.itemPressed : null,
+        showPress && !reducedMotion ? styles.itemPressedScale : null,
+      ];
+    },
+    [active, isDisabled, muted, destructive, reducedMotion],
   );
 
   const itemTextStyle = useMemo(
@@ -371,7 +366,7 @@ export function MenuItem({
   }
 
   return (
-    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
+    <Tooltip delayDuration={350} enabledOnDesktop enabledOnMobile={false}>
       <TooltipTrigger asChild>{content}</TooltipTrigger>
       <TooltipContent side="right" align="center" offset={10}>
         <Text style={styles.tooltipText}>{tooltip}</Text>
@@ -382,7 +377,7 @@ export function MenuItem({
 
 const styles = StyleSheet.create((theme) => ({
   page: {
-    paddingVertical: theme.spacing[1],
+    paddingVertical: 6,
     gap: MENU_ROW_GAP,
   },
   labelContainer: {
@@ -406,7 +401,7 @@ const styles = StyleSheet.create((theme) => ({
   // full width of the surface rather than reading as an inset tick between two chips.
   separator: {
     height: 1,
-    marginVertical: theme.spacing[1],
+    marginVertical: 6,
     backgroundColor: theme.colors.borderAccent,
   },
   // A hint with `trailing` is a key on the left edge and its value on the right, so the values
@@ -443,12 +438,12 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     minHeight: MENU_ITEM_HEIGHT,
     gap: theme.spacing[2],
-    marginHorizontal: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
+    marginHorizontal: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderWidth: theme.borderWidth[1],
     borderColor: "transparent",
-    borderRadius: theme.borderRadius.md,
+    borderRadius: 10,
     outlineWidth: 0,
     outlineColor: "transparent",
   },
@@ -458,12 +453,12 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     minHeight: MENU_ITEM_HEIGHT,
-    marginHorizontal: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
+    marginHorizontal: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.md,
+    borderRadius: 10,
     backgroundColor: theme.colors.surface2,
   },
   fieldFocused: {
@@ -477,24 +472,36 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: 0,
     paddingHorizontal: 0,
   },
+  itemDestructive: {
+    backgroundColor: theme.colors.dangerSoft,
+  },
+  itemDestructiveHovered: {
+    backgroundColor: theme.colors.dangerSoftHover,
+  },
   itemHovered: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.hoverTint,
+  },
+  itemFocused: {
+    borderColor: theme.colors.textMuted,
   },
   itemPressed: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: theme.colors.bgControlActive,
+  },
+  itemPressedScale: {
+    transform: [{ scale: 0.99 }],
   },
   // The row you are inside, not the value you chose. A chosen value is marked by its check.
   itemActive: {
     backgroundColor: theme.colors.surface2,
   },
   itemDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
   },
   itemMuted: {
     opacity: 0.72,
   },
   itemText: {
-    fontSize: theme.fontSize.base,
+    fontSize: 14,
     lineHeight: MENU_ITEM_LINE_HEIGHT,
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.normal,
@@ -503,7 +510,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
   },
   itemTextDestructive: {
-    color: theme.colors.destructive,
+    color: theme.colors.dangerText,
   },
   itemTextSuccess: {
     color: theme.colors.palette.green[500],

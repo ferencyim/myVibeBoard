@@ -1,5 +1,5 @@
 import type { StyleProp, ViewStyle } from "react-native";
-import { ICON_SIZE, type Theme } from "@/styles/theme";
+import { CONTROL_HEIGHT, ICON_SIZE, type Theme } from "@/styles/theme";
 
 export type ButtonControlSize = "xs" | "sm" | "md" | "lg";
 export type FieldControlSize = "sm" | "md";
@@ -22,17 +22,17 @@ export interface ControlInteractionStyleMap {
   controlDisabled?: StyleProp<ViewStyle>;
 }
 
-const TIGHT_CONTROL_HEIGHT = 28;
-const COMPACT_CONTROL_HEIGHT = 32;
-const FIELD_CONTROL_HEIGHT = 44;
-export const HEADER_CONTROL_HEIGHT = 26;
+const TIGHT_CONTROL_HEIGHT = CONTROL_HEIGHT.sm;
+const COMPACT_CONTROL_HEIGHT = CONTROL_HEIGHT.md;
+const FIELD_CONTROL_HEIGHT = CONTROL_HEIGHT.lg;
+export const HEADER_CONTROL_HEIGHT = CONTROL_HEIGHT.sm;
 const SEGMENTED_TIGHT_INSET = 2;
 const SEGMENTED_COMPACT_INSET = 2;
 const SEGMENTED_FIELD_INSET = 3;
-const SWITCH_TRACK_WIDTH = 34;
+const SWITCH_TRACK_WIDTH = 36;
 const SWITCH_TRACK_HEIGHT = 20;
 const SWITCH_THUMB_SIZE = 16;
-const CONTROL_FOCUS_RING_WIDTH = 2;
+const CONTROL_FOCUS_RING_WIDTH = 1;
 const CONTROL_FOCUS_RING_OFFSET = 1;
 const CONTROL_CENTER_JUSTIFY_CONTENT = "center";
 const FIELD_TEXT_LINE_HEIGHT_RATIO = 1.4;
@@ -49,10 +49,10 @@ export const CONTROL_HEIGHTS = {
 };
 
 export const buttonControlHeight: Record<ButtonControlSize, number> = {
-  xs: CONTROL_HEIGHTS.tight,
+  xs: CONTROL_HEIGHT.xs,
   sm: CONTROL_HEIGHTS.compact,
   md: CONTROL_HEIGHTS.field,
-  lg: CONTROL_HEIGHTS.field,
+  lg: CONTROL_HEIGHT.xl,
 };
 
 export const buttonIconSize: Record<ButtonControlSize, number> = {
@@ -227,23 +227,23 @@ export function createControlGeometry(theme: Theme) {
   return {
     buttonXs: {
       minHeight: buttonControlHeight.xs,
-      paddingHorizontal: theme.spacing[3],
-      borderRadius: theme.borderRadius.xl,
+      paddingHorizontal: theme.spacing[2],
+      borderRadius: theme.borderRadius.sm,
     },
     buttonSm: {
       minHeight: buttonControlHeight.sm,
       paddingHorizontal: theme.spacing[3],
-      borderRadius: theme.borderRadius.xl,
+      borderRadius: theme.borderRadius.md,
     },
     buttonMd: {
       minHeight: buttonControlHeight.md,
       paddingHorizontal: theme.spacing[4],
-      borderRadius: theme.borderRadius["2xl"],
+      borderRadius: theme.borderRadius.md,
     },
     buttonLg: {
       minHeight: buttonControlHeight.lg,
       paddingHorizontal: theme.spacing[6],
-      borderRadius: theme.borderRadius["2xl"],
+      borderRadius: theme.borderRadius.md,
     },
     buttonText: {
       fontSize: theme.fontSize.base,
@@ -279,16 +279,16 @@ export function createControlGeometry(theme: Theme) {
     },
     controlActive: {
       borderColor: theme.colors.borderAccent,
-      outlineColor: theme.colors.accent,
+      outlineColor: theme.colors.textMuted,
       outlineOffset: CONTROL_FOCUS_RING_OFFSET,
       outlineStyle: "solid" as const,
       outlineWidth: CONTROL_FOCUS_RING_WIDTH,
     },
     controlFocusRingColor: {
-      outlineColor: theme.colors.accent,
+      outlineColor: theme.colors.textMuted,
     },
     controlDisabled: {
-      opacity: theme.opacity[50],
+      opacity: 0.45,
     },
     switchControl,
     segmentedContainerXs: {

@@ -14,7 +14,7 @@ export const NO_RAW_PRESSABLE_MESSAGE =
   "A raw pressable has no standard press or hover feedback. Icon actions use ToolbarButton " +
   "(@/components/ui/pane-content-toolbar); rows on a menu surface use MenuItem or " +
   "ComposerTrackRow; other rows use PressHighlight (@/components/ui/press-highlight); labelled " +
-  "buttons use Button. See docs/design.md §2.";
+  "buttons use Button. New screens use IconButton and ListRow from @/ui. See docs/design.md.";
 
 const noRawPressable = {
   create(context) {

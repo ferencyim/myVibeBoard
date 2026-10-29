@@ -41,31 +41,32 @@ describe("StatusBadge", () => {
   it("uses the neutral badge shell for the muted variant", () => {
     const style = getComputedStyle(mountBadge("muted"));
 
-    expect(style.backgroundColor).toBe("rgb(228, 228, 231)");
+    expect(style.backgroundColor).toBe("rgb(255, 255, 255)");
     expect(style.borderColor).toBe("rgb(228, 228, 231)");
   });
 
-  it.each(["success", "warning", "error"] as const)(
-    "fills the %s variant with a translucent tint of its own status color",
-    (variant) => {
-      const badge = mountBadge(variant);
-      const text = badge.lastElementChild;
-      if (!(text instanceof HTMLElement)) {
-        throw new Error("StatusBadge did not render its label");
-      }
-      const fill = parseColor(getComputedStyle(badge).backgroundColor);
+  it.each([
+    ["success", "31,168,90"],
+    ["warning", "240,138,0"],
+    ["error", "232,34,45"],
+  ] as const)("fills the %s variant with its semantic soft background", (variant, expectedRgb) => {
+    const badge = mountBadge(variant);
+    const text = badge.lastElementChild;
+    if (!(text instanceof HTMLElement)) {
+      throw new Error("StatusBadge did not render its label");
+    }
+    const fill = parseColor(getComputedStyle(badge).backgroundColor);
 
-      expect(fill.rgb).toBe(parseColor(getComputedStyle(text).color).rgb);
-      expect(fill.alpha).toBeGreaterThan(0);
-      expect(fill.alpha).toBeLessThan(0.5);
-    },
-  );
+    expect(fill.rgb).toBe(expectedRgb);
+    expect(fill.alpha).toBeGreaterThan(0);
+    expect(fill.alpha).toBeLessThan(0.5);
+  });
 
   it.each([
-    ["success", "rgb(21, 128, 61)"],
-    ["warning", "rgb(217, 119, 6)"],
-    ["error", "rgb(185, 28, 28)"],
-    ["muted", "rgb(102, 102, 102)"],
+    ["success", "rgb(24, 122, 65)"],
+    ["warning", "rgb(156, 82, 0)"],
+    ["error", "rgb(192, 20, 29)"],
+    ["muted", "rgb(107, 107, 112)"],
   ] as const)("uses the semantic %s signal for its text", (variant, expectedColor) => {
     const badge = mountBadge(variant);
     const text = badge.lastElementChild;

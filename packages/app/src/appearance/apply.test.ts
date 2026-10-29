@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { darkHighlightColors, resolveSyntaxColors } from "@getpaseo/highlight";
-import { DEFAULT_UI_FONT_STACK, REGISTERED_THEMES } from "@/styles/theme";
+import {
+  DEFAULT_UI_FONT_STACK,
+  FONT_SIZE,
+  LINE_HEIGHT,
+  REGISTERED_THEMES,
+  type Theme,
+} from "@/styles/theme";
 import { applyAppearance, type AppearanceInput } from "./apply";
 
 // Override the global react-native-unistyles mock (vitest.setup.ts) so that
@@ -25,18 +31,8 @@ type ThemeUpdater = (theme: FakeTheme) => FakeTheme;
 interface FakeTheme {
   colorScheme: "light" | "dark";
   fontFamily: { ui: string; mono: string };
-  fontSize: {
-    code: number;
-    content: number;
-    sm: number;
-    base: number;
-    lg: number;
-    xl: number;
-    "2xl": number;
-    "3xl": number;
-    "4xl": number;
-  };
-  lineHeight: { diff: number };
+  fontSize: Theme["fontSize"];
+  lineHeight: Theme["lineHeight"];
   contentMaxWidth: number;
   colors: { foreground: string; syntax: Record<string, string> };
 }
@@ -45,18 +41,8 @@ function makeFakeTheme(): FakeTheme {
   return {
     colorScheme: "dark",
     fontFamily: { ui: "seed-ui-stack", mono: "seed-mono-stack" },
-    fontSize: {
-      code: 12,
-      content: 15,
-      sm: 12,
-      base: 14,
-      lg: 16,
-      xl: 18,
-      "2xl": 20,
-      "3xl": 22,
-      "4xl": 26,
-    },
-    lineHeight: { diff: 22 },
+    fontSize: { ...FONT_SIZE },
+    lineHeight: { ...LINE_HEIGHT },
     contentMaxWidth: 820,
     colors: { foreground: "#fff", syntax: {} },
   };
@@ -131,7 +117,9 @@ describe("applyAppearance", () => {
     expect(fontSize.sm).toBe(13);
     expect(fontSize.lg).toBe(17);
     expect(fontSize.xl).toBe(19);
-    expect(fontSize["4xl"]).toBe(28);
+    expect(fontSize["4xl"]).toBe(34);
+    expect(fontSize.md).toBe(14);
+    expect(fontSize.display).toBe(34);
   });
 
   it("derives the UI ramp from the canonical sizes, not the live theme (no compounding)", () => {
@@ -145,6 +133,8 @@ describe("applyAppearance", () => {
       code: 4,
       content: 4,
       sm: 4,
+      md: 4,
+      display: 4,
       base: 4,
       lg: 4,
       xl: 4,
@@ -187,6 +177,17 @@ describe("applyAppearance", () => {
     applyAppearance(makeInput({ codeFontSize: 18 }));
 
     expect(runCapturedUpdater().lineHeight.diff).toBe(Math.round(18 * 1.5)); // 27
+  });
+
+  it("scales interface line heights while keeping content and code independent", () => {
+    applyAppearance(makeInput({ uiBaseFontSize: 21, contentFontSize: 16, codeFontSize: 12 }));
+
+    const { lineHeight } = runCapturedUpdater();
+    expect(lineHeight.base).toBe(30);
+    expect(lineHeight.md).toBe(27);
+    expect(lineHeight.display).toBe(57);
+    expect(lineHeight.content).toBe(22);
+    expect(lineHeight.code).toBe(16);
   });
 
   it("swaps colors.syntax to the resolved palette for the named theme", () => {

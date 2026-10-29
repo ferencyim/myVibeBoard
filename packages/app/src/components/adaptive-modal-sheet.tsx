@@ -3,8 +3,13 @@ import type { ComponentProps, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Keyboard, Pressable, Text, View } from "react-native";
-import type { DimensionValue, StyleProp, ViewStyle } from "react-native";
-import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
+import type {
+  DimensionValue,
+  PressableStateCallbackType,
+  StyleProp,
+  ViewStyle,
+} from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import {
   getOverlayRoot,
@@ -13,7 +18,7 @@ import {
   useWebOverlayRegistration,
 } from "../lib/overlay-root";
 import { BottomSheetHandle, type BottomSheetBackgroundProps } from "@gorhom/bottom-sheet";
-import Animated from "react-native-reanimated";
+import Animated, { useReducedMotion } from "react-native-reanimated";
 import { ArrowLeft, Search, X, type LucideIcon } from "lucide-react-native";
 import {
   IsolatedBottomSheetModal,
@@ -26,6 +31,7 @@ import { ScrollView } from "@/components/ui/scroll-view";
 import { isWeb } from "@/constants/platform";
 import { useKeyboardVisibility } from "@/hooks/use-keyboard-visibility";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MOTION, type Theme } from "@/styles/theme";
 import { AdaptiveTextInput } from "@/components/adaptive-text-input";
 export { AdaptiveTextInput, type AdaptiveTextInputProps } from "@/components/adaptive-text-input";
 
@@ -65,11 +71,23 @@ export interface SheetHeader {
   search?: SheetHeaderSearch;
 }
 
+function SheetIcon({ icon: Icon, size, color }: { icon: LucideIcon; size: number; color: string }) {
+  return <Icon size={size} color={color} />;
+}
+const ThemedSheetIcon = withUnistyles(SheetIcon);
+const primaryIconMapping = (theme: Theme) => ({ color: theme.colors.textPrimary });
+const mutedIconMapping = (theme: Theme) => ({ color: theme.colors.textMuted });
+
 const SCROLL_CONTENT_GROW = { flexGrow: 1 };
 const ABSOLUTE_FILL_STYLE = { ...StyleSheet.absoluteFill };
 const NATIVE_DIALOG_SNAP_POINTS = ["100%"];
 
 const styles = StyleSheet.create((theme) => ({
+  sheetBackground: {
+    backgroundColor: theme.colors.bgSheet,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
   nativeDialogSurface: {
     flex: 1,
   },
@@ -78,7 +96,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   desktopOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(0,0,0,0.55)",
+    backgroundColor: theme.colors.dialogOverlay,
     justifyContent: "center",
     alignItems: "center",
     padding: theme.spacing[6],
@@ -91,10 +109,10 @@ const styles = StyleSheet.create((theme) => ({
     maxHeight: "85%",
     flexShrink: 1,
     minHeight: 0,
-    backgroundColor: theme.colors.surface1,
-    borderRadius: theme.borderRadius.xl,
+    backgroundColor: theme.colors.bgSheet,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: theme.colors.surface2,
+    borderColor: theme.colors.dialogRing,
   },
   headerContainer: {
     borderBottomWidth: 1,
@@ -122,11 +140,18 @@ const styles = StyleSheet.create((theme) => ({
   title: {
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
+    color: theme.colors.textPrimary,
   },
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
+  },
+  actionPressedScale: { transform: [{ scale: 0.97 }] },
+  actionFocused: {
+    outlineWidth: 1,
+    outlineColor: theme.colors.textMuted,
+    outlineStyle: "solid",
   },
   closeButton: {
     padding: theme.spacing[SHEET_HEADER_CLOSE_PADDING_SCALE],
@@ -209,6 +234,10 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     minHeight: 0,
   },
+  confirmationHeader: { borderBottomWidth: 0 },
+  confirmationHeaderRow: { paddingTop: 24, paddingBottom: 0 },
+  confirmationContent: { paddingVertical: 16 },
+  confirmationFooter: { paddingTop: 0, paddingBottom: 24, borderTopWidth: 0 },
   footer: {
     paddingHorizontal: theme.spacing[SHEET_HORIZONTAL_PADDING_SCALE],
     paddingVertical: theme.spacing[3],
@@ -221,23 +250,9 @@ const styles = StyleSheet.create((theme) => ({
   },
 }));
 
-const WEB_EXIT_DURATION_MS = 160;
-
 /** The compact sheet's surface: Gorhom's `backgroundComponent` for every bottom sheet. */
 export function SheetBackground({ style }: BottomSheetBackgroundProps) {
-  const { theme } = useUnistyles();
-  const combinedStyle = useMemo(
-    () => [
-      style,
-      {
-        backgroundColor: theme.colors.surface0,
-        borderTopLeftRadius: theme.borderRadius["2xl"],
-        borderTopRightRadius: theme.borderRadius["2xl"],
-      },
-    ],
-    [style, theme.colors.surface0, theme.borderRadius],
-  );
-  return <Animated.View pointerEvents="none" style={combinedStyle} />;
+  return <Animated.View pointerEvents="none" style={[style, styles.sheetBackground]} />;
 }
 
 const ThemedBottomSheetHandle = withUnistyles(BottomSheetHandle, (theme) => ({
@@ -291,6 +306,18 @@ function SheetContent({ style, children }: { style: StyleProp<ViewStyle>; childr
  * An icon action in a sheet header's trailing rail, drawn like the Close button so a header's
  * actions line up with it at one size. Pass it through `SheetHeader.actions`.
  */
+function sheetHeaderActionStyle({
+  pressed,
+  focused = false,
+  reducedMotion,
+}: PressableStateCallbackType & { focused?: boolean; reducedMotion: boolean }) {
+  return [
+    styles.closeButton,
+    pressed && !reducedMotion && styles.actionPressedScale,
+    focused && styles.actionFocused,
+  ];
+}
+
 export function SheetHeaderIconButton({
   icon: Icon,
   accessibilityLabel,
@@ -302,17 +329,25 @@ export function SheetHeaderIconButton({
   onPress: () => void;
   testID?: string;
 }) {
-  const { theme } = useUnistyles();
+  const reducedMotion = useReducedMotion();
+  const actionStyle = useCallback(
+    (state: PressableStateCallbackType) => sheetHeaderActionStyle({ ...state, reducedMotion }),
+    [reducedMotion],
+  );
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      style={styles.closeButton}
+      style={actionStyle}
       onPress={onPress}
       testID={testID}
     >
       {({ pressed }) => (
-        <Icon size={16} color={pressed ? theme.colors.foreground : theme.colors.foregroundMuted} />
+        <ThemedSheetIcon
+          icon={Icon}
+          size={16}
+          uniProps={pressed ? primaryIconMapping : mutedIconMapping}
+        />
       )}
     </Pressable>
   );
@@ -323,18 +358,15 @@ export function SheetHeaderView({
   onClose,
   showCloseButton = true,
   testID,
+  confirmation = false,
 }: {
   header: SheetHeader;
   onClose: () => void;
   showCloseButton?: boolean;
+  confirmation?: boolean;
   testID?: string;
 }) {
-  const { theme } = useUnistyles();
   const { t } = useTranslation();
-  const titleStyle = useMemo(
-    () => [styles.title, { color: theme.colors.foreground }],
-    [theme.colors.foreground],
-  );
   const back = header.back;
   const handleBackPress = back?.onPress;
   const search = header.search;
@@ -346,8 +378,11 @@ export function SheetHeaderView({
   );
 
   return (
-    <View style={styles.headerContainer} testID={testID}>
-      <View style={styles.headerRow}>
+    <View
+      style={[styles.headerContainer, confirmation && styles.confirmationHeader]}
+      testID={testID}
+    >
+      <View style={[styles.headerRow, confirmation && styles.confirmationHeaderRow]}>
         {handleBackPress ? (
           <Pressable
             onPress={handleBackPress}
@@ -358,16 +393,17 @@ export function SheetHeaderView({
             testID="sheet-header-back"
           >
             {({ pressed }) => (
-              <ArrowLeft
+              <ThemedSheetIcon
+                icon={ArrowLeft}
                 size={18}
-                color={pressed ? theme.colors.foreground : theme.colors.foregroundMuted}
+                uniProps={pressed ? primaryIconMapping : mutedIconMapping}
               />
             )}
           </Pressable>
         ) : null}
         {header.leading ? <View style={styles.headerLeadingSlot}>{header.leading}</View> : null}
         <View style={styles.headerTitleGroup}>
-          <Text style={titleStyle} numberOfLines={1}>
+          <Text style={styles.title} numberOfLines={1}>
             {header.title}
           </Text>
           {header.subtitle}
@@ -383,7 +419,7 @@ export function SheetHeaderView({
       </View>
       {search ? (
         <View style={styles.searchRow}>
-          <Search size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+          <ThemedSheetIcon icon={Search} size={16} uniProps={mutedIconMapping} />
           <AdaptiveTextInput
             // @ts-expect-error - outlineStyle is web-only
             style={[styles.searchInput, isWeb && { outlineStyle: "none" }]}
@@ -404,7 +440,6 @@ export function SheetHeaderView({
 }
 
 export function InlineHeaderView({ header }: { header: SheetHeader }) {
-  const { theme } = useUnistyles();
   const { t } = useTranslation();
   const back = header.back;
   const handleBackPress = back?.onPress;
@@ -426,9 +461,10 @@ export function InlineHeaderView({ header }: { header: SheetHeader }) {
               testID="sheet-header-back"
             >
               {({ pressed }) => (
-                <ArrowLeft
+                <ThemedSheetIcon
+                  icon={ArrowLeft}
                   size={16}
-                  color={pressed ? theme.colors.foreground : theme.colors.foregroundMuted}
+                  uniProps={pressed ? primaryIconMapping : mutedIconMapping}
                 />
               )}
             </Pressable>
@@ -442,7 +478,7 @@ export function InlineHeaderView({ header }: { header: SheetHeader }) {
       ) : null}
       {header.search ? (
         <View style={styles.inlineSearchRow}>
-          <Search size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
+          <ThemedSheetIcon icon={Search} size={14} uniProps={mutedIconMapping} />
           <AdaptiveTextInput
             // @ts-expect-error - outlineStyle is web-only
             style={[styles.searchInput, isWeb && { outlineStyle: "none" }]}
@@ -475,6 +511,11 @@ export interface AdaptiveModalSheetProps {
   testID?: string;
   /** Override the max width of the desktop card. */
   desktopMaxWidth?: number;
+  desktopBorderRadius?: number;
+  desktopMaxHeight?: DimensionValue;
+  surfaceVariant?: "default" | "confirmation";
+  /** Native Sheet primitives keep bottom-sheet presentation even on wide tablets. */
+  forceSheet?: boolean;
   /** Bound an author-owned list without changing content-sized first-party dialogs. */
   desktopHeight?: DimensionValue;
   /** Whether the host supplies the scroll container. Caller-owned lists still share sheet gestures. */
@@ -499,6 +540,10 @@ export function AdaptiveModalSheet({
   snapPoints,
   testID,
   desktopMaxWidth,
+  desktopBorderRadius,
+  desktopMaxHeight,
+  surfaceVariant,
+  forceSheet,
   desktopHeight,
   scrollable = true,
   presentation,
@@ -507,7 +552,10 @@ export function AdaptiveModalSheet({
   contextBridge = null,
 }: AdaptiveModalSheetProps) {
   const { t } = useTranslation();
-  const isMobile = useIsCompactFormFactor();
+  const isCompact = useIsCompactFormFactor();
+  const isMobile = forceSheet || isCompact;
+  const reducedMotion = useReducedMotion();
+  const exitDuration = reducedMotion ? 0 : MOTION.overlay;
   const insets = useSafeAreaInsets();
   const isKeyboardVisible = useKeyboardVisibility(visible);
   const resolvedSnapPoints = useMemo(() => snapPoints ?? ["65%", "90%"], [snapPoints]);
@@ -528,14 +576,20 @@ export function AdaptiveModalSheet({
     () => ({ paddingBottom: compactSafeAreaPadding.footerPaddingBottom ?? 0 }),
     [compactSafeAreaPadding.footerPaddingBottom],
   );
+  const confirmation = surfaceVariant === "confirmation";
+  const resolvedContentStyle = [confirmation && styles.confirmationContent, contentStyle];
   const footerView = useMemo(
     () =>
       footer ? (
         <View style={footerClearanceStyle}>
-          <View style={[styles.footer, footerContainerStyle]}>{footer}</View>
+          <View
+            style={[styles.footer, confirmation && styles.confirmationFooter, footerContainerStyle]}
+          >
+            {footer}
+          </View>
         </View>
       ) : null,
-    [footer, footerClearanceStyle, footerContainerStyle],
+    [footer, footerClearanceStyle, footerContainerStyle, confirmation],
   );
   useEffect(() => {
     if (!isWeb && visible) {
@@ -563,8 +617,10 @@ export function AdaptiveModalSheet({
       styles.desktopCard,
       desktopHeight != null && { height: desktopHeight },
       desktopMaxWidth != null && { maxWidth: desktopMaxWidth },
+      desktopBorderRadius != null && { borderRadius: desktopBorderRadius },
+      desktopMaxHeight != null && { maxHeight: desktopMaxHeight },
     ],
-    [desktopMaxWidth, desktopHeight],
+    [desktopMaxWidth, desktopHeight, desktopBorderRadius, desktopMaxHeight],
   );
   const desktopOverlayStyle = useMemo(
     () => [
@@ -572,12 +628,12 @@ export function AdaptiveModalSheet({
       isWeb && {
         zIndex: modalLayer,
         opacity: isWebClosing ? 0 : 1,
-        transitionDuration: `${WEB_EXIT_DURATION_MS}ms`,
+        transitionDuration: `${exitDuration}ms`,
         transitionProperty: "opacity",
         transitionTimingFunction: "ease",
       },
     ],
-    [isWebClosing, modalLayer],
+    [isWebClosing, modalLayer, exitDuration],
   );
 
   const handleWebOverlayKeyDown = useCallback(
@@ -609,14 +665,19 @@ export function AdaptiveModalSheet({
       setShouldRenderWeb(false);
       setIsWebClosing(false);
       onDismiss?.();
-    }, WEB_EXIT_DURATION_MS);
+    }, exitDuration);
     return () => window.clearTimeout(timeout);
-  }, [visible, isMobile, onDismiss, shouldRenderWeb]);
+  }, [visible, isMobile, onDismiss, shouldRenderWeb, exitDuration]);
 
   if (isMobile) {
     const sheetContent = (
       <>
-        <SheetHeaderView header={header} onClose={onClose} testID={testID} />
+        <SheetHeaderView
+          header={header}
+          onClose={onClose}
+          testID={testID}
+          confirmation={confirmation}
+        />
         <View style={[styles.compactStaticContent, bodyStyle]}>
           {scrollable ? (
             <ScrollView
@@ -626,12 +687,14 @@ export function AdaptiveModalSheet({
               showsVerticalScrollIndicator={false}
             >
               <View style={[styles.contentGrow, bodyClearanceStyle]}>
-                <SheetContent style={[styles.contentGrow, contentStyle]}>{children}</SheetContent>
+                <SheetContent style={[styles.contentGrow, resolvedContentStyle]}>
+                  {children}
+                </SheetContent>
               </View>
             </ScrollView>
           ) : (
             <View style={[styles.compactStaticContent, bodyClearanceStyle]}>
-              <SheetContent style={[styles.compactStaticContent, contentStyle]}>
+              <SheetContent style={[styles.compactStaticContent, resolvedContentStyle]}>
                 {children}
               </SheetContent>
             </View>
@@ -667,7 +730,7 @@ export function AdaptiveModalSheet({
     desktopHeight == null ? styles.desktopStaticContent : styles.compactStaticContent;
   const cardInner = (
     <OverlayLayerProvider layer={modalLayer}>
-      <SheetHeaderView header={header} onClose={onClose} />
+      <SheetHeaderView header={header} onClose={onClose} confirmation={confirmation} />
       <View style={[scrollable ? styles.desktopScrollContainer : desktopStaticStyle, bodyStyle]}>
         {scrollable ? (
           <ScrollView
@@ -676,10 +739,12 @@ export function AdaptiveModalSheet({
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator
           >
-            <SheetContent style={[styles.contentGrow, contentStyle]}>{children}</SheetContent>
+            <SheetContent style={[styles.contentGrow, resolvedContentStyle]}>
+              {children}
+            </SheetContent>
           </ScrollView>
         ) : (
-          <SheetContent style={[desktopStaticStyle, contentStyle]}>{children}</SheetContent>
+          <SheetContent style={[desktopStaticStyle, resolvedContentStyle]}>{children}</SheetContent>
         )}
       </View>
       {footerView}

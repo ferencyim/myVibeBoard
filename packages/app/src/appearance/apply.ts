@@ -4,6 +4,7 @@ import {
   DEFAULT_UI_FONT_STACK,
   DEFAULT_MONO_FONT_STACK,
   FONT_SIZE,
+  LINE_HEIGHT,
   REGISTERED_THEMES,
   type Theme,
 } from "@/styles/theme";
@@ -38,12 +39,14 @@ function scaleFontSize(
   const r = uiBaseSize / FONT_SIZE.base;
   return {
     sm: Math.round(FONT_SIZE.sm * r),
+    md: Math.round(FONT_SIZE.md * r),
     base: Math.round(FONT_SIZE.base * r),
     lg: Math.round(FONT_SIZE.lg * r),
     xl: Math.round(FONT_SIZE.xl * r),
     "2xl": Math.round(FONT_SIZE["2xl"] * r),
     "3xl": Math.round(FONT_SIZE["3xl"] * r),
     "4xl": Math.round(FONT_SIZE["4xl"] * r),
+    display: Math.round(FONT_SIZE.display * r),
     content: contentSize, // absolute, NOT scaled
     code: codeSize, // absolute, NOT scaled
   };
@@ -63,7 +66,21 @@ function scaleFontSize(
 export function applyAppearance(input: AppearanceInput): void {
   const ui = input.uiFontFamily.trim() || DEFAULT_UI_FONT_STACK;
   const mono = input.monoFontFamily.trim() || DEFAULT_MONO_FONT_STACK;
-  const diffLineHeight = Math.round(input.codeFontSize * 1.5); // couple to code size
+  const ratio = input.uiBaseFontSize / FONT_SIZE.base;
+  const lineHeight = {
+    sm: Math.round(LINE_HEIGHT.sm * ratio),
+    md: Math.round(LINE_HEIGHT.md * ratio),
+    base: Math.round(LINE_HEIGHT.base * ratio),
+    lg: Math.round(LINE_HEIGHT.lg * ratio),
+    xl: Math.round(LINE_HEIGHT.xl * ratio),
+    "2xl": Math.round(LINE_HEIGHT["2xl"] * ratio),
+    "3xl": Math.round(LINE_HEIGHT["3xl"] * ratio),
+    "4xl": Math.round(LINE_HEIGHT["4xl"] * ratio),
+    display: Math.round(LINE_HEIGHT.display * ratio),
+    content: Math.round((input.contentFontSize * LINE_HEIGHT.content) / FONT_SIZE.content),
+    code: Math.round((input.codeFontSize * LINE_HEIGHT.code) / FONT_SIZE.code),
+    diff: Math.round(input.codeFontSize * 1.5),
+  };
   const activeTheme = UnistylesRuntime.themeName;
   // Unistyles web emits after each registry patch. Updating the mounted theme
   // first ensures subscribers receive its new numeric tokens in this render;
@@ -80,7 +97,6 @@ export function applyAppearance(input: AppearanceInput): void {
         input.contentFontSize,
         input.codeFontSize,
       );
-      const lineHeight = { ...t.lineHeight, diff: diffLineHeight };
       if (t.colorScheme === "light") {
         return {
           ...t,

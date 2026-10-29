@@ -66,7 +66,7 @@ export function Field({ label, children, trailing, hint, error, testID }: FieldP
   );
 }
 
-type FormTextInputProps = AdaptiveTextInputProps & {
+export type FormTextInputProps = AdaptiveTextInputProps & {
   size?: FieldControlSize;
 };
 
@@ -260,7 +260,7 @@ const formInputStyles = StyleSheet.create((theme) => {
 
   return {
     chrome: {
-      backgroundColor: theme.colors.surface2,
+      backgroundColor: theme.colors.bgControl,
     },
     chromeSm: {
       ...geometry.fieldControlSm,
@@ -284,6 +284,7 @@ const formInputStyles = StyleSheet.create((theme) => {
       flex: 1,
       minWidth: 0,
       color: theme.colors.foreground,
+      fontFamily: theme.fontFamily.ui,
       paddingHorizontal: 0,
       paddingVertical: 0,
       outlineColor: "transparent",

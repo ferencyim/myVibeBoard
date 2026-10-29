@@ -4,7 +4,8 @@ import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Switch } from "./switch";
 
-const { theme } = vi.hoisted(() => ({
+const { theme, motion } = vi.hoisted(() => ({
+  motion: { reduced: false, pressedStyle: [] as unknown[] },
   theme: {
     opacity: { 50: 0.5 },
     spacing: { 0: 0, 3: 12, 4: 16, 6: 24 },
@@ -13,6 +14,8 @@ const { theme } = vi.hoisted(() => ({
     borderWidth: { 1: 1 },
     colors: {
       surface3: "#333",
+      bgControlActive: "#333",
+      textMuted: "#979797",
       accent: "#0a84ff",
       accentForeground: "#fff",
       borderAccent: "#555",
@@ -28,7 +31,10 @@ vi.mock("react-native-reanimated", () => ({
   Easing: {
     ease: "ease",
     inOut: (value: unknown) => value,
+    bezier: (...values: number[]) => values,
   },
+  ReduceMotion: { System: "system" },
+  useReducedMotion: () => motion.reduced,
   interpolateColor: (value: number, _input: number[], output: string[]) =>
     value >= 1 ? output[1] : output[0],
   useAnimatedStyle: (factory: () => unknown) => factory(),
@@ -49,6 +55,7 @@ vi.mock("react-native", () => ({
     disabled,
     onPress,
     testID,
+    style,
   }: {
     "aria-checked"?: boolean;
     accessibilityLabel?: string;
@@ -58,8 +65,10 @@ vi.mock("react-native", () => ({
     disabled?: boolean;
     onPress?: (event: { stopPropagation: () => void }) => void;
     testID?: string;
-  }) =>
-    React.createElement(
+    style?: (state: { pressed: boolean }) => unknown[];
+  }) => {
+    motion.pressedStyle = style?.({ pressed: true }) ?? [];
+    return React.createElement(
       "button",
       {
         "aria-checked": ariaChecked ?? accessibilityState?.checked,
@@ -72,7 +81,8 @@ vi.mock("react-native", () => ({
         type: "button",
       },
       children,
-    ),
+    );
+  },
 }));
 
 vi.mock("react-native-unistyles", () => ({
@@ -93,6 +103,8 @@ describe("Switch", () => {
   let container: HTMLElement | null = null;
 
   beforeEach(() => {
+    motion.reduced = false;
+    motion.pressedStyle = [];
     const dom = new JSDOM("<!doctype html><html><body></body></html>");
     vi.stubGlobal("React", React);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -164,6 +176,16 @@ describe("Switch", () => {
     pressSwitch(switchElement);
 
     expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the pressed switch still when reduced motion is enabled", () => {
+    renderSwitch({ value: false });
+    const scaleStyle = expect.objectContaining({ transform: [{ scale: 0.97 }] });
+    expect(motion.pressedStyle).toEqual(expect.arrayContaining([scaleStyle]));
+
+    motion.reduced = true;
+    renderSwitch({ value: false });
+    expect(motion.pressedStyle).not.toEqual(expect.arrayContaining([scaleStyle]));
   });
 
   it("reflects checked accessibility state from value", () => {

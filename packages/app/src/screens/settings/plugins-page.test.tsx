@@ -66,7 +66,13 @@ vi.mock("react-native-reanimated", () => ({
       return this;
     }
   },
-  Easing: { ease: "ease", inOut: (value: unknown) => value },
+  Easing: {
+    ease: "ease",
+    inOut: (value: unknown) => value,
+    bezier: (...values: number[]) => values,
+  },
+  ReduceMotion: { System: "system" },
+  useReducedMotion: () => false,
   interpolateColor: (value: number, _input: number[], output: string[]) =>
     value >= 1 ? output[1] : output[0],
   useAnimatedStyle: (factory: () => unknown) => factory(),

@@ -371,11 +371,12 @@
         "paseo/no-raw-pressable": "error"
       }
     },
-    // Press feedback is owned by the primitives in components/ui. Raw pressable burn-down:
+    // Press feedback is owned by the primitives in ui and components/ui. Raw pressable burn-down:
     // 94 files. They may only leave this list.
     {
       "files": [
         "packages/app/src/components/ui/**/*.{ts,tsx}",
+        "packages/app/src/ui/**/*.{ts,tsx}",
         "packages/app/src/**/*.{test,spec}.{ts,tsx}",
         "packages/app/src/agent-profiles/settings/agent-profile-appearance-field.tsx",
         "packages/app/src/agent-skills/selection-sheet.tsx",

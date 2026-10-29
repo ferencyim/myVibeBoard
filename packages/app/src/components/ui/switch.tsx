@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Pressable,
   type GestureResponderEvent,
@@ -10,11 +10,13 @@ import Animated, {
   interpolateColor,
   useAnimatedStyle,
   useDerivedValue,
+  useReducedMotion,
+  ReduceMotion,
   withTiming,
 } from "react-native-reanimated";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { createControlGeometry, switchGeometry } from "@/components/ui/control-geometry";
-import type { Theme } from "@/styles/theme";
+import { MOTION, type Theme } from "@/styles/theme";
 
 interface SwitchProps {
   value: boolean;
@@ -25,7 +27,11 @@ interface SwitchProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const TIMING = { duration: 180, easing: Easing.inOut(Easing.ease) };
+const TIMING = {
+  duration: MOTION.normal,
+  easing: Easing.bezier(0.77, 0, 0.175, 1),
+  reduceMotion: ReduceMotion.System,
+};
 
 interface SwitchTrackProps {
   value: boolean;
@@ -67,7 +73,7 @@ function SwitchTrack({
 }
 
 const ThemedSwitchTrack = withUnistyles(SwitchTrack, (theme: Theme) => ({
-  trackOffColor: theme.colors.surface3,
+  trackOffColor: theme.colors.bgControlActive,
   trackOnColor: theme.colors.accent,
   thumbOffColor: theme.colors.palette.white,
   thumbOnColor: theme.colors.accentForeground,
@@ -81,6 +87,10 @@ export function Switch({
   testID,
   style,
 }: SwitchProps) {
+  const [focused, setFocused] = useState(false);
+  const reduceMotion = useReducedMotion();
+  const handleFocus = useCallback(() => setFocused(true), []);
+  const handleBlur = useCallback(() => setFocused(false), []);
   const handlePress = useCallback(
     (event: GestureResponderEvent) => {
       event.stopPropagation();
@@ -91,14 +101,22 @@ export function Switch({
   );
 
   const accessibilityState = useMemo(() => ({ checked: value, disabled }), [value, disabled]);
-  const pressableStyle = useMemo(
-    () => [styles.switchControl, disabled ? styles.disabled : null, style],
-    [disabled, style],
+  const pressableStyle = useCallback(
+    ({ pressed }: { pressed: boolean }) => [
+      styles.switchControl,
+      focused ? styles.focused : null,
+      pressed && !reduceMotion ? styles.pressed : null,
+      disabled ? styles.disabled : null,
+      style,
+    ],
+    [disabled, focused, reduceMotion, style],
   );
 
   return (
     <Pressable
       onPress={handlePress}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
       disabled={disabled}
       hitSlop={8}
       accessibilityRole="switch"
@@ -120,6 +138,13 @@ const styles = StyleSheet.create((theme) => {
     switchControl: {
       ...geometry.switchControl,
     },
+    focused: {
+      outlineWidth: 1,
+      outlineColor: theme.colors.textMuted,
+      outlineStyle: "solid",
+      outlineOffset: 1,
+    },
+    pressed: { transform: [{ scale: 0.97 }] },
     switchTrack: {
       width: switchGeometry.trackWidth,
       height: switchGeometry.trackHeight,
@@ -140,7 +165,7 @@ const styles = StyleSheet.create((theme) => {
       elevation: 2,
     },
     disabled: {
-      opacity: theme.opacity[50],
+      opacity: 0.45,
     },
   };
 });

@@ -27,6 +27,8 @@ vi.mock("react-native-reanimated", () => ({
   default: {
     View: "div",
   },
+  ReduceMotion: { System: "system" },
+  useReducedMotion: () => false,
   FadeIn: {},
   FadeOut: {},
 }));
@@ -63,6 +65,7 @@ afterEach(() => {
   }
   root = null;
   container = null;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -112,5 +115,35 @@ describe("TooltipTrigger", () => {
     pressTrigger();
 
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens after 350 ms of pointer hover and cancels on leave", () => {
+    vi.useFakeTimers();
+    const onOpenChange = vi.fn();
+    act(() => {
+      root?.render(
+        <Tooltip onOpenChange={onOpenChange}>
+          <TooltipTrigger asChild>
+            <Pressable testID="trigger">
+              <Text>Help</Text>
+            </Pressable>
+          </TooltipTrigger>
+        </Tooltip>,
+      );
+    });
+    const trigger = container?.querySelector('[data-testid="trigger"]');
+    act(() => {
+      trigger?.dispatchEvent(new window.MouseEvent("pointerover", { bubbles: true }));
+      vi.advanceTimersByTime(349);
+    });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
+    act(() => {
+      trigger?.dispatchEvent(new window.MouseEvent("pointerout", { bubbles: true }));
+    });
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
   });
 });

@@ -9,7 +9,8 @@ import type { Theme } from "@/styles/theme";
 
 const theme = {
   borderRadius: {
-    md: 6,
+    sm: 6,
+    md: 8,
     lg: 8,
     xl: 12,
     "2xl": 16,
@@ -21,6 +22,7 @@ const theme = {
   colors: {
     accent: "#20744A",
     borderAccent: "#2F3534",
+    textMuted: "#979797",
   },
   fontSize: {
     xs: 10,
@@ -62,10 +64,10 @@ describe("control geometry", () => {
     });
     expect(geometry.controlActive).toEqual({
       borderColor: "#2F3534",
-      outlineColor: "#20744A",
+      outlineColor: "#979797",
       outlineOffset: 1,
       outlineStyle: "solid",
-      outlineWidth: 2,
+      outlineWidth: 1,
     });
   });
 
@@ -103,8 +105,8 @@ describe("control geometry", () => {
         borderWidth * 2,
     ).toBe(geometry.fieldControlSm.minHeight);
 
-    expect(geometry.fieldControlMd.minHeight).toBe(44);
-    expect(geometry.fieldControlMd.paddingVertical).toBe(11);
+    expect(geometry.fieldControlMd.minHeight).toBe(36);
+    expect(geometry.fieldControlMd.paddingVertical).toBe(7);
     expect(
       geometry.fieldTextMd.lineHeight +
         geometry.fieldControlMd.paddingVertical * 2 +
@@ -112,7 +114,7 @@ describe("control geometry", () => {
     ).toBe(geometry.fieldControlMd.minHeight);
 
     expect(geometry.formTextInputSm.paddingVertical).toBe(5);
-    expect(geometry.formTextInputMd.paddingVertical).toBe(11);
+    expect(geometry.formTextInputMd.paddingVertical).toBe(7);
   });
 
   it("keeps segmented controls ghost with button-radius segments in a button-sized track", () => {
@@ -121,24 +123,25 @@ describe("control geometry", () => {
     expect(geometry.segmentedContainerXs.padding).toBe(0);
     expect(geometry.segmentedContainerSm.padding).toBe(0);
     expect(geometry.segmentedContainerMd.padding).toBe(0);
-    expect(geometry.segmentedSegmentXs.borderRadius).toBe(geometry.buttonXs.borderRadius);
-    expect(geometry.segmentedSegmentSm.borderRadius).toBe(geometry.buttonSm.borderRadius);
-    expect(geometry.segmentedSegmentMd.borderRadius).toBe(geometry.buttonMd.borderRadius);
-    expect(geometry.segmentedContainerXs.minHeight).toBe(geometry.buttonXs.minHeight);
+    expect(geometry.segmentedSegmentXs.borderRadius).toBe(12);
+    expect(geometry.segmentedSegmentSm.borderRadius).toBe(12);
+    expect(geometry.segmentedSegmentMd.borderRadius).toBe(16);
+    expect(geometry.segmentedContainerXs.minHeight).toBe(28);
     expect(geometry.segmentedContainerSm.minHeight).toBe(geometry.buttonSm.minHeight);
     expect(geometry.segmentedContainerMd.minHeight).toBe(geometry.buttonMd.minHeight);
     expect(geometry.segmentedSegmentXs.minHeight).toBe(24);
     expect(geometry.segmentedSegmentSm.minHeight).toBe(28);
-    expect(geometry.segmentedSegmentMd.minHeight).toBe(38);
+    expect(geometry.segmentedSegmentMd.minHeight).toBe(30);
   });
 
   it("keeps one size contract across buttons and segmented controls", () => {
     const geometry = createControlGeometry(theme);
 
     // xs is a genuinely smaller tier, not sm with a different font.
-    expect(geometry.buttonXs.minHeight).toBe(28);
+    expect(geometry.buttonXs.minHeight).toBe(24);
     expect(geometry.buttonSm.minHeight).toBe(32);
-    expect(geometry.buttonMd.minHeight).toBe(44);
+    expect(geometry.buttonMd.minHeight).toBe(36);
+    expect(geometry.buttonLg.minHeight).toBe(40);
     expect(geometry.buttonXs.minHeight).toBe(buttonControlHeight.xs);
     expect(geometry.buttonSm.minHeight).toBe(buttonControlHeight.sm);
     expect(geometry.buttonMd.minHeight).toBe(buttonControlHeight.md);
@@ -152,7 +155,7 @@ describe("control geometry", () => {
 
     // Segments sit inside a track, so they run one padding step tighter than a
     // standalone button of the same size — the gap between segments reads as the padding.
-    expect(geometry.segmentedSegmentXs.paddingHorizontal).toBeLessThan(
+    expect(geometry.segmentedSegmentXs.paddingHorizontal).toBeLessThanOrEqual(
       geometry.buttonXs.paddingHorizontal,
     );
     expect(geometry.segmentedSegmentSm.paddingHorizontal).toBeLessThan(

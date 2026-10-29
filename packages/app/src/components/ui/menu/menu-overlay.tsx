@@ -253,7 +253,7 @@ export function AnchoredSurface({
   align = "start",
   offset = 4,
   width,
-  minWidth = 180,
+  minWidth = 192,
   maxWidth,
   maxHeight,
   fullWidth = false,
@@ -313,8 +313,12 @@ export function AnchoredSurface({
       ? { width: screenWidth - horizontalPadding * 2 }
       : {
           ...(typeof width === "number" ? { width } : null),
-          ...(typeof minWidth === "number" ? { minWidth } : null),
-          ...(typeof maxWidth === "number" ? { maxWidth } : null),
+          ...(typeof minWidth === "number"
+            ? { minWidth: Math.min(minWidth, screenWidth - 16) }
+            : null),
+          ...(typeof maxWidth === "number"
+            ? { maxWidth: Math.min(maxWidth, screenWidth - 16) }
+            : null),
         };
     return [
       resolvedWidthStyle,
@@ -534,10 +538,10 @@ const styles = StyleSheet.create((theme) => ({
     left: 0,
   },
   content: {
-    backgroundColor: theme.colors.surface1,
+    backgroundColor: theme.colors.bgSheet,
     borderWidth: 1,
     borderColor: theme.colors.borderAccent,
-    borderRadius: theme.borderRadius.lg,
+    borderRadius: 14,
     overflow: "hidden",
     ...theme.shadow.md,
   },

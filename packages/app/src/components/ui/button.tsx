@@ -9,7 +9,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, View, StyleSheet as NativeStyleSheet } from "react-native";
 import type {
   PressableProps,
   PressableStateCallbackType,
@@ -17,6 +17,7 @@ import type {
   TextStyle,
   ViewStyle,
 } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import {
   buttonIconSize,
@@ -25,8 +26,8 @@ import {
 } from "@/components/ui/control-geometry";
 import type { Theme } from "@/styles/theme";
 
-type ButtonVariant = "default" | "secondary" | "outline" | "ghost" | "destructive";
-type ButtonSize = ButtonControlSize;
+export type ButtonVariant = "default" | "secondary" | "outline" | "ghost" | "destructive" | "link";
+export type ButtonSize = ButtonControlSize | "default";
 
 type LeftIcon =
   | ReactElement
@@ -79,10 +80,11 @@ const foregroundMutedIconMapping = (theme: Theme) => ({
   iconColor: theme.colors.foregroundMuted,
 });
 const accentForegroundIconMapping = (theme: Theme) => ({
-  iconColor: theme.colors.accentForeground,
+  iconColor: theme.colors.primaryForeground,
 });
+const accentTextIconMapping = (theme: Theme) => ({ iconColor: theme.colors.accentText });
 const destructiveForegroundIconMapping = (theme: Theme) => ({
-  iconColor: theme.colors.destructiveForeground,
+  iconColor: theme.colors.dangerText,
 });
 
 const styles = StyleSheet.create((theme) => {
@@ -111,44 +113,62 @@ const styles = StyleSheet.create((theme) => {
       ...geometry.buttonLg,
     },
     default: {
-      backgroundColor: theme.colors.accent,
-      borderColor: theme.colors.accent,
+      backgroundColor: theme.colors.primary,
+      borderColor: theme.colors.primary,
     },
     secondary: {
-      backgroundColor: theme.colors.surface3,
-      borderColor: theme.colors.surface3,
+      backgroundColor: theme.colors.hoverTint,
+      borderColor: theme.colors.hoverTint,
     },
     outline: {
-      backgroundColor: "transparent",
-      borderColor: theme.colors.borderAccent,
+      backgroundColor: theme.colors.bgControl,
+      borderColor: theme.colors.borderStrong,
     },
     ghost: {
       backgroundColor: "transparent",
       borderColor: "transparent",
     },
     destructive: {
-      backgroundColor: theme.colors.destructive,
-      borderColor: theme.colors.destructive,
+      backgroundColor: theme.colors.dangerSoft,
+      borderColor: "transparent",
+    },
+    link: {
+      backgroundColor: "transparent",
+      borderColor: "transparent",
+    },
+    hovered: { backgroundColor: theme.colors.bgControlHover },
+    primaryHovered: { opacity: 0.9 },
+    destructiveHovered: { backgroundColor: theme.colors.dangerSoftHover },
+    linkText: { color: theme.colors.accentText },
+    linkHoveredText: { textDecorationLine: "underline" },
+    focused: {
+      outlineWidth: 1,
+      outlineStyle: "solid",
+      outlineColor: theme.colors.textMuted,
+      outlineOffset: 1,
     },
     pressed: {
-      opacity: 0.85,
+      transform: [{ scale: 0.97 }],
     },
     disabled: {
-      opacity: theme.opacity[50],
+      opacity: 0.45,
     },
     text: {
       color: theme.colors.foreground,
       ...geometry.buttonText,
-      fontWeight: theme.fontWeight.normal,
+      lineHeight: theme.lineHeight.base,
+      fontFamily: theme.fontFamily.ui,
+      fontWeight: theme.fontWeight.medium,
     },
     textXs: {
       ...geometry.buttonTextXs,
+      lineHeight: theme.lineHeight.sm,
     },
     textDefault: {
-      color: theme.colors.accentForeground,
+      color: theme.colors.primaryForeground,
     },
     textDestructive: {
-      color: theme.colors.destructiveForeground,
+      color: theme.colors.dangerText,
     },
     textGhost: {
       color: theme.colors.foregroundMuted,
@@ -161,8 +181,8 @@ const styles = StyleSheet.create((theme) => {
 
 export function Button({
   children,
-  variant = "secondary",
-  size = "md",
+  variant = "default",
+  size = "default",
   leftIcon,
   trailing,
   style,
@@ -171,6 +191,8 @@ export function Button({
   loading = false,
   accessibilityRole,
   accessibilityState: accessibilityStateProp,
+  onFocus,
+  onBlur,
   ...props
 }: PropsWithChildren<
   Omit<PressableProps, "style"> & {
@@ -185,46 +207,65 @@ export function Button({
   }
 >) {
   const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const reduceMotion = useReducedMotion();
+  const controlSize = size === "default" ? "md" : size;
   const isDisabled = disabled || loading;
+  // Keep the hover envelope in the same parent flex slot as the original button.
+  const flattenedStyle = NativeStyleSheet.flatten(style);
+  const envelopeStyle = useMemo(
+    () => ({
+      position: "relative" as const,
+      flex: flattenedStyle?.flex,
+      flexGrow: flattenedStyle?.flexGrow,
+      flexShrink: flattenedStyle?.flexShrink,
+      flexBasis: flattenedStyle?.flexBasis,
+      alignSelf: flattenedStyle?.alignSelf,
+    }),
+    [
+      flattenedStyle?.flex,
+      flattenedStyle?.flexGrow,
+      flattenedStyle?.flexShrink,
+      flattenedStyle?.flexBasis,
+      flattenedStyle?.alignSelf,
+    ],
+  );
 
-  let variantStyle: ViewStyle;
-  if (variant === "default") {
-    variantStyle = styles.default;
-  } else if (variant === "secondary") {
-    variantStyle = styles.secondary;
-  } else if (variant === "outline") {
-    variantStyle = styles.outline;
-  } else if (variant === "ghost") {
-    variantStyle = styles.ghost;
-  } else {
-    variantStyle = styles.destructive;
-  }
-
-  let sizeStyle: ViewStyle;
-  if (size === "xs") {
-    sizeStyle = styles.xs;
-  } else if (size === "sm") {
-    sizeStyle = styles.sm;
-  } else if (size === "lg") {
-    sizeStyle = styles.lg;
-  } else {
-    sizeStyle = styles.md;
-  }
+  const variantStyle = styles[variant];
+  const sizeStyle = styles[controlSize];
   const isGhostHovered = hovered && variant === "ghost";
 
   const handleHoverIn = useCallback(() => setHovered(true), []);
   const handleHoverOut = useCallback(() => setHovered(false), []);
+  const handleFocus = useCallback<NonNullable<PressableProps["onFocus"]>>(
+    (event) => {
+      setFocused(true);
+      onFocus?.(event);
+    },
+    [onFocus],
+  );
+  const handleBlur = useCallback<NonNullable<PressableProps["onBlur"]>>(
+    (event) => {
+      setFocused(false);
+      onBlur?.(event);
+    },
+    [onBlur],
+  );
 
   const pressableStyle = useCallback(
     ({ pressed }: PressableStateCallbackType): StyleProp<ViewStyle> => [
       styles.base,
       sizeStyle,
       variantStyle,
-      pressed ? styles.pressed : null,
+      hovered && variant !== "link" && variant !== "default" ? styles.hovered : null,
+      hovered && variant === "default" ? styles.primaryHovered : null,
+      hovered && variant === "destructive" ? styles.destructiveHovered : null,
+      focused ? styles.focused : null,
+      pressed && !reduceMotion ? styles.pressed : null,
       isDisabled ? styles.disabled : null,
       style,
     ],
-    [sizeStyle, variantStyle, isDisabled, style],
+    [sizeStyle, variantStyle, hovered, variant, focused, reduceMotion, isDisabled, style],
   );
 
   const resolvedTextStyle = useMemo(
@@ -234,10 +275,12 @@ export function Button({
       variant === "default" ? styles.textDefault : null,
       variant === "destructive" ? styles.textDestructive : null,
       variant === "ghost" ? styles.textGhost : null,
+      variant === "link" ? styles.linkText : null,
+      hovered && variant === "link" ? styles.linkHoveredText : null,
       textStyle,
       isGhostHovered ? styles.textGhostHovered : null,
     ],
-    [size, variant, textStyle, isGhostHovered],
+    [size, variant, hovered, textStyle, isGhostHovered],
   );
 
   const accessibilityState = useMemo(
@@ -252,6 +295,9 @@ export function Button({
     if (variant === "destructive") {
       return destructiveForegroundIconMapping;
     }
+    if (variant === "link") {
+      return accentTextIconMapping;
+    }
     if (variant === "ghost") {
       return isGhostHovered ? foregroundIconMapping : foregroundMutedIconMapping;
     }
@@ -259,23 +305,25 @@ export function Button({
   }
 
   return (
-    <Pressable
-      {...props}
-      accessibilityRole={accessibilityRole ?? "button"}
-      accessibilityState={accessibilityState}
-      disabled={isDisabled}
-      onHoverIn={handleHoverIn}
-      onHoverOut={handleHoverOut}
-      style={pressableStyle}
-    >
-      <ThemedButtonIcon
-        loading={loading}
-        leftIcon={leftIcon}
-        iconSize={buttonIconSize[size]}
-        uniProps={resolveIconMapping()}
-      />
-      {children != null ? <Text style={resolvedTextStyle}>{children}</Text> : null}
-      {trailing}
-    </Pressable>
+    <View style={envelopeStyle} onPointerEnter={handleHoverIn} onPointerLeave={handleHoverOut}>
+      <Pressable
+        {...props}
+        accessibilityRole={accessibilityRole ?? "button"}
+        accessibilityState={accessibilityState}
+        disabled={isDisabled}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        style={pressableStyle}
+      >
+        <ThemedButtonIcon
+          loading={loading}
+          leftIcon={leftIcon}
+          iconSize={buttonIconSize[controlSize]}
+          uniProps={resolveIconMapping()}
+        />
+        {children != null ? <Text style={resolvedTextStyle}>{children}</Text> : null}
+        {trailing}
+      </Pressable>
+    </View>
   );
 }
