@@ -13,6 +13,7 @@ import { presetModels, presetModeId } from "./vibe/contract/preset-models";
 import { isModelUnavailableError } from "./vibe/contract/error-class";
 import { findProjectConfig } from "./vibe/db/project-config";
 import { createBotStore } from "./vibe/db/bots";
+import { createBotThreadStore } from "./vibe/db/bot-threads";
 import { createVibeStore } from "./vibe/db/commands";
 import { createTaskRuntimeCommands } from "./vibe/db/task-runtime";
 import { resolveVibeHome, type VibeDb } from "./vibe/db/sqlite";
@@ -33,7 +34,7 @@ interface OpenedBot {
 }
 
 export interface BotAgent extends Pick<PaseoAgent,
-  "id" | "provider" | "model" | "thinkingOptionId" | "status" | "labels" | "updatedAt" | "archivedAt"
+  "id" | "cwd" | "provider" | "model" | "thinkingOptionId" | "status" | "labels" | "updatedAt" | "archivedAt"
 > {
   workspaceId?: string | null;
   currentModeId?: PaseoAgent["currentModeId"];
@@ -69,6 +70,7 @@ export interface BotHost {
   };
   providers: {
     snapshot(options?: { cwd?: string; cachedOnly?: boolean }): Promise<PaseoProviderSnapshotResult>;
+    refresh(options?: { cwd?: string }): Promise<unknown>;
     listAvailable(): Promise<{ providers: Array<{ provider: string; available: boolean }> }>;
     listModels(provider: string): Promise<{
       models?: Array<{
@@ -124,6 +126,7 @@ function validateAvatar(path: string) {
 
 export function createBotService(db: VibeDb, paseo: BotHost) {
   const bots = createBotStore(db);
+  const threads = createBotThreadStore(db);
   const memoryDelivery = createMemoryDelivery(db);
   const store = createVibeStore(db);
   let migration: Promise<void> | null = null;
@@ -287,11 +290,12 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
   async function caller(id: string | null | undefined) {
     await ready();
     if (!id) throw new Error("工具仅供 bot 使用");
-    const record = bots.list().find((bot) => bot.mainAgentId === id);
-    if (!record) throw new Error("调用者不是当前 bot 主对话");
     const current = await agent(id);
-    if (!current || current.archivedAt || current.labels["vibe.bot"] !== record.id ||
-        current.labels["vibe.bot-thread"] !== "main") {
+    const record = current && bots.get(current.labels["vibe.bot"] ?? "");
+    const threadId = current?.labels["vibe.bot-thread"];
+    const matches = record && (threadId === "main" ? record.mainAgentId === id :
+      threads.list(record.id).some((thread) => thread.id === threadId && thread.agentId === id));
+    if (!record || record.archivedAt || !current || current.archivedAt || !matches) {
       throw new Error("bot 身份标签不匹配");
     }
     return record;
@@ -566,6 +570,73 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     const cwd = join(resolveVibeHome(), "bots", bot.id);
     mkdirSync(cwd, { recursive: true });
     return cwd;
+  }
+
+  const threadOpens = new Map<string, Promise<OpenedBot>>();
+  const threadStates = new Map<string, BotOpenState>();
+  async function waitThread(botId: string, id: string): Promise<OpenedBot> {
+    const pending = threadOpens.get(id);
+    if (pending) return pending;
+    const job = (async () => {
+      await ready();
+      const bot = bots.require(botId);
+      const thread = threads.require(botId, id);
+      if (bot.archivedAt || thread.archivedAt) throw new Error("bot 或旁线程已归档");
+      if (thread.agentId) {
+        const current = await agent(thread.agentId);
+        if (!current || current.archivedAt) throw new Error("旁线程会话暂不可用");
+        if (current.status === "closed") await paseo.agents.ref(current.id).resume();
+        return { agentId: current.id, workspaceId: current.workspaceId ?? null };
+      }
+      const target = await validate(bot, false, false, true);
+      const main = bot.mainAgentId ? await agent(bot.mainAgentId) : null;
+      if (bot.mainAgentId && !main) throw new Error("主对话暂不可读，无法确定旁线程工作目录");
+      const cwd = main?.cwd ?? await botDirectory(bot);
+      const permission = await mode(target.provider, bot.permissionMode, true, cwd);
+      const memories = bots.memories(bot.id);
+      const created = await paseo.agents.create({
+        idempotencyKey: "bot-thread:" + id, cwd, title: thread.title,
+        labels: { "vibe.bot": bot.id, "vibe.bot-thread": id,
+          ...(bot.projectId ? { "vibe.role": "project", "vibe.project_id": bot.projectId } : {}) },
+        env: { VIBE_ROLE: bot.kind, VIBE_BOT_ID: bot.id,
+          ...(bot.projectId ? { VIBE_PROJECT_ID: bot.projectId } : {}),
+          ...(target.runtimeEnv ? { VIBE_RUNTIME_ENV: target.runtimeEnv } : {}) },
+        config: { provider: target.provider + "/" + target.model,
+          systemPrompt: [prompt(bot), bot.instructions, target.instructions, memoryContext(memories)].filter(Boolean).join("\n\n"),
+          ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
+          ...(permission ? { modeId: permission } : {}) },
+      });
+      threads.setAgent(botId, id, created.id);
+      if (threads.require(botId, id).archivedAt || bots.require(botId).archivedAt) {
+        throw new Error("bot 或旁线程在创建期间已归档");
+      }
+      memoryDelivery.record(bot.id, created.id, memories, [prompt(bot), bot.instructions].filter(Boolean).join("\n\n"));
+      return { agentId: created.id, workspaceId: created.workspaceId ?? null };
+    })().then((opened) => {
+      threadStates.set(id, { status: "ready", ...opened, error: null });
+      return opened;
+    }).catch((error: unknown) => {
+      threadStates.set(id, { status: "failed", agentId: null, workspaceId: null,
+        error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }).finally(() => threadOpens.delete(id));
+    threadOpens.set(id, job);
+    return job;
+  }
+  async function openThread(botId: string, id: string): Promise<BotOpenState> {
+    await ready();
+    const thread = threads.require(botId, id);
+    if (thread.archivedAt || bots.require(botId).archivedAt) throw new Error("bot 或旁线程已归档");
+    if (threadOpens.has(id)) return creatingState();
+    if (thread.agentId) {
+      const current = await agent(thread.agentId);
+      if (current && !current.archivedAt && current.status !== "closed")
+        return { status: "ready", agentId: current.id, workspaceId: current.workspaceId ?? null, error: null };
+    }
+    const failed = threadStates.get(id);
+    if (failed?.status === "failed") { threadStates.delete(id); return failed; }
+    void waitThread(botId, id).catch(() => {});
+    return creatingState();
   }
 
   async function spawnOnce(bot: Bot, handoff?: string): Promise<OpenedBot> {
@@ -878,14 +949,19 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     for (const timer of retryTimers.values()) clearTimeout(timer);
     retryTimers.clear();
     await Promise.allSettled([
-      ...updates.values(), ...pendingOpens.values(), ...openings.values(), ...defaults.values(), ...continuations.values(),
+      ...updates.values(), ...pendingOpens.values(), ...openings.values(), ...defaults.values(), ...continuations.values(), ...threadOpens.values(),
       ...(migration ? [migration] : []),
       ...(settingsMigration ? [settingsMigration] : []),
     ]);
   }
 
   return {
-    bots, memoryDelivery, ready, view, caller, models,
+    bots, threads, openThread, waitThread, memoryDelivery, ready, view, caller, models,
+    modelsForProject: async (query?: string, projectId?: string, refresh = false) => {
+      const cwd = projectId ? (await project(projectId)).projectRootPath : undefined;
+      if (refresh) await paseo.providers.refresh(cwd ? { cwd } : {});
+      return models(query, true, cwd);
+    },
     defaultPreset: async (projectId?: string) => (projectId ? findProjectConfig(store.projects.list(true), projectId, (await project(projectId)).projectRootPath)?.defaultPresets.project : undefined) ?? store.modelDefaults.global().project ?? null,
     create, defaultBot, open, state, waitOpen, update, apply, prompt,
     live, failover, close, continueConversation,

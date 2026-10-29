@@ -238,6 +238,8 @@ export function roleTabDisabled(
   const task = input.task;
   if (Array.isArray(task?.control?.enabledRoles) && task.control.enabledRoles.includes(role))
     return false;
+  if (task?.flowLevel === "simple" && role !== "worker") return true;
+  if (task?.flowLevel === "medium" && (role === "scout" || role === "reviewer")) return true;
   if (task?.rolesSnapshot && OPTIONAL_TASK_ROLES.includes(role))
     return task.rolesSnapshot[role] === null;
   try {
@@ -443,10 +445,15 @@ export function createTaskTabs(options: {
   }
   /** Records a UI-created worktree so its first agent becomes tab #1; agent-created worktrees stay out. */
   const PENDING_WORKSPACE_TTL_MS = 5 * 60_000;
-  const pendingWorktreeCreates = new Map<string, number>();
+  const pendingWorktreeCreates = new Map<string, {
+    at: number;
+    flowLevel?: "simple" | "medium" | "full";
+    source?: "user" | "bot";
+    reason?: string;
+  }>();
   function prunePending(nowMs: number): void {
-    for (const [workspaceId, at] of pendingWorktreeCreates) {
-      if (nowMs - at > PENDING_WORKSPACE_TTL_MS) pendingWorktreeCreates.delete(workspaceId);
+    for (const [workspaceId, pending] of pendingWorktreeCreates) {
+      if (nowMs - pending.at > PENDING_WORKSPACE_TTL_MS) pendingWorktreeCreates.delete(workspaceId);
     }
   }
   function trackWorkspaceCreate(request: PluginBeforeRequests["workspace.create"]): void {
@@ -460,11 +467,19 @@ export function createTaskTabs(options: {
     if (!request.workspaceId) return;
     const nowMs = now();
     prunePending(nowMs);
-    pendingWorktreeCreates.set(request.workspaceId, nowMs);
+    pendingWorktreeCreates.set(request.workspaceId, { at: nowMs, flowLevel: request.firstAgentContext?.flowLevel, source: "user" });
+  }
+  function setInitialFlow(workspaceId: string, input: { level: "simple" | "medium" | "full"; reason: string }): void {
+    if (store.tasks.get(workspaceId)) {
+      store.tasks.setFlow(workspaceId, { level: input.level, source: "bot", reason: input.reason });
+      return;
+    }
+    prunePending(now());
+    pendingWorktreeCreates.set(workspaceId, { at: now(), flowLevel: input.level, source: "bot", reason: input.reason });
   }
   function claimCreatedWorkspace(workspaceId: string): void {
     prunePending(now());
-    if (!pendingWorktreeCreates.delete(workspaceId)) return;
+    if (!pendingWorktreeCreates.has(workspaceId)) return;
     store.tasks.markTaskWorkspace(workspaceId);
   }
   /** Old tasks predate the marker; the task row itself is the durable proof. */
@@ -544,7 +559,17 @@ export function createTaskTabs(options: {
     }
     if (!isTaskWorkspace(workspaceId)) return null;
     let task = store.tasks.get(workspaceId);
-    if (!task) task = store.tasks.create({ workspaceId, anchorAgentId: agentId });
+    if (!task) {
+      task = store.tasks.create({ workspaceId, anchorAgentId: agentId });
+      const pending = pendingWorktreeCreates.get(workspaceId);
+      pendingWorktreeCreates.delete(workspaceId);
+      if (pending?.flowLevel) {
+        task = store.tasks.setFlow(workspaceId, { level: pending.flowLevel, source: pending.source ?? "user", reason: pending.reason ?? "用户新建任务时选择" });
+        if (pending.flowLevel === "simple" && pending.source === "user") task = store.tasks.updateControl(workspaceId, { simpleAutoExecute: true });
+      } else if (pending?.source === "user") {
+        task = store.tasks.updateControl(workspaceId, { flowEvaluationPending: true });
+      }
+    }
     // The native project of every task, so the cross-task plan list still finds it later.
     if (placement.projectId && task.control?.projectId !== placement.projectId)
       task = store.tasks.updateControl(workspaceId, { projectId: placement.projectId });
@@ -642,8 +667,17 @@ export function createTaskTabs(options: {
       }
     }
     task = normalizeNumbers(task);
+    const projectId = typeof task.control?.projectId === "string" ? task.control.projectId : null;
     const views: TaskTabView[] = await Promise.all(
       task.tabs.map(async (tab) => {
+        if (tab.role !== "main" && FLOW_ROLE_ORDER.includes(tab.role as FlowRole) &&
+            roleTabDisabled(store, tab.role as FlowRole, { task, projectId })) {
+          return {
+            number: tab.number, agentId: "", role: tab.role,
+            roleLabel: TASK_TAB_ROLE_LABELS[tab.role], provider: tab.provider, model: tab.model,
+            status: "未启用", title: tabTitle(tab), busy: false,
+          };
+        }
         let agent: PaseoAgent | undefined;
         let handle: PaseoAgentHandle | undefined;
         let current = tab;
@@ -675,7 +709,6 @@ export function createTaskTabs(options: {
         };
       }),
     );
-    const projectId = typeof task.control?.projectId === "string" ? task.control.projectId : null;
     if (!views.some((view) => view.role === "main")) views.push(missingMainTab(task, projectId));
     const main = views.find((view) => view.role === "main");
     for (const role of FLOW_ROLE_ORDER) {
@@ -831,7 +864,7 @@ export function createTaskTabs(options: {
         })
       : "";
     const format =
-      role === "planner" ? store.prompts.resolve("task.plan_format", { projectId }) : "";
+      role === "planner" || role === "main" ? store.prompts.resolve("task.plan_format", { projectId }) : "";
     const parts = [guide, roleText, format].filter(
       (text): text is string => !!text && !supplied.includes(text),
     );
@@ -997,6 +1030,7 @@ export function createTaskTabs(options: {
     workspace: taskWorkspace,
     trackWorkspaceCreate,
     claimCreatedWorkspace,
+    setInitialFlow,
   };
 }
 export type TaskTabs = ReturnType<typeof createTaskTabs>;

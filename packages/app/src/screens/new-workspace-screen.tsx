@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { router } from "expo-router";
 import { Text, View } from "react-native";
+import { Button } from "@/ui/button";
 import { StyleSheet } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -180,7 +181,76 @@ function buildFirstAgentContext(input: {
   };
 }
 
+type FlowChoice = "auto" | "simple" | "medium" | "full";
+
+function FlowOption({
+  value,
+  label,
+  selected,
+  disabled,
+  onChange,
+}: {
+  value: FlowChoice;
+  label: string;
+  selected: boolean;
+  disabled: boolean;
+  onChange: (value: FlowChoice) => void;
+}) {
+  const select = useCallback(() => onChange(value), [onChange, value]);
+  return (
+    <Button
+      size="sm"
+      variant={selected ? "secondary" : "ghost"}
+      disabled={disabled}
+      onPress={select}
+    >
+      {label}
+    </Button>
+  );
+}
+
+function FlowSelector({
+  hidden,
+  value,
+  disabled,
+  supportsChoice,
+  isConnected,
+  onChange,
+}: {
+  hidden: boolean;
+  value: FlowChoice;
+  disabled: boolean;
+  supportsChoice: boolean;
+  isConnected: boolean;
+  onChange: (value: FlowChoice) => void;
+}) {
+  if (hidden) return null;
+  return (
+    <View style={styles.flowChoice}>
+      <Text style={styles.flowLabel}>流程</Text>
+      {(
+        [
+          ["auto", "自动（项目 bot 评估）"],
+          ["simple", "简单"],
+          ["medium", "中等"],
+          ["full", "完整"],
+        ] as const
+      ).map(([option, label]) => (
+        <FlowOption
+          key={option}
+          value={option}
+          label={label}
+          selected={value === option}
+          disabled={disabled || (option !== "auto" && isConnected && !supportsChoice)}
+          onChange={onChange}
+        />
+      ))}
+    </View>
+  );
+}
+
 interface FirstWorkspaceMessageInput {
+  flowChoice: FlowChoice;
   payload: MessagePayload;
   composerState: ReturnType<typeof useAgentInputDraft>["composerState"];
   formPreferences: FormPreferences;
@@ -225,6 +295,7 @@ function buildFirstWorkspaceMessage(
     ...model,
     text: input.payload.text,
     attachments: input.payload.attachments,
+    ...(input.flowChoice !== "auto" ? { flowLevel: input.flowChoice } : {}),
   };
 }
 
@@ -717,12 +788,15 @@ export function NewWorkspaceScreen({
   });
   // COMPAT(workspaceMultiplicity): added in v0.1.97, drop the gate when floor >= v0.1.97
   const supportsWorkspaceMultiplicity = useHostFeature(selectedServerId, "workspaceMultiplicity");
+  // COMPAT(taskFlowChoice): added in v0.13.2, remove after 2027-02-01.
+  const supportsFlowChoice = useHostFeature(selectedServerId, "taskFlowChoice");
   const supportsForgeSearch = useHostFeature(selectedServerId, "forgeSearch");
   const [creationIdentity, setCreationIdentity] = useState(() => ({
     draftId: draftId ?? generateDraftId(),
     worktreeSlug: createNameId(),
   }));
   const submissionLock = useRef(false);
+  const [flowChoice, setFlowChoice] = useState<FlowChoice>("auto");
   const [submittedOutboxId, setSubmittedOutboxId] = useState<string | null>(null);
   const outbox = useFirstMessageOutbox();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1155,6 +1229,7 @@ export function NewWorkspaceScreen({
 
         const queuedMessage = buildFirstWorkspaceMessage({
           payload,
+          flowChoice,
           composerState,
           formPreferences,
           isConnected,
@@ -1170,6 +1245,7 @@ export function NewWorkspaceScreen({
         setPendingAction("chat");
         const entry = await firstMessageOutbox.enqueue(queuedMessage);
         setSubmittedOutboxId(entry.id);
+        setFlowChoice("auto");
         clearConsumedDraft();
         chatDraft.replaceText("");
         setCreationIdentity({ draftId: generateDraftId(), worktreeSlug: createNameId() });
@@ -1196,6 +1272,7 @@ export function NewWorkspaceScreen({
       formPreferences,
       isConnected,
       useDefaultModel,
+      flowChoice,
       isStillOnCreateScreen,
       launchTarget,
       leaveFullscreen,
@@ -1502,7 +1579,19 @@ export function NewWorkspaceScreen({
         isCompact={isCompact}
         fullscreen={isComposerFullscreen}
         title={t("newWorkspace.title")}
-        formStack={formStack}
+        formStack={
+          <>
+            {formStack}
+            <FlowSelector
+              hidden={isTerminalLaunch}
+              value={flowChoice}
+              disabled={isPending}
+              supportsChoice={supportsFlowChoice}
+              isConnected={isConnected}
+              onChange={setFlowChoice}
+            />
+          </>
+        }
         onImportSession={importSession.open}
       >
         <NewTaskOutboxHint isTerminalLaunch={isTerminalLaunch} />
@@ -1623,6 +1712,13 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.normal,
     color: theme.colors.foreground,
   },
+  flowChoice: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  flowLabel: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   outboxHint: {
     fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,

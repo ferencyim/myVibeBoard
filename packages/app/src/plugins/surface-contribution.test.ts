@@ -83,6 +83,14 @@ describe("plugin surface contribution identity", () => {
     ]);
   });
 
+  it("resolves a previous sidebar route after its entry moves to the page rail", () => {
+    const plugin = installation("host", ["main"]);
+    plugin.pageRailItems = [{ id: "master", title: "bot", icon: "Bot", screenId: "main" }];
+    expect(
+      resolvePluginSurfaceContribution(plugin, { kind: "sidebar", id: "master" }).surface?.id,
+    ).toBe("main");
+  });
+
   it("does not let a same-id sidebar contribution capture a direct surface", () => {
     const identity = { kind: "surface", id: "overview" } as const;
     const resolved = resolvePluginSurfaceContribution(installations[0] ?? null, identity);

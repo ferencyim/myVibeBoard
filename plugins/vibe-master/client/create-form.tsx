@@ -17,7 +17,13 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   onSubmit(value: { name: string; title: string; instructions: string; presetId: string | null; provider: string | null; model: string | null; thinking: string }): void;
 }) {
   const list = useRpc(modelsListRpc);
-  const catalog = useQuery({ queryKey: ["vibe-bots", "create-models", projectId], queryFn: () => list({ projectId }) });
+  const [refreshing, setRefreshing] = useState(false);
+  const catalog = useQuery({ queryKey: ["vibe-bots", "create-models", projectId], queryFn: () => list({ projectId }), refetchInterval: refreshing ? 3000 : false });
+  const [refreshError, setRefreshError] = useState("");
+  const refreshModels = useCallback(() => {
+    setRefreshing(true); setRefreshError("");
+    void list({ projectId, refresh: true }).then(() => catalog.refetch()).catch((reason: unknown) => setRefreshError(String(reason))).finally(() => setRefreshing(false));
+  }, [list, projectId, catalog]);
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -47,7 +53,7 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   }), [theme]);
   const presets = useMemo(() => [{ label: "直接选择模型", value: "" }, ...(catalog.data?.presets ?? []).map((p) => ({ label: p.name, value: p.id }))], [catalog.data]);
   const providers = useMemo(() => [{ label: "请选择 provider", value: "" }, ...(catalog.data?.providers ?? []).map((p) => ({ label: p.provider, value: p.provider }))], [catalog.data]);
-  const modelOptions = useMemo(() => modelChoices(selectedProvider?.models), [selectedProvider]);
+  const modelOptions = useMemo(() => modelChoices(selectedProvider?.models, !!provider && !catalog.isLoading), [selectedProvider, provider, catalog.isLoading]);
   const thinkingOptions = useMemo(() => [{ label: "默认", value: "" }, ...(selectedModel?.thinkingOptions ?? []).map((o) => ({ label: o.name, value: o.id }))], [selectedModel]);
   const changeProvider = useCallback((v: string) => { setProvider(v); setModel(""); setThinking(""); }, []);
   const changeModel = useCallback((v: string) => { setModel(v); setThinking(""); }, []);
@@ -61,9 +67,12 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
       <TextInput accessibilityLabel="角色说明" placeholder="角色说明（可选，也可稍后编辑）" placeholderTextColor={theme.colors.foregroundMuted} value={instructions} onChangeText={setInstructions} multiline maxLength={30000} style={styles.description} />
       <Text style={styles.muted}>{catalog.isLoading ? "正在读取缓存模型…" : "缓存目录没有价格信息，无法确定最低价；请确认或选择合适的模型。"}</Text>
       {catalog.error ? <Text style={styles.danger}>模型目录加载失败：{String(catalog.error)}</Text> : null}
+      <Button theme={theme} label={refreshing ? "正在刷新模型列表…" : "刷新模型列表"} disabled={refreshing} onPress={refreshModels} />
+      {refreshError ? <Text style={styles.danger}>刷新模型列表失败：{refreshError}</Text> : null}
       <SettingsSelect label="预设" value={presetId} options={presets} onValueChange={setPresetId} />
       {!presetId ? <View style={styles.fields}>
         <SettingsSelect label="Provider" value={provider} options={providers} onValueChange={changeProvider} />
+        {provider && !catalog.isLoading && !selectedProvider?.models.length ? <Text style={styles.muted}>暂无缓存模型（可稍后重试或改选其它 provider）</Text> : null}
         <SettingsSelect label="模型" value={model} options={modelOptions} onValueChange={changeModel} />
         <SettingsSelect label="思考强度" value={thinking} options={thinkingOptions} onValueChange={setThinking} />
       </View> : null}

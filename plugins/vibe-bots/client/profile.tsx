@@ -44,6 +44,14 @@ export function BotProfilePanel(props: PluginAgentPanelProps) {
 // COMPAT(pluginThemeTokens): added in v0.13.0, remove after 2027-04-29.
 const legacyTokens = { spacing: { 2: 8, 3: 12, 4: 16, 24: 96 }, fontSize: { xl: 18 }, borderRadius: { md: 8 }, borderWidth: { 1: 1 } };
 
+function emptyModels(provider: string, loading: boolean, models: readonly unknown[] | undefined) {
+  return !!provider && !loading && !models?.length;
+}
+
+function modelChoices(provider: string, loading: boolean, models: ReadonlyArray<{ id: string; name: string; isDefault: boolean }> | undefined) {
+  return [{ label: emptyModels(provider, loading, models) ? "暂无缓存模型（可稍后重试或改选其它 provider）" : "请选择模型", value: "" }, ...(models ?? []).map((item) => ({ label: item.name + (item.isDefault ? "（默认）" : ""), value: item.id }))];
+}
+
 function useProfileStyles(theme: PluginTheme) {
   const spacing = theme.spacing ?? legacyTokens.spacing;
   const fontSize = theme.fontSize ?? legacyTokens.fontSize;
@@ -80,7 +88,13 @@ function Profile({ bot, theme, navigation, tab }: ProfileProps) {
   const setDefault = useRpc(projectDefaultBotSetRpc);
   const modelsList = useRpc(modelsListRpc);
   const client = useQueryClient();
-  const models = useQuery({ queryKey: ["vibe-bots", "models"], queryFn: () => modelsList({}) });
+  const [refreshing, setRefreshing] = useState(false);
+  const models = useQuery({ queryKey: ["vibe-bots", "models", bot.projectId], queryFn: () => modelsList({ projectId: bot.projectId ?? undefined }), refetchInterval: refreshing ? 3000 : false });
+  const [refreshError, setRefreshError] = useState("");
+  const refreshModels = useCallback(() => {
+    setRefreshing(true); setRefreshError("");
+    void modelsList({ projectId: bot.projectId ?? undefined, refresh: true }).then(() => models.refetch()).catch((reason: unknown) => setRefreshError(String(reason))).finally(() => setRefreshing(false));
+  }, [modelsList, bot.projectId, models]);
   const [name, setName] = useState(bot.name);
   const [title, setTitle] = useState(bot.title);
   const [instructions, setInstructions] = useState(bot.instructions);
@@ -134,7 +148,7 @@ function Profile({ bot, theme, navigation, tab }: ProfileProps) {
   const selectedModel = selectedProvider?.models.find((item) => item.id === model);
   const presets = useMemo(() => [{ label: "直接选择模型", value: "" }, ...(models.data?.presets ?? []).map((item) => ({ label: item.name, value: item.id }))], [models.data]);
   const providers = useMemo(() => [{ label: "请选择 provider", value: "" }, ...(models.data?.providers ?? []).map((item) => ({ label: item.provider, value: item.provider }))], [models.data]);
-  const modelOptions = useMemo(() => [{ label: "请选择模型", value: "" }, ...(selectedProvider?.models ?? []).map((item) => ({ label: item.name + (item.isDefault ? "（默认）" : ""), value: item.id }))], [selectedProvider]);
+  const modelOptions = useMemo(() => modelChoices(provider, models.isLoading, selectedProvider?.models), [selectedProvider, provider, models.isLoading]);
   const thinkingOptions = useMemo(() => [{ label: "默认", value: "" }, ...(selectedModel?.thinkingOptions ?? []).map((item) => ({ label: item.name, value: item.id }))], [selectedModel]);
   if (page === "memories") return <MemoryList bot={bot} theme={theme} onBack={actions.profile} onDirtyChange={setMemoryDirty} />;
   if (page === "instructions") return <Page theme={theme}><SettingsAction label="" actionLabel="返回资料" onPress={actions.profile} /><LongTextField theme={theme} label="角色说明" value={instructions} onChangeText={setInstructions} /><SettingsAction label="" actionLabel={busy ? "正在保存…" : "保存"} disabled={busy} onPress={actions.save} /><Feedback theme={theme} error={error} message={message} /></Page>;
@@ -148,6 +162,8 @@ function Profile({ bot, theme, navigation, tab }: ProfileProps) {
     </SettingsCard></SettingsSection>
     <SettingsSection title="模型与备用"><SettingsCard>
     <SettingsSelect label="模型 / 预设" value={presetId} options={presets} onValueChange={setPresetId} />
+    <Button theme={theme} label={refreshing ? "正在刷新模型列表…" : "刷新模型列表"} disabled={refreshing} onPress={refreshModels} />
+    <Feedback theme={theme} error={refreshError} />
     {!presetId ? <View style={styles.fields}><SettingsSelect label="Provider" value={provider} options={providers} onValueChange={actions.provider} /><SettingsSelect label="模型" value={model} options={modelOptions} onValueChange={actions.model} /><SettingsSelect label="思考强度" value={thinking} options={thinkingOptions} onValueChange={setThinking} /></View> : null}
     <Text style={styles.muted}>备用模型按顺序使用</Text>
     {backups.map(({ backup, remove }) => <View key={`${backup.provider}:${backup.model}:${backup.thinking}`} style={styles.fields}>

@@ -1,3 +1,6 @@
+import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
+import { PageRail } from "@/shell/page-rail";
+import { UsageSidebarRoot } from "@/usage";
 import { startProjectDocumentSync } from "@/runtime/project-documents";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
@@ -20,7 +23,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { AppState, useWindowDimensions, View } from "react-native";
+import { AppState, Text, useWindowDimensions, View } from "react-native";
 import { GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -53,10 +56,12 @@ import { HostChooserModal, useHostChooser } from "@/hosts/host-chooser";
 import { HostConfirmationSheet } from "@/hosts/host-confirmation-sheet";
 import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
 import {
+  PAGE_RAIL_WIDTH,
   canDesktopAppSidebarShare,
   resolveDesktopAppChromeLayout,
   resolveDesktopAppContentMinimum,
   resolveDesktopSidebarVisibility,
+  isDesktopPageRailVisible,
 } from "@/components/desktop-sidebar-layout";
 import { isNative, isWeb } from "@/constants/platform";
 import { HorizontalScrollProvider } from "@/contexts/horizontal-scroll-context";
@@ -427,7 +432,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
     canShare: canDesktopAppSidebarShare({
       contentMinimumWidth: appContentMinimumWidth,
       requestedSidebarWidth: sidebarWidth,
-      viewportWidth,
+      viewportWidth: viewportWidth - PAGE_RAIL_WIDTH,
     }),
   });
   const hasTopLeftWindowControls = useHasWindowChromeObstruction("top-left");
@@ -454,6 +459,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   const workspaceChrome = (
     <View style={workspaceChromeStyle}>
       <WorkspaceLayoutModePublisher />
+      <DesktopPageRail visible={isDesktopPageRailVisible(chromeEnabled, isCompactLayout)} />
       {!isCompactLayout ? (
         <WindowChromeRegion corners={appChromeLayout.sidebarCorners}>
           {themedSidebarChrome}
@@ -463,7 +469,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
         <WindowChromeRegion
           corners={isCompactLayout && chromeEnabled ? "both" : appChromeLayout.contentCorners}
         >
-          <View style={flexStyle}>{children}</View>
+          <AppContentCard compact={isCompactLayout}>{children}</AppContentCard>
         </WindowChromeRegion>
       </WorkspaceExplorerOpenGesture>
     </View>
@@ -473,6 +479,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   // Their tracked styles update in place; web numeric styles still need remounting.
   const surface = (
     <View style={layoutStyles.surfaceFill}>
+      <DesktopTitlebar visible={isDesktopPageRailVisible(chromeEnabled, isCompactLayout)} />
       {workspaceChrome}
       <AppearanceStyleBoundary>
         {!isCompactLayout && appChromeLayout.sidebarToggleOwner === "window" ? (
@@ -521,6 +528,38 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
       <SheetHostScope enabled={isCompactLayout}>{surface}</SheetHostScope>
     </AppContainerLifetime>
   );
+}
+
+function DesktopPageRail({ visible }: { visible: boolean }) {
+  return visible ? (
+    <UsageSidebarRoot>
+      <PageRail />
+    </UsageSidebarRoot>
+  ) : null;
+}
+
+const DEV_BUILD_LABEL = process.env.EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL?.trim() || null;
+
+function DesktopTitlebar({ visible }: { visible: boolean }) {
+  return visible ? (
+    <View style={layoutStyles.windowTitlebar}>
+      <TitlebarDragRegion />
+      {DEV_BUILD_LABEL ? (
+        <Text
+          pointerEvents="none"
+          testID="dev-build-label"
+          accessibilityLabel={`Development build: ${DEV_BUILD_LABEL}`}
+          style={layoutStyles.devBuildLabel}
+        >
+          {DEV_BUILD_LABEL}
+        </Text>
+      ) : null}
+    </View>
+  ) : null;
+}
+
+function AppContentCard({ compact, children }: { compact: boolean; children: ReactNode }) {
+  return <View style={compact ? flexStyle : layoutStyles.contentCard}>{children}</View>;
 }
 
 function AppContainerLifetime({
@@ -777,9 +816,11 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
     routeServerId !== null && hosts.some((host) => host.serverId === routeServerId);
   const shouldShowAppChrome =
     storeReady &&
-    (pathname === "/open-project" ||
+    (pathname.startsWith("/settings") ||
+      pathname === "/open-project" ||
       pathname === "/new" ||
       pathname === "/sessions" ||
+      pathname === "/routines" ||
       pathname === "/schedules" ||
       routeHasKnownHost);
 
@@ -813,6 +854,7 @@ function RootStack() {
         <Stack.Screen name="new" />
         <Stack.Screen name="open-project" />
         <Stack.Screen name="sessions" />
+        <Stack.Screen name="routines" />
         <Stack.Screen name="schedules" />
         <Stack.Screen name="pair-scan" />
       </Stack.Protected>
@@ -930,7 +972,24 @@ export default function RootLayout() {
 const layoutStyles = StyleSheet.create((theme) => ({
   surfaceFill: {
     flex: 1,
-    backgroundColor: theme.colors.surface0,
+    backgroundColor: theme.colors.bgFrame,
+  },
+  windowTitlebar: { height: 38, position: "relative", backgroundColor: theme.colors.bgFrame },
+  devBuildLabel: {
+    alignSelf: "center",
+    color: theme.colors.accentForeground,
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.borderRadius.full,
+    paddingHorizontal: theme.spacing[2],
+    fontSize: theme.fontSize.sm,
+  },
+  contentCard: {
+    flex: 1,
+    overflow: "hidden",
+    borderRadius: theme.borderRadius.card,
+    backgroundColor: theme.colors.bgCanvas,
+    marginRight: theme.spacing[1],
+    marginBottom: theme.spacing[1],
   },
   windowSidebarToggle: {
     position: "absolute",

@@ -90,6 +90,7 @@ function fixture() {
     },
     plugins: { invoke },
     providers: {
+      refresh: vi.fn(async (_options?: unknown) => ({})),
       listAvailable: vi.fn(async () => ({ providers: [{ provider: "codex", available: true }, { provider: "claude", available: true }] })),
       listModels: vi.fn(async (_provider: string) => ({ models: [
         { id: "initial", label: "初始模型", isDefault: true, thinkingOptions: [{ id: "high", label: "高" }] },
@@ -122,7 +123,34 @@ function fixture() {
   return { api, db, service, start, createProjectBot, agents, createAgent, setModel, setThinking, send, setLabels, setTitle, invoke, seedLegacy };
 }
 
+function modelIds(entry: { provider: string; models: Array<{ id: string }> }) {
+  return [entry.provider, entry.models.map((model) => model.id)];
+}
+
 describe("bot 服务主对话与模型变更", () => {
+  it("项目模型目录读取项目与全局缓存并保留全部可选模型", async () => {
+    const f = fixture();
+    f.api.providers.snapshot.mockImplementation(async (options) => ({
+      generatedAt: "2026-10-29T00:00:00.000Z", requestId: "fixture",
+      entries: (options as { cwd?: string })?.cwd ? [
+        { provider: "claude", enabled: true, status: "ready", models: [
+          { provider: "claude", id: "opus", label: "Opus", isDefault: true },
+          { provider: "claude", id: "sonnet", label: "Sonnet", isDefault: false },
+          { provider: "claude", id: "hidden", label: "Hidden", isSelectable: false },
+        ] },
+      ] : [{ provider: "codex", enabled: true, status: "ready", models: [
+        { provider: "codex", id: "one", label: "One", isDefault: true },
+        { provider: "codex", id: "two", label: "Two", isDefault: false },
+      ] }],
+    }));
+    const result = await f.service.modelsForProject(undefined, "p");
+    expect(result.providers.map(modelIds)).toEqual([
+      ["codex", ["one", "two"]], ["claude", ["opus", "sonnet"]],
+    ]);
+    await f.service.modelsForProject(undefined, "p", true);
+    expect(f.api.providers.refresh).toHaveBeenCalledWith({ cwd: "/project-repo" });
+  });
+
   it("慢创建立即返回创建中，同 bot 单飞且同项目其他 bot 独立创建", async () => {
     const f = fixture();
     const one = await f.createProjectBot();
@@ -456,4 +484,67 @@ it("旧主对话下一回合送达通用角色说明，用户修改说明后仅�
   const next = f.service.memoryDelivery.prepare(bot.id, "legacy-helper", [], "协助写作")!;
   expect(next.context).toContain("协助写作");
   expect(next.context).not.toContain("你不自动派发");
+});
+
+describe("旁线程", () => {
+  it("支持增改归档并限制每个 bot 的未归档数量", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    const other = await f.createProjectBot();
+    const rows = Array.from({ length: 8 }, (_, i) => f.service.threads.create(bot.id, `话题 ${i}`));
+    expect(() => f.service.threads.create(bot.id, "超限")).toThrow("8");
+    expect(() => f.service.threads.rename(other.id, rows[0].id, "越权")).toThrow();
+    expect(f.service.threads.rename(bot.id, rows[0].id, "新标题").title).toBe("新标题");
+    f.service.threads.archive(bot.id, rows[0].id);
+    expect(f.service.threads.list(bot.id)).toHaveLength(7);
+    expect(f.service.threads.create(bot.id, "新话题")).toBeTruthy();
+  });
+
+  it("后台打开单飞，继承身份、目录和记忆，并校验调用者", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    f.service.bots.memoryAdd(bot.id, "共享记忆");
+    const thread = f.service.threads.create(bot.id, "话题");
+    const create = f.createAgent.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    f.createAgent.mockImplementationOnce(async (input) => { await gate; return create(input); });
+    try {
+      expect((await f.service.openThread(bot.id, thread.id)).status).toBe("creating");
+      expect((await f.service.openThread(bot.id, thread.id)).status).toBe("creating");
+      release();
+      const opened = await f.service.waitThread(bot.id, thread.id);
+      const request = f.createAgent.mock.calls[0][0];
+      expect(request.cwd).toBe("/project-repo");
+      expect(request.labels).toMatchObject({ "vibe.bot": bot.id, "vibe.bot-thread": thread.id });
+      expect(request.config.systemPrompt).toContain("共享记忆");
+      expect((await f.service.caller(opened.agentId)).id).toBe(bot.id);
+      f.agents.get(opened.agentId)!.labels["vibe.bot"] = "other";
+      await expect(f.service.caller(opened.agentId)).rejects.toThrow();
+      expect(f.createAgent).toHaveBeenCalledTimes(1);
+    } finally { release(); }
+  });
+
+  it("使用迁移主对话的目录，创建期间归档不会交付任务", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    f.seedLegacy("old-main", { "vibe.bot": bot.id, "vibe.bot-thread": "main" });
+    f.agents.get("old-main")!.cwd = "/existing-directory";
+    f.service.bots.setMain(bot.id, "old-main");
+    const thread = f.service.threads.create(bot.id, "话题");
+    const create = f.createAgent.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    f.createAgent.mockImplementationOnce(async (input) => { await gate; return create(input); });
+    try {
+      const opening = f.service.waitThread(bot.id, thread.id);
+      for (let attempt = 0; attempt < 100 && !f.createAgent.mock.calls.length; attempt++) await Promise.resolve();
+      expect(f.createAgent.mock.calls[0][0].cwd).toBe("/existing-directory");
+      f.service.threads.archive(bot.id, thread.id);
+      release();
+      await expect(opening).rejects.toThrow("已归档");
+      expect(f.service.threads.require(bot.id, thread.id).agentId).toBeTruthy();
+      expect(f.send).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
 });

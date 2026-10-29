@@ -18,6 +18,12 @@ export const taskTabCommandRpc = defineRpc({
   output: z.object({ task: TaskSchema, message: z.string() }),
 });
 
+export const taskFlowSetRpc = defineRpc({
+  name: "vibe.task.flow.set",
+  input: z.object({ workspaceId: z.string().min(1), level: z.enum(["simple", "medium", "full"]) }),
+  output: z.object({ task: TaskSchema }),
+});
+
 /** Task status rows appended by the plugin; rendered by this plugin's timeline renderer. */
 export const taskStatusDataSchema = z.object({ text: z.string() });
 

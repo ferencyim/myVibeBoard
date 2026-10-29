@@ -1,13 +1,14 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
-import { SchedulerScreen, SchedulerSettingsScreen, SchedulerSidebarItem } from "./client/screen";
+import { SchedulerScreen, SchedulerSettingsScreen } from "./client/screen";
 
 export default function contribute(client: PluginClientContext) {
   client.addScreen({ id: "main", title: "调度器", Component: SchedulerScreen });
-  client.addSidebarHeaderItem({
+  client.addPageRailItem({
     id: "scheduler",
     title: "调度器",
-    order: -10,
-    Component: SchedulerSidebarItem,
+    order: 30,
+    icon: "CalendarClock",
+    screenId: "main",
   });
   client.addSettingsScreen({
     order: -20,

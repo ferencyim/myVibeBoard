@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { BotThreadSchema } from "./vibe/contract/bot-thread";
 import {
   BotSchema,
   BotCreateSchema,
@@ -41,6 +42,13 @@ export const BotOpenStateSchema = z.object({
   workspaceId: z.string().nullable(),
   error: z.string().nullable(),
 });
+const threadIdentity = { botId: z.string().min(1), id: z.string().min(1) };
+const threadTitle = z.string().trim().min(1).max(200);
+export const threadsListRpc = defineRpc({ name: "threads.list", input: z.object({ botId: z.string().min(1) }), output: z.object({ threads: z.array(BotThreadSchema) }) });
+export const threadsCreateRpc = defineRpc({ name: "threads.create", input: z.object({ botId: z.string().min(1), title: threadTitle }), output: z.object({ thread: BotThreadSchema }) });
+export const threadsRenameRpc = defineRpc({ name: "threads.rename", input: z.object({ ...threadIdentity, title: threadTitle }), output: z.object({ thread: BotThreadSchema }) });
+export const threadsArchiveRpc = defineRpc({ name: "threads.archive", input: z.object(threadIdentity), output: z.object({ ok: z.literal(true) }) });
+export const threadsOpenRpc = defineRpc({ name: "threads.open", input: z.object(threadIdentity), output: BotOpenStateSchema });
 export const botsOpenRpc = defineRpc({
   name: "bots.open",
   input: z.object({ id: z.string() }),
@@ -92,7 +100,7 @@ export const memoriesRemoveRpc = defineRpc({
 });
 export const modelsListRpc = defineRpc({
   name: "models.list",
-  input: z.object({ query: z.string().optional(), projectId: z.string().optional() }),
+  input: z.object({ query: z.string().optional(), projectId: z.string().optional(), refresh: z.boolean().optional() }),
   output: z.object({
     defaultPresetId: z.string().nullable().optional(),
     providers: z.array(z.object({
