@@ -45,7 +45,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.sendBehavior).toBe("steer");
     expect(storedSendBehavior(storage)).toBe("steer");
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "dark-default"]);
   });
 
   it("leaves interrupt alone once the migration has run", async () => {
@@ -64,7 +64,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.sendBehavior).toBe("queue");
     expect(storage.entries.has(APP_SETTINGS_KEY)).toBe(false);
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "dark-default"]);
   });
 
   it("marks itself applied on a fresh install without rewriting settings", async () => {
@@ -73,7 +73,7 @@ describe("migrateAppSettings", () => {
     await migrateAppSettings(settingsWith("steer"), storage);
 
     expect(storage.entries.has(APP_SETTINGS_KEY)).toBe(false);
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "dark-default"]);
   });
 
   it("keeps unknown migration ids written by a newer client", async () => {
@@ -83,8 +83,27 @@ describe("migrateAppSettings", () => {
 
     await migrateAppSettings(settingsWith("interrupt"), storage);
 
-    expect(appliedIds(storage)).toEqual(["some-later-migration", "steer-default"]);
+    expect(appliedIds(storage)).toEqual(["some-later-migration", "steer-default", "dark-default"]);
   });
+
+  it("migrates auto to dark once and preserves subsequent auto choices", async () => {
+    const storage = createInMemoryKeyValueStorage();
+    const settings = { ...settingsWith("steer"), theme: "auto" as const };
+
+    expect((await migrateAppSettings(settings, storage)).theme).toBe("dark");
+    expect(JSON.parse(storage.entries.get(APP_SETTINGS_KEY)!).theme).toBe("dark");
+    expect((await migrateAppSettings(settings, storage)).theme).toBe("auto");
+  });
+
+  it.each(["light", "dark", "pureBlack", "plugin"] as const)(
+    "preserves the explicit %s theme",
+    async (theme) => {
+      const storage = createInMemoryKeyValueStorage();
+      expect((await migrateAppSettings({ ...settingsWith("steer"), theme }, storage)).theme).toBe(
+        theme,
+      );
+    },
+  );
 
   it("migrates every mobile 15px content preference to 16px", async () => {
     const storage = createInMemoryKeyValueStorage();
@@ -94,7 +113,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.contentFontSize).toBe(16);
     expect(storedContentFontSize(storage)).toBe(16);
-    expect(appliedIds(storage)).toEqual(["steer-default", "mobile-content-16"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "dark-default", "mobile-content-16"]);
   });
 
   it("leaves a 15px web content preference unchanged", async () => {
@@ -105,7 +124,7 @@ describe("migrateAppSettings", () => {
 
     expect(result.contentFontSize).toBe(15);
     expect(storedContentFontSize(storage)).toBeUndefined();
-    expect(appliedIds(storage)).toEqual(["steer-default"]);
+    expect(appliedIds(storage)).toEqual(["steer-default", "dark-default"]);
   });
 
   it("lets a mobile user choose 15px after the default migration ran", async () => {
@@ -144,6 +163,6 @@ describe("migrateAppSettings", () => {
     const result = await migrateAppSettings(settingsWith("steer"), recovered);
 
     expect(result.sendBehavior).toBe("steer");
-    expect(appliedIds(recovered)).toEqual(["steer-default"]);
+    expect(appliedIds(recovered)).toEqual(["steer-default", "dark-default"]);
   });
 });

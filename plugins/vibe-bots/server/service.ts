@@ -659,7 +659,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
       },
       config: {
         provider: target.provider + "/" + target.model,
-        systemPrompt: [prompt(bot), bot.instructions, target.instructions, memoryContext(memories)].filter(Boolean).join("\n\n"),
+        systemPrompt: [prompt(bot), bot.instructions, target.instructions, memoryContext(memories), handoff].filter(Boolean).join("\n\n"),
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
         ...(permission ? { modeId: permission } : {}),
       },
@@ -678,14 +678,6 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
       });
       if (previous && previous.state !== "ended") {
         store.sessions.setState(previous.id, "ended", { outcome: "bot_main_replaced" });
-      }
-    }
-    if (handoff) {
-      try {
-        await created.send(handoff, { sourceAgentId: created.id });
-      } catch (error) {
-        if (bot.mainAgentId) bots.setMain(bot.id, bot.mainAgentId);
-        throw error;
       }
     }
     return { agentId: created.id, workspaceId: created.workspaceId ?? null };

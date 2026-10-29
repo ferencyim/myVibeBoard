@@ -13,6 +13,9 @@ const AppliedMigrationsSchema = z.strictObject({ applied: z.array(z.string()) })
  */
 const STEER_DEFAULT_MIGRATION = "steer-default";
 
+/** Older installs persisted the former system-following default. */
+const DARK_DEFAULT_MIGRATION = "dark-default";
+
 /** Existing mobile installs materialized the old 15px content default in storage. */
 const MOBILE_CONTENT_16_MIGRATION = "mobile-content-16";
 
@@ -41,6 +44,12 @@ export async function migrateAppSettings(
     migrated =
       migrated.sendBehavior === "interrupt" ? { ...migrated, sendBehavior: "steer" } : migrated;
     applied.add(STEER_DEFAULT_MIGRATION);
+    addedMigration = true;
+  }
+
+  if (!applied.has(DARK_DEFAULT_MIGRATION)) {
+    migrated = migrated.theme === "auto" ? { ...migrated, theme: "dark" } : migrated;
+    applied.add(DARK_DEFAULT_MIGRATION);
     addedMigration = true;
   }
 

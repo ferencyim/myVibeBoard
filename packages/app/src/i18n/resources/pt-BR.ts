@@ -2114,6 +2114,7 @@ export const ptBR: TranslationResources = {
     },
   },
   toolCallDetails: {
+    agentMessage: en.toolCallDetails.agentMessage,
     error: "Erro",
     empty: "Nenhum detalhe adicional disponível",
     subAgentActivity: "Atividade do subagente",

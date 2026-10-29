@@ -2106,6 +2106,14 @@ export const en = {
     },
   },
   toolCallDetails: {
+    agentMessage: {
+      message: "Message received",
+      finished: "Agent finished",
+      errored: "Agent errored",
+      "permission-required": "Agent needs permission",
+      closed: "Agent closed",
+      from: "From agent: {{id}}",
+    },
     error: "Error",
     empty: "No additional details available",
     subAgentActivity: "Sub-agent activity",

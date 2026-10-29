@@ -116,8 +116,8 @@ export const zhCN: TranslationResources = {
   },
   composer: {
     placeholders: {
-      desktop: "给 Agent 发消息，标记 @files，或使用 /commands 和 /skills",
-      mobile: "发消息，@files，/commands",
+      desktop: "给助手发消息，使用 @ 引用文件，或使用 / 选择命令和技能",
+      mobile: "发消息，使用 @ 引用文件或 / 选择命令",
       fallback: "输入消息...",
       terminal: "Prompt",
     },
@@ -2059,9 +2059,17 @@ export const zhCN: TranslationResources = {
     },
   },
   toolCallDetails: {
+    agentMessage: {
+      message: "已收到消息",
+      finished: "助手已完成",
+      errored: "助手出错",
+      "permission-required": "助手需要授权",
+      closed: "助手已关闭",
+      from: "来自助手：{{id}}",
+    },
     error: "错误",
     empty: "没有可用的更多详情",
-    subAgentActivity: "Sub-agent 活动",
+    subAgentActivity: "子助手活动",
     input: "输入",
     output: "输出",
   },

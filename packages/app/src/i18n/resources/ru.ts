@@ -2114,6 +2114,7 @@ export const ru: TranslationResources = {
     },
   },
   toolCallDetails: {
+    agentMessage: en.toolCallDetails.agentMessage,
     error: "Ошибка",
     empty: "Дополнительные сведения отсутствуют",
     subAgentActivity: "Активность субагента",
