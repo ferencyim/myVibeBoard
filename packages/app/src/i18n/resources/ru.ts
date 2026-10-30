@@ -117,6 +117,9 @@ export const ru: TranslationResources = {
   },
   composer: {
     placeholders: {
+      toTarget: "Message {{name}}, tag @files, or use /commands and /skills",
+      toTargetMobile: "Message {{name}}, @files, /commands",
+      describeNeed: "Describe what you need, tag @files, or use /commands and /skills",
       desktop: "Напишите агенту сообщение, отметьте @files или используйте /commands и /skills.",
       mobile: "Сообщение,@files,/commands",
       fallback: "Сообщение...",

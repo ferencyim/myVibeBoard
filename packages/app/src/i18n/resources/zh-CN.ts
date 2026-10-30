@@ -116,7 +116,10 @@ export const zhCN: TranslationResources = {
   },
   composer: {
     placeholders: {
-      desktop: "给助手发消息，使用 @ 引用文件，或使用 / 选择命令和技能",
+      toTarget: "给 {{name}} 发消息，使用 @ 引用文件，或使用 / 选择命令和技能",
+      toTargetMobile: "给 {{name}} 发消息，使用 @ 或 /",
+      describeNeed: "描述你的需求，使用 @ 引用文件，或使用 / 选择命令和技能",
+      desktop: "发消息，使用 @ 引用文件，或使用 / 选择命令和技能",
       mobile: "发消息，使用 @ 引用文件或 / 选择命令",
       fallback: "输入消息...",
       terminal: "Prompt",
@@ -1426,11 +1429,11 @@ export const zhCN: TranslationResources = {
       selectModel: "请选择模型",
     },
     tooltips: {
-      project: "Choose the project",
-      host: "Choose the host",
-      isolation: "Choose the isolation level",
+      project: "选择项目",
+      host: "选择主机",
+      isolation: "选择隔离方式",
       startingRef: "选择起始位置",
-      launch: "Choose what to launch",
+      launch: "选择启动方式（对话或终端）",
     },
     refPicker: {
       startingRef: "起始 ref",
@@ -1441,13 +1444,13 @@ export const zhCN: TranslationResources = {
       title: "起始位置",
     },
     launch: {
-      title: "What to launch",
-      chat: "Chat",
-      terminal: "Terminal",
-      manageProfiles: "Manage profiles",
-      submit: "Launch",
-      promptPlaceholder: "Prompt {{name}}",
-      commandPlaceholder: "Run a command, or leave empty for a blank terminal",
+      title: "启动方式",
+      chat: "对话（新任务）",
+      terminal: "终端",
+      manageProfiles: "管理配置",
+      submit: "启动",
+      promptPlaceholder: "向 {{name}} 输入提示",
+      commandPlaceholder: "运行命令，留空则打开空白终端",
     },
   },
   desktop: {
