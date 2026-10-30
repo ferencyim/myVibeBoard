@@ -15,7 +15,9 @@ import {
 } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
+import { HubSections } from "./hub-screen";
+import { Button, Field, Muted, Row, Section } from "./hub-ui";
 import { formatRpcError } from "../shared/vibe/ui/rpc-error";
 import {
   devicesRpc,
@@ -52,118 +54,6 @@ const LEVEL_ZH: Record<string, string> = {
   unknown: "未知",
 };
 
-function Section({
-  theme,
-  title,
-  children,
-}: {
-  theme: PluginTheme;
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <View
-      style={{
-        backgroundColor: theme.colors.surface1,
-        borderColor: theme.colors.border,
-        borderWidth: 1,
-        borderRadius: theme.borderRadius?.md ?? 12,
-        padding: theme.spacing?.[4] ?? 16,
-        gap: theme.spacing?.[3] ?? 12,
-      }}
-    >
-      <Text style={{ color: theme.colors.foreground, fontWeight: "600", fontSize: 15 }}>
-        {title}
-      </Text>
-      {children}
-    </View>
-  );
-}
-
-const Muted = ({ theme, children }: { theme: PluginTheme; children: ReactNode }) => (
-  <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{children}</Text>
-);
-
-function Row({ theme, left, right }: { theme: PluginTheme; left: string; right: string }) {
-  return (
-    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-      <Text style={{ color: theme.colors.foreground, flexShrink: 1 }}>{left}</Text>
-      <Text style={{ color: theme.colors.foregroundMuted, flexShrink: 1, textAlign: "right" }}>
-        {right}
-      </Text>
-    </View>
-  );
-}
-
-function Button({
-  theme,
-  label,
-  onPress,
-  active,
-  disabled,
-}: {
-  theme: PluginTheme;
-  label: string;
-  onPress: () => void;
-  active?: boolean;
-  disabled?: boolean;
-}) {
-  return (
-    <Pressable
-      disabled={disabled}
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 999,
-        backgroundColor: active ? theme.colors.accent : theme.colors.surface2,
-        opacity: disabled ? 0.5 : 1,
-      }}
-    >
-      <Text
-        style={{
-          color: active ? theme.colors.accentForeground : theme.colors.foreground,
-          fontSize: 12,
-        }}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function Field({
-  theme,
-  value,
-  onChangeText,
-  placeholder,
-}: {
-  theme: PluginTheme;
-  value: string;
-  onChangeText: (text: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <TextInput
-      value={value}
-      onChangeText={onChangeText}
-      placeholder={placeholder}
-      placeholderTextColor={theme.colors.foregroundMuted}
-      autoCapitalize="none"
-      style={{
-        color: theme.colors.foreground,
-        backgroundColor: theme.colors.surface0,
-        borderColor: theme.colors.border,
-        borderWidth: 1,
-        borderRadius: 8,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        fontSize: 14,
-      }}
-    />
-  );
-}
-
 const levelColor = (theme: PluginTheme, level: string) => {
   if (level === "exhausted") return theme.colors.statusDanger;
   if (level === "tight") return theme.colors.statusWarning;
@@ -182,6 +72,7 @@ export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
   const [serial, setSerial] = useState("");
   const [avd, setAvd] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [showMore, setShowMore] = useState(false);
 
   const status = useQuery({
     queryKey: ["vibe-scheduler", "status"],
@@ -221,12 +112,13 @@ export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
     >
       <View style={{ gap: theme.spacing?.[2] ?? 8 }}>
         <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize?.xl ?? 18, fontWeight: "600" }}>
-          调度器
+          中枢
         </Text>
-        <Muted theme={theme}>查看任务、资源和维护规则。</Muted>
+        <Muted theme={theme}>全机任务队列、共用资源、暂停窗口和全局指令。</Muted>
       </View>
+      <HubSections theme={theme} />
       {navigation?.openPluginScreen ? (
-        <Section theme={theme} title="维护规则与运行记录">
+        <Section theme={theme} title="运行记录与维护规则">
           <Muted theme={theme}>查看各项目的维护状态，编辑规则或手动运行。</Muted>
           <View style={{ alignSelf: "flex-start" }}>
             <Button
@@ -237,13 +129,20 @@ export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
           </View>
         </Section>
       ) : null}
-      {status.error ? (
+      <View style={{ flexDirection: "row" }}>
+        <Button
+          theme={theme}
+          label={showMore ? "收起并发、额度与设备池" : "展开并发、额度与设备池"}
+          onPress={() => setShowMore((v) => !v)}
+        />
+      </View>
+      {showMore && status.error ? (
         <Text style={{ color: theme.colors.statusDanger }}>
           无法加载调度器：{formatRpcError(status.error)}
         </Text>
       ) : null}
-      {!s ? <Muted theme={theme}>加载中...</Muted> : null}
-      {s ? (
+      {showMore && !s ? <Muted theme={theme}>加载中...</Muted> : null}
+      {showMore && s ? (
         <>
           <Section theme={theme} title="任务状态">
             <Row theme={theme} left="运行中" right={String(s.running.total)} />
@@ -332,7 +231,7 @@ export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
         </>
       ) : null}
 
-      <Section theme={theme} title="设备池">
+      {showMore ? <Section theme={theme} title="设备池">
         {error ? <Text style={{ color: theme.colors.statusDanger }}>{error}</Text> : null}
         {devices.data?.length === 0 ? <Muted theme={theme}>还没有登记设备。</Muted> : null}
         {devices.data?.map((d) => (
@@ -406,7 +305,7 @@ export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
             }
           />
         </View>
-      </Section>
+      </Section> : null}
     </ScrollView>
   );
 }
@@ -415,7 +314,7 @@ export function SchedulerSidebarItem({ currentScreen, openScreen }: PluginSideba
   return (
     <SidebarRow
       icon="Cpu"
-      label="调度器"
+      label="中枢"
       active={currentScreen?.screenId === "main"}
       onPress={() => openScreen({ screenId: "main" })}
     />
