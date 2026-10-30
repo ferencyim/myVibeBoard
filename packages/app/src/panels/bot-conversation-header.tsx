@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Ellipsis, PanelRight, Settings2 } from "lucide-react-native";
-import { Text, View } from "react-native";
+import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { z } from "zod";
@@ -98,6 +98,9 @@ export function isProfileTarget(target: WorkspaceTabTarget | undefined, agentId:
   );
 }
 
+const NARROW_HEADER_ENTER = 560;
+const NARROW_HEADER_EXIT = 600;
+
 type ConversationBot = NonNullable<ReturnType<typeof useConversationBot>>;
 // oxlint-disable-next-line complexity
 export function BotConversationHeader({
@@ -120,7 +123,14 @@ export function BotConversationHeader({
   const [moreOpen, setMoreOpen] = useState(false);
   const openMore = useCallback(() => setMoreOpen(true), []);
   const closeMore = useCallback(() => setMoreOpen(false), []);
-  const placement = conversationControlsPlacement(compact, false, runtimeOpen);
+  // 右侧面板占宽时头部放不下模型选择器：把运行控件收进「更多」，头部只留身份与图标。
+  const [narrow, setNarrow] = useState(false);
+  const onHeaderLayout = useCallback((event: LayoutChangeEvent) => {
+    const width = event.nativeEvent.layout.width;
+    setNarrow((current) => (current ? width < NARROW_HEADER_EXIT : width < NARROW_HEADER_ENTER));
+  }, []);
+  const basePlacement = conversationControlsPlacement(compact, false, runtimeOpen);
+  const placement = isBot && narrow && basePlacement === "header" ? "registration" : basePlacement;
   const openRuntime = useCallback(() => setRuntimeOpen(true), []);
   const closeRuntime = useCallback(() => setRuntimeOpen(false), []);
   const runtimeHeader = useMemo(() => ({ title: "运行设置" }), []);
@@ -160,7 +170,7 @@ export function BotConversationHeader({
   const compactIdentityAction = compact ? openRuntime : undefined;
   return (
     <View style={safeAreaStyle}>
-      <View style={styles.header} testID="conversation-header">
+      <View style={styles.header} testID="conversation-header" onLayout={onHeaderLayout}>
         {isPaneFocused ? slots.left : null}
         <PressHighlight
           style={isBot ? styles.botIdentity : styles.identity}
@@ -238,6 +248,16 @@ export function BotConversationHeader({
         </ComposerKeyboardScopeProvider>
       </AdaptiveModalSheet>
       <AdaptiveModalSheet header={moreHeader} visible={moreOpen} onClose={closeMore}>
+        {narrow && !compact ? (
+          <ComposerKeyboardScopeProvider {...scope}>
+            <AgentControls
+              agentId={agentId}
+              serverId={serverId}
+              isCompactLayout
+              hideModeControl={isBot}
+            />
+          </ComposerKeyboardScopeProvider>
+        ) : null}
         <LiveAgentModeControl agentId={agentId} serverId={serverId} onClose={closeMore} />
       </AdaptiveModalSheet>
     </View>
@@ -254,6 +274,7 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface0,
+    overflow: "hidden",
   },
   identity: {
     flex: 1,

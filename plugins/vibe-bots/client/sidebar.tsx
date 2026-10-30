@@ -73,16 +73,19 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
   }, [pending, state.data, navigate]);
   const styles = useMemo(() => ({ row: { minHeight: 54, padding: (theme.spacing?.[2] ?? 8), borderRadius: (theme.borderRadius?.md ?? 8), flexDirection: "row" as const, alignItems: "center" as const, gap: (theme.spacing?.[2] ?? 8) }, names: { flex: 1 }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted }, danger: { color: theme.colors.statusDanger } }), [theme]);
   const run = useCallback(async () => {
+    // 点击立即响应：已有主 agent 直接跳转；没有则先显示资料页（身份可见），创建完成后自动接上对话。
+    if (bot.mainAgentId) navigate(bot.mainAgentId);
+    else navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "profile", params: { botId: bot.id } });
     setOpening(true); setError("");
     try {
       const result = await open({ id: bot.id });
       client.setQueryData(key, result);
-      if (result.status === "ready" && result.agentId) navigate(result.agentId);
+      if (result.status === "ready" && result.agentId) { if (result.agentId !== bot.mainAgentId) navigate(result.agentId); }
       else if (result.status === "creating") setPending(true);
       else if (result.error) setError(result.error);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setOpening(false); }
-  }, [open, bot.id, client, key, navigate]);
+  }, [open, bot.id, bot.mainAgentId, client, key, navigate, navigation]);
   const profile = useCallback(() => navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "profile", params: { botId: bot.id } }), [navigation, bot.id]);
   const showMenu = useCallback(() => setMenu(true), []);
   const contextMenu = useMemo(() => ({ onContextMenu: (event: { preventDefault(): void }) => { event.preventDefault(); showMenu(); } }), [showMenu]);
@@ -92,9 +95,9 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
   const closeMenu = useCallback(() => setMenu(false), []);
   const rowStyle = useMemo(() => [styles.row, selected && { backgroundColor: theme.colors.surface2 }], [styles.row, selected, theme.colors.surface2]);
   const status = state.data?.status === "failed" || error ? "failed" : activity?.status;
-  return <View><Pressable {...contextMenu} accessibilityRole="button" accessibilityLabel={bot.name} disabled={opening || state.data?.status === "creating"} onPress={onPress} onLongPress={showMenu} onHoverIn={hoverIn} onHoverOut={hoverOut} style={rowStyle}>
+  return <View><Pressable {...contextMenu} accessibilityRole="button" accessibilityLabel={bot.name} onPress={onPress} onLongPress={showMenu} onHoverIn={hoverIn} onHoverOut={hoverOut} style={rowStyle}>
     <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={36} />
-    {!sidebarCompact && <BotDetails bot={bot} activity={activity} loading={opening || state.data?.status === "creating"} theme={theme} projectName={projectName} />}
+    {!sidebarCompact && <BotDetails bot={bot} activity={activity} loading={!bot.mainAgentId && (opening || state.data?.status === "creating")} theme={theme} projectName={projectName} />}
     {status ? <StatusIndicator status={status} count={activity?.count} /> : null}
     <BotMenuButton name={bot.name} hovered={hovered} onPress={showMenu} color={theme.colors.foregroundMuted} />
   </Pressable>{menu ? <View><Pressable onPress={onPress}><Text style={styles.text}>打开</Text></Pressable><Pressable onPress={openProfile}><Text style={styles.text}>资料 / 改名</Text></Pressable><Pressable onPress={archiveBot}><Text style={styles.danger}>归档</Text></Pressable><Pressable onPress={closeMenu}><Text style={styles.muted}>取消</Text></Pressable></View> : null}{error || state.data?.error ? <Text style={styles.danger}>{error || state.data?.error}</Text> : null}</View>;

@@ -255,6 +255,18 @@ describe("bot 服务主对话与模型变更", () => {
     expect(f.send).not.toHaveBeenCalled();
   });
 
+  it("已有主 agent 时 open 立即返回 ready，不新建 agent", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    const opened = await f.service.waitOpen(bot.id);
+    for (let i = 0; i < 3; i++) {
+      expect(await f.service.open(bot.id)).toEqual({ status: "ready", ...opened, error: null });
+    }
+    f.agents.get(opened.agentId)!.status = "closed";
+    expect(await f.service.open(bot.id)).toMatchObject({ status: "ready", agentId: opened.agentId });
+    expect(f.createAgent).toHaveBeenCalledTimes(1);
+  });
+
   it("同 provider 换模型调用宿主 setModel，保留 bot、主会话、记忆与历史入口", async () => {
     const f = fixture();
     const bot = await f.createProjectBot();
