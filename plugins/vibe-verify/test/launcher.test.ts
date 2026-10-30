@@ -316,7 +316,8 @@ describe("验证/复核 tab", () => {
     await launcher.launch(input({ provider: "gemini", role: "reviewer" }));
     await launcher.launch(input({ provider: "gemini", role: "verifier" }));
     expect(f.created[0].config).toMatchObject({ modeId: "auto" });
-    expect(f.created[1].config).toMatchObject({ modeId: "auto" });
+    // Codex's automatic tier is auto-review; its "auto" id is the default-permissions mode.
+    expect(f.created[1].config).toMatchObject({ modeId: "auto-review" });
     for (const index of [2, 3]) {
       expect(f.created[index].config).not.toHaveProperty("modeId");
       expect(f.created[index].config).not.toHaveProperty("options");
