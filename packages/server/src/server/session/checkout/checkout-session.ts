@@ -53,7 +53,7 @@ import {
   listCheckoutCommits,
   getCommitFileDiff,
 } from "../../../utils/checkout-git.js";
-import { runGitCommand } from "../../../utils/run-git-command.js";
+import { runGitCommand, runWithGitCommandPriority } from "../../../utils/run-git-command.js";
 import { expandTilde } from "../../../utils/path.js";
 import type { GitMetadataGenerator } from "./git-metadata-generator.js";
 
@@ -238,7 +238,10 @@ export class CheckoutSession {
     const resolvedCwd = expandTilde(cwd);
 
     try {
-      const snapshot = await this.workspaceGitService.getSnapshot(resolvedCwd);
+      // The status payload is git-only: skip forge, and jump ahead of background refreshes.
+      const snapshot = await runWithGitCommandPriority("high", () =>
+        this.workspaceGitService.getSnapshot(resolvedCwd, { includeForge: false }),
+      );
       this.host.emit({
         type: "checkout_status_response",
         payload: buildCheckoutStatusPayloadFromSnapshot({

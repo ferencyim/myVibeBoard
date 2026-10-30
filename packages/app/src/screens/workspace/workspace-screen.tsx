@@ -248,16 +248,22 @@ function TaskFlowLevel({ serverId, workspaceId }: { serverId: string; workspaceI
         if (!result || typeof result !== "object" || !("task" in result)) return null;
         const task = result.task;
         if (!task || typeof task !== "object" || !("flowLevel" in task)) return null;
-        if (task.flowLevel === "simple") return "简单档";
-        if (task.flowLevel === "medium") return "中等档";
-        if (task.flowLevel === "full") return "完整档";
+        if (task.flowLevel === "simple") return "简单";
+        if (task.flowLevel === "medium") return "中等";
+        if (task.flowLevel === "full") return "完整";
         return null;
       },
       retry: false,
     },
     plugin?.queryClient,
   );
-  return query.data ? <Text style={styles.conversationWorkspaceBranch}>{query.data}</Text> : null;
+  return query.data ? (
+    <View style={styles.conversationFlowBadge}>
+      <Text style={styles.conversationFlowBadgeText} numberOfLines={1}>
+        {query.data}
+      </Text>
+    </View>
+  ) : null;
 }
 const EMPTY_UI_TABS: WorkspaceTab[] = [];
 const EMPTY_WORKSPACE_SCRIPTS: WorkspaceDescriptor["scripts"] = [];
@@ -3578,7 +3584,7 @@ function WorkspaceScreenContent({
       ) : (
         <View style={styles.conversationWorkspaceIdentity}>
           {hasTaskFlow && isWorkspaceHeaderSubtitleDistinct ? (
-            <Text style={styles.conversationWorkspaceBranch} numberOfLines={1}>
+            <Text style={styles.conversationWorkspaceProject} numberOfLines={1}>
               {workspaceHeaderSubtitle} /
             </Text>
           ) : null}
@@ -4138,6 +4144,24 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
     flexShrink: 1,
+  },
+  // The project short name keeps its width (up to a cap); the task title truncates first.
+  conversationWorkspaceProject: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    flexShrink: 0,
+    maxWidth: 140,
+  },
+  conversationFlowBadge: {
+    flexShrink: 0,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 1,
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.surface2,
+  },
+  conversationFlowBadgeText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
   },
   headerTitleContainer: {
     flex: 1,

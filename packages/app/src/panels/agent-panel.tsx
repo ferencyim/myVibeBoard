@@ -1,3 +1,4 @@
+import { resolveAgentPlaceholder } from "@/composer/agent-placeholder";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -1635,6 +1636,12 @@ function ActiveAgentComposer({
   onMessageSent: () => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
+  const { t } = useTranslation();
+  const conversationBot = useConversationBot(serverId, agentId);
+  const agentLabels = useSessionStore((state) => {
+    const session = state.sessions[serverId];
+    return (session?.agents.get(agentId) ?? session?.agentDetails.get(agentId))?.labels;
+  });
   const { onLayout: onInputAreaLayout, isBelow: isCompactComposerLayout } = useContainerWidthBelow(
     COMPACT_FORM_FACTOR_WIDTH,
     { initialIsBelow: isCompactFormFactor },
@@ -1714,6 +1721,11 @@ function ActiveAgentComposer({
         onClearQuote={onClearQuote}
         onSetQuote={onSetQuote}
         hideAgentControls={hideAgentControls}
+        placeholder={resolveAgentPlaceholder(t, {
+          botName: conversationBot?.name,
+          labels: agentLabels,
+          isDesktop: !isCompactComposerLayout,
+        })}
         agentId={agentId}
         serverId={serverId}
         workspaceId={workspaceId}

@@ -26,6 +26,10 @@ interface PendingAgentInitialization {
 
 const pendingAgentInitializations = new Map<string, PendingAgentInitialization>();
 
+/** The protocol has no "explicit retry" flag, so the cooldown stays short. */
+const AGENT_LOAD_FAILURE_COOLDOWN_MS = 30_000;
+const recentLoadFailures = new Map<string, { error: unknown; at: number }>();
+
 export type AgentLoaderManager = Pick<
   AgentManager,
   | "createAgent"
@@ -95,6 +99,16 @@ export async function ensureAgentLoaded(
     return laterInflight.promise;
   }
 
+  // A resume that just failed (e.g. provider app-server won't start) is not retried
+  // immediately: startup scans and UI polls would each respawn the provider process.
+  const recentFailure = recentLoadFailures.get(agentId);
+  if (recentFailure) {
+    if (Date.now() - recentFailure.at < AGENT_LOAD_FAILURE_COOLDOWN_MS) {
+      throw recentFailure.error;
+    }
+    recentLoadFailures.delete(agentId);
+  }
+
   const pendingOptions = {
     broadcastTimeline: deps.broadcastTimeline === true,
   };
@@ -150,6 +164,11 @@ export async function ensureAgentLoaded(
 
   try {
     return await initPromise;
+  } catch (error) {
+    if (!(error instanceof AgentNotFoundError)) {
+      recentLoadFailures.set(agentId, { error, at: Date.now() });
+    }
+    throw error;
   } finally {
     const current = pendingAgentInitializations.get(agentId);
     if (current === pending) {

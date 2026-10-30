@@ -187,3 +187,29 @@ export interface MarkdownProps {
 
 /** Renders Markdown using Paseo’s theme, selection, and link behavior. */
 export declare const Markdown: ComponentType<MarkdownProps>;
+
+export interface ModelPickerFieldProps {
+  providers: readonly {
+    provider: string;
+    label?: string;
+    models: readonly {
+      id: string;
+      name: string;
+      isDefault?: boolean;
+      thinkingOptions: readonly { id: string; name: string }[];
+    }[];
+  }[];
+  provider: string;
+  model: string;
+  /** Selected thinking option id; empty means the default. */
+  thinking: string;
+  loading?: boolean;
+  disabled?: boolean;
+  /** A rejection rolls the optimistic selection back. */
+  onSelect(provider: string, model: string): void | Promise<unknown>;
+  onSelectThinking?(id: string): void | Promise<unknown>;
+  /** Called when the picker opens; use it to refresh the catalog in the background. */
+  onOpen?(): void;
+}
+/** Host provider / model / effort picker rendered as a full-width form field. */
+export declare const ModelPickerField: ComponentType<ModelPickerFieldProps>;

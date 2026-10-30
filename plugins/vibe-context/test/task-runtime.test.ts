@@ -570,6 +570,34 @@ describe("all role watchdog", () => {
   });
 });
 
+describe("watchdog startup throttling", () => {
+  it("waits out the start delay and stops re-reading an agent whose activity read failed", async () => {
+    const s = setup("scout");
+    let nowMs = Date.now();
+    s.store.sessions.touch(s.session.id, { lastActivityAt: new Date(nowMs).toISOString() });
+    const activity = vi.fn(async (): Promise<number | null> => {
+      throw new Error("resume failed");
+    });
+    const watchdog = createTaskWatchdog({
+      store: s.store,
+      config: () => ({ enabled: true, minutes: 100000, providerMinutes: {} }),
+      activity,
+      report: vi.fn(),
+      now: () => nowMs,
+      startDelayMs: 60_000,
+    });
+    await watchdog.tick();
+    expect(activity).not.toHaveBeenCalled();
+    nowMs += 61_000;
+    await watchdog.tick();
+    await watchdog.tick();
+    expect(activity).toHaveBeenCalledTimes(1);
+    nowMs += 5 * 60_000;
+    await watchdog.tick();
+    expect(activity).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("compaction resource ownership", () => {
   it("defers when the ordinary worker still owns a compute slot without running or yielding it", async () => {
     const s = setup();

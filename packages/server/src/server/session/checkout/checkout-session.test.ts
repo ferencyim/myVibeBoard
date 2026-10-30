@@ -28,6 +28,7 @@ import {
   createNoopWorkspaceGitService,
 } from "../../test-utils/workspace-git-service-stub.js";
 import { createWorktree, deletePaseoWorktree } from "../../../utils/worktree.js";
+import { getGitCommandPriority } from "../../../utils/run-git-command.js";
 import { expandTilde } from "../../../utils/path.js";
 import type { GitMetadataGenerator } from "./git-metadata-generator.js";
 
@@ -246,6 +247,24 @@ describe("CheckoutSession", () => {
           }),
         },
       ]);
+    });
+
+    it("reads the snapshot at high git priority without forge", async () => {
+      let seen: { priority?: string; options?: unknown } = {};
+      const { checkout } = makeCheckoutSession({
+        git: {
+          getSnapshot: async (_cwd: string, options?: unknown) => {
+            seen = { priority: getGitCommandPriority(), options };
+            return createGitSnapshot("/repo", "main");
+          },
+        },
+      });
+      await checkout.handleStatusRequest({
+        type: "checkout_status_request",
+        cwd: "/repo",
+        requestId: "r3",
+      });
+      expect(seen).toEqual({ priority: "high", options: { includeForge: false } });
     });
 
     it("emits an error status response when the git snapshot read fails", async () => {

@@ -822,9 +822,21 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     return job;
   }
 
-  function open(id: string): Promise<BotOpenState> {
+  async function open(id: string): Promise<BotOpenState> {
+    await ready();
+    const bot = bots.require(id);
+    // 已有可用主 agent：立即返回 ready，恢复/应用待定模型在后台完成，绝不新建。
+    if (bot.mainAgentId && !bot.archivedAt && !pendingOpens.has(id) && !continuations.has(id)) {
+      const current = await agent(bot.mainAgentId);
+      if (current && !current.archivedAt) {
+        const state: BotOpenState = { status: "ready", agentId: current.id, workspaceId: current.workspaceId ?? null, error: null };
+        openStates.set(id, state);
+        void openNow(id).catch((error: unknown) => console.error("[vibe-bots] 后台恢复主对话失败", error));
+        return state;
+      }
+    }
     void waitOpen(id).catch(() => {});
-    return Promise.resolve(creatingState());
+    return creatingState();
   }
 
   async function state(id: string): Promise<BotOpenState> {

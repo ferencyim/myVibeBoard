@@ -125,6 +125,7 @@ const WATCH_RECOVERY_MAX_BACKOFF_STEPS = 4;
 const WORKSPACE_GIT_AUXILIARY_READ_TTL_MS = 15_000;
 // Non-forced refresh triggers share this minimum gap to absorb watcher/self-heal bursts; force bypasses it.
 const WORKSPACE_GIT_INTERNAL_MIN_GAP_MS = 2_000;
+const FORGE_FAILURE_BACKOFF_MS = 60_000;
 // Small values (booleans, short strings, small arrays); generous cap.
 const WORKSPACE_GIT_AUXILIARY_CACHE_MAX = 256;
 
@@ -1236,7 +1237,9 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
         force: false,
         refreshStructure: true,
         refreshWorktree: true,
-        includeForge: true,
+        // Forge/PR state is fetched on demand (poll, open_project); doing it for every
+        // workspace at startup floods the git scheduler with failing `gh` calls.
+        includeForge: false,
         reason: "initial",
         queueIfBusy: false,
         movedRemoteRefs: new Set(),
@@ -3408,6 +3411,16 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     if (!resolution) {
       target.latestForge = buildUnresolvedRemoteForgeSnapshot(remoteUrl);
       target.latestForgeLoadedAtMs = this.deps.now().getTime();
+      return;
+    }
+    // Back off after a failed lookup (e.g. `gh` GraphQL errors) so repeated refreshes
+    // don't re-spawn the failing command; forced refreshes still go through.
+    if (
+      !request.force &&
+      target.latestForge?.error &&
+      target.latestForgeLoadedAtMs !== null &&
+      this.deps.now().getTime() - target.latestForgeLoadedAtMs < FORGE_FAILURE_BACKOFF_MS
+    ) {
       return;
     }
     const forgeService: ForgeService = resolution.service;

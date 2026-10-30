@@ -105,7 +105,10 @@ import {
 import { buildNewWorkspaceProjectIconTargets } from "./new-workspace/project-icon-targets";
 import { useNewWorkspaceProjectPicker } from "./new-workspace/project-picker";
 import { useNewWorkspaceForm } from "./new-workspace/form";
-import { buildFirstMessageModel } from "./new-workspace/first-message-config";
+import {
+  buildFirstMessageModel,
+  resolveUseDefaultModel,
+} from "./new-workspace/first-message-config";
 import { ImportSessionButton } from "./new-workspace/import-session-button";
 import { useImportSession } from "@/hooks/use-import-session";
 import {
@@ -342,22 +345,38 @@ function newTaskFormVisibility(input: {
   return { canCreateWorktree: false, showRefPicker: true };
 }
 
+function newWorkspaceTitle(isTerminalLaunch: boolean, workspaceTitle: string): string {
+  return isTerminalLaunch ? workspaceTitle : "新建任务";
+}
+
+function composerHasModel(
+  composerState: { agentControls: { selectedModel: string } } | null | undefined,
+): boolean {
+  return Boolean(composerState?.agentControls.selectedModel);
+}
+
 function NewTaskOutboxHint({ isTerminalLaunch }: { isTerminalLaunch: boolean }) {
   if (isTerminalLaunch) return null;
   return (
     <Text style={styles.outboxHint}>
-      新任务使用独立
-      worktree；离线首消息保存在本机，联网后自动发送。离线未选分支时使用主机工作副本的默认分支。
+      新任务使用独立 worktree；离线首消息保存在本机，联网后自动发送。
     </Text>
   );
 }
 
-function useFirstMessageModelIntent(selectedServerId: string, isConnected: boolean) {
+function useFirstMessageModelIntent(
+  selectedServerId: string,
+  isConnected: boolean,
+  hasSelectedModel: boolean,
+) {
   const [modelIntent, setModelIntent] = useState<{ serverId: string; useDefault: boolean } | null>(
     null,
   );
-  const useDefaultModel =
-    modelIntent?.serverId === selectedServerId ? modelIntent.useDefault : !isConnected;
+  const useDefaultModel = resolveUseDefaultModel({
+    intent: modelIntent?.serverId === selectedServerId ? modelIntent.useDefault : null,
+    isConnected,
+    hasSelectedModel,
+  });
   return { useDefaultModel, setModelIntent };
 }
 
@@ -869,10 +888,6 @@ export function NewWorkspaceScreen({
   const { workspace } = creationResult;
   const client = useHostRuntimeClient(selectedServerId);
   const isConnected = useHostRuntimeIsConnected(selectedServerId);
-  const { useDefaultModel, setModelIntent } = useFirstMessageModelIntent(
-    selectedServerId,
-    isConnected,
-  );
   const {
     selectedProject,
     selectedSourceDirectory,
@@ -915,6 +930,11 @@ export function NewWorkspaceScreen({
     }),
   });
   const composerState = chatDraft.composerState;
+  const { useDefaultModel, setModelIntent } = useFirstMessageModelIntent(
+    selectedServerId,
+    isConnected,
+    composerHasModel(composerState),
+  );
   const [pickerSelection, dispatchPickerSelection] = useReducer(
     reducePickerSelection,
     initialPickerSelectionState,
@@ -1544,6 +1564,7 @@ export function NewWorkspaceScreen({
   ) : (
     <Composer
       key="chat"
+      placeholder={t("composer.placeholders.describeNeed")}
       editingSession={composerEditing.chat}
       agentId={draftKey}
       serverId={selectedServerId}
@@ -1578,7 +1599,7 @@ export function NewWorkspaceScreen({
       <NewWorkspaceLayout
         isCompact={isCompact}
         fullscreen={isComposerFullscreen}
-        title={t("newWorkspace.title")}
+        title={newWorkspaceTitle(isTerminalLaunch, t("newWorkspace.title"))}
         formStack={
           <>
             {formStack}
@@ -1717,6 +1738,10 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: "wrap",
     alignItems: "center",
     gap: theme.spacing[2],
+    // Same inset as the project/host row above and the hint below, so the label is not
+    // flush with the container border.
+    paddingHorizontal: theme.spacing[4],
+    marginBottom: theme.spacing[2],
   },
   flowLabel: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   outboxHint: {

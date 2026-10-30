@@ -28,6 +28,10 @@ let gitProcessScheduler = new GitProcessScheduler(resolveGitProcessPolicy({ env:
 let gitRuntimeMetrics = createGitCommandRuntimeMetricsWindow(gitProcessScheduler.policy);
 const gitCommandPriority = new AsyncLocalStorage<GitProcessPriority>();
 
+export function getGitCommandPriority(): GitProcessPriority {
+  return gitCommandPriority.getStore() ?? "normal";
+}
+
 export function runWithGitCommandPriority<T>(priority: GitProcessPriority, operation: () => T): T {
   return gitCommandPriority.run(priority, operation);
 }

@@ -307,6 +307,7 @@ export function registerTaskContext(
   };
   const watchdog = createTaskWatchdog({
     store: options.store,
+    startDelayMs: 60_000,
     config: () => {
       const config = options.getConfig?.() ?? {
         watchdogEnabled: true,
