@@ -5,18 +5,19 @@ import { queueOrderRpc } from "../shared/rpc";
 import type { SchedulerRuntime } from "./runtime";
 
 const IndependentBotsSchema = z.object({
-  bots: z.array(z.object({ mainAgentId: z.string().nullable() })),
+  bots: z.array(z.object({ mainAgentId: z.string().nullable(), role: z.string().nullable().optional() })),
 });
 
+/** Scheduler tools (queue order, read) belong to the coordinator bot only. */
 export async function requireIndependentBot(
   callerAgentId: string | null,
   invoke: (pluginId: string, method: string, input: unknown) => Promise<unknown>,
 ): Promise<void> {
-  if (!callerAgentId) throw new Error("调度工具只能由独立 bot 调用");
+  if (!callerAgentId) throw new Error("调度工具只能由总协调 bot 调用");
   const result = await invoke("vibe-bots", "bots.list", { kind: "independent" });
   const { bots } = IndependentBotsSchema.parse(result);
-  if (!bots.some((bot) => bot.mainAgentId === callerAgentId)) {
-    throw new Error("只有未归档独立 bot 的主对话可以使用调度工具");
+  if (!bots.some((bot) => bot.mainAgentId === callerAgentId && bot.role === "coordinator")) {
+    throw new Error("只有总协调 bot 的主对话可以使用调度工具");
   }
 }
 

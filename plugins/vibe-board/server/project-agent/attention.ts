@@ -33,6 +33,11 @@ export function createTaskAttention(options: {
       // No default bot (or archived): nothing to retry, record it so the event is not redelivered forever.
       console.warn("[vibe-board] 任务状态未能通知项目 bot", result);
     }
+    // The coordinator also hears about it (deduped through attentionNotifiedPhase); a failed
+    // notification must not keep the project bot's one from being recorded.
+    await api.plugins
+      .invoke("vibe-bots", "bots.notify", { target: "coordinator", text: `项目 bot 已收到通知。${text}`, source: "任务看板" })
+      .catch((error: unknown) => console.warn("[vibe-board] 任务状态未能通知总协调", error));
     options.store.tasks.updateControl(workspaceId, { attentionNotifiedPhase: phase });
   }
   const consumer = createEventConsumer({

@@ -18,6 +18,11 @@ export const directiveIssueRpc = defineRpc({
     kind: z.enum(["temporary", "standing"]),
     expiresAt: z.string().nullable().optional(),
     pause: z.object({ scope: z.string().min(1), until: z.string().optional() }).optional(),
+    /**
+     * Plugin-to-plugin calls lose the agent caller, so a bot tool sets this to be treated as a bot
+     * (it can only lower privileges, never raise them).
+     */
+    asBot: z.literal(true).optional(),
   }),
   output: z.object({ directive }),
 });
@@ -28,7 +33,7 @@ export const directiveConfirmRpc = defineRpc({
 });
 export const directiveRevokeRpc = defineRpc({
   name: "hub.directive.revoke",
-  input: z.object({ id: z.string().min(1) }),
+  input: z.object({ id: z.string().min(1), asBot: z.literal(true).optional() }),
   output: z.object({ directive }),
 });
 export const directiveListRpc = defineRpc({

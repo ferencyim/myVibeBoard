@@ -27,11 +27,14 @@ import {
   hubPauseCreateRpc,
   hubPauseListRpc,
   hubPauseRevokeRpc,
+  hubTakeoverGetRpc,
+  hubTakeoverSetRpc,
 } from "./shared/rpc";
 import { createSchedulerRuntime, DEFAULT_SETTINGS, type RuntimeSettings } from "./server/runtime";
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import { fromThresholds, toPageResource, toPageStatus, toThresholds } from "./server/hub-page";
-import { registerBotTools } from "./server/bot-tools";
+import { registerBotTools, requireIndependentBot } from "./server/bot-tools";
+import { createCoordinatorNotifier, createHubWatcher } from "./server/hub-events";
 import { registerDirectives } from "./server/directive-register";
 
 /**
@@ -109,7 +112,39 @@ export default function contribute(server: PluginServerContext) {
   });
 
   registerBotTools(server, runtime, () => paseo);
-  const stopDirectives = registerDirectives(server, db);
+  const notifyCoordinator = createCoordinatorNotifier({
+    send: async (text) => {
+      if (!paseo) return { accepted: false };
+      return paseo.plugins.invoke("vibe-bots", "bots.notify", {
+        target: "coordinator",
+        text,
+        source: "中枢",
+      });
+    },
+    onError: (error) => console.error("vibe-scheduler: 通知总协调失败：", error),
+  });
+  const stopDirectives = registerDirectives(server, db, {
+    notifyCoordinator,
+    pause: {
+      create: async (input) => {
+        const pause = await runtime.hub.createPause({
+          scope: input.scope,
+          until: input.until,
+          reason: input.reason,
+          issuedBy: input.issuedBy,
+        });
+        return { id: pause.id };
+      },
+      remove: async (id) => {
+        await runtime.hub.revokePause(id);
+      },
+    },
+  });
+  const watchHub = createHubWatcher({ hub: runtime.hub, notify: notifyCoordinator });
+  const hubWatchTimer = setInterval(() => {
+    watchHub().catch((error) => console.error("vibe-scheduler: 中枢事件检查失败：", error));
+  }, 30_000);
+  (hubWatchTimer as unknown as { unref?: () => void }).unref?.();
 
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
@@ -185,7 +220,14 @@ export default function contribute(server: PluginServerContext) {
 
   server.handle(hubStatusRpc, async () => toPageStatus(await runtime.hub.status()));
   server.handle(hubQueueReorderRpc, async ({ order, priorities, reason }, { callerAgentId }) => {
-    if (callerAgentId) throw new Error("bot 请使用受权限限制的中枢工具");
+    // Only the coordinator bot may reorder; other agents are refused.
+    if (callerAgentId) {
+      if (!paseo) throw new Error("宿主尚未连接，请稍后重试");
+      const api = paseo;
+      await requireIndependentBot(callerAgentId, (pluginId, method, input) =>
+        api.plugins.invoke(pluginId, method, input),
+      );
+    }
     const kinds = new Map((await runtime.hub.status()).queue.map((q) => [q.id, q.kind]));
     return runtime.hub.reorder({
       order: order.map((id) => ({ kind: kinds.get(id) ?? "job", id })),
@@ -205,11 +247,36 @@ export default function contribute(server: PluginServerContext) {
     const result = await runtime.hub.updateSettings(fromThresholds(thresholds));
     return { thresholds: toThresholds(result.settings), fileError: result.fileError };
   });
-  server.handle(hubPauseCreateRpc, async (input) => ({ ...(await runtime.hub.createPause(input)) }));
+  server.handle(hubPauseCreateRpc, async (input, { callerAgentId }) => {
+    const bot = !!callerAgentId || input.issuedBy === "bot";
+    if (bot) {
+      // A bot's pause is a temporary operations window: it needs an end and may not exceed 24 hours.
+      const until = input.until ? Date.parse(input.until) : NaN;
+      if (!Number.isFinite(until) || until - Date.now() > 24 * 3_600_000)
+        throw new Error("bot 下发的暂停必须设置结束时间，且不超过 24 小时");
+    }
+    return { ...(await runtime.hub.createPause({ ...input, issuedBy: bot ? "bot" : (input.issuedBy ?? "user") })) };
+  });
   server.handle(hubPauseListRpc, ({ activeOnly }) => ({
     pauses: runtime.hub.listPauses(activeOnly ?? true).map((p) => ({ ...p })),
   }));
-  server.handle(hubPauseRevokeRpc, async ({ id }) => ({ ok: await runtime.hub.revokePause(id) }));
+  server.handle(hubPauseRevokeRpc, async ({ id }, { callerAgentId }) => {
+    if (callerAgentId && runtime.hub.listPauses(true).find((p) => p.id === id)?.issuedBy === "user")
+      throw new Error("bot 不能撤销用户设置的暂停");
+    return { ok: await runtime.hub.revokePause(id) };
+  });
+  const takeoverState = () => ({
+    enabled: runtime.takeover().enabled,
+    active: runtime.takeover().active,
+    available: runtime.takeover().available,
+    disabledFile: runtime.takeover().disabledFile,
+  });
+  server.handle(hubTakeoverGetRpc, () => takeoverState());
+  server.handle(hubTakeoverSetRpc, async ({ enabled }, { callerAgentId }) => {
+    if (callerAgentId) throw new Error("接管全机重任务只能由用户开关");
+    await runtime.setTakeover(enabled);
+    return takeoverState();
+  });
 
   server.handle(devicesRpc, () => ({
     devices: runtime.leases.listDevices().map((device) => ({
@@ -234,6 +301,7 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     stopSettings();
     stopDirectives();
+    clearInterval(hubWatchTimer);
     for (const stop of stopHooks) stop();
     await runtime.stop();
     db.close();

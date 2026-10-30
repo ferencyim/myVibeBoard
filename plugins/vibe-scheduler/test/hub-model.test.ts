@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   THRESHOLD_FIELDS,
+  formatDirectiveScope,
+  formatDuration,
+  jobOutcomeText,
+  parseTakeover,
+  takeoverLabel,
   formatRemaining,
   groupDirectives,
   metricExceeds,
@@ -164,5 +169,44 @@ describe("directives and time", () => {
     expect(formatRemaining("2026-10-30T00:20:00.000Z", now)).toBe("还剩 20 分");
     expect(formatRemaining("2026-10-30T02:05:00.000Z", now)).toBe("还剩 2 小时 5 分");
     expect(formatRemaining("2026-11-01T03:00:00.000Z", now)).toBe("还剩 2 天 3 小时");
+  });
+});
+
+describe("hub page alignment", () => {
+  it("covers every threshold key the hub sends", () => {
+    const keys = THRESHOLD_FIELDS.map((f) => f.key);
+    for (const key of ["deployMinAvailableMemGb", "cpuWindowSeconds", "maxCommitRatio", "maxCpu", "heavyHardLimit"])
+      expect(keys).toContain(key);
+  });
+
+  it("reads agents, recent jobs and unregistered resources", () => {
+    const view = parseHubStatus({
+      agents: { running: { total: 3 } },
+      unregisteredResources: ["pg:9", 4],
+      recentJobs: [{ id: "j", owner: "o", command: "npm", exitCode: 1, durationMs: 90_000, outcome: "released", finishedAt: "2026-01-01T00:00:00Z" }],
+    });
+    expect(view.agents.running).toBe(3);
+    expect(view.unregisteredResources).toEqual(["pg:9"]);
+    expect(view.recentJobs[0]).toMatchObject({ id: "j", exitCode: 1 });
+    expect(jobOutcomeText(view.recentJobs[0]!)).toBe("失败（退出码 1）");
+    expect(formatDuration(90_000)).toBe("1 分 30 秒");
+    expect(parseHubStatus({}).agents.running).toBeNull();
+  });
+
+  it("reads directive scope objects, pause and updatedAt", () => {
+    expect(formatDirectiveScope("all")).toBe("all");
+    expect(formatDirectiveScope({ kind: "all" })).toBe("all");
+    expect(formatDirectiveScope({ kind: "projects", projectIds: ["a", "b"] })).toBe("项目：a、b");
+    const [d] = parseDirectives({
+      directives: [{ id: "1", text: "t", scope: { kind: "providers", providers: ["codex"] }, updatedAt: "2026-01-01T00:00:00Z", pause: { scope: "build", until: "2026-01-02T00:00:00Z" } }],
+    });
+    expect(d).toMatchObject({ scope: "模型提供方：codex", updatedAt: "2026-01-01T00:00:00Z", pause: { scope: "build" } });
+  });
+
+  it("describes the takeover state", () => {
+    expect(takeoverLabel(parseTakeover(undefined)).text).toContain("未配置");
+    expect(takeoverLabel({ enabled: false, active: false, available: true, disabledFile: false }).text).toContain("本地锁");
+    expect(takeoverLabel({ enabled: true, active: true, available: true, disabledFile: false }).text).toContain("接管中");
+    expect(takeoverLabel({ enabled: true, active: true, available: true, disabledFile: true }).warn).toBe(true);
   });
 });

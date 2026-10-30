@@ -656,6 +656,22 @@ describe("总协调与 bot 消息", () => {
     expect(f.db.prepare("SELECT COUNT(*) AS n FROM bot_message WHERE from_bot_id IS NULL").get()).toMatchObject({ n: 1 });
   });
 
+  it("总协调可以查看并放行被防循环拦下的消息", async () => {
+    const f = fixture();
+    const coordinator = await independent(f, "总");
+    f.service.bots.transferCoordinator(coordinator.id);
+    const a = await f.createProjectBot();
+    const b = await f.createProjectBot();
+    const messaging = createBotMessaging(f.db, f.service, f.api);
+    for (let i = 0; i < 6; i++) await messaging.send(i % 2 ? a : b, i % 2 ? b.id : a.id, "来" + i);
+    expect((await messaging.send(a, b.id, "第七条")).status).toBe("held");
+    expect(messaging.listHeld().map((row) => row.text)).toEqual(["第七条"]);
+    expect(messaging.listHeld("nobody")).toEqual([]);
+    await expect(messaging.releaseHeld(a.id)).resolves.toEqual({ released: 1 });
+    expect(f.db.prepare("SELECT COUNT(*) AS n FROM bot_message WHERE status='held'").get()).toMatchObject({ n: 0 });
+    await expect(messaging.releaseHeld()).resolves.toEqual({ released: 0 });
+  });
+
   it("别的插件已写入 turn context 时追加而不覆盖，并沿用其送达 id", async () => {
     const f = fixture();
     const bot = await f.createProjectBot();

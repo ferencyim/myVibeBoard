@@ -12,6 +12,7 @@ export const hubQueueReorderRpc = defineRpc({
     /** Waiting job ids in the desired order. */
     order: z.array(z.string()).max(1000),
     priorities: z.record(z.string(), z.number().int().min(0).max(9)).optional(),
+    reason: z.string().max(1000).optional(),
   }),
   output: loose,
 });
@@ -34,6 +35,22 @@ export const hubSettingsSetRpc = defineRpc({
   name: "hub.settings.set",
   input: z.object({ thresholds: z.record(z.string(), z.number()) }),
   output: loose,
+});
+const takeoverShape = z.object({
+  enabled: z.boolean(),
+  active: z.boolean(),
+  available: z.boolean(),
+  disabledFile: z.boolean(),
+});
+export const hubTakeoverGetRpc = defineRpc({
+  name: "hub.takeover.get",
+  input: z.object({}),
+  output: takeoverShape,
+});
+export const hubTakeoverSetRpc = defineRpc({
+  name: "hub.takeover.set",
+  input: z.object({ enabled: z.boolean() }),
+  output: takeoverShape,
 });
 export const hubPauseCreateRpc = defineRpc({
   name: "hub.pause.create",

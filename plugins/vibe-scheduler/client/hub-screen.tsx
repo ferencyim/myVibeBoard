@@ -17,14 +17,19 @@ import {
   hubSettingsGetRpc,
   hubSettingsSetRpc,
   hubStatusRpc,
+  hubTakeoverGetRpc,
+  hubTakeoverSetRpc,
 } from "./hub-rpc";
 import {
   EMPTY_HUB_STATUS,
+  EMPTY_TAKEOVER,
   PAUSE_SCOPES,
   STATE_ZH,
   THRESHOLD_FIELDS,
   formatClock,
+  formatDuration,
   formatMetric,
+  jobOutcomeText,
   formatRemaining,
   groupDirectives,
   metricExceeds,
@@ -32,7 +37,9 @@ import {
   parseDirectives,
   parseHubStatus,
   parseNumberField,
+  parseTakeover,
   parseThresholds,
+  takeoverLabel,
   queueOrderIds,
   queueSource,
   setQueuePriority,
@@ -44,6 +51,7 @@ import {
   type HubResource,
   type HubStatus,
   type QueueItem,
+  type Takeover,
   type ThresholdField,
   type Thresholds,
 } from "./hub-model";
@@ -53,6 +61,7 @@ const KEY = ["vibe-scheduler", "hub"] as const;
 const STATUS_KEY = [...KEY, "status"] as const;
 const SETTINGS_KEY = [...KEY, "settings"] as const;
 const DIRECTIVES_KEY = [...KEY, "directives"] as const;
+const TAKEOVER_KEY = [...KEY, "takeover"] as const;
 const POLL_MS = 5_000;
 
 /**
@@ -64,6 +73,7 @@ function useHubData() {
   const statusCall = useRpc(hubStatusRpc);
   const settingsCall = useRpc(hubSettingsGetRpc);
   const directivesCall = useRpc(hubDirectiveListRpc);
+  const takeoverCall = useRpc(hubTakeoverGetRpc);
   const poll = { refetchInterval: POLL_MS, refetchIntervalInBackground: false, retry: 1 } as const;
   const status = useQuery({
     queryKey: STATUS_KEY,
@@ -82,6 +92,13 @@ function useHubData() {
     queryFn: async () => parseDirectives(await directivesCall({})),
     ...poll,
   });
+  const takeover = useQuery({
+    queryKey: TAKEOVER_KEY,
+    queryFn: async () => parseTakeover(await takeoverCall({})),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
+    retry: 1,
+  });
   const [error, setError] = useState<string | null>(null);
 
   /** Optimistic write: patch the cache, call, roll back on failure, refetch either way. */
@@ -99,7 +116,7 @@ function useHubData() {
       void queryClient.invalidateQueries({ queryKey: KEY });
     }
   }
-  return { status, settings, directives, error, setError, mutate };
+  return { status, settings, directives, takeover, error, setError, mutate };
 }
 
 type Hub = ReturnType<typeof useHubData>;
@@ -122,6 +139,7 @@ export function HubSections({ theme }: { theme: PluginTheme }) {
       <ResourcesSection theme={theme} hub={hub} status={status} />
       <PauseSection theme={theme} hub={hub} status={status} />
       <DirectiveSection theme={theme} hub={hub} items={hub.directives.data ?? []} />
+      <RecordsSection theme={theme} status={status} />
     </>
   );
 }
@@ -148,7 +166,11 @@ function MachineSection({
     );
   return (
     <Section theme={theme} title="机器">
+      <TakeoverBar theme={theme} hub={hub} takeover={hub.takeover.data ?? EMPTY_TAKEOVER} />
       <Muted theme={theme}>实时指标与放行阈值；修改阈值立即生效并写回 guard 配置。</Muted>
+      {status.agents.running !== null ? (
+        <Muted theme={theme}>当前运行中的 agent 会话：{status.agents.running}</Muted>
+      ) : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
         {THRESHOLD_FIELDS.map((field) => {
           const over = metricExceeds(field, status.machine, thresholds);
@@ -189,6 +211,52 @@ function MachineSection({
         })}
       </View>
     </Section>
+  );
+}
+
+/** The switch that lets the hub take over every heavy job on the machine. Off by default; asks before changing. */
+function TakeoverBar({ theme, hub, takeover }: { theme: PluginTheme; hub: Hub; takeover: Takeover }) {
+  const setCall = useRpc(hubTakeoverSetRpc);
+  const [confirming, setConfirming] = useState(false);
+  const label = takeoverLabel(takeover);
+  const next = !takeover.enabled;
+  const apply = () => {
+    setConfirming(false);
+    void hub.mutate<Takeover>(TAKEOVER_KEY, (prev) => ({ ...prev, enabled: next }), () => setCall({ enabled: next }));
+  };
+  return (
+    <View style={{ gap: 6 }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>接管全机重任务</Text>
+        <Text style={{ color: label.warn ? theme.colors.statusWarning : theme.colors.foregroundMuted, fontSize: 12 }}>
+          {label.text}
+        </Text>
+        {!confirming ? (
+          <Button
+            theme={theme}
+            label={next ? "开启接管" : "关闭接管"}
+            disabled={!takeover.available}
+            onPress={() => setConfirming(true)}
+          />
+        ) : null}
+      </View>
+      {confirming ? (
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+            {next
+              ? "开启后，本机所有经 win-heavy-guard 的构建、测试、部署都先向中枢申请并按此处的队列与暂停放行；中枢不可用时会自动退回本地锁。确认开启？"
+              : "关闭后中枢停止接管，guard 恢复使用本地锁；已在中枢排队的任务会在下次申请时退回本地锁。确认关闭？"}
+          </Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Button theme={theme} label={next ? "确认开启" : "确认关闭"} active onPress={apply} />
+            <Button theme={theme} label="取消" onPress={() => setConfirming(false)} />
+          </View>
+        </View>
+      ) : null}
+      <Muted theme={theme}>
+        应急回退：在锁目录放一个名为 hub.disabled 的文件，全机 guard 立即忽略中枢；删除即恢复。
+      </Muted>
+    </View>
   );
 }
 
@@ -372,6 +440,11 @@ function ResourcesSection({ theme, hub, status }: { theme: PluginTheme; hub: Hub
   return (
     <Section theme={theme} title="共用资源">
       <Muted theme={theme}>如测试 PostgreSQL 实例。并发上限 1 即排他。</Muted>
+      {status.unregisteredResources.length > 0 ? (
+        <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+          有任务占用了未登记的资源：{status.unregisteredResources.join("、")}（按上限 1 处理，可在下方登记）
+        </Text>
+      ) : null}
       {status.resources.length === 0 ? <Muted theme={theme}>还没有登记共用资源。</Muted> : null}
       {status.resources.map((r) => (
         <View key={r.name} style={{ gap: 4 }}>
@@ -539,6 +612,8 @@ function DirectiveSection({ theme, hub, items }: { theme: PluginTheme; hub: Hub;
           issuedBy: "user",
           status: "active",
           createdAt: new Date().toISOString(),
+          updatedAt: null,
+          pause: null,
         },
         ...prev,
       ],
@@ -554,6 +629,8 @@ function DirectiveSection({ theme, hub, items }: { theme: PluginTheme; hub: Hub;
           {d.kind === "standing" ? "长期" : "临时"}
           {d.expiresAt ? ` · 到 ${formatClock(d.expiresAt)}` : ""}
           {d.issuedBy === "bot" ? " · 总协调 bot 下发" : " · 你下发"}
+          {d.scope !== "all" ? ` · 范围 ${d.scope}` : ""}
+          {d.pause ? ` · 同时暂停 ${d.pause.scope}${d.pause.until ? "（到 " + formatClock(d.pause.until) + "）" : ""}` : ""}
         </Muted>
         {actions}
       </View>
@@ -620,6 +697,28 @@ function DirectiveSection({ theme, hub, items }: { theme: PluginTheme; hub: Hub;
       <View style={{ flexDirection: "row" }}>
         <Button theme={theme} label="下发" onPress={submit} />
       </View>
+    </Section>
+  );
+}
+
+// ---- 运行记录 -------------------------------------------------------------------------------
+
+function RecordsSection({ theme, status }: { theme: PluginTheme; status: HubStatus }) {
+  return (
+    <Section theme={theme} title="运行记录">
+      <Muted theme={theme}>最近结束的重任务（经中枢放行的）。</Muted>
+      {status.recentJobs.length === 0 ? <Muted theme={theme}>还没有记录。</Muted> : null}
+      {status.recentJobs.map((job) => (
+        <View key={job.id} style={{ gap: 2 }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.foreground, fontSize: 13 }}>
+            {job.command || job.id}
+          </Text>
+          <Muted theme={theme}>
+            {[job.project, job.owner].filter(Boolean).join(" · ") || "—"} · {formatClock(job.finishedAt)} ·{" "}
+            {jobOutcomeText(job)} · 用时 {formatDuration(job.durationMs)}
+          </Muted>
+        </View>
+      ))}
     </Section>
   );
 }

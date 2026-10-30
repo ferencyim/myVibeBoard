@@ -50,11 +50,31 @@ export interface HubMachine {
   handles: number | null;
   diskQueue: number | null;
 }
+export interface HubJobRecord {
+  id: string;
+  owner: string;
+  project: string;
+  command: string;
+  priority: number;
+  queuedAt: string | null;
+  finishedAt: string | null;
+  exitCode: number | null;
+  durationMs: number | null;
+  outcome: "released" | "reaped";
+}
+export interface HubAgents {
+  /** Running agent sessions the scheduler counts, if reported. */
+  running: number | null;
+}
 export interface HubStatus {
   machine: HubMachine;
   queue: QueueItem[];
   resources: HubResource[];
   pauses: HubPause[];
+  agents: HubAgents;
+  recentJobs: HubJobRecord[];
+  /** Resource names jobs asked for that are not registered. */
+  unregisteredResources: string[];
 }
 
 export const EMPTY_HUB_STATUS: HubStatus = {
@@ -69,6 +89,9 @@ export const EMPTY_HUB_STATUS: HubStatus = {
   queue: [],
   resources: [],
   pauses: [],
+  agents: { running: null },
+  recentJobs: [],
+  unregisteredResources: [],
 };
 
 export function parseHubStatus(raw: unknown): HubStatus {
@@ -112,6 +135,24 @@ export function parseHubStatus(raw: unknown): HubStatus {
       reason: str(p.reason),
       issuedBy: str(p.issuedBy, "user"),
     })),
+    agents: {
+      running: isObj(o.agents) && isObj(o.agents.running) ? numOrNull(o.agents.running.total) : null,
+    },
+    recentJobs: list(o.recentJobs).map((j) => ({
+      id: str(j.id),
+      owner: str(j.owner),
+      project: str(j.project),
+      command: str(j.command),
+      priority: num(j.priority, 1),
+      queuedAt: typeof j.queuedAt === "string" ? j.queuedAt : null,
+      finishedAt: typeof j.finishedAt === "string" ? j.finishedAt : null,
+      exitCode: numOrNull(j.exitCode),
+      durationMs: numOrNull(j.durationMs),
+      outcome: j.outcome === "reaped" ? "reaped" : "released",
+    })),
+    unregisteredResources: (Array.isArray(o.unregisteredResources) ? o.unregisteredResources : []).filter(
+      (n): n is string => typeof n === "string",
+    ),
   };
 }
 
@@ -131,8 +172,10 @@ export interface ThresholdField {
 /** Mirrors win-heavy-guard.admission.json. */
 export const THRESHOLD_FIELDS: ThresholdField[] = [
   { key: "minAvailableMemGb", label: "可用内存下限", unit: "GB", min: 0, max: 1024, int: false, metric: "availableMemGb" },
+  { key: "deployMinAvailableMemGb", label: "部署可用内存下限", unit: "GB", min: 0, max: 1024, int: false },
   { key: "maxCommitRatio", label: "已承诺内存上限", unit: "比例", min: 0.1, max: 1, int: false, metric: "commitRatio" },
   { key: "maxCpu", label: "CPU 上限", unit: "比例", min: 0.1, max: 1, int: false, metric: "cpu" },
+  { key: "cpuWindowSeconds", label: "CPU 统计窗口", unit: "秒", min: 1, max: 600, int: true },
   { key: "maxProcesses", label: "进程数上限", unit: "个", min: 10, max: 100000, int: true, metric: "processes" },
   { key: "maxHandles", label: "句柄数上限", unit: "个", min: 1000, max: 10000000, int: true, metric: "handles" },
   { key: "maxDiskQueue", label: "磁盘队列上限", unit: "", min: 0.1, max: 1000, int: false, metric: "diskQueue" },
@@ -239,6 +282,9 @@ export const PAUSE_SCOPES = [
   { value: "all-heavy", label: "全部重任务" },
   { value: "build", label: "构建" },
   { value: "test", label: "测试" },
+  { value: "deploy", label: "部署" },
+  { value: "db", label: "数据库" },
+  { value: "agents", label: "新 agent 任务" },
   { value: "pg:*", label: "所有 PG 实例" },
 ] as const;
 
@@ -310,12 +356,27 @@ export type DirectiveStatus = "active" | "pending" | "revoked" | "expired";
 export interface Directive {
   id: string;
   text: string;
+  /** "all" or a readable summary of the project/provider list. */
   scope: string;
   kind: "temporary" | "standing";
   expiresAt: string | null;
   issuedBy: "user" | "bot";
   status: DirectiveStatus;
   createdAt: string | null;
+  updatedAt: string | null;
+  /** Pause rule enforced while the directive is active. */
+  pause: { scope: string; until: string | null } | null;
+}
+
+/** The hub sends scope as "all" or { kind: "projects" | "providers", ... }. */
+export function formatDirectiveScope(scope: unknown): string {
+  if (scope === undefined || scope === null || scope === "all") return "all";
+  if (!isObj(scope)) return typeof scope === "string" ? scope : "all";
+  if (scope.kind === "projects" && Array.isArray(scope.projectIds))
+    return `项目：${scope.projectIds.join("、")}`;
+  if (scope.kind === "providers" && Array.isArray(scope.providers))
+    return `模型提供方：${scope.providers.join("、")}`;
+  return "all";
 }
 
 export function parseDirectives(raw: unknown): Directive[] {
@@ -323,7 +384,7 @@ export function parseDirectives(raw: unknown): Directive[] {
   return list(arr).map((d) => ({
     id: str(d.id),
     text: str(d.text),
-    scope: str(d.scope, "all"),
+    scope: formatDirectiveScope(d.scope),
     kind: d.kind === "standing" ? "standing" : "temporary",
     expiresAt: typeof d.expiresAt === "string" ? d.expiresAt : null,
     issuedBy: d.issuedBy === "bot" ? "bot" : "user",
@@ -332,7 +393,56 @@ export function parseDirectives(raw: unknown): Directive[] {
         ? d.status
         : "active",
     createdAt: typeof d.createdAt === "string" ? d.createdAt : null,
+    updatedAt: typeof d.updatedAt === "string" ? d.updatedAt : null,
+    pause: isObj(d.pause)
+      ? { scope: str(d.pause.scope), until: typeof d.pause.until === "string" ? d.pause.until : null }
+      : null,
   }));
+}
+
+// ---- takeover -------------------------------------------------------------------------------
+
+export interface Takeover {
+  enabled: boolean;
+  active: boolean;
+  available: boolean;
+  disabledFile: boolean;
+}
+export const EMPTY_TAKEOVER: Takeover = { enabled: false, active: false, available: false, disabledFile: false };
+
+export function parseTakeover(raw: unknown): Takeover {
+  const o: Obj = isObj(raw) ? raw : {};
+  return {
+    enabled: o.enabled === true,
+    active: o.active === true,
+    available: o.available === true,
+    disabledFile: o.disabledFile === true,
+  };
+}
+
+export function takeoverLabel(t: Takeover): { text: string; warn: boolean } {
+  if (!t.available) return { text: "本机未配置中枢目录，无法接管", warn: true };
+  if (t.enabled && t.disabledFile)
+    return { text: "已开启，但锁目录有 hub.disabled，guard 仍走本地锁", warn: true };
+  if (t.enabled && t.active) return { text: "接管中：全机重任务经中枢排队", warn: false };
+  if (t.enabled) return { text: "已开启，正在启动中枢接口", warn: true };
+  return { text: "未接管：guard 使用本地锁（默认）", warn: false };
+}
+
+// ---- job records ----------------------------------------------------------------------------
+
+export function formatDuration(ms: number | null): string {
+  if (ms === null) return "—";
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec} 秒`;
+  const min = Math.floor(sec / 60);
+  return min < 60 ? `${min} 分 ${sec % 60} 秒` : `${Math.floor(min / 60)} 小时 ${min % 60} 分`;
+}
+
+export function jobOutcomeText(job: Pick<HubJobRecord, "outcome" | "exitCode">): string {
+  if (job.outcome === "reaped") return "客户端失联，已回收";
+  if (job.exitCode === null) return "已结束";
+  return job.exitCode === 0 ? "成功" : `失败（退出码 ${job.exitCode}）`;
 }
 
 export function groupDirectives(items: readonly Directive[]) {

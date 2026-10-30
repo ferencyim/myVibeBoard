@@ -90,6 +90,8 @@ export interface JobRequest {
   slots: number;
   memGb?: number;
   resources?: Array<{ name: string; mode: "shared" | "exclusive" }>;
+  /** Reported by the client (win-heavy-guard infers it locally); the command name is the fallback. */
+  category?: JobCategory;
   pid: number;
 }
 
@@ -110,6 +112,9 @@ export interface JobView {
   waitReasons?: string[];
 }
 
+export type JobCategory = "build" | "test" | "deploy" | "db" | "other";
+export const JOB_CATEGORIES: readonly JobCategory[] = ["build", "test", "deploy", "db", "other"];
+
 export interface AgentQueueItem {
   workspaceId: string;
   goal: string;
@@ -118,6 +123,8 @@ export interface AgentQueueItem {
 export interface HubAgents {
   queue(): AgentQueueItem[];
   running(): unknown;
+  /** workspaceId -> why the task is still waiting (last admission pass). */
+  deferred?(): Record<string, string>;
   reorder(workspaceIds: string[], reason: string): Promise<unknown>;
 }
 
@@ -148,8 +155,10 @@ export function defaultIsPidAlive(pid: number): boolean {
   }
 }
 
-/** build / test category inferred from the command, for pause scopes. */
-export function jobCategory(command: string): "build" | "test" | "other" {
+/** Fallback category from the command name, for clients that do not report one. */
+export function jobCategory(command: string): JobCategory {
+  if (/\b(deploy|release|publish)\b/i.test(command)) return "deploy";
+  if (/\b(psql|pg_dump|pg_restore|migrate)\b/i.test(command)) return "db";
   if (/\b(test|vitest|jest|pytest|playwright|maestro|e2e)\b/i.test(command)) return "test";
   if (
     /\b(build|gradle|gradlew|assemble|bundle|compile|tsc|hvigor|msbuild|cargo|xcodebuild|apk)\b/i.test(
@@ -168,12 +177,15 @@ function globMatch(pattern: string, value: string): boolean {
   return new RegExp("^" + body + "$", "i").test(value);
 }
 
+const CATEGORY_SCOPES = ["build", "test", "deploy", "db"];
+
 export function pauseMatches(
   scope: string,
-  job: Pick<JobRequest, "command" | "project" | "resources">,
+  job: Pick<JobRequest, "command" | "project" | "resources" | "category">,
 ): boolean {
+  if (scope === "agents") return false;
   if (scope === "all-heavy") return true;
-  if (scope === "build" || scope === "test") return jobCategory(job.command) === scope;
+  if (CATEGORY_SCOPES.includes(scope)) return (job.category ?? jobCategory(job.command)) === scope;
   if (scope.startsWith("project:")) return job.project === scope.slice(8);
   return (job.resources ?? []).some((r) => globMatch(scope, r.name));
 }
@@ -181,9 +193,11 @@ export function pauseMatches(
 export function validatePauseScope(scope: string): string {
   const s = scope.trim();
   if (!s) throw new Error("暂停范围不能为空");
-  if (["all-heavy", "build", "test"].includes(s) || s.startsWith("project:") || /[:*]/.test(s))
+  if (["all-heavy", "agents", ...CATEGORY_SCOPES].includes(s) || s.startsWith("project:") || /[:*]/.test(s))
     return s;
-  throw new Error("暂停范围须为 all-heavy / build / test / project:名称 / 资源名或通配（如 pg:*）");
+  throw new Error(
+    "暂停范围须为 all-heavy / build / test / deploy / db / agents / project:名称 / 资源名或通配（如 pg:*）",
+  );
 }
 
 /**
@@ -192,6 +206,14 @@ export function validatePauseScope(scope: string): string {
  * interval:<seconds left>, resource_busy:<name>, resource_exclusive:<name>, resource_full:<name>,
  * pause:<scope>:<reason>[|until], behind_higher. `describeWaitReason` renders them for people.
  */
+function describePause(arg: string): string {
+  const [rest = "", until] = arg.split("|");
+  const i = rest.indexOf(":");
+  const scope = i < 0 ? rest : rest.slice(0, i);
+  const reason = i < 0 ? "" : rest.slice(i + 1);
+  return `暂停（${scope}）${reason ? "：" + reason : ""}${until ? "，到 " + until.slice(5, 16).replace("T", " ") : ""}`;
+}
+
 export function describeWaitReason(code: string): string {
   const [head, ...rest] = code.split(":");
   const arg = rest.join(":");
@@ -209,7 +231,7 @@ export function describeWaitReason(code: string): string {
     resource_busy: "资源 " + arg + " 正被占用",
     resource_exclusive: "资源 " + arg + " 被独占",
     resource_full: "资源 " + arg + " 共享上限已满",
-    pause: "暂停：" + arg,
+    pause: describePause(arg),
     behind_higher: "排在等待机器资源的更高顺位任务之后",
   };
   return text[head!] ?? code;
@@ -514,11 +536,42 @@ export function createHub(deps: HubDeps) {
     machineReasons: async (priority = 1, memGb = 0) =>
       metricReasons(settings, await readMetrics(), priority, memGb),
 
+    /**
+     * Why a new agent task must wait, or null. Only the `agents` and `project:<name>` pauses apply
+     * (`all-heavy` is shell jobs only), plus the shared machine thresholds when `machine` is set.
+     */
+    async agentGate(
+      projectName: string | null,
+      options: { machine?: boolean } = {},
+    ): Promise<string | null> {
+      const pause = store
+        .listPauses(true)
+        .find(
+          (p) =>
+            p.scope === "agents" ||
+            (!!projectName && p.scope.toLowerCase() === "project:" + projectName.toLowerCase()),
+        );
+      if (pause)
+        return (
+          "中枢：" +
+          describeWaitReason(
+            `pause:${pause.scope}:${pause.reason || "无说明"}${pause.until ? "|" + pause.until : ""}`,
+          )
+        );
+      if (options.machine === false) return null;
+      const reasons = metricReasons(settings, await readMetrics(), 1);
+      return reasons.length ? "中枢：" + reasons.map(describeWaitReason).join("、") : null;
+    },
+
+    /** Latest metrics (cached a few seconds), for the event watcher. */
+    metrics: () => readMetrics(),
+
     async status() {
       const metrics = await readMetrics();
       const registry = store.listResources();
       const held = holders();
       const agentItems = new Map((deps.agents?.queue() ?? []).map((a) => [a.workspaceId, a]));
+      const deferred = deps.agents?.deferred?.() ?? {};
       return {
         machine: {
           metrics,
@@ -550,7 +603,7 @@ export function createHub(deps: HubDeps) {
               summary: a?.goal ?? "",
               resources: [] as Array<{ name: string; mode: string }>,
               queuedAt: a?.confirmedAt ?? null,
-              waitReasons: [] as string[],
+              waitReasons: deferred[row.id] ? [deferred[row.id]!] : ([] as string[]),
             };
           }
           const j = jobs.get(row.id)!;

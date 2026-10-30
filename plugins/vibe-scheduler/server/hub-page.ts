@@ -2,7 +2,7 @@
 // guard units (percent, GB).
 
 import type { HubResource } from "./hub-store";
-import type { Hub, HubSettings } from "./hub";
+import { describeWaitReason, type Hub, type HubSettings } from "./hub";
 
 type HubStatus = Awaited<ReturnType<Hub["status"]>>;
 
@@ -65,7 +65,7 @@ export function toPageStatus(status: HubStatus) {
     state: q.waitReasons.some((w) => w.startsWith("pause:"))
       ? ("paused" as const)
       : ("queued" as const),
-    waitReasons: q.waitReasons,
+    waitReasons: q.waitReasons.map(describeWaitReason),
     queuedAt: q.queuedAt,
   }));
   return {

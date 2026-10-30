@@ -110,6 +110,8 @@ export interface TaskSchedulerDeps {
   log?: (message: string) => void;
   identity?: (directory: string) => Promise<{ repo: string; directory: string }>;
   emit: (type: string, payload: Record<string, unknown>) => void;
+  /** Resource hub gate: a reason to keep a new task queued (pauses, machine thresholds), else null. */
+  hubGate?: (info: { projectName: string | null }) => Promise<string | null> | string | null;
 }
 const canonical = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
 export async function repositoryIdentity(directory: string) {
@@ -673,6 +675,10 @@ export function createTaskScheduler(deps: TaskSchedulerDeps) {
     const { workspace, paths, project } = await admissionWorkspace(request, master, hostOperation && !hostVerification);
     const projectId = master ? null : workspace.projectId;
     checkCapacity(model.provider, projectId);
+    if (!existing && !master) {
+      const gate = await deps.hubGate?.({ projectName: project?.name ?? null });
+      if (gate) block(gate, true);
+    }
     const access = hostVerification ? "verify" : request.operation === "compact" ? "read" : accessFor(role, hostOperation);
     const files = filesFor(request, role, task, planning);
     const ranges = master && !hostOperation ? [] : await normalizeTaskFiles(files, paths.directory);

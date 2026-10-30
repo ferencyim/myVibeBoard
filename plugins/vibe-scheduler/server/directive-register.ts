@@ -20,6 +20,8 @@ export interface RegisterDirectiveOptions {
   pause?: PauseGateway;
   files?: DirectiveFileTarget[];
   tickMs?: number;
+  /** Tell the coordinator bot (deduped by the caller); failures must not break directive handling. */
+  notifyCoordinator?: (key: string, text: string) => void;
 }
 
 // The page shows scope "all" as a plain string; narrower scopes stay objects.
@@ -38,26 +40,32 @@ export function registerDirectives(
   const service = createDirectiveService({
     db,
     pause: options.pause,
-    notifyUser: (d) =>
-      server.notify({ title: "总协调已下发临时指令", body: d.text.slice(0, 200), data: { directiveId: d.id } }),
+    notifyUser: (d) => {
+      server.notify({ title: "总协调已下发临时指令", body: d.text.slice(0, 200), data: { directiveId: d.id } });
+      options.notifyCoordinator?.(
+        "directive-issued:" + d.id,
+        `你下发的临时指令已生效（到 ${d.expiresAt ?? "—"}）：${d.text.slice(0, 200)}。仅供记录，无需回复。`,
+      );
+    },
     onChange: () => syncDirectiveFiles(files, service.list("active"), log),
   });
 
-  server.handle(directiveIssueRpc, async (input, { callerAgentId }) => ({
-      directive: asRecord(
-        await service.issue({
-          ...input,
-          scope: input.scope === "all" ? { kind: "all" } : input.scope,
-          issuedBy: callerAgentId ? "bot" : "user" }),
-      ),
-    }));
+  server.handle(directiveIssueRpc, async ({ asBot, ...input }, { callerAgentId }) => ({
+    directive: asRecord(
+      await service.issue({
+        ...input,
+        scope: input.scope === "all" ? { kind: "all" } : input.scope,
+        issuedBy: callerAgentId || asBot ? "bot" : "user",
+      }),
+    ),
+  }));
   server.handle(directiveConfirmRpc, async ({ id }, { callerAgentId }) => {
     if (callerAgentId) throw new Error("长期规则只能由用户确认");
     return { directive: asRecord(await service.confirm(id)) };
   });
-  server.handle(directiveRevokeRpc, async ({ id }, { callerAgentId }) => {
+  server.handle(directiveRevokeRpc, async ({ id, asBot }, { callerAgentId }) => {
     const found = service.list().find((d) => d.id === id);
-    if (callerAgentId && found?.issuedBy === "user") throw new Error("bot 不能撤销用户下发的指令");
+    if ((callerAgentId || asBot) && found?.issuedBy === "user") throw new Error("bot 不能撤销用户下发的指令");
     return { directive: asRecord(await service.revoke(id)) };
   });
   server.handle(directiveListRpc, ({ status }) => ({
@@ -65,8 +73,10 @@ export function registerDirectives(
   }));
   const tick = () => {
     try {
-      for (const d of service.expireDue())
+      for (const d of service.expireDue()) {
         server.notify({ title: "全局指令已到期", body: d.text.slice(0, 200), data: { directiveId: d.id } });
+        options.notifyCoordinator?.("directive-expired:" + d.id, `全局指令已到期：${d.text.slice(0, 200)}`);
+      }
     } catch (error) {
       console.error("vibe-scheduler: 指令到期检查失败：", error);
     }

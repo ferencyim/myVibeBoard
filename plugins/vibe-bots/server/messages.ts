@@ -142,6 +142,25 @@ export function createBotMessaging(
     for (const { to_bot_id } of ids) await flush(to_bot_id).catch((error) => console.error("[vibe-bots] bot 消息重投失败", error));
   }
 
-  return { send, notify, flush, flushAll };
+  /** Held (loop-guarded) messages, newest last; optionally only those to or from one bot. */
+  function listHeld(botId?: string) {
+    return db.prepare<Row & { to_bot_id: string }>(
+      `SELECT id,from_bot_id,to_bot_id,text,created_at FROM bot_message WHERE status='held'` +
+        (botId ? " AND (from_bot_id=? OR to_bot_id=?)" : "") + " ORDER BY created_at,id",
+    ).all(...(botId ? [botId, botId] : []));
+  }
+
+  /** Coordinator decision: the held messages were not a loop. They go back to the delivery queue. */
+  async function releaseHeld(botId?: string): Promise<{ released: number }> {
+    const rows = listHeld(botId);
+    if (!rows.length) return { released: 0 };
+    const mark = db.prepare("UPDATE bot_message SET status='queued' WHERE id=? AND status='held'");
+    db.immediate(() => { for (const row of rows) mark.run(row.id); });
+    for (const to of new Set(rows.map((row) => row.to_bot_id)))
+      void flush(to).catch((error) => console.error("[vibe-bots] 释放后的消息投递失败，稍后重试", error));
+    return { released: rows.length };
+  }
+
+  return { send, notify, flush, flushAll, listHeld, releaseHeld };
 }
 export type BotMessaging = ReturnType<typeof createBotMessaging>;

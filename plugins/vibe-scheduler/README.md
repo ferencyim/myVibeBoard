@@ -34,3 +34,10 @@ scheduler.task_tick 是隔离验收的显式 tick 入口。scheduler.status 返�
 ## 检查
 
 在本目录运行 npm test 和 npm run typecheck。真实机器资源采样测试需显式设置 VIBE_E2E_SAMPLE=1。真实模型与隔离 daemon 的联调证据由 WP-112 总报告记录；单元测试中的原生状态与设备争用是合成夹具。
+
+## 中枢联调（WP-175）
+
+- 接管开关 `hub.takeover.get/set`（仅用户）：默认关闭，关闭时不写 `hub.json`；见 `docs/vibe/HUB-DESIGN.md` §2.2。锁目录的 `hub.disabled` 文件是全机应急回退。
+- 事件通知（`server/hub-events.ts`）经 `vibe-bots` 的 `bots.notify` 通知总协调，同一事件 1 小时内只发一次：重任务排队超 15 分钟、机器指标连续 5 分钟超阈值、暂停/指令到期、bot 下发的临时指令生效；任务失败/卡住由 vibe-board 转发。
+- bot 下发的暂停与指令经 `issuedBy:"bot"` / `asBot:true` 标记（插件间调用不带 agent 身份）；`hub.queue.reorder` 与 `vibe_scheduler_read` / `vibe_queue_reorder` 仅总协调可用。
+- 测试 `test/hub-integration.test.ts` 含真实 `win-heavy-guard.py` 的端到端（无 Windows/python 时跳过）。

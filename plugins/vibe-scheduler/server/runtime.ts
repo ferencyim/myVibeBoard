@@ -3,6 +3,7 @@ import { readResourceMeta, writeResourceMeta, type RemoteHost } from "./vibe/db"
 // Wires the scheduler to the real world: timers, resource_sample persistence, the usage cache and
 // the event consumer for native task resource requests. `index.server.ts` only adds Paseo plumbing.
 
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normalizeUsage, type UsageProviderLike } from "./quota";
 import { createPortAllocator, type PortAllocator } from "./ports";
@@ -56,6 +57,8 @@ export const DEFAULT_SETTINGS: RuntimeSettings = {
   sampleRetentionDays: 7,
   remoteSampleSeconds: 60,
 };
+
+const TAKEOVER_KEY = "hub.takeover";
 
 export interface RuntimeOptions {
   db: VibeDb;
@@ -124,6 +127,8 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   };
   publishLimits();
 
+  // The gate closure needs the hub, and the hub needs the scheduler.
+  let hub: ReturnType<typeof createHub>;
   const scheduler = createTaskScheduler({
     store,
     leases,
@@ -141,10 +146,14 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
       }),
     emit: (type, payload) =>
       publishEvent(db, { type: type as EventType, payload } as NewEvent, now),
+    // Machine thresholds are tuned for heavy jobs; agent tasks only meet them once the hub
+    // has taken over the machine. Explicit pauses apply either way.
+    hubGate: ({ projectName }) => hub.agentGate(projectName, { machine: takeover }),
   });
 
-  const hub = createHub({
-    store: createHubStore(db, now),
+  const hubStore = createHubStore(db, now);
+  hub = createHub({
+    store: hubStore,
     now,
     admissionFile: options.hubAdmissionFile ?? null,
     isPidAlive: options.isPidAlive,
@@ -152,10 +161,36 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     agents: {
       queue: () => scheduler.status().queue,
       running: () => scheduler.runningCounts(),
+      deferred: () => scheduler.status().deferred,
       reorder: (ids, reason) => scheduler.setQueueOrder(ids, reason),
     },
   });
   let hubHttp: HubHttp | null = null;
+  let hubStarting: Promise<void> | null = null;
+  // Default off: until the user turns this on the hub writes no hub.json and guards use local locks.
+  let takeover = readResourceMeta<boolean>(db, TAKEOVER_KEY, false) === true;
+
+  /** Make hub.json match the switch: start the HTTP API when taking over, stop (and remove hub.json) when not. */
+  async function applyTakeover(): Promise<void> {
+    if (stopped || !options.hubDir) return;
+    if (takeover && !hubHttp && !hubStarting) {
+      hubStarting = startHubHttp(hub, { dir: options.hubDir, onError })
+        .then((http) => {
+          if (stopped || !takeover) return http.stop();
+          hubHttp = http;
+        })
+        .catch(onError)
+        .finally(() => {
+          hubStarting = null;
+        });
+    }
+    await hubStarting;
+    if (!takeover && hubHttp) {
+      const http = hubHttp;
+      hubHttp = null;
+      await http.stop().catch(onError);
+    }
+  }
 
   const consumer = createEventConsumer({
     db,
@@ -296,15 +331,22 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
       ports.configure({ base: settings.devPortBase, span: settings.devPortSpan });
       publishLimits();
     },
+    takeover: () => ({
+      enabled: takeover,
+      /** hub.json is currently published. */
+      active: hubHttp !== null,
+      available: !!options.hubDir,
+      dir: options.hubDir ?? null,
+      disabledFile: options.hubDir ? existsSync(join(options.hubDir, "hub.disabled")) : false,
+    }),
+    async setTakeover(enabled: boolean) {
+      takeover = enabled;
+      writeResourceMeta(db, TAKEOVER_KEY, enabled);
+      await applyTakeover();
+    },
     start() {
       stopped = false;
-      if (options.hubDir && !hubHttp)
-        void startHubHttp(hub, { dir: options.hubDir, onError })
-          .then((http) => {
-            if (stopped) return http.stop();
-            hubHttp = http;
-          })
-          .catch(onError);
+      void applyTakeover();
       consumer.start();
       void sampleNow().catch(onError);
       void sampleRemotesNow().catch(onError);
@@ -326,6 +368,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     },
     async stop() {
       stopped = true;
+      await hubStarting;
       await hubHttp?.stop().catch(onError);
       hubHttp = null;
       if (remoteTimer) clearTimeout(remoteTimer);

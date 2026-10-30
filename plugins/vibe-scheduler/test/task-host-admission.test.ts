@@ -30,7 +30,7 @@ const closes: Array<() => void> = [];
 afterEach(() => {
   for (const close of closes.splice(0)) close();
 });
-function setup() {
+function setup(hubGate?: () => string | null) {
   const db = openVibeDb({ path: ":memory:" });
   closes.push(() => db.close());
   migrateOwner(db, "scheduler");
@@ -73,10 +73,28 @@ function setup() {
       agents,
     }),
     emit: () => undefined,
+    hubGate,
   });
   return { db, store, runtime, scheduler, agents };
 }
 describe("task host admission", () => {
+  it("keeps a new task queued with the hub's reason, then admits once the gate opens", async () => {
+    let reason: string | null = "中枢：暂停（agents）：维护窗口";
+    const ctx = setup(() => reason);
+    const request = {
+      requestId: "gate",
+      workspaceId: "workspace",
+      action: "acquire" as const,
+      role: "worker" as const,
+    };
+    const blocked = await ctx.scheduler.requestResource(request);
+    expect(blocked).toMatchObject({ ok: false, retryable: true });
+    expect(blocked.reason).toContain("维护窗口");
+    expect((await ctx.scheduler.tick()).deferred.workspace).toContain("维护窗口");
+    reason = null;
+    expect((await ctx.scheduler.requestResource(request)).ok).toBe(true);
+  });
+
   it.each(["idle", "running", "active_turn"] as const)(
     "releases an unbound reservation only when every native member is stopped: %s",
     async (state) => {

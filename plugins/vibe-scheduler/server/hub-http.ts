@@ -22,6 +22,7 @@ const JobBody = z.object({
     .array(z.object({ name: z.string().min(1).max(200), mode: z.enum(["shared", "exclusive"]) }))
     .max(16)
     .optional(),
+  category: z.enum(["build", "test", "deploy", "db", "other"]).optional(),
   pid: z.number().int().min(1),
 });
 const ReleaseBody = z.object({

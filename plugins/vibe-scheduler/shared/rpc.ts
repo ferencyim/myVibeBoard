@@ -202,3 +202,24 @@ export const hubPauseRevokeRpc = defineRpc({
   input: z.object({ id: z.string().min(1) }),
   output: z.object({ ok: z.boolean() }),
 });
+
+/** The "take over all heavy jobs on this machine" switch. Default off; off means no hub.json is written. */
+const takeoverState = z.object({
+  enabled: z.boolean(),
+  /** hub.json is published right now. */
+  active: z.boolean(),
+  /** A hub directory is configured for this daemon. */
+  available: z.boolean(),
+  /** The lock dir holds hub.disabled, so guards ignore the hub regardless of the switch. */
+  disabledFile: z.boolean(),
+});
+export const hubTakeoverGetRpc = defineRpc({
+  name: "hub.takeover.get",
+  input: z.object({}),
+  output: takeoverState,
+});
+export const hubTakeoverSetRpc = defineRpc({
+  name: "hub.takeover.set",
+  input: z.object({ enabled: z.boolean() }),
+  output: takeoverState,
+});
