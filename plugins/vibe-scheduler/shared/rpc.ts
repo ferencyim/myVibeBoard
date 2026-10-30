@@ -123,3 +123,82 @@ export const queueOrderRpc = defineRpc({
   }),
   output: z.object({ workspaceIds: z.array(z.string()), reason: z.string() }),
 });
+
+// --- hub (docs/vibe/HUB-DESIGN.md 2) ---------------------------------------------------------
+const loose = z.record(z.string(), z.unknown());
+const thresholdsShape = {
+  minAvailableMemGb: z.number().min(0),
+  deployMinAvailableMemGb: z.number().min(0),
+  /** 0-1 */
+  maxCommitRatio: z.number().min(0).max(1),
+  /** 0-1, averaged over the CPU window */
+  maxCpu: z.number().min(0).max(1),
+  cpuWindowSeconds: z.number().int().min(1).max(600),
+  maxProcesses: z.number().int().min(0),
+  maxHandles: z.number().int().min(0),
+  maxDiskQueue: z.number().min(0),
+  minStartIntervalSec: z.number().min(0),
+  heavyHardLimit: z.number().int().min(1).max(64),
+};
+
+export const hubStatusRpc = defineRpc({ name: "hub.status", input: z.object({}), output: loose });
+export const hubQueueReorderRpc = defineRpc({
+  name: "hub.queue.reorder",
+  input: z.object({
+    /** Waiting entry ids (shell job ids and agent workspace ids) in the wanted order. */
+    order: z.array(z.string().min(1)).max(1000),
+    priorities: z.record(z.string(), z.number().int().min(0).max(9)).optional(),
+    reason: z.string().trim().min(1).max(1000).optional(),
+  }),
+  output: z.object({ order: z.array(z.object({ kind: z.string(), id: z.string() })) }),
+});
+export const hubResourcesListRpc = defineRpc({
+  name: "hub.resources.list",
+  input: z.object({}),
+  output: z.object({ resources: z.array(loose) }),
+});
+export const hubResourcesUpsertRpc = defineRpc({
+  name: "hub.resources.upsert",
+  input: z.object({
+    name: z.string().trim().min(1).max(200),
+    /** Concurrent shared holders; exclusive always needs zero holders. */
+    limit: z.number().int().min(1).max(64).optional(),
+    note: z.string().max(500).optional(),
+  }),
+  output: loose,
+});
+export const hubResourcesRemoveRpc = defineRpc({
+  name: "hub.resources.remove",
+  input: z.object({ name: z.string().min(1) }),
+  output: z.object({ ok: z.boolean() }),
+});
+export const hubSettingsGetRpc = defineRpc({
+  name: "hub.settings.get",
+  input: z.object({}),
+  output: loose,
+});
+export const hubSettingsSetRpc = defineRpc({
+  name: "hub.settings.set",
+  input: z.object({ thresholds: z.object(thresholdsShape).partial() }),
+  output: loose,
+});
+export const hubPauseCreateRpc = defineRpc({
+  name: "hub.pause.create",
+  input: z.object({
+    scope: z.string().min(1).max(200),
+    until: z.string().nullable().optional(),
+    reason: z.string().max(1000).optional(),
+    issuedBy: z.string().max(100).optional(),
+  }),
+  output: loose,
+});
+export const hubPauseListRpc = defineRpc({
+  name: "hub.pause.list",
+  input: z.object({ activeOnly: z.boolean().optional() }),
+  output: z.object({ pauses: z.array(loose) }),
+});
+export const hubPauseRevokeRpc = defineRpc({
+  name: "hub.pause.revoke",
+  input: z.object({ id: z.string().min(1) }),
+  output: z.object({ ok: z.boolean() }),
+});

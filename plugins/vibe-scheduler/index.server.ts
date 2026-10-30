@@ -17,10 +17,42 @@ import {
   taskResourceRpc,
   taskTickRpc,
   queueOrderRpc,
+  hubStatusRpc,
+  hubQueueReorderRpc,
+  hubResourcesListRpc,
+  hubResourcesUpsertRpc,
+  hubResourcesRemoveRpc,
+  hubSettingsGetRpc,
+  hubSettingsSetRpc,
+  hubPauseCreateRpc,
+  hubPauseListRpc,
+  hubPauseRevokeRpc,
 } from "./shared/rpc";
 import { createSchedulerRuntime, DEFAULT_SETTINGS, type RuntimeSettings } from "./server/runtime";
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
+import { fromThresholds, toPageResource, toPageStatus, toThresholds } from "./server/hub-page";
 import { registerBotTools } from "./server/bot-tools";
+
+/**
+ * hub.json and the guard admission file. A dev/test daemon (VIBE_HOME set) must not touch the real
+ * ones, so it gets private paths unless VIBE_HUB_DIR / VIBE_HUB_ADMISSION_FILE say otherwise.
+ */
+function hubPaths() {
+  const env = process.env;
+  if (env.VIBE_HOME?.trim()) {
+    const dir = join(env.VIBE_HOME.trim(), "hub");
+    return {
+      hubDir: env.VIBE_HUB_DIR || dir,
+      hubAdmissionFile: env.VIBE_HUB_ADMISSION_FILE || join(dir, "admission.json"),
+    };
+  }
+  if (process.platform !== "win32" && !env.VIBE_HUB_DIR) return {};
+  return {
+    hubDir: env.VIBE_HUB_DIR || "D:\\devRepoCaches\\validation\\locks\\win-heavy",
+    hubAdmissionFile:
+      env.VIBE_HUB_ADMISSION_FILE || "D:\\devRepo\\ci-dashboard\\queue\\win-heavy-guard.admission.json",
+  };
+}
 
 export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
@@ -34,6 +66,7 @@ export default function contribute(server: PluginServerContext) {
   const runtime = createSchedulerRuntime({
     db,
     dataDir: join(resolveVibeHome(), "scheduler"),
+    ...hubPaths(),
     onError: (error) => console.error("vibe-scheduler:", error),
     native: async (workspaceId) => {
       if (!paseo) throw new Error("尚未连接原生宿主，暂停派发");
@@ -147,6 +180,34 @@ export default function contribute(server: PluginServerContext) {
     remember(context.paseo);
     return { ...(await runtime.tickOnce()) };
   });
+
+  server.handle(hubStatusRpc, async () => toPageStatus(await runtime.hub.status()));
+  server.handle(hubQueueReorderRpc, async ({ order, priorities, reason }, { callerAgentId }) => {
+    if (callerAgentId) throw new Error("bot 请使用受权限限制的中枢工具");
+    const kinds = new Map((await runtime.hub.status()).queue.map((q) => [q.id, q.kind]));
+    return runtime.hub.reorder({
+      order: order.map((id) => ({ kind: kinds.get(id) ?? "job", id })),
+      priorities,
+      reason: reason ?? "中枢页面调整",
+    });
+  });
+  server.handle(hubResourcesListRpc, () => ({
+    resources: runtime.hub.listResources().map(toPageResource),
+  }));
+  server.handle(hubResourcesUpsertRpc, ({ name, limit, note }) =>
+    toPageResource(runtime.hub.upsertResource({ name, maxShared: limit, note })),
+  );
+  server.handle(hubResourcesRemoveRpc, ({ name }) => ({ ok: runtime.hub.removeResource(name) }));
+  server.handle(hubSettingsGetRpc, () => ({ thresholds: toThresholds(runtime.hub.settings()) }));
+  server.handle(hubSettingsSetRpc, async ({ thresholds }) => {
+    const result = await runtime.hub.updateSettings(fromThresholds(thresholds));
+    return { thresholds: toThresholds(result.settings), fileError: result.fileError };
+  });
+  server.handle(hubPauseCreateRpc, async (input) => ({ ...(await runtime.hub.createPause(input)) }));
+  server.handle(hubPauseListRpc, ({ activeOnly }) => ({
+    pauses: runtime.hub.listPauses(activeOnly ?? true).map((p) => ({ ...p })),
+  }));
+  server.handle(hubPauseRevokeRpc, async ({ id }) => ({ ok: await runtime.hub.revokePause(id) }));
 
   server.handle(devicesRpc, () => ({
     devices: runtime.leases.listDevices().map((device) => ({

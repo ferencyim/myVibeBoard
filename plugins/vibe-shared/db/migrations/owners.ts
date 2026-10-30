@@ -202,6 +202,47 @@ CREATE UNIQUE INDEX idx_device_lease_active ON device_lease(device_id) WHERE rel
     name: "workspace_task_leases",
     sql: `ALTER TABLE device_lease ADD COLUMN workspace_id TEXT;`,
   },
+  {
+    version: 3,
+    name: "hub_core",
+    sql: `
+-- Named shared resources (e.g. pg:5435). max_shared = concurrent shared holders; exclusive needs zero holders.
+CREATE TABLE hub_resource (
+  name TEXT PRIMARY KEY,
+  max_shared INTEGER NOT NULL DEFAULT 1 CHECK (max_shared >= 1),
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Pause / maintenance rules. Active while revoked_at IS NULL and (until IS NULL OR until > now).
+CREATE TABLE hub_pause (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  until TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  issued_by TEXT NOT NULL DEFAULT 'user',
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+
+-- Finished heavy jobs (pruned to the most recent rows).
+CREATE TABLE hub_job_log (
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  project TEXT,
+  command TEXT NOT NULL,
+  priority INTEGER NOT NULL,
+  queued_at TEXT NOT NULL,
+  admitted_at TEXT,
+  finished_at TEXT NOT NULL,
+  exit_code INTEGER,
+  duration_ms INTEGER,
+  outcome TEXT NOT NULL CHECK (outcome IN ('released','reaped'))
+);
+CREATE INDEX idx_hub_job_log_finished ON hub_job_log(finished_at);
+`,
+  },
 ];
 
 export const STATS_MIGRATIONS: Migration[] = [

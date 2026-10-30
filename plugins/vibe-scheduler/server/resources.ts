@@ -174,14 +174,18 @@ function attribute(
 
 // --- real probe -----------------------------------------------------------------------------
 
-export type CommandRunner = (command: string, args: readonly string[]) => Promise<string>;
+export type CommandRunner = (
+  command: string,
+  args: readonly string[],
+  timeoutMs?: number,
+) => Promise<string>;
 
-export const runCommand: CommandRunner = (command, args) =>
+export const runCommand: CommandRunner = (command, args, timeoutMs = 20_000) =>
   new Promise((resolve, reject) => {
     execFile(
       command,
       [...args],
-      { maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: 20_000 },
+      { maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: timeoutMs },
       (error, stdout) => {
         if (error) {
           reject(error);

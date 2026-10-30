@@ -15,6 +15,9 @@ import {
   type SystemProbe,
 } from "./resources";
 import { DEFAULT_CONFIG, type SchedulerConfig } from "./scheduler";
+import { createHub } from "./hub";
+import { startHubHttp, type HubHttp } from "./hub-http";
+import { createHubStore } from "./hub-store";
 import {
   createTaskScheduler,
   type NativeTaskWorkspace,
@@ -65,6 +68,10 @@ export interface RuntimeOptions {
   /** Fetch provider usage (providers.listUsage); null when no daemon handle is known yet. */
   fetchUsage?: () => Promise<readonly UsageProviderLike[]> | null;
   settings?: RuntimeSettings;
+  /** Hub: directory for hub.json (HTTP API is off when omitted) and the guard admission file to sync. */
+  hubDir?: string;
+  hubAdmissionFile?: string | null;
+  isPidAlive?: (pid: number) => boolean;
   onError?: (error: unknown) => void;
   native?: (workspaceId: string) => Promise<NativeTaskWorkspace | null>;
   routineTick?: (input: {
@@ -135,6 +142,20 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     emit: (type, payload) =>
       publishEvent(db, { type: type as EventType, payload } as NewEvent, now),
   });
+
+  const hub = createHub({
+    store: createHubStore(db, now),
+    now,
+    admissionFile: options.hubAdmissionFile ?? null,
+    isPidAlive: options.isPidAlive,
+    onError,
+    agents: {
+      queue: () => scheduler.status().queue,
+      running: () => scheduler.runningCounts(),
+      reorder: (ids, reason) => scheduler.setQueueOrder(ids, reason),
+    },
+  });
+  let hubHttp: HubHttp | null = null;
 
   const consumer = createEventConsumer({
     db,
@@ -207,6 +228,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
   async function tickOnce() {
     await consumer.poll();
     await refreshUsage();
+    await hub.tick().catch(onError);
     const result = await scheduler.tick();
     if (options.routineTick) await scheduler.withAdmissionLock(() => options.routineTick!({
       paused: result.paused || scheduler.status().recovering || !!scheduler.status().recoveryError,
@@ -262,6 +284,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     leases,
     ports,
     scheduler,
+    hub,
     sampleNow,
     sampleRemotesNow,
     tickOnce,
@@ -275,6 +298,13 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     },
     start() {
       stopped = false;
+      if (options.hubDir && !hubHttp)
+        void startHubHttp(hub, { dir: options.hubDir, onError })
+          .then((http) => {
+            if (stopped) return http.stop();
+            hubHttp = http;
+          })
+          .catch(onError);
       consumer.start();
       void sampleNow().catch(onError);
       void sampleRemotesNow().catch(onError);
@@ -296,6 +326,8 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     },
     async stop() {
       stopped = true;
+      await hubHttp?.stop().catch(onError);
+      hubHttp = null;
       if (remoteTimer) clearTimeout(remoteTimer);
       if (tickTimer) clearTimeout(tickTimer);
       if (sampleTimer) clearTimeout(sampleTimer);
