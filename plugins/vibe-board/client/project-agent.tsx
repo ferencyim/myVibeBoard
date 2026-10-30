@@ -2,6 +2,7 @@ import { BotCreateForm } from "./create-form";
 import { formatRelativeTime } from "./relative-time";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActionMenu, type ActionMenuItem } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginClientContext, type PluginProjectSidebarGroupProps } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { projectBotsListRpc, projectBotsCreateRpc, projectBotsOpenRpc, projectBotsStateRpc, projectBotsArchiveRpc } from "../shared/project-bots";
@@ -63,9 +64,14 @@ function ProjectBotRow({ bot, theme, navigation, host, sidebarCompact, Avatar, S
   const { label, error, disabled } = projectAgentPresentation(state.data, opening, openError, bot.name);
   const showMenu = useCallback(() => setMenu(true), []);
   const contextMenu = useMemo(() => ({ onContextMenu: (event: { preventDefault(): void }) => { event.preventDefault(); showMenu(); } }), [showMenu]);
-  const profile = useCallback(() => { setMenu(false); navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "profile", params: { botId: bot.id } }); }, [navigation, bot.id]);
-  const archiveBot = useCallback(() => { setMenu(false); void archive({ id: bot.id }).then(() => client.invalidateQueries({ queryKey: ["vibe-bots", "project"] })).catch((reason) => setOpenError(String(reason))); }, [archive, bot.id, client]);
-  const closeMenu = useCallback(() => setMenu(false), []);
+  const profile = useCallback(() => { navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "profile", params: { botId: bot.id } }); }, [navigation, bot.id]);
+  const archiveBot = useCallback(() => { void archive({ id: bot.id }).then(() => client.invalidateQueries({ queryKey: ["vibe-bots", "project"] })).catch((reason) => setOpenError(String(reason))); }, [archive, bot.id, client]);
+  const items = useMemo<ActionMenuItem[]>(() => [
+    { id: "open", label: "打开" },
+    { id: "profile", label: "资料" },
+    { id: "archive", label: "归档", destructive: true, confirm: { title: "归档 bot", message: `确定归档「${bot.name}」吗？`, confirmLabel: "归档" } },
+  ], [bot.name]);
+  const selectItem = useCallback((id: string) => { if (id === "open") run(); else if (id === "profile") profile(); else if (id === "archive") archiveBot(); }, [run, profile, archiveBot]);
   const rowStyle = useMemo(() => [styles.row, selected && { backgroundColor: theme.colors.surface2 }], [styles.row, selected, theme.colors.surface2]);
   const status = error ? "failed" : activity?.status;
   return <View>
@@ -73,9 +79,8 @@ function ProjectBotRow({ bot, theme, navigation, host, sidebarCompact, Avatar, S
       <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={24} />
       {!sidebarCompact ? <View style={styles.names}><View style={styles.head}><Text numberOfLines={1} style={styles.name}>{bot.name}{bot.isDefault ? <Text style={styles.badge}> 默认 </Text> : null}</Text>{lastMessageTime ? <Text style={styles.muted}>{lastMessageTime}</Text> : null}</View>{projectName || (label !== bot.name && label) ? <Text numberOfLines={1} style={styles.muted}>{projectName || label}</Text> : null}</View> : null}
       {status ? <StatusIndicator status={status} count={activity?.count} /> : null}
-      {Platform.OS !== "web" || hovered ? <Pressable accessibilityRole="button" accessibilityLabel={`${bot.name}菜单`} onPress={showMenu}><Text style={styles.muted}>…</Text></Pressable> : null}
+      <ActionMenu label={`${bot.name}菜单`} items={items} onSelect={selectItem} open={menu} onOpenChange={setMenu} visible={Platform.OS !== "web" || hovered || menu} />
     </Pressable>
-    {menu ? <View><Pressable onPress={run}><Text style={styles.text}>打开</Text></Pressable><Pressable onPress={profile}><Text style={styles.text}>资料 / 改名</Text></Pressable><Pressable onPress={archiveBot}><Text style={styles.error}>归档</Text></Pressable><Pressable onPress={closeMenu}><Text style={styles.muted}>取消</Text></Pressable></View> : null}
     {error ? <Text style={styles.error}>{error}</Text> : null}
   </View>;
 }

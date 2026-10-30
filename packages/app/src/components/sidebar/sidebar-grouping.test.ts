@@ -51,4 +51,40 @@ describe("groupSidebarItems", () => {
     );
     expect(groups.map((group) => group.title)).toEqual(["需要你", "运行中", "空闲"]);
   });
+
+  it("pins a 需要你 group first in project and date modes and removes its items from the other groups", () => {
+    const now = new Date(2026, 9, 29, 12);
+    const items = [
+      item("a", { projectId: "p1", projectName: "P1", lastActivityAt: now }),
+      item("b", {
+        projectId: "p1",
+        projectName: "P1",
+        status: "needs_attention",
+        lastActivityAt: now,
+      }),
+      item("c", { kind: "bot", status: "needs_attention", lastActivityAt: now }),
+    ];
+    const byProject = groupSidebarItems(items, "project", now);
+    expect(summarize(byProject)).toEqual([
+      ["需要你", ["b", "c"]],
+      ["P1", ["a"]],
+    ]);
+    const byDate = groupSidebarItems(items, "date", now);
+    expect(byDate.map((group) => group.title)).toEqual(["需要你", "今天"]);
+    expect(byDate[1].items.map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("shows no 需要你 group when nothing needs attention", () => {
+    expect(groupSidebarItems([item("a")], "date").map((group) => group.title)).not.toContain(
+      "需要你",
+    );
+  });
 });
+
+function itemIds(group: { items: { id: string }[] }): string[] {
+  return group.items.map((entry) => entry.id);
+}
+
+function summarize(groups: { title: string; items: { id: string }[] }[]): [string, string[]][] {
+  return groups.map((group) => [group.title, itemIds(group)]);
+}

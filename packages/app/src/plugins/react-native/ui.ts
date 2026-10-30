@@ -30,3 +30,5 @@ export { StreamedText } from "./streamed-text";
 export { Markdown } from "./markdown";
 
 export { ModelPickerField } from "./model-picker-field";
+
+export { ActionMenu } from "./action-menu";
