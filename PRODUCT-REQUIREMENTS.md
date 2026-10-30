@@ -13,6 +13,10 @@
 
 ## 已拍板的决定
 
+- 2026-10-30：项目 bot、任务和普通 workspace 的「Git/构建」面板展示本地 Git、同仓库 worktree
+  以及按主检出路径匹配的 ci-dashboard 构建和发布状态。大仓库首次响应须在 3 秒内，其他
+  worktree 的改动在后台扫描并缓存，手动刷新绕过短期状态缓存；插件停止时终止进程树。
+
 - WP-138 装机反馈：新建项目 bot 的 provider 下拉须保持响应；新建和资料表单使用稳定的缓存目录选项，切换 provider 时不重复请求。
 
 - WP-138 第三轮：修复沙箱外补跑暴露的 bot 模型切换/迁移、client API 与 server 前台上下文测试失败；同时以最小改动修复 main 既有 lifecycle payload 和 master 模板测试预期。逐项区分实现错误与过时预期，保留断言强度；沙箱内仅做 typecheck、lint，不运行 Vitest、格式化或 daemon。

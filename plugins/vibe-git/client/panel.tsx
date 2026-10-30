@@ -1,7 +1,7 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
-import { useQuery } from "@tanstack/react-query";
-import React, { type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import React, { useEffect, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { statusRpc, type Changes, type Status } from "../shared/rpc";
 
@@ -140,6 +140,18 @@ function Version({ value }: {
 }
 
 function GitSections({ theme, git }: { theme: PluginTheme; git?: Status["git"] }) {
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => setExpanded(false), [git?.workspacePath]);
+
+  const worktrees = git?.worktrees ?? [];
+  const canCollapse = (worktree: (typeof worktrees)[number]) =>
+    !worktree.current && worktree.merged === true && worktree.changes?.total === 0 &&
+    !worktree.prunable && !worktree.missing;
+  const visibleWorktrees = expanded || worktrees.length <= 12
+    ? worktrees
+    : worktrees.filter((worktree) => !canCollapse(worktree));
+  const hiddenCount = worktrees.length - visibleWorktrees.length;
+
   return (
     <>
       <Section theme={theme} title="当前位置">
@@ -168,9 +180,15 @@ function GitSections({ theme, git }: { theme: PluginTheme; git?: Status["git"] }
         )}
       </Section>
       <Section theme={theme} title="同仓库 worktree">
+        {git?.status === "ok" ? (
+          <Line theme={theme} warning={git.scanning}>
+            {git.scanning ? "正在扫描 worktree 改动" : "worktree 扫描完成"}
+            {git.changesScannedAt ? ` · 上次扫描 ${date(git.changesScannedAt)}` : " · 尚无扫描结果"}
+          </Line>
+        ) : null}
         {!git ? <Line theme={theme}>加载中…</Line> : git.status !== "ok" ? (
           <Line theme={theme}>暂无 worktree 信息</Line>
-        ) : git.worktrees.map((worktree) => (
+        ) : visibleWorktrees.map((worktree) => (
           <View key={worktree.path} style={[
             styles.worktree,
             { borderColor: worktree.current ? theme.colors.accent : theme.colors.border },
@@ -192,6 +210,13 @@ function GitSections({ theme, git }: { theme: PluginTheme; git?: Status["git"] }
             </Line>
           </View>
         ))}
+        {git?.status === "ok" && (hiddenCount > 0 || expanded && worktrees.length > 12) ? (
+          <Pressable accessibilityRole="button" onPress={() => setExpanded((value) => !value)}>
+            <Text style={[styles.line, { color: theme.colors.accent }]}>
+              {expanded ? "收起" : `其余 ${hiddenCount} 个已合并 worktree`}
+            </Text>
+          </Pressable>
+        ) : null}
       </Section>
     </>
   );
@@ -225,7 +250,7 @@ function BuildSection({ theme, build }: { theme: PluginTheme; build?: Status["bu
             </Line>
             <Line theme={theme}>{`开始 ${date(pipeline.startedAt)} · 结束 ${date(pipeline.finishedAt)}`}</Line>
             <Line theme={theme}>
-              {`构建提交 ${pipeline.sourceSha ?? "未知"} · ${pipeline.shaRelation.status === "same"
+              {`构建提交 ${pipeline.sourceSha?.slice(0, 9) ?? "未知"} · ${pipeline.shaRelation.status === "same"
                 ? "与 origin/main 相同"
                 : pipeline.shaRelation.status === "behind"
                   ? `落后 origin/main ${pipeline.shaRelation.count} 个提交`
@@ -292,10 +317,20 @@ function ReleaseSection({ theme, release }: { theme: PluginTheme; release?: Stat
 
 export function GitPanel({ theme, workspaceId }: PluginWorkspacePanelProps) {
   const call = useRpc(statusRpc);
+  const queryClient = useQueryClient();
+  const queryKey = ["vibe-git", "status", workspaceId];
+  const refresh = useMutation({
+    mutationFn: async () => {
+      await queryClient.cancelQueries({ queryKey });
+      const data = await call({ workspaceId, force: true });
+      return { data, queryKey };
+    },
+    onSuccess: ({ data, queryKey: resultKey }) => queryClient.setQueryData(resultKey, data),
+  });
   const query = useQuery({
-    queryKey: ["vibe-git", "status", workspaceId],
+    queryKey,
     queryFn: () => call({ workspaceId }),
-    refetchInterval: 30_000,
+    refetchInterval: refresh.isPending ? false : 30_000,
     retry: false,
   });
   const updatedAt = query.dataUpdatedAt
@@ -309,15 +344,16 @@ export function GitPanel({ theme, workspaceId }: PluginWorkspacePanelProps) {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="刷新 Git 和构建状态"
-            onPress={() => void query.refetch()}
+            onPress={() => refresh.mutate()}
+            disabled={refresh.isPending}
             style={[styles.refresh, { backgroundColor: theme.colors.surface2 }]}
           >
             <Text style={{ color: theme.colors.foreground }}>刷新</Text>
           </Pressable>
           {updatedAt ? <Line theme={theme}>{`更新于 ${updatedAt}`}</Line> : null}
-          {query.isFetching ? <Line theme={theme} warning>刷新中…</Line> : null}
+          {query.isFetching || refresh.isPending ? <Line theme={theme} warning>刷新中…</Line> : null}
         </View>
-        {query.error ? <Line theme={theme} danger>状态读取失败，请刷新重试。</Line> : null}
+        {query.error || refresh.error ? <Line theme={theme} danger>状态读取失败，请刷新重试。</Line> : null}
         <GitSections theme={theme} git={query.data?.git} />
         <BuildSection theme={theme} build={query.data?.build} />
         <ReleaseSection theme={theme} release={query.data?.release} />
