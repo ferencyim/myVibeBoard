@@ -13,7 +13,7 @@ import { getAgentControlHintKey } from "@/composer/agent-controls/utils";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
-import { resolveNextAgentModeId } from "@/composer/agent-controls/mode";
+import { resolveModeControlValue, resolveNextAgentModeId } from "@/composer/agent-controls/mode";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { useComposerControlLayout } from "@/composer/agent-controls/layout-context";
 import { AgentControlTrigger } from "@/composer/agent-controls/control";
@@ -297,15 +297,15 @@ export function useLiveAgentModeControl(
   );
 
   return useMemo(() => {
-    if (!slice || availableModes.length === 0) return null;
-    return {
+    if (!slice) return null;
+    return resolveModeControlValue({
       provider: slice.provider,
       providerDefinitions,
-      modeOptions: availableModes,
-      selectedModeId: slice.currentModeId,
+      availableModes,
+      currentModeId: slice.currentModeId,
       onSelectMode: handleSelectMode,
       disabled: !client,
-    };
+    });
   }, [availableModes, client, handleSelectMode, providerDefinitions, slice]);
 }
 

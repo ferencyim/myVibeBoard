@@ -34,6 +34,43 @@ export function findFastControl(features: readonly AgentFeature[] | undefined): 
   return null;
 }
 
+/**
+ * Fast controls for an agent whose runtime features are not loaded yet (the daemon loads it on
+ * the first write). Claude gets its toggle, Codex a speed select; the value is the saved preference.
+ */
+export function buildFallbackFastFeatures(
+  provider: string,
+  values: Record<string, unknown> | undefined,
+): AgentFeature[] {
+  const key = provider.toLowerCase();
+  if (key === "claude") {
+    return [
+      {
+        type: "toggle",
+        id: FAST_TOGGLE_ID,
+        label: "Fast",
+        value: values?.[FAST_TOGGLE_ID] === true,
+      },
+    ];
+  }
+  if (key === "codex") {
+    const tier = values?.[SPEED_TIER_ID];
+    return [
+      {
+        type: "select",
+        id: SPEED_TIER_ID,
+        label: "Speed",
+        value: typeof tier === "string" ? tier : "default",
+        options: [
+          { id: "default", label: "Normal", isDefault: true },
+          { id: "fast", label: "Fast" },
+        ],
+      },
+    ];
+  }
+  return [];
+}
+
 const PERMISSION_LABELS: Record<string, Record<string, string>> = {
   claude: {
     plan: "计划",

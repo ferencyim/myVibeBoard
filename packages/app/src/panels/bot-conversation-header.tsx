@@ -205,7 +205,6 @@ export function BotConversationHeader({
               serverId={serverId}
               isCompactLayout={compact}
               registrationOnly={placement === "registration"}
-              hideModeControl={isBot}
             />
           </ComposerKeyboardScopeProvider>
         ) : null}
@@ -239,23 +238,13 @@ export function BotConversationHeader({
         onClose={closeRuntime}
       >
         <ComposerKeyboardScopeProvider {...scope}>
-          <AgentControls
-            agentId={agentId}
-            serverId={serverId}
-            isCompactLayout
-            hideModeControl={isBot}
-          />
+          <AgentControls agentId={agentId} serverId={serverId} isCompactLayout />
         </ComposerKeyboardScopeProvider>
       </AdaptiveModalSheet>
       <AdaptiveModalSheet header={moreHeader} visible={moreOpen} onClose={closeMore}>
         {narrow && !compact ? (
           <ComposerKeyboardScopeProvider {...scope}>
-            <AgentControls
-              agentId={agentId}
-              serverId={serverId}
-              isCompactLayout
-              hideModeControl={isBot}
-            />
+            <AgentControls agentId={agentId} serverId={serverId} isCompactLayout />
           </ComposerKeyboardScopeProvider>
         ) : null}
         <LiveAgentModeControl agentId={agentId} serverId={serverId} onClose={closeMore} />

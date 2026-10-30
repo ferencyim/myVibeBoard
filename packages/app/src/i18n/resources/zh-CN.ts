@@ -229,7 +229,7 @@ export const zhCN: TranslationResources = {
     },
     hints: {
       thinking: "Thinking mode",
-      model: "切换 Model",
+      model: "切换模型",
       mode: "更改模式",
     },
   },

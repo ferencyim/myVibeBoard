@@ -34,6 +34,7 @@ import {
 } from "@/components/provider-model-picker/provider-model-picker";
 import {
   buildPermissionOptions,
+  buildFallbackFastFeatures,
   findFastControl,
   isPickerFeature,
 } from "@/components/provider-model-picker/picker-controls";
@@ -167,7 +168,6 @@ interface AgentControlsProps {
   registrationOnly?: boolean;
   onDropdownClose?: () => void;
   isCompactLayout?: boolean;
-  hideModeControl?: boolean;
 }
 
 function AgentControlCommandCenterRegistration({
@@ -1278,9 +1278,8 @@ export const AgentControls = memo(function AgentControls({
   registrationOnly = false,
   onDropdownClose,
   isCompactLayout,
-  hideModeControl = false,
 }: AgentControlsProps) {
-  const { updatePreferences } = useFormPreferences();
+  const { preferences, updatePreferences } = useFormPreferences();
   const agent = useSessionStore(
     useShallow((state) => selectAgentControlsSlice(state, serverId, agentId)),
   );
@@ -1469,30 +1468,44 @@ export const AgentControls = memo(function AgentControls({
     [activeModelId, agentId, agentProvider, client, toast, updatePreferences],
   );
 
+  // The daemon loads an idle agent on the first write, so until then its features are empty and
+  // the picker falls back to the provider's fast control with the saved value.
+  const savedFeatureValues = agentProvider
+    ? preferences.providerPreferences?.[agentProvider]?.featureValues
+    : undefined;
+  const pickerFeatures = useMemo(
+    () =>
+      agent?.features?.length
+        ? agent.features
+        : buildFallbackFastFeatures(agentProvider ?? "", savedFeatureValues),
+    [agent?.features, agentProvider, savedFeatureValues],
+  );
+
   const handleSetFeature = useCallback(
     (featureId: string, value: unknown) => {
       if (!client || !agentProvider) {
         return;
       }
-      void updatePreferences((current) =>
-        mergeProviderPreferences({
-          preferences: current,
-          provider: agentProvider,
-          updates: {
-            featureValues: {
-              [featureId]: value,
-            },
-          },
-        }),
-      ).catch((error) => {
+      const previous = savedFeatureValues?.[featureId] ?? null;
+      const saveFeature = (next: unknown) =>
+        updatePreferences((current) =>
+          mergeProviderPreferences({
+            preferences: current,
+            provider: agentProvider,
+            updates: { featureValues: { [featureId]: next } },
+          }),
+        );
+      void saveFeature(value).catch((error) => {
         console.warn("[AgentControls] persist feature preference failed", error);
       });
+      // The saved value drives the picker when the agent has no live features: roll it back.
       void client.setAgentFeature(agentId, featureId, value).catch((error) => {
         console.warn("[AgentControls] setAgentFeature failed", error);
         toast.error(toErrorMessage(error));
+        void saveFeature(previous);
       });
     },
-    [agentId, agentProvider, client, toast, updatePreferences],
+    [agentId, agentProvider, client, savedFeatureValues, toast, updatePreferences],
   );
 
   const commandCenterControls = useMemo<AgentControlCommandCenterSource>(
@@ -1573,7 +1586,7 @@ export const AgentControls = memo(function AgentControls({
         thinkingOptions={thinkingOptions.length > 0 ? thinkingOptions : undefined}
         selectedThinkingOptionId={modelSelection.selectedThinkingId ?? undefined}
         onSelectThinkingOption={handleSelectThinkingOption}
-        features={agent.features}
+        features={pickerFeatures}
         onSetFeature={handleSetFeature}
         isModelLoading={snapshotIsLoading || selectedProviderIsLoading}
         onModelSelectorOpen={handleModelSelectorOpen}
@@ -1581,7 +1594,7 @@ export const AgentControls = memo(function AgentControls({
         isRetryingModelProvider={snapshotIsRefreshing}
         onDropdownClose={onDropdownClose}
         disabled={!client}
-        modeControl={hideModeControl ? null : modeControl}
+        modeControl={modeControl}
         modelSelectorServerId={serverId}
         nextTurnNotice={nextTurnNotice}
         isCompactLayout={isCompactLayout}

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentFeature } from "@getpaseo/protocol/agent-types";
 import {
   autoModeId,
+  buildFallbackFastFeatures,
   buildPermissionOptions,
   findFastControl,
   isPickerFeature,
@@ -76,5 +77,32 @@ describe("permissions", () => {
     expect(buildPermissionOptions("opencode", [{ id: "build", label: "Build" }])[0]?.label).toBe(
       "Build",
     );
+  });
+});
+
+describe("buildFallbackFastFeatures", () => {
+  it("builds Claude's toggle from the saved value", () => {
+    expect(findFastControl(buildFallbackFastFeatures("claude", { fast_mode: true }))).toMatchObject(
+      {
+        featureId: "fast_mode",
+        value: true,
+      },
+    );
+    expect(findFastControl(buildFallbackFastFeatures("claude", undefined))).toMatchObject({
+      value: false,
+    });
+  });
+
+  it("builds Codex's speed tier from the saved value", () => {
+    expect(
+      findFastControl(buildFallbackFastFeatures("codex", { service_tier: "fast" })),
+    ).toMatchObject({ featureId: "service_tier", value: true, on: "fast", off: "default" });
+    expect(
+      findFastControl(buildFallbackFastFeatures("codex", { service_tier: null })),
+    ).toMatchObject({ value: false });
+  });
+
+  it("has no fast control for other providers", () => {
+    expect(buildFallbackFastFeatures("opencode", {})).toEqual([]);
   });
 });

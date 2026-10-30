@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMode } from "@getpaseo/protocol/agent-types";
-import { resolveAgentControlsMode, resolveNextAgentModeId } from "./mode";
+import { resolveAgentControlsMode, resolveModeControlValue, resolveNextAgentModeId } from "./mode";
 
 const PLAN_MODE = { id: "plan", label: "Plan" } satisfies AgentMode;
 
@@ -64,5 +64,39 @@ describe("resolveNextAgentModeId", () => {
   it("returns null when there are fewer than two modes", () => {
     expect(resolveNextAgentModeId({ modeOptions: [], selectedMode: "" })).toBeNull();
     expect(resolveNextAgentModeId({ modeOptions: [PLAN_MODE], selectedMode: "plan" })).toBeNull();
+  });
+});
+
+describe("resolveModeControlValue", () => {
+  const definition = {
+    id: "claude",
+    modes: MODES,
+    defaultModeId: "build",
+  } as unknown as Parameters<typeof resolveModeControlValue>[0]["providerDefinitions"][number];
+  const base = {
+    provider: "claude",
+    providerDefinitions: [definition],
+    currentModeId: undefined,
+    onSelectMode: () => {},
+    disabled: false,
+  };
+
+  it("uses the live modes when the agent reports them", () => {
+    const live = [{ id: "x", label: "X" }];
+    const value = resolveModeControlValue({ ...base, availableModes: live, currentModeId: "x" });
+    expect(value?.modeOptions).toBe(live);
+    expect(value?.selectedModeId).toBe("x");
+  });
+
+  it("falls back to the provider definition modes when the agent is not loaded", () => {
+    const value = resolveModeControlValue({ ...base, availableModes: [] });
+    expect(value?.modeOptions).toBe(MODES);
+    expect(value?.selectedModeId).toBe("build");
+  });
+
+  it("offers nothing when neither source has modes", () => {
+    expect(resolveModeControlValue({ ...base, providerDefinitions: [], availableModes: [] })).toBe(
+      null,
+    );
   });
 });
