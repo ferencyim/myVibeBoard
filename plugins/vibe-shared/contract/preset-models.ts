@@ -19,7 +19,9 @@ export function presetModeId(provider: string, mode: PresetPermissionMode): stri
   const p = provider.toLowerCase();
   if (p !== "claude" && p !== "codex") return undefined;
   if (mode === "full") return p === "claude" ? "bypassPermissions" : "full-access";
-  return mode === "auto" ? "auto" : undefined;
+  // Codex's own "auto" is the default approval flow; its auto tier is the auto-reviewer.
+  if (mode === "auto") return p === "codex" ? "auto-review" : "auto";
+  return undefined;
 }
 
 /** The one source for a task tab's native mode, whether the plugin pre-creates the tab or opens it

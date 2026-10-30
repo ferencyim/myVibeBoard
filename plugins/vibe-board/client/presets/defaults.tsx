@@ -19,7 +19,7 @@ import {
   setModelDefault,
   type DefaultModelField,
 } from "./defaults-model";
-import { ENVIRONMENT_LABELS, PERMISSION_LABELS, plannersOf, setPlanner } from "./logic";
+import { ENVIRONMENT_LABELS, plannersOf, setPlanner } from "./logic";
 import { roleDraftOf, type RoleDraft } from "./role-setting";
 
 type PickerProviders = ComponentProps<typeof ModelPickerField>["providers"];
@@ -41,10 +41,6 @@ interface EditorProps {
   disabled?: boolean;
 }
 
-const PERMISSION_OPTIONS = (Object.keys(PERMISSION_LABELS) as PresetPermissionMode[]).map((id) => ({
-  value: id,
-  label: PERMISSION_LABELS[id],
-}));
 const ENVIRONMENT_OPTIONS = (Object.keys(ENVIRONMENT_LABELS) as PresetEnvironmentKind[]).map(
   (id) => ({ value: id, label: ENVIRONMENT_LABELS[id] }),
 );
@@ -180,6 +176,8 @@ function RoleCard({
         onSelectThinking={selectThinking}
         fast={draft.fastMode}
         onFastChange={FAST_PROVIDERS.has(draft.provider) ? setFast : undefined}
+        permission={draft.permissionMode}
+        onPermissionChange={setPermission}
       />
       {stateText ? <Muted>{stateText}</Muted> : null}
       {current ? (
@@ -212,13 +210,6 @@ function RoleCard({
               onSelect={addBackup}
             />
           </View>
-          <SettingsSelect
-            disabled={disabled}
-            label="权限"
-            value={draft.permissionMode}
-            options={PERMISSION_OPTIONS}
-            onValueChange={setPermission}
-          />
           <SettingsSelect
             disabled={disabled}
             label="运行目录"

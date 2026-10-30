@@ -99,6 +99,14 @@ export function assertPermissionTightening(previous: Bot["permissionMode"], next
   }
 }
 
+/** Fast mode as agent feature values: Codex has a speed tier, every other provider the toggle. */
+export function fastFeatureValues(target: { provider: string; fastMode?: boolean }) {
+  if (!target.fastMode) return {};
+  return {
+    featureValues: target.provider.toLowerCase() === "codex" ? { service_tier: "fast" } : { fast_mode: true },
+  };
+}
+
 function legacyPermission(agent: BotAgent): Bot["permissionMode"] {
   if (["full-access", "bypassPermissions"].includes(agent.currentModeId ?? "")) return "full";
   if (["auto", "auto-review"].includes(agent.currentModeId ?? "")) return "auto";
@@ -376,7 +384,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     if (bot.provider && bot.model) {
       return {
         provider: bot.provider, model: bot.model, thinking: bot.thinking,
-        permissionMode: bot.permissionMode, instructions: "", runtimeEnv: null,
+        permissionMode: bot.permissionMode, instructions: "", runtimeEnv: null, fastMode: bot.fastMode,
       };
     }
     if (bot.kind === "project") {
@@ -391,7 +399,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         provider: selection.config.provider.slice(0, slash), model: selection.config.provider.slice(slash + 1),
         thinking: bot.thinking || selection.config.thinkingOptionId || "",
         permissionMode: bot.permissionMode, instructions: selection.config.systemPrompt ?? "",
-        runtimeEnv: selection.runtimeEnv ?? null,
+        runtimeEnv: selection.runtimeEnv ?? null, fastMode: bot.fastMode,
       };
     }
     const catalog = await models("", true);
@@ -399,7 +407,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     if (!first?.defaultModel) throw new Error("主机没有可用默认模型，请先配置 provider");
     return {
       provider: first.provider, model: first.defaultModel, thinking: bot.thinking,
-      permissionMode: bot.permissionMode, instructions: "", runtimeEnv: null,
+      permissionMode: bot.permissionMode, instructions: "", runtimeEnv: null, fastMode: bot.fastMode,
     };
   }
 
@@ -490,7 +498,10 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
 
   async function create(input: BotCreate, actor?: Bot) {
     await ready();
-    const value = BotCreateSchema.parse(input);
+    // A bot that creates a bot without naming a permission passes on its own, never a wider default.
+    const value = BotCreateSchema.parse(
+      actor && input.permissionMode === undefined ? { ...input, permissionMode: actor.permissionMode } : input,
+    );
     if (actor) {
       assertCreationScope(actor, value);
       assertPermissionTightening(actor.permissionMode, value.permissionMode);
@@ -608,7 +619,7 @@ ${COORDINATOR_PROMPT}` : base;
         config: { provider: target.provider + "/" + target.model,
           systemPrompt: [prompt(bot), bot.instructions, target.instructions, memoryContext(memories)].filter(Boolean).join("\n\n"),
           ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
-          ...("fastMode" in target && target.fastMode ? { featureValues: { fast_mode: true } } : {}),
+          ...fastFeatureValues(target),
           ...(permission ? { modeId: permission } : {}) },
       });
       threads.setAgent(botId, id, created.id);
@@ -666,7 +677,7 @@ ${COORDINATOR_PROMPT}` : base;
         provider: target.provider + "/" + target.model,
         systemPrompt: [prompt(bot), bot.instructions, target.instructions, memoryContext(memories), handoff].filter(Boolean).join("\n\n"),
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
-        ...("fastMode" in target && target.fastMode ? { featureValues: { fast_mode: true } } : {}),
+        ...fastFeatureValues(target),
         ...(permission ? { modeId: permission } : {}),
       },
     };
@@ -872,7 +883,7 @@ ${COORDINATOR_PROMPT}` : base;
       if (value.provider === undefined) value.provider = active.provider;
       if (value.model === undefined) value.model = active.model;
     }
-    const changesRuntime = ["provider", "model", "thinking", "presetId", "backupModels", "permissionMode"]
+    const changesRuntime = ["provider", "model", "thinking", "presetId", "backupModels", "permissionMode", "fastMode"]
       .some((key) => key in value);
     if (changesRuntime) await validate({ ...current, ...value }, true, true, true);
     else if (value.avatarPath) validateAvatar(value.avatarPath);
@@ -891,7 +902,7 @@ ${COORDINATOR_PROMPT}` : base;
       if (["provider", "model", "thinking", "presetId", "backupModels"].some((key) => key in value)) {
         db.prepare("DELETE FROM bot_model_state WHERE bot_id=?").run(id);
       }
-      if (["provider", "model", "thinking", "presetId", "permissionMode"].some((key) => key in value)) {
+      if (["provider", "model", "thinking", "presetId", "permissionMode", "fastMode"].some((key) => key in value)) {
         bots.pending(id, true);
       }
       return result;

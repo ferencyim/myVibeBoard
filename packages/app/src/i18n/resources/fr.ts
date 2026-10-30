@@ -2225,6 +2225,7 @@ export const fr: TranslationResources = {
     staleReasonRejected: "{{source}} login was rejected",
     staleReasonError: "{{source}} could not be reached",
     staleReasonNoQuota: "{{source}} reports no quota",
+    staleNever: "No successful read yet; waiting to read ({{reason}}).",
     loginRejected: "Connexion refusée (HTTP {{status}}). {{remedy}}",
     loginExpired: "Connexion expirée {{relativeTime}}. {{remedy}}",
     title: "Utilisation du forfait",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PresetModelSchema, PresetModelInputSchema, presetModels, withPresetModel, isModelUnavailableError } from "../contract";
+import { PresetModelSchema, PresetModelInputSchema, presetModeId, presetModels, withPresetModel, isModelUnavailableError } from "../contract";
 import { MIGRATIONS, createVibeStore, migrateOwner } from "../db";
 import { openTestDb, setup } from "./helpers";
 
@@ -74,5 +74,14 @@ describe("ordered models in a preset", () => {
     expect(() => store.presets.update("legacy", { models: [{ ...first, model: "" }] })).toThrow();
     expect(migrateOwner(db, "core").applied).toEqual([]);
     db.close();
+  });
+});
+
+describe("permission tiers to native modes", () => {
+  it("maps the auto tier to Claude's auto mode and Codex's auto-reviewer", () => {
+    expect(presetModeId("claude", "auto")).toBe("auto");
+    expect(presetModeId("codex", "auto")).toBe("auto-review");
+    expect(presetModeId("codex", "full")).toBe("full-access");
+    expect(presetModeId("opencode", "auto")).toBeUndefined();
   });
 });

@@ -30,8 +30,14 @@ import { CombinedModelSelector } from "@/components/combined-model-selector";
 import {
   NextTurnBadge,
   type PickerFast,
+  type PickerPermission,
 } from "@/components/provider-model-picker/provider-model-picker";
-import { FAST_MODE_FEATURE_ID, PLAN_MODE_FEATURE_ID } from "@/agent-controls/policy";
+import {
+  buildPermissionOptions,
+  findFastControl,
+  isPickerFeature,
+} from "@/components/provider-model-picker/picker-controls";
+import { PLAN_MODE_FEATURE_ID } from "@/agent-controls/policy";
 import {
   resolveNextTurnNotice,
   type NextTurnNotice,
@@ -450,22 +456,30 @@ function ControlledAgentControls({
   const _modelAnchorRef = useRef<View>(null);
   const thinkingAnchorRef = useRef<View>(null);
 
-  // Fast lives inside the model picker and plan mode only in the mode menu / command center.
+  // Fast (Claude's toggle, Codex's speed tier) and the permission mode live inside the model
+  // picker; plan mode is only in the command center.
   const fast = useMemo<PickerFast | null>(() => {
-    const feature = allFeatures?.find(
-      (item) => item.id === FAST_MODE_FEATURE_ID && item.type === "toggle",
-    );
-    if (!feature || !onSetFeature) return null;
+    const control = findFastControl(allFeatures);
+    if (!control || !onSetFeature) return null;
     return {
-      value: feature.value === true,
-      onChange: (value) => onSetFeature(FAST_MODE_FEATURE_ID, value),
+      value: control.value,
+      onChange: (value) => onSetFeature(control.featureId, value ? control.on : control.off),
     };
   }, [allFeatures, onSetFeature]);
+  const permission = useMemo<PickerPermission | null>(
+    () =>
+      modeControl && modeControl.modeOptions.length > 0
+        ? {
+            options: buildPermissionOptions(modeControl.provider, modeControl.modeOptions),
+            selectedId: modeControl.selectedModeId ?? undefined,
+            onSelect: modeControl.onSelectMode,
+          }
+        : null,
+    [modeControl],
+  );
   const features = useMemo(
     () =>
-      allFeatures?.filter(
-        (item) => item.id !== FAST_MODE_FEATURE_ID && item.id !== PLAN_MODE_FEATURE_ID,
-      ),
+      allFeatures?.filter((item) => !isPickerFeature(item.id) && item.id !== PLAN_MODE_FEATURE_ID),
     [allFeatures],
   );
 
@@ -497,7 +511,7 @@ function ControlledAgentControls({
     canSelectModel,
     thinkingOptions,
     features,
-    hasMode: modeControl !== null && modeControl !== undefined,
+    hasMode: false,
   });
   const featureControls = useMemo(
     () =>
@@ -515,11 +529,11 @@ function ControlledAgentControls({
     () => ({
       hasModel: canSelectModel,
       hasThinking: canSelectThinking,
-      hasMode: modeControl !== null && modeControl !== undefined,
+      hasMode: false,
       features: featureControls,
       fontScale,
     }),
-    [canSelectModel, canSelectThinking, featureControls, fontScale, modeControl],
+    [canSelectModel, canSelectThinking, featureControls, fontScale],
   );
   const presentation = useMemo(() => resolveComposerControlPresentation(density), [density]);
   const layoutContextValue = useMemo(
@@ -701,7 +715,6 @@ function ControlledAgentControls({
           handleOpenChange={handleOpenChange}
           handleNestedOpenChange={handleSheetOpenChange}
           renderThinkingOption={renderThinkingOption}
-          modeControl={modeControl}
           presentation={presentation}
           glyphSize={layoutContextValue.glyphSize}
           activeSheet={activeSheet}
@@ -710,6 +723,7 @@ function ControlledAgentControls({
           modelSelectorServerId={modelSelectorServerId}
           nextTurnNotice={nextTurnNotice}
           fast={fast}
+          permission={permission}
         />
       </View>
     </ComposerControlLayoutProvider>
@@ -760,7 +774,6 @@ interface DesktopAgentControlsContentProps {
     active: boolean;
     onPress: () => void;
   }) => ReactElement;
-  modeControl?: AgentModeControlValue | null;
   presentation: ComposerControlPresentation;
   glyphSize: number;
   activeSheet: ActiveSheet;
@@ -769,6 +782,7 @@ interface DesktopAgentControlsContentProps {
   modelSelectorServerId: string | null;
   nextTurnNotice: NextTurnNotice | null;
   fast: PickerFast | null;
+  permission: PickerPermission | null;
 }
 
 const DESKTOP_SEARCH_THRESHOLD = 6;
@@ -814,7 +828,6 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     handleOpenChange,
     handleNestedOpenChange,
     renderThinkingOption,
-    modeControl,
     presentation,
     glyphSize,
     activeSheet,
@@ -823,6 +836,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     modelSelectorServerId,
     nextTurnNotice,
     fast,
+    permission,
   } = props;
   const modelToolbar = useMemo(
     () => ({ glyphSize, showCaret: presentation.showCarets }),
@@ -883,6 +897,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
                 isRetryingProvider={isRetryingModelProvider}
                 serverId={modelSelectorServerId}
                 fast={fast}
+                permission={permission}
                 thinkingOptions={thinkingOptions}
                 selectedThinkingOptionId={selectedThinkingOptionId}
                 onSelectThinkingOption={canSelectThinking ? handleThinkingSelect : undefined}
@@ -935,8 +950,6 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
           />
         </>
       ) : null}
-
-      {modeControl ? <AgentModeControl {...modeControl} onClose={onDropdownClose} /> : null}
 
       {presentation.aggregateFeatures && features?.length ? (
         <>

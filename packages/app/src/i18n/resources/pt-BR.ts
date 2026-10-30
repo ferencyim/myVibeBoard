@@ -2210,6 +2210,7 @@ export const ptBR: TranslationResources = {
     staleReasonRejected: "{{source}} login was rejected",
     staleReasonError: "{{source}} could not be reached",
     staleReasonNoQuota: "{{source}} reports no quota",
+    staleNever: "No successful read yet; waiting to read ({{reason}}).",
     loginRejected: "Login rejeitado (HTTP {{status}}). {{remedy}}",
     loginExpired: "O login expirou {{relativeTime}}. {{remedy}}",
     title: "Uso do plano",

@@ -23,10 +23,9 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { Check, ChevronDown, Search } from "lucide-react-native";
+import { Check, Search } from "lucide-react-native";
 import { AdaptiveTextInput } from "@/components/adaptive-text-input";
 import { Button } from "@/components/ui/button";
-import { Combobox } from "@/components/ui/combobox";
 import { Switch } from "@/components/ui/switch";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { PressHighlight } from "@/components/ui/press-highlight";
@@ -38,7 +37,6 @@ import {
   groupModelItems,
   localizeEffortLabel,
   moveHighlight,
-  resolveEffortControlKind,
   toModelItem,
   type PickerModelItem,
 } from "@/components/provider-model-picker/model-list";
@@ -46,13 +44,20 @@ import { getProviderModelRows } from "@/provider-selection/provider-selection";
 import type { ProviderSelectorProvider } from "@/provider-selection/provider-selection";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 
-/** Fast-mode toggle of the selected model; absent when the model has no fast tier. */
+/** Fast-mode switch of the selected model; absent when the provider reports no fast feature. */
 export interface PickerFast {
   value: boolean;
   onChange: (value: boolean) => void;
 }
 
 export interface PickerThinking {
+  options: { id: string; label: string }[];
+  selectedId: string | undefined;
+  onSelect: (id: string) => void;
+}
+
+/** Permission modes of the selected provider; the picker is the only place they are changed. */
+export interface PickerPermission {
   options: { id: string; label: string }[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
@@ -68,6 +73,7 @@ export interface PickerPanelProps {
   isLoading: boolean;
   thinking?: PickerThinking | null;
   fast?: PickerFast | null;
+  permission?: PickerPermission | null;
   onPick: (provider: string, modelId: string) => void;
   onRetryProvider?: (provider: string) => void;
   isRetryingProvider?: boolean;
@@ -77,7 +83,6 @@ export interface PickerPanelProps {
 }
 
 const ThemedCheck = withUnistyles(Check);
-const ThemedChevron = withUnistyles(ChevronDown);
 const ThemedSearch = withUnistyles(Search);
 const ThemedSpinner = withUnistyles(LoadingSpinner);
 const mutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -133,6 +138,7 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
     selectedModel,
     thinking,
     fast,
+    permission,
     onPick,
     onRetryProvider,
     isRetryingProvider = false,
@@ -214,7 +220,6 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
 
   const selectionKind = provider?.modelSelection.kind;
   const ownsSelection = provider?.id === selectedProvider;
-  const showEffort = Boolean(ownsSelection && thinking && thinking.options.length > 0);
   const highlightedKey = highlight >= 0 ? flatItems[highlight]?.key : undefined;
 
   return (
@@ -284,8 +289,10 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
         </>
       )}
       <PickerFooter
-        thinking={showEffort ? thinking : null}
-        fast={ownsSelection ? fast : null}
+        thinking={thinking}
+        fast={fast}
+        permission={permission}
+        active={Boolean(ownsSelection)}
         disabled={selectionKind === "error"}
       />
     </>
@@ -443,12 +450,22 @@ const ModelRow = memo(function ModelRow(props: {
 function PickerFooter(props: {
   thinking?: PickerThinking | null;
   fast?: PickerFast | null;
+  permission?: PickerPermission | null;
+  /** Only the provider that owns the current selection shows its controls. */
+  active: boolean;
   disabled?: boolean;
 }) {
+  const { thinking, fast, permission, active, disabled } = props;
+  if (!active) return null;
   return (
     <>
-      {props.thinking ? <EffortRow thinking={props.thinking} disabled={props.disabled} /> : null}
-      {props.fast ? <FastRow fast={props.fast} /> : null}
+      {thinking && thinking.options.length > 0 ? (
+        <EffortRow thinking={thinking} disabled={disabled} />
+      ) : null}
+      {fast ? <FastRow fast={fast} /> : null}
+      {permission && permission.options.length > 0 ? (
+        <PermissionRow permission={permission} />
+      ) : null}
     </>
   );
 }
@@ -458,24 +475,28 @@ function EffortRow({ thinking, disabled }: { thinking: PickerThinking; disabled?
     () => thinking.options.map((option) => ({ id: option.id, label: localizeEffortLabel(option) })),
     [thinking.options],
   );
-  const kind = resolveEffortControlKind(options.map((option) => option.label));
   return (
     <View style={styles.effortRow} testID="provider-model-picker-effort">
       <Text style={styles.effortLabel}>推理强度</Text>
-      {kind === "segmented" ? (
-        <SegmentedEffort
-          options={options}
-          selectedId={thinking.selectedId}
-          onSelect={thinking.onSelect}
-          disabled={disabled}
-        />
-      ) : (
-        <EffortSelect
-          options={options}
-          selectedId={thinking.selectedId}
-          onSelect={thinking.onSelect}
-        />
-      )}
+      <SegmentedControl
+        options={options}
+        selectedId={thinking.selectedId}
+        onSelect={thinking.onSelect}
+        disabled={disabled}
+      />
+    </View>
+  );
+}
+
+function PermissionRow({ permission }: { permission: PickerPermission }) {
+  return (
+    <View style={styles.effortRow} testID="provider-model-picker-permission">
+      <Text style={styles.effortLabel}>权限</Text>
+      <SegmentedControl
+        options={permission.options}
+        selectedId={permission.selectedId}
+        onSelect={permission.onSelect}
+      />
     </View>
   );
 }
@@ -503,7 +524,8 @@ function noop() {}
 
 const SLIDE_EASING = Easing.bezier(0.22, 1, 0.36, 1);
 
-function SegmentedEffort(props: {
+/** Sliding-pill segmented control; many options scroll sideways instead of turning into a menu. */
+function SegmentedControl(props: {
   options: EffortOption[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
@@ -549,25 +571,32 @@ function SegmentedEffort(props: {
   }));
 
   return (
-    <View
-      style={[styles.segments, disabled && styles.segmentsDisabled]}
-      accessibilityRole="radiogroup"
-      aria-disabled={disabled}
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.segmentsScroll}
+      contentContainerStyle={styles.segmentsScrollContent}
     >
-      <Animated.View pointerEvents="none" style={[styles.segmentPill, pillStyle]}>
-        <View style={styles.segmentPillFill} />
-        <View style={styles.segmentPillHighlight} />
-      </Animated.View>
-      {options.map((option) => (
-        <Segment
-          key={option.id}
-          option={option}
-          selected={option.id === selectedId}
-          onSelect={disabled ? noop : onSelect}
-          onBox={handleSegmentLayout}
-        />
-      ))}
-    </View>
+      <View
+        style={[styles.segments, disabled && styles.segmentsDisabled]}
+        accessibilityRole="radiogroup"
+        aria-disabled={disabled}
+      >
+        <Animated.View pointerEvents="none" style={[styles.segmentPill, pillStyle]}>
+          <View style={styles.segmentPillFill} />
+          <View style={styles.segmentPillHighlight} />
+        </Animated.View>
+        {options.map((option) => (
+          <Segment
+            key={option.id}
+            option={option}
+            selected={option.id === selectedId}
+            onSelect={disabled ? noop : onSelect}
+            onBox={handleSegmentLayout}
+          />
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -594,44 +623,6 @@ function Segment(props: {
     >
       <Text style={props.selected ? styles.segmentTextOn : styles.segmentText}>{option.label}</Text>
     </PressHighlight>
-  );
-}
-
-function EffortSelect(props: {
-  options: EffortOption[];
-  selectedId: string | undefined;
-  onSelect: (id: string) => void;
-}) {
-  const { options, selectedId, onSelect } = props;
-  const anchorRef = useRef<View>(null);
-  const [open, setOpen] = useState(false);
-  const current = options.find((option) => option.id === selectedId);
-  const handleOpen = useCallback(() => setOpen(true), []);
-  return (
-    <>
-      <PressHighlight
-        ref={anchorRef}
-        collapsable={false}
-        onPress={handleOpen}
-        style={styles.effortSelect}
-        accessibilityRole="button"
-      >
-        <Text style={styles.segmentText} numberOfLines={1}>
-          {current?.label ?? "默认"}
-        </Text>
-        <ThemedChevron size={ICON_SIZE.xs} uniProps={mutedMapping} />
-      </PressHighlight>
-      <Combobox
-        options={options}
-        value={selectedId ?? ""}
-        onSelect={onSelect}
-        searchable={false}
-        open={open}
-        onOpenChange={setOpen}
-        anchorRef={anchorRef}
-        desktopPlacement="top-start"
-      />
-    </>
   );
 }
 
@@ -821,10 +812,12 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.foreground,
     opacity: 0.16,
   },
+  segmentsScroll: { flexShrink: 1, flexGrow: 0, minWidth: 0 },
+  segmentsScrollContent: { flexGrow: 0 },
   segmentsDisabled: { opacity: 0.5 },
   segment: {
     height: 28,
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
     borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
@@ -838,15 +831,5 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
-  },
-  effortSelect: {
-    width: 128,
-    height: 28,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: theme.spacing[2],
-    borderRadius: 8,
-    backgroundColor: theme.colors.hoverTint,
   },
 }));

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaseoAgentCreateOptions, PaseoAgentSendOptions, PaseoProviderSnapshotResult } from "@getpaseo/client";
-import { createBotService, type BotService } from "../server/service";
+import { createBotService, fastFeatureValues, type BotService } from "../server/service";
 import { createBotMessaging } from "../server/messages";
 import { appendTurnContext } from "../server/memory";
 import { createVibeStore } from "../server/vibe/db/commands";
@@ -241,11 +241,31 @@ describe("bot 服务主对话与模型变更", () => {
     } as never);
     const fast = await f.service.create({ kind: "independent", name: "快", presetId: preset.id } as never);
     await f.service.waitOpen(fast.id);
-    expect(f.createAgent.mock.calls[0]![0].config).toMatchObject({ featureValues: { fast_mode: true } });
+    expect(f.createAgent.mock.calls[0]![0].config).toMatchObject({ featureValues: { service_tier: "fast" } });
     const plain = await f.createProjectBot();
     await f.service.waitOpen(plain.id);
     expect(f.createAgent.mock.calls[1]![0].config).not.toHaveProperty("featureValues");
   });
+  it("bot 自己的快速字段随主对话创建传给 agent：Codex 用速度档，其余用开关", async () => {
+    const f = fixture();
+    const bot = await f.service.create({ kind: "independent", name: "快", provider: "codex", model: "initial", fastMode: true } as never);
+    await f.service.waitOpen(bot.id);
+    expect(f.createAgent.mock.calls[0]![0].config).toMatchObject({ featureValues: { service_tier: "fast" } });
+    expect(fastFeatureValues({ provider: "claude", fastMode: true })).toEqual({ featureValues: { fast_mode: true } });
+    expect(fastFeatureValues({ provider: "claude", fastMode: false })).toEqual({});
+  });
+
+  it("bot 创建 bot 不写权限时沿用创建者的权限，显式更宽仍被拒绝", async () => {
+    const f = fixture();
+    const creator = f.service.bots.create({ kind: "independent", name: "创建者", permissionMode: "accept-edits" });
+    const child = await f.service.create({ kind: "independent", name: "子", provider: "codex", model: "initial" } as never, creator);
+    expect(child.permissionMode).toBe("accept-edits");
+    await expect(f.service.create({ kind: "independent", name: "越权", permissionMode: "auto" } as never, creator)).rejects.toThrow("不能放宽");
+    const auto = f.service.bots.create({ kind: "independent", name: "自动者", permissionMode: "auto" });
+    expect((await f.service.create({ kind: "independent", name: "同级", provider: "codex", model: "initial", permissionMode: "auto" } as never, auto)).permissionMode).toBe("auto");
+    expect(f.service.bots.create({ kind: "independent", name: "默认" }).permissionMode).toBe("auto");
+  });
+
   it("缓存目录存在时拒绝未知模型", async () => {
     const f = fixture();
     await expect(f.service.create({ kind: "project", projectId: "p", name: "助理", provider: "codex", model: "unknown" }))

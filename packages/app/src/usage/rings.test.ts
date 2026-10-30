@@ -100,7 +100,7 @@ describe("resolveUsageRings", () => {
     expect(account?.level).toBe("danger");
   });
 
-  it("leaves out accounts with no windowed share, unavailable reports and balance-only reports", () => {
+  it("leaves out balance-only reports and keeps a failed read as an empty grey ring", () => {
     const accounts = resolveUsageRings(
       [
         entry("none", [{ id: "a", usedPct: null }]),
@@ -111,7 +111,8 @@ describe("resolveUsageRings", () => {
       ],
       t,
     );
-    expect(accounts.map((account) => account.reportId)).toEqual(["ok"]);
+    expect(accounts.map((account) => account.reportId)).toEqual(["off", "ok"]);
+    expect(accounts[0]?.stale).not.toBeNull();
   });
 
   it("names an account with its label and groups each source's accounts together", () => {
@@ -143,7 +144,6 @@ describe("sortByRemaining", () => {
 });
 
 describe("resolveUsageRings with unavailable accounts", () => {
-  const now = Date.parse("2026-10-29T12:00:00.000Z");
   const available = entry("claude", [{ id: "five_hour", usedPct: 40, durationMins: 300 }]);
   const expired = {
     ...entry("claude", []),
@@ -161,23 +161,34 @@ describe("resolveUsageRings with unavailable accounts", () => {
   });
 
   it("greys the last read of an account that turned unavailable, then recovers", () => {
-    const [stale] = resolveUsageRings([expired], t, remembered("2026-10-29T09:00:00.000Z"), now);
+    const [stale] = resolveUsageRings([expired], t, remembered("2026-10-29T09:00:00.000Z"));
     expect(stale?.stale).not.toBeNull();
     expect(stale?.remaining).toBe(60);
     expect(stale?.stale?.reason).toContain("staleReasonExpired");
     expect(stale?.accessibleLabel).toContain("providerUsage.staleSummary");
-    const [fresh] = resolveUsageRings([available], t, remembered("2026-10-29T09:00:00.000Z"), now);
+    const [fresh] = resolveUsageRings([available], t, remembered("2026-10-29T09:00:00.000Z"));
     expect(fresh?.stale).toBeNull();
   });
 
-  it("hides a last read older than 24 hours", () => {
-    expect(resolveUsageRings([expired], t, remembered("2026-10-28T11:00:00.000Z"), now)).toEqual(
-      [],
-    );
+  it("keeps greying a last read however old it is", () => {
+    const [stale] = resolveUsageRings([expired], t, remembered("2026-09-01T11:00:00.000Z"));
+    expect(stale?.stale).not.toBeNull();
+    expect(stale?.remaining).toBe(60);
   });
 
-  it("draws nothing for an account that was never read", () => {
-    expect(resolveUsageRings([expired], t, {}, now)).toEqual([]);
+  it("draws an empty grey ring with the reason for an account that was never read", () => {
+    const [account] = resolveUsageRings([expired], t, {});
+    expect(account?.rings).toEqual([]);
+    expect(account?.stale?.summary).toContain("providerUsage.staleNever");
+    expect(account?.stale?.summary).toContain("staleReasonExpired");
+  });
+
+  it("draws no ring for a source that has no quota", () => {
+    const noQuota = {
+      ...expired,
+      report: { status: "unavailable", problem: { kind: "no_quota", detail: "none" } },
+    } as UsageReportEntry;
+    expect(resolveUsageRings([noQuota], t, {})).toEqual([]);
   });
 
   it("falls back to the daemon's last successful read", () => {
@@ -185,6 +196,6 @@ describe("resolveUsageRings with unavailable accounts", () => {
       ...expired,
       lastSuccessful: remembered("2026-10-29T10:00:00.000Z").claude,
     } as UsageReportEntry;
-    expect(resolveUsageRings([withDaemon], t, {}, now)[0]?.stale).not.toBeNull();
+    expect(resolveUsageRings([withDaemon], t, {})[0]?.stale).not.toBeNull();
   });
 });

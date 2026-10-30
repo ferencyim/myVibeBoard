@@ -118,5 +118,12 @@ CREATE INDEX idx_bot_message_queue ON bot_message(to_bot_id,status,created_at);
 CREATE INDEX idx_bot_message_pair ON bot_message(from_bot_id,to_bot_id,created_at);
 `,
   },
+  {
+    // Existing bots keep their stored permission; new rows always get an explicit value from the
+    // contract, whose default is now "auto" (SQLite cannot change a column default in place).
+    version: 5, name: "bot_fast_mode", sql: `
+ALTER TABLE bot ADD COLUMN fast_mode INTEGER NOT NULL DEFAULT 0 CHECK(fast_mode IN (0,1));
+`,
+  },
 ];
 

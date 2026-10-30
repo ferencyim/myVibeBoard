@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
   ProviderModelPicker,
   type PickerFast,
+  type PickerPermission,
   type PickerThinking,
   type ProviderModelPickerTriggerState,
 } from "@/components/provider-model-picker/provider-model-picker";
@@ -14,6 +15,7 @@ interface CombinedModelSelectorProps {
   onSelect: (provider: string, modelId: string) => void | Promise<unknown>;
   isLoading: boolean;
   fast?: PickerFast | null;
+  permission?: PickerPermission | null;
   renderTrigger?: (input: ProviderModelPickerTriggerState) => React.ReactNode;
   onOpen?: () => void;
   onClose?: () => void;
@@ -58,6 +60,7 @@ export function CombinedModelSelector({
       isLoading={rest.isLoading}
       thinking={thinking}
       fast={rest.fast}
+      permission={rest.permission}
       onRetryProvider={rest.onRetryProvider}
       isRetryingProvider={rest.isRetryingProvider}
       disabled={rest.disabled}

@@ -14,7 +14,7 @@ import { suggestedModel } from "./create-model";
 
 export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmit }: {
   theme: PluginTheme; projectId?: string; busy: boolean; error?: string; onCancel(): void;
-  onSubmit(value: { name: string; title: string; instructions: string; presetId: string | null; provider: string | null; model: string | null; thinking: string }): void;
+  onSubmit(value: { name: string; title: string; instructions: string; presetId: string | null; provider: string | null; model: string | null; thinking: string; permissionMode: "accept-edits" | "auto" | "full"; fastMode: boolean }): void;
 }) {
   const list = useRpc(modelsListRpc);
   const [refreshing, setRefreshing] = useState(false);
@@ -30,6 +30,8 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [thinking, setThinking] = useState("");
+  const [fastMode, setFastMode] = useState(false);
+  const [permissionMode, setPermissionMode] = useState<"accept-edits" | "auto" | "full">("auto");
   const [initialized, setInitialized] = useState(false);
   useEffect(() => {
     if (!catalog.data || initialized) return;
@@ -46,9 +48,10 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
     muted: { color: theme.colors.foregroundMuted },
     danger: { color: theme.colors.statusDanger }, fields: { gap: 8 },
   }), [theme]);
-  const selectModel = useCallback((nextProvider: string, nextModel: string) => { setProvider(nextProvider); setModel(nextModel); setThinking(""); }, []);
+  const selectModel = useCallback((nextProvider: string, nextModel: string) => { setProvider(nextProvider); setModel(nextModel); setThinking(""); setFastMode(false); }, []);
   const selectThinking = useCallback((id: string) => setThinking(id), []);
-  const submit = useCallback(() => onSubmit({ name: name.trim(), title, instructions, presetId: null, provider, model, thinking }), [onSubmit, name, title, instructions, provider, model, thinking]);
+  const selectPermission = useCallback((value: string) => setPermissionMode(value as "accept-edits" | "auto" | "full"), []);
+  const submit = useCallback(() => onSubmit({ name: name.trim(), title, instructions, presetId: null, provider, model, thinking, permissionMode, fastMode }), [onSubmit, name, title, instructions, provider, model, thinking, permissionMode, fastMode]);
   const closeModal = useCallback((open: boolean) => { if (!open) onCancel(); }, [onCancel]);
   const canSubmit = !!provider && !!model;
   return <Modal title={`新建${projectId ? "项目 " : ""}bot`} open onOpenChange={closeModal}>
@@ -60,7 +63,7 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
       {catalog.error ? <Text style={styles.danger}>模型目录加载失败：{String(catalog.error)}</Text> : null}
       <Button theme={theme} label={refreshing ? "正在刷新模型列表…" : "刷新模型列表"} disabled={refreshing} onPress={refreshModels} />
       {refreshError ? <Text style={styles.danger}>刷新模型列表失败：{refreshError}</Text> : null}
-      <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading} onSelect={selectModel} onSelectThinking={selectThinking} />
+      <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading} onSelect={selectModel} onSelectThinking={selectThinking} fast={fastMode} onFastChange={provider === "claude" || provider === "codex" ? setFastMode : undefined} permission={permissionMode} onPermissionChange={selectPermission} />
       {error ? <Text accessibilityRole="alert" style={styles.danger}>{error}</Text> : null}
       <Button theme={theme} label={busy ? "正在新建…" : "确认新建"} disabled={busy || !name.trim() || !canSubmit} onPress={submit} />
       <Button theme={theme} label="取消" disabled={busy} onPress={onCancel} />

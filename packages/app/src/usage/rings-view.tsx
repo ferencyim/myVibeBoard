@@ -80,6 +80,17 @@ const RingGraphicBase = function RingGraphic({
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
+      {rings.length === 0 ? (
+        <Circle
+          cx={CENTER}
+          cy={CENTER}
+          r={OUTER_RADIUS}
+          fill="none"
+          stroke={trackColor}
+          strokeOpacity={TRACK_OPACITY * 2}
+          strokeWidth={STROKE_WIDTH}
+        />
+      ) : null}
       {rings.map((ring, index) => {
         const radius = index === 0 ? OUTER_RADIUS : INNER_RADIUS;
         const circumference = 2 * Math.PI * radius;

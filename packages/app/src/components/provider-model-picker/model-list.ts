@@ -76,14 +76,6 @@ export function moveHighlight(current: number, delta: 1 | -1, count: number): nu
   return (current + delta + count) % count;
 }
 
-export type EffortControlKind = "segmented" | "select";
-
-/** At most five options with at most 26 label characters in total fit a segmented control. */
-export function resolveEffortControlKind(labels: string[]): EffortControlKind {
-  const total = labels.reduce((sum, label) => sum + label.length, 0);
-  return labels.length <= 5 && total <= 26 ? "segmented" : "select";
-}
-
 const EFFORT_LABELS: Record<string, string> = {
   low: "低",
   medium: "中",

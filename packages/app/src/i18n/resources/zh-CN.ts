@@ -2162,6 +2162,7 @@ export const zhCN: TranslationResources = {
     staleReasonRejected: "{{source}} 登录被拒绝",
     staleReasonError: "暂时无法读取 {{source}}",
     staleReasonNoQuota: "{{source}} 未提供额度",
+    staleNever: "尚未成功读取过额度；等待读取（{{reason}}）。",
     loginRejected: "登录被拒绝（HTTP {{status}}）。{{remedy}}",
     loginExpired: "登录已于{{relativeTime}}过期。{{remedy}}",
     title: "套餐用量",

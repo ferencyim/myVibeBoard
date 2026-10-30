@@ -2198,6 +2198,7 @@ export const ja: TranslationResources = {
     staleReasonRejected: "{{source}} login was rejected",
     staleReasonError: "{{source}} could not be reached",
     staleReasonNoQuota: "{{source}} reports no quota",
+    staleNever: "No successful read yet; waiting to read ({{reason}}).",
     loginRejected: "ログインが拒否されました (HTTP {{status}})。{{remedy}}",
     loginExpired: "ログインは{{relativeTime}}に期限切れになりました。{{remedy}}",
     title: "プラン使用量",

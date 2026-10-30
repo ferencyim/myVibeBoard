@@ -211,6 +211,9 @@ export interface ModelPickerFieldProps {
   /** Fast mode of the selected model; the picker shows the switch only when `onFastChange` is given. */
   fast?: boolean;
   onFastChange?(value: boolean): void | Promise<unknown>;
+  /** Permission tier ("accept-edits", "auto" or "full"); the picker shows the row only when `onPermissionChange` is given. */
+  permission?: string;
+  onPermissionChange?(value: string): void | Promise<unknown>;
   /** Called when the picker opens; use it to refresh the catalog in the background. */
   onOpen?(): void;
 }

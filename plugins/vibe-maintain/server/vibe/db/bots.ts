@@ -46,8 +46,8 @@ export function createBotStore(db: VibeDb, now = () => new Date().toISOString())
     db.prepare(`INSERT INTO bot(
       id,kind,project_id,name,title,avatar_seed,avatar_hue,avatar_path,instructions,
       preset_id,provider,model,thinking,backup_models_json,notifications_json,
-      permission_mode,main_agent_id,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      permission_mode,fast_mode,main_agent_id,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id,
       value.kind,
       value.projectId,
@@ -64,6 +64,7 @@ export function createBotStore(db: VibeDb, now = () => new Date().toISOString())
       JSON.stringify(value.backupModels),
       JSON.stringify(value.notifications),
       value.permissionMode,
+      value.fastMode ? 1 : 0,
       mainAgentId,
       at,
       at,
@@ -88,13 +89,16 @@ export function createBotStore(db: VibeDb, now = () => new Date().toISOString())
       backupModels: "backup_models_json",
       notifications: "notifications_json",
       permissionMode: "permission_mode",
+      fastMode: "fast_mode",
     };
     const assignments: string[] = [];
     const params: SqlParam[] = [];
     for (const [key, item] of Object.entries(value)) {
       if (item === undefined) continue;
       assignments.push(fields[key] + "=?");
-      params.push(typeof item === "object" && item !== null ? JSON.stringify(item) : item);
+      params.push(
+        typeof item === "object" && item !== null ? JSON.stringify(item) : typeof item === "boolean" ? Number(item) : item,
+      );
     }
     if (assignments.length) {
       db.prepare(`UPDATE bot SET ${assignments.join(",")},updated_at=? WHERE id=?`).run(...params, now(), id);

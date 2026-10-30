@@ -27,7 +27,7 @@ export const EMPTY_ROLE_DRAFT: RoleDraft = {
   thinking: "",
   fastMode: false,
   instructions: "",
-  permissionMode: "accept-edits",
+  permissionMode: "auto",
   environmentKind: "new-worktree",
   baseBranch: null,
   runtimeEnv: null,

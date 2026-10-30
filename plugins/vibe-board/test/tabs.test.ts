@@ -1583,7 +1583,7 @@ describe("上下文接续", () => {
     const next = task.tabs.at(-1)!;
     expect(next.role).toBe("scout");
     expect(fake.created.at(-1)).toMatchObject({
-      config: { provider: "codex/first", modeId: "auto", thinkingOptionId: "high" },
+      config: { provider: "codex/first", modeId: "auto-review", thinkingOptionId: "high" },
       env: { VIBE_ROLE: "scout", VIBE_WORKSPACE_ID: "ws" },
       labels: { [TASK_TAB_ROLE_LABEL]: "scout" },
     });
@@ -1764,7 +1764,7 @@ describe("上下文接续", () => {
       const next = task.tabs.find((tab) => tab.role === "worker")!;
       expect(next.agentId).not.toBe("agent-w");
       expect(fake.created.at(-1)).toMatchObject({
-        config: { provider: "codex/second", modeId: "auto", thinkingOptionId: "high" },
+        config: { provider: "codex/second", modeId: "auto-review", thinkingOptionId: "high" },
         env: { VIBE_ROLE: "worker", VIBE_WORKSPACE_ID: "ws" },
         labels: {
           [TASK_TAB_ROLE_LABEL]: "worker",
@@ -2911,7 +2911,7 @@ describe("预建 tab 的边界", () => {
     const byRole = (role: string) =>
       fake.created.find((input) => (input.env as Record<string, string>).VIBE_ROLE === role)!
         .config as { modeId?: string };
-    expect(byRole("reviewer").modeId).toBe("auto");
+    expect(byRole("reviewer").modeId).toBe("auto-review");
     expect(byRole("worker").modeId).toBe("full-access");
     expect(byRole("scout").modeId).toBeUndefined();
   });

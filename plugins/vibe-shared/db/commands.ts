@@ -506,7 +506,7 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
             provider: input.provider,
             model: input.model,
             thinking: input.thinking ?? "",
-            permissionMode: input.permissionMode ?? "accept-edits",
+            permissionMode: input.permissionMode ?? "auto",
           },
           input.fallbackPresetIds ?? [],
         );

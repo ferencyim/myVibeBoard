@@ -23,7 +23,9 @@ export const BotFieldsSchema = z.object({
     completed: z.boolean().default(true),
     failed: z.boolean().default(true),
   }).default({ enabled: true, completed: true, failed: true }),
-  permissionMode: BotPermissionSchema.default("accept-edits"),
+  permissionMode: BotPermissionSchema.default("auto"),
+  /** Fast mode of the main conversation (Claude fast_mode, Codex service_tier=fast). */
+  fastMode: z.boolean().default(false),
 });
 export const BotCreateSchema = BotFieldsSchema.extend({
   kind: z.enum(["independent", "project"]),
@@ -52,6 +54,7 @@ export const BotPatchSchema = z.object({
   backupModels: BotFieldsSchema.shape.backupModels.removeDefault().optional(),
   notifications: BotFieldsSchema.shape.notifications.removeDefault().optional(),
   permissionMode: BotFieldsSchema.shape.permissionMode.removeDefault().optional(),
+  fastMode: BotFieldsSchema.shape.fastMode.removeDefault().optional(),
 }).strict();
 export const BotSchema = BotFieldsSchema.extend({
   id: z.string().startsWith("bot_"),

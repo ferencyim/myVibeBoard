@@ -21,14 +21,21 @@ export function ModelSection({ bot, save }: { bot: BotView; save(patch: BotPatch
     void modelsList({ projectId: bot.projectId ?? undefined, refresh: true }).then(() => refetch()).catch(() => undefined);
   }, [modelsList, bot.projectId, refetch]);
   const select = useCallback(async (provider: string, model: string) => {
-    if (!(await save({ provider, model, thinking: "", presetId: null }))) throw new Error("保存模型失败");
+    if (!(await save({ provider, model, thinking: "", presetId: null, fastMode: false }))) throw new Error("保存模型失败");
   }, [save]);
   const selectThinking = useCallback(async (id: string) => {
     if (!(await save({ thinking: id }))) throw new Error("保存思考强度失败");
   }, [save]);
+  const selectPermission = useCallback(async (value: string) => {
+    if (!(await save({ permissionMode: value as BotView["permissionMode"] }))) throw new Error("保存权限失败");
+  }, [save]);
+  const selectFast = useCallback(async (value: boolean) => {
+    if (!(await save({ fastMode: value }))) throw new Error("保存快速模式失败");
+  }, [save]);
+  const fastProvider = bot.provider === "claude" || bot.provider === "codex";
   return <>
     <Group title="模型">
-      <ModelPickerField providers={models.data?.providers ?? []} provider={bot.provider ?? ""} model={bot.model ?? ""} thinking={bot.thinking} loading={models.isLoading} onSelect={select} onSelectThinking={selectThinking} onOpen={refreshInBackground} />
+      <ModelPickerField providers={models.data?.providers ?? []} provider={bot.provider ?? ""} model={bot.model ?? ""} thinking={bot.thinking} loading={models.isLoading} onSelect={select} onSelectThinking={selectThinking} fast={bot.fastMode} onFastChange={fastProvider ? selectFast : undefined} permission={bot.permissionMode} onPermissionChange={selectPermission} onOpen={refreshInBackground} />
     </Group>
     {legacyPreset ? <Caption>{`仍沿用角色设置「${legacyPreset.name}」；在上面重新选择模型后将不再使用预设。`}</Caption> : null}
     {bot.pendingModel ? <Caption>模型变更待空闲时应用。</Caption> : null}

@@ -56,9 +56,6 @@ export interface RememberedUsage {
   report: AvailableUsageReport;
 }
 
-/** A remembered read older than this is too old to draw. */
-export const STALE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
 const MAX_RINGS = 2;
 
 /** Whole percent left of a window, or null when the source reports no share. */
@@ -125,11 +122,40 @@ function lastGood(entry: UsageReportEntry, remembered?: RememberedUsage): Rememb
     : fromDaemon;
 }
 
+/** A source that has no quota at all (not a failed read) draws no ring. */
+function isNoQuota(entry: UsageReportEntry): boolean {
+  return entry.report.status === "unavailable" && entry.report.problem.kind === "no_quota";
+}
+
+function placeholderAccount(entry: UsageReportEntry, t: TFunction): RingAccount {
+  const name = accountName(entry);
+  const reason = staleReason(entry, t);
+  const summary = t("providerUsage.staleNever", { reason });
+  return {
+    key: entry.id,
+    reportId: entry.id,
+    sourceLabel: entry.sourceLabel,
+    name,
+    icon: entry.icon ?? null,
+    // Sorts first so the narrow rail never folds an unreadable account into "+N".
+    remaining: 0,
+    level: "danger",
+    windows: [],
+    rings: [],
+    accessibleLabel: `${name} usage: ${summary} ${t("providerUsage.openUsage")}`,
+    stale: { at: entry.fetchedAt, reason, summary },
+  };
+}
+
+/**
+ * An account that cannot be read keeps its ring however old the last read is, greyed; one that
+ * was never read gets an empty grey ring that says why. A source with no quota, or an available
+ * report with no windowed limit (balances only), has no ring.
+ */
 function resolveAccount(
   entry: UsageReportEntry,
   t: TFunction,
   remembered: RememberedUsage | undefined,
-  now: number,
 ): RingAccount | null {
   let source: AvailableUsageReport;
   let stale: RingStale | null = null;
@@ -137,8 +163,7 @@ function resolveAccount(
     source = entry.report;
   } else {
     const good = lastGood(entry, remembered);
-    const age = good ? now - Date.parse(good.fetchedAt) : Number.NaN;
-    if (!good || !(age <= STALE_MAX_AGE_MS)) return null;
+    if (!good) return isNoQuota(entry) ? null : placeholderAccount(entry, t);
     source = good.report;
     const reason = staleReason(entry, t);
     stale = {
@@ -161,7 +186,7 @@ function resolveAccount(
       level: ringLevel(remaining),
     });
   }
-  if (windows.length === 0) return null;
+  if (windows.length === 0) return stale && !isNoQuota(entry) ? placeholderAccount(entry, t) : null;
   const ordered = longestFirst(windows);
   const remaining = Math.min(...ordered.map((window) => window.remaining));
   const name = accountName(entry);
@@ -187,19 +212,18 @@ function resolveAccount(
 /**
  * The provider accounts that get a ring, in report order with each source's accounts together.
  * A report with no windowed limit (no usage, or only balances) gets none. An account that cannot
- * be read now keeps its ring, marked `stale`, while its last good read is under 24 hours old.
+ * be read now keeps its ring, marked `stale`, and is never hidden.
  */
 export function resolveUsageRings(
   reports: readonly UsageReportEntry[],
   t: TFunction = i18n.t,
   remembered: Readonly<Record<string, RememberedUsage>> = {},
-  now: number = Date.now(),
 ): RingAccount[] {
   const sourceIds = [...new Set(reports.map((entry) => entry.sourceId))];
   return sourceIds
     .flatMap((sourceId) => reports.filter((entry) => entry.sourceId === sourceId))
     .flatMap((entry) => {
-      const account = resolveAccount(entry, t, remembered[entry.id], now);
+      const account = resolveAccount(entry, t, remembered[entry.id]);
       return account ? [account] : [];
     });
 }

@@ -13,7 +13,7 @@ describe("vibe-bots 例程迁移", () => {
       db.exec("INSERT INTO schema_version VALUES ('vibe-bots', 1, 'old')");
       db.exec("INSERT INTO bot(id,kind,name,created_at,updated_at) VALUES ('bot_old','independent','旧助手','old','old')");
       db.exec("INSERT INTO bot_memory(id,bot_id,text,source,created_at,updated_at) VALUES ('memory_old','bot_old','保留记忆','user','old','old')");
-      expect(migrateOwner(db, "vibe-bots")).toMatchObject({ from: 1, to: 4, applied: [2, 3, 4] });
+      expect(migrateOwner(db, "vibe-bots")).toMatchObject({ from: 1, to: 5, applied: [2, 3, 4, 5] });
       expect(db.prepare("SELECT name FROM bot WHERE id='bot_old'").get()).toEqual({ name: "旧助手" });
       expect(db.prepare("SELECT text FROM bot_memory WHERE id='memory_old'").get()).toEqual({ text: "保留记忆" });
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bot_thread','bot_routine','bot_routine_run') ORDER BY name").all())
@@ -39,8 +39,8 @@ describe("vibe-bots 例程迁移", () => {
 
       expect(migrateOwnerThrough(db, "vibe-bots", 2)).toMatchObject({ from: 1, to: 2, applied: [2] });
       db.exec("INSERT INTO bot_thread(id,bot_id,title,agent_id,created_at) VALUES ('thread_old','bot_old','旧话题','agent_old','old')");
-      expect(migrateOwner(db, "vibe-bots")).toMatchObject({ from: 2, to: 4, applied: [3, 4] });
-      expect(getSchemaVersion(db, "vibe-bots")).toBe(4);
+      expect(migrateOwner(db, "vibe-bots")).toMatchObject({ from: 2, to: 5, applied: [3, 4, 5] });
+      expect(getSchemaVersion(db, "vibe-bots")).toBe(5);
       expect(db.prepare("SELECT name FROM bot WHERE id='bot_old'").get()).toEqual({ name: "旧助手" });
       expect(db.prepare("SELECT text FROM bot_memory WHERE id='memory_old'").get()).toEqual({ text: "保留记忆" });
       expect(db.prepare("SELECT title,agent_id FROM bot_thread WHERE id='thread_old'").get()).toEqual({ title: "旧话题", agent_id: "agent_old" });

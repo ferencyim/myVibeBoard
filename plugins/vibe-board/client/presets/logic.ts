@@ -82,7 +82,7 @@ export const EMPTY_MODEL_DRAFT: PresetModelDraft = {
   provider: "",
   model: "",
   thinking: "",
-  permissionMode: "accept-edits",
+  permissionMode: "auto",
 };
 
 export interface PresetDraft {

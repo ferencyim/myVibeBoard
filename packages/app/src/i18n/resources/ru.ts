@@ -2210,6 +2210,7 @@ export const ru: TranslationResources = {
     staleReasonRejected: "{{source}} login was rejected",
     staleReasonError: "{{source}} could not be reached",
     staleReasonNoQuota: "{{source}} reports no quota",
+    staleNever: "No successful read yet; waiting to read ({{reason}}).",
     loginRejected: "Вход отклонён (HTTP {{status}}). {{remedy}}",
     loginExpired: "Срок входа истёк {{relativeTime}}. {{remedy}}",
     title: "Использование плана",

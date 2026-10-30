@@ -8,6 +8,14 @@ import type {
   ProviderSelectionModelRow,
 } from "@/provider-selection/provider-selection";
 
+const PERMISSION_TIERS = ["accept-edits", "auto", "full"] as const;
+
+function permissionTierLabel(tier: (typeof PERMISSION_TIERS)[number], provider: string): string {
+  if (tier === "accept-edits") return "接受编辑";
+  if (tier === "auto") return "自动";
+  return provider === "codex" ? "完全访问" : "完全放行";
+}
+
 /** Full-width provider / model / effort field for plugin settings screens. */
 export function ModelPickerField(props: ModelPickerFieldProps) {
   const {
@@ -63,6 +71,21 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
         : null,
     [fast, onFastChange],
   );
+  const { permission, onPermissionChange } = props;
+  const pickerPermission = useMemo(
+    () =>
+      onPermissionChange
+        ? {
+            options: PERMISSION_TIERS.map((tier) => ({
+              id: tier,
+              label: permissionTierLabel(tier, provider),
+            })),
+            selectedId: permission,
+            onSelect: (id: string) => void onPermissionChange(id),
+          }
+        : null,
+    [onPermissionChange, permission, provider],
+  );
   const effortLabel = efforts.find((item) => item.id === thinking)?.name;
   const leading = useMemo(
     () => (provider ? <ModelProviderGlyph provider={provider} serverId={null} size={16} /> : null),
@@ -103,6 +126,7 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
       isLoading={loading}
       thinking={pickerThinking}
       fast={pickerFast}
+      permission={pickerPermission}
       disabled={disabled}
       onOpen={onOpen}
       renderTrigger={renderTrigger}

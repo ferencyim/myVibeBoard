@@ -9,6 +9,7 @@ import {
   ProviderModelPanel,
   type PickerKeyHandler,
   type PickerFast,
+  type PickerPermission,
   type PickerThinking,
 } from "@/components/provider-model-picker/picker-panel";
 import { useOptimisticSelection } from "@/components/provider-model-picker/use-optimistic-selection";
@@ -22,7 +23,11 @@ import {
 } from "@/provider-selection/provider-selection";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 
-export type { PickerFast, PickerThinking } from "@/components/provider-model-picker/picker-panel";
+export type {
+  PickerFast,
+  PickerPermission,
+  PickerThinking,
+} from "@/components/provider-model-picker/picker-panel";
 
 const SHEET_SNAP_POINTS = ["80%", "90%"];
 const SHEET_HEADER = { title: "选择模型" };
@@ -48,6 +53,7 @@ export interface ProviderModelPickerProps {
   isLoading: boolean;
   thinking?: PickerThinking | null;
   fast?: PickerFast | null;
+  permission?: PickerPermission | null;
   onRetryProvider?: (provider: string) => void;
   isRetryingProvider?: boolean;
   disabled?: boolean;
@@ -71,6 +77,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
     isLoading,
     thinking = null,
     fast = null,
+    permission = null,
     onRetryProvider,
     isRetryingProvider,
     disabled = false,
@@ -121,7 +128,9 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   }, [handleClose, handleOpen, open]);
 
   const hasEffortRow =
-    Boolean(selection.thinking && selection.thinking.options.length > 0) || Boolean(fast);
+    Boolean(selection.thinking && selection.thinking.options.length > 0) ||
+    Boolean(fast) ||
+    Boolean(permission && permission.options.length > 0);
   const { pick } = selection;
   const handlePick = useCallback(
     (provider: string, modelId: string) => {
@@ -140,6 +149,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
       isLoading={isLoading}
       thinking={selection.thinking}
       fast={fast}
+      permission={permission}
       onPick={handlePick}
       onRetryProvider={onRetryProvider}
       isRetryingProvider={isRetryingProvider}

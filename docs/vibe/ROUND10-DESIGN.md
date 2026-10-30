@@ -88,17 +88,18 @@ bot 是一个稳定身份，和 provider 会话分开。换模型、换 provider
 - 选中任务：头部保留「项目 / 任务名」与分支，固定六个流程 tab 使用单行短标题、状态图标和紧凑控件；模型与状态详情放在悬停提示或原生长按菜单中。未启用档位降低不透明度，点击仍可启用。空间不足时横向滚动，边缘渐隐提示更多内容，选中项自动滚入；Web 支持滚轮、触控板和鼠标拖动，Android 支持手指滑动。右侧流程面板保留进度、子任务、其他方案、证据和执行/通过/停止，角色行精简为编号、角色与状态。
 - composer：容器、附件、引用、提示词书本按钮照 openbot 样式重画；保留「发给 #n」、slash 命令、outbox 与离线首消息。
 
-### 3.2.1 模型选择器（WP-150、WP-177）
+### 3.2.1 模型选择器（WP-150、WP-177、WP-182）
 
 全应用只有这一个模型选择器，实现在 `packages/app/src/components/provider-model-picker/`：composer、bot/普通会话顶行（同一个 `AgentControls`，窄屏也走它，选择器自己变底部 sheet）、新建任务、调度表单、元数据生成设置、插件的 `ModelPickerField`（bot 资料、新建 bot、任务角色）都用它。预设（agent 配置）已改称角色设置并并入「任务角色」页，不再出现在任何选择处；旧的 `model-browser`、`CompactModelSheet`、预设管理页已删除。`combined-model-selector.tsx` 只是把旧参数转给它的适配层。
 
-- 结构：左 52 宽 provider 竖栏 + 右面板（标题和副标题、不可用时的状态块和重试、搜索、按服务分组的模型列表、推理强度行、快速行）。只有一个 provider 时不画竖栏。竖栏项悬停显示左侧 tooltip。
+- 结构：左 52 宽 provider 竖栏 + 右面板（标题和副标题、不可用时的状态块和重试、搜索、按服务分组的模型列表，底部依次是推理强度、快速、权限三行）。只有一个 provider 时不画竖栏。竖栏项悬停显示左侧 tooltip。
 - 触发器：28 高 pill，`provider 图标 · 模型名 · ⚡ 快速（开启时）· 推理强度 ⌄`；通过 `renderTrigger` 可换成整行表单触发器，此时弹层宽度等于触发器宽度。
 - 弹层定位（`placement.ts`，纯函数有单测）：默认触发器下方右对齐、间距 8、宽 min(360, 视口-24)；下方放不下且上方更宽松时翻到上方；横向贴边（距边 8）；最大高 min(520, 视口-100, 所在一侧剩余空间)，最小高 226；只有模型列表滚动，标题、搜索、强度行不收缩。触发器测量完成前不挂载弹层。web 渲染到 overlay-root，原生用 Modal；窄屏改用底部 sheet。
 - 响应：点开立即显示，列表用缓存快照，后台刷新就地更新；选中后按钮立刻显示新值（`use-optimistic-selection.ts`），请求在后台发出，抛错或 promise 拒绝时回滚并 toast。
 - 键盘（web）：↑↓ 环绕移动高亮，Enter 选中，Esc 关闭。选中后没有强度行也没有快速行就自动关闭。
-- 推理强度：选项不超过 5 个且标签总字数不超过 26 用分段控件（选中段背后的 pill 用文字色 12% 底加顶部 1px 高光，250ms 滑动，首次放置与 resize 不动画，整体禁用 0.5 透明），否则用宽 128 的下拉。标签中文化为 低/中/高/极高/最高（`localizeEffortLabel`）。
-- 快速：只在当前模型带 `fast_mode` 功能时出现在强度行下方，工具栏上不再有单独的快速按钮。计划模式不在选择器里，也不在工具栏出现，只留在模式菜单和命令中心。
+- 推理强度：一律用分段控件，档位多时横向紧凑排列并可横向滚动，不再退成下拉（选中段背后的 pill 用文字色 12% 底加顶部 1px 高光，250ms 滑动，首次放置与 resize 不动画，整体禁用 0.5 透明）。标签中文化为 低/中/高/极高/最高（`localizeEffortLabel`）。
+- 快速：provider 带快速功能就显示开关，工具栏上没有单独的快速按钮。Claude 是 `fast_mode` 开关；Codex 的速度是 `service_tier` 选择（`default`/`fast`），选择器把它折成同一个开关（`picker-controls.ts` 的 `findFastControl`，有单测）。该功能由 daemon 按当前模型给出，模型不支持时不显示。插件的 `ModelPickerField` 通过 `fast`/`onFastChange` 接入（角色设置已接，bot 没有快速字段，未接）。
+- 权限：面板最底一行，同样的分段控件，选中即生效，标签中文化（Claude：计划/每次询问/接受编辑/自动/完全放行；Codex：默认/自动/完全访问）。运行中的 agent 走 `setAgentMode`，工具栏上不再有模式按钮（循环切换快捷键随之失效，命令中心里仍可切换，计划模式也只在命令中心）。新会话、角色设置、bot 默认权限一律是「自动」档：Claude 的 `auto`，Codex 的 `auto-review`（`presetModeId`，注意 Codex 自己的 `auto` 只是默认审批流）。插件的 `ModelPickerField` 用 `permission`/`onPermissionChange`（`accept-edits`/`auto`/`full` 三档），新建 bot 表单默认自动；bot 契约和数据库的默认值仍是 `accept-edits`（bot 创建 bot 时只能收紧权限，改默认值会让它们建不出来）。
 - 切换服务商：运行中会话在选择器里选另一家模型时，bot 会话调 vibe-bots `bots.update`（空闲后生效），其余会话调 switch-provider 的 `session.switch` 开新会话并带交接内容，然后打开新会话；本轮还在跑时提示「本轮结束后切换」，回合结束后执行。
 - 「下轮生效」：agent 运行中，配置的模型或强度与运行时不同，顶行选择器左侧显示徽标（`next-turn.ts`，有单测）。
 - 未做（对照 openbot 规格）：免费档排序、多账号 tab、「+ 添加 provider」入口、触发器文字切换动画、列表上下渐隐、rail 的方向键循环。
