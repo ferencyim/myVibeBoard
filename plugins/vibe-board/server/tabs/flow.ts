@@ -803,10 +803,29 @@ export function createTaskFlow(options: {
       log("流程定档通知 #1 失败", error);
     }
   }
+  /** The requirement #1 received. Tasks created before it was stored fall back to the first user
+   *  message of #1's timeline, which is then written back so it is read only once. */
+  async function requirementOf(task: Task): Promise<string | null> {
+    const stored = task.control?.requirementText;
+    if (typeof stored === "string" && stored) return stored;
+    try {
+      const page = await timeline(task.anchorAgentId);
+      for (const entry of page.entries) {
+        if (entry.item.type !== "user_message") continue;
+        const text = entry.item.text.trim();
+        if (!text) continue;
+        store.tasks.updateControl(task.workspaceId, { requirementText: text });
+        return text;
+      }
+    } catch {
+      // timeline unavailable: no button
+    }
+    return null;
+  }
   /** The planner tab that still waits for the requirement: it exists, is idle and has no history. */
   async function idlePlanner(task: Task): Promise<TaskTab | null> {
     if (task.flowLevel === "simple" || task.phase !== "planning" || task.plan) return null;
-    if (typeof task.control?.requirementText !== "string" || !task.control.requirementText) return null;
+    if (!(await requirementOf(task))) return null;
     const planner = task.tabs.find((tab) => tab.role === "planner");
     if (!planner) return null;
     try {
@@ -828,7 +847,7 @@ export function createTaskFlow(options: {
     const task = requireTask(workspaceId);
     const planner = await idlePlanner(task);
     if (!planner) throw new Error("方案 tab 当前不需要接收需求（已有对话、正在运行或尚未创建）");
-    const text = String(task.control?.requirementText);
+    const text = (await requirementOf(task)) as string;
     await paseo()
       .agents.ref(planner.agentId)
       .send(`#1 收到的用户原始需求如下，请据此出方案：

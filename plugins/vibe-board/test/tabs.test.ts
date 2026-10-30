@@ -623,6 +623,19 @@ describe("任务 workspace 标记", () => {
     expect(fake.sends.at(-1)).toMatchObject({ agentId: planner.agentId });
     expect(fake.sends.at(-1)!.text).toContain("做一个登录页");
   });
+  it("旧任务缺 requirementText：从 #1 时间线第一条用户消息回退并回写", async () => {
+    const { store, fake, flow } = await projectTask();
+    store.tasks.setFlow("ws", { level: "full", source: "bot", reason: "x" });
+    await flow.provisionTabs("ws");
+    expect((await flow.panel("ws")).nextStep).toBeNull();
+    fake.setTimeline("agent-1", [
+      { item: { type: "user_message", text: " 地图页按钮改透明 ", messageId: "u1" }, turnId: "t1", seqEnd: 1 },
+    ]);
+    expect((await flow.panel("ws")).nextStep).toBe("start_plan");
+    expect(store.tasks.get("ws")?.control?.requirementText).toBe("地图页按钮改透明");
+    await flow.startPlanner("ws");
+    expect(fake.sends.at(-1)!.text).toContain("地图页按钮改透明");
+  });
   it("只有新任务表单创建的 worktree 成为任务；CLI 与 agent 创建的不算", async () => {
     const { store, tabs } = setup();
     tabs.trackWorkspaceCreate({
