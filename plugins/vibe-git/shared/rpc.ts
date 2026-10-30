@@ -36,6 +36,8 @@ const git = z.object({
   operation: z.string().nullable(),
   commits: z.array(z.object({ sha: z.string(), subject: z.string(), timestamp: z.number() })),
   worktrees: z.array(worktree),
+  changesScannedAt: z.string().nullable().optional(),
+  scanning: z.boolean().optional(),
 });
 const clientStatus = z.object({
   client: z.string(),
@@ -92,6 +94,6 @@ export type Status = z.infer<typeof StatusSchema>;
 export type Changes = z.infer<typeof changes>;
 export const statusRpc = defineRpc({
   name: "git.status",
-  input: z.object({ workspaceId: z.string().min(1) }),
+  input: z.object({ workspaceId: z.string().min(1), force: z.boolean().optional() }),
   output: StatusSchema,
 });

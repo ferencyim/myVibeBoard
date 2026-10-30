@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { gitStatus } from "../server/git";
+import { createGitService, createScanState } from "../server/git";
+import { createProcessRunner } from "../server/process";
 import { normalizePath } from "../server/parse";
 
 const temporaryDirectories: string[] = [];
@@ -48,6 +49,10 @@ describe("真实 Git 仓库状态", () => {
     await writeFile(path.join(worktree, "untracked.txt"), "untracked\n");
     await writeFile(path.join(main, "untracked-main.txt"), "untracked\n");
 
+    const runner = createProcessRunner();
+    const scanner = createProcessRunner();
+    const scanState = createScanState();
+    const { gitStatus } = createGitService(runner, scanner, scanState);
     const result = await gitStatus(worktree);
     expect(result.status).toBe("ok");
     expect(result.branch).toBe("feature");
@@ -57,6 +62,8 @@ describe("真实 Git 仓库状态", () => {
     expect(result.changes).toEqual({ staged: 1, unstaged: 1, untracked: 1, total: 3 });
     const current = result.worktrees.find((entry) => entry.current);
     const primary = result.worktrees.find((entry) => normalizePath(entry.path) === normalizePath(main));
+    expect(primary?.changes).toBeNull();
+    expect(result.scanning).toBe(true);
     expect(current).toMatchObject({
       branch: "feature",
       counts: { ahead: 1, behind: 1 },
@@ -67,16 +74,30 @@ describe("真实 Git 仓库状态", () => {
       current: false,
       merged: true,
       counts: { ahead: 0, behind: 0 },
-      changes: { staged: 0, unstaged: 0, untracked: 1, total: 1 },
     });
+    for (let i = 0; i < 100 && scanState.scans.get(normalizePath(main))?.scanning; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const rescanned = await gitStatus(worktree);
+    expect(rescanned.worktrees.find((entry) => normalizePath(entry.path) === normalizePath(main))?.changes)
+      .toEqual({ staged: 0, unstaged: 0, untracked: 1, total: 1 });
+    expect(rescanned.changesScannedAt).toBeTruthy();
     const mainStatus = await gitStatus(main);
     expect(mainStatus.isMain).toBe(true);
     expect(mainStatus.worktrees.find((entry) => entry.current)?.branch).toBe("main");
+    scanState.closed = true;
+    runner.cleanup();
+    scanner.cleanup();
   }, 30000);
 
   it("对非 Git 目录返回 not_git", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "vibe-git-empty-"));
     temporaryDirectories.push(dir);
+    const runner = createProcessRunner();
+    const scanner = createProcessRunner();
+    const { gitStatus } = createGitService(runner, scanner, createScanState());
     expect((await gitStatus(dir)).status).toBe("not_git");
+    runner.cleanup();
+    scanner.cleanup();
   });
 });

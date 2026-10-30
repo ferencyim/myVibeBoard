@@ -52,7 +52,7 @@ describe("dashboard HTTP 状态", () => {
         },
       ],
     });
-    const build = await buildStatus(".", "d:/repo/main");
+    const build = await buildStatus(".", "d:/repo/main", async () => ({ status: "unknown", count: null }));
     expect(build.status).toBe("ok");
     expect(build.pipelines).toHaveLength(1);
     expect(build.pipelines[0].failureReason).toContain("[已隐藏]");
@@ -72,13 +72,13 @@ describe("dashboard HTTP 状态", () => {
       pipelines: [{ repo: "/other" }],
       products: [{ repo: "/other" }],
     });
-    expect((await buildStatus(".", "/main")).status).toBe("not_configured");
+    expect((await buildStatus(".", "/main", async () => ({ status: "unknown", count: null }))).status).toBe("not_configured");
     expect((await releaseStatus("/main")).status).toBe("not_configured");
   });
 
   it("非 200 返回 error", async () => {
     process.env.VIBE_CI_DASHBOARD_URL = await serve(503, {});
-    expect((await buildStatus(".", "/main")).status).toBe("error");
+    expect((await buildStatus(".", "/main", async () => ({ status: "unknown", count: null }))).status).toBe("error");
     expect((await releaseStatus("/main")).status).toBe("error");
   });
 
@@ -89,7 +89,7 @@ describe("dashboard HTTP 状态", () => {
       server.close((error) => error ? reject(error) : resolve());
     });
     process.env.VIBE_CI_DASHBOARD_URL = url;
-    expect((await buildStatus(".", "/main")).status).toBe("dashboard_down");
+    expect((await buildStatus(".", "/main", async () => ({ status: "unknown", count: null }))).status).toBe("dashboard_down");
     expect((await releaseStatus("/main")).status).toBe("dashboard_down");
   });
 });

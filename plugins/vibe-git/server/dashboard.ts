@@ -1,6 +1,6 @@
 import type { Status } from "../shared/rpc";
 import { selectDashboard } from "./parse";
-import { sourceRelation } from "./git";
+
 
 const str = (v: unknown): string | null =>
   typeof v === "string" ? v : typeof v === "number" ? String(v) : null;
@@ -26,11 +26,11 @@ const version = (v: unknown) => {
   };
 };
 
-async function fetchSection(endpoint: string, key: "pipelines" | "products", mainPath: string | null) {
+async function fetchSection(endpoint: string, key: "pipelines" | "products", mainPath: string | null, signal?: AbortSignal) {
   try {
     const base = process.env.VIBE_CI_DASHBOARD_URL || "http://127.0.0.1:43173";
     const response = await fetch(`${base.replace(/\/$/, "")}${endpoint}`, {
-      signal: AbortSignal.timeout(3000),
+      signal: signal ?? AbortSignal.timeout(3000),
     });
     if (!response.ok) return { status: "error" as const, values: [] };
     let data: unknown;
@@ -45,8 +45,16 @@ async function fetchSection(endpoint: string, key: "pipelines" | "products", mai
   }
 }
 
-export async function buildStatus(cwd: string, mainPath: string | null): Promise<Status["build"]> {
-  const result = await fetchSection("/api/status", "pipelines", mainPath);
+export async function buildStatus(
+  cwd: string,
+  mainPath: string | null,
+  sourceRelation: (cwd: string, sha: string | null) => Promise<{
+    status: "same" | "behind" | "unknown";
+    count: number | null;
+  }>,
+  signal?: AbortSignal,
+): Promise<Status["build"]> {
+  const result = await fetchSection("/api/status", "pipelines", mainPath, signal);
   const pipelines = await Promise.all(result.values.map(async (p) => {
     const sourceSha = str(p.sourceSha);
     return {
@@ -75,8 +83,8 @@ export async function buildStatus(cwd: string, mainPath: string | null): Promise
   return { status: result.status, pipelines };
 }
 
-export async function releaseStatus(mainPath: string | null): Promise<Status["release"]> {
-  const result = await fetchSection("/api/release/overview", "products", mainPath);
+export async function releaseStatus(mainPath: string | null, signal?: AbortSignal): Promise<Status["release"]> {
+  const result = await fetchSection("/api/release/overview", "products", mainPath, signal);
   return {
     status: result.status,
     products: result.values.map((p) => ({
