@@ -3,7 +3,7 @@ import { Pressable, StyleSheet } from "react-native";
 import { GestureDetector, type GestureType } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { isWeb } from "@/constants/platform";
-import { WindowChromeRootRegion } from "@/utils/desktop-window";
+import { WindowChromeRegion, WindowChromeRootRegion } from "@/utils/desktop-window";
 import { usePanelStore, type MobilePanelView } from "@/stores/panel-store";
 import { getMobilePanelFrame } from "./model";
 import { useIsMobilePanelActive, useMobilePanelsRuntime } from "./provider";
@@ -116,7 +116,13 @@ export function MobilePanelOverlay({
           </Pressable>
 
           <Animated.View pointerEvents={isOpen ? "auto" : "none"} style={combinedPanelStyle}>
-            <WindowChromeRootRegion corners="both">{children}</WindowChromeRootRegion>
+            {/* A docked panel sits inside the content region and inherits its corners; only an
+                overlay covers the whole window and restarts corner ownership. */}
+            {docked ? (
+              <WindowChromeRegion corners="both">{children}</WindowChromeRegion>
+            ) : (
+              <WindowChromeRootRegion corners="both">{children}</WindowChromeRootRegion>
+            )}
           </Animated.View>
         </Animated.View>
       </Animated.View>
