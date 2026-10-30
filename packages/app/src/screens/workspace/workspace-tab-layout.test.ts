@@ -109,7 +109,18 @@ describe("computeWorkspaceTabLayout", () => {
     expect(result.closeButtonPolicy).toBe("all");
     expect(result.requiresHorizontalScrollFallback).toBe(false);
     expect(result.items.map((item) => item.width)).toEqual([64, 64, 64, 64]);
-    expect(result.items.every((item) => item.showLabel)).toBe(true);
+    // 30px of text room cannot hold a 98px label: icon only, the tooltip carries the title.
+    expect(result.items.every((item) => item.showLabel)).toBe(false);
+  });
+
+  it("shows a short label in full and falls back to the icon when it would be cut", () => {
+    const result = computeWorkspaceTabLayout({
+      viewportWidth: 340,
+      tabLabelWidths: [28, 56, 28, 56],
+      metrics: { ...metrics, actionsReservedWidth: 36 },
+      compact: false,
+    });
+    expect(result.items.map((item) => item.showLabel)).toEqual([true, false, true, false]);
   });
 
   it("scrolls at natural widths rather than shrinking below the clickable minimum", () => {

@@ -112,6 +112,6 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
 function BotDetails({ bot, activity, loading, theme, projectName }: { projectName?: string; bot: import("../shared/vibe/contract/bots").Bot; activity?: import("@getpaseo/plugin/client").PluginSidebarAgentActivity; loading: boolean; theme: PluginSidebarGroupProps["theme"] }) {
   const styles = useMemo(() => ({ names: { flex: 1 }, head: { flexDirection: "row" as const, alignItems: "center" as const, gap: (theme.spacing?.[2] ?? 8) }, name: { flex: 1, color: theme.colors.foreground }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted } }), [theme]);
   const time = formatRelativeTime(activity?.lastMessage?.timestamp ?? bot.updatedAt);
-  const sub = loading ? "正在创建…" : projectName ?? (bot.role === "coordinator" ? "总协调" : undefined);
+  const sub = loading ? "正在创建…" : projectName ?? (bot.role === "coordinator" ? [bot.title, "中枢与项目协调"].find((t) => t && t !== bot.name) : undefined);
   return <View style={styles.names}><View style={styles.head}><Text numberOfLines={1} style={styles.name}>{bot.name}</Text>{time ? <Text style={styles.muted}>{time}</Text> : null}</View>{sub ? <Text numberOfLines={1} style={styles.muted}>{sub}</Text> : null}</View>;
 }
