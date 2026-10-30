@@ -102,3 +102,23 @@ export function useSidebarWorkspaceClassification(project: SidebarProjectEntry) 
     loading: queries.some((query) => query.isPending),
   };
 }
+
+// An independent bot's main agent runs in `$VIBE_HOME/bots/<botId>`; the bot row stands for it.
+const BOT_DIRECTORY = /(^|[\\/])bots[\\/]bot_[^\\/]+([\\/]|$)/;
+
+function isBotWorkspace(workspace: SidebarWorkspacePlacement): boolean {
+  return [workspace.workspaceDirectory, workspace.projectRootPath].some(
+    (path) => path !== undefined && BOT_DIRECTORY.test(path),
+  );
+}
+
+/** Drops independent bots' working directories, and the projects made only of them. */
+export function hideIndependentBotWorkspaces(
+  projects: readonly SidebarProjectEntry[],
+): SidebarProjectEntry[] {
+  return projects.flatMap((project) => {
+    const workspaces = project.workspaces.filter((workspace) => !isBotWorkspace(workspace));
+    if (workspaces.length === project.workspaces.length) return [project];
+    return workspaces.length > 0 ? [{ ...project, workspaces }] : [];
+  });
+}

@@ -83,7 +83,8 @@ export function WorkspaceMetaRow({
     prHint,
     serviceSummary,
     labels,
-    visible: rowItems,
+    // A row handed a project name sits outside its project group; without it the row is ambiguous.
+    visible: projectName ? { ...rowItems, project: true } : rowItems,
     checksDisplay,
   });
 

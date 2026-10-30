@@ -118,6 +118,9 @@ export const fr: TranslationResources = {
   },
   composer: {
     placeholders: {
+      toTarget: "Message {{name}}, tag @files, or use /commands and /skills",
+      toTargetMobile: "Message {{name}}, @files, /commands",
+      describeNeed: "Describe what you need, tag @files, or use /commands and /skills",
       desktop: "Écrivez à l’agent, mentionnez des @fichiers ou utilisez les /commandes et /skills",
       mobile: "Message, @fichiers, /commandes",
       fallback: "Message…",

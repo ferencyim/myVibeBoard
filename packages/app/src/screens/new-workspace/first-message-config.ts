@@ -55,3 +55,16 @@ function savedFirstMessageModel(
     },
   };
 }
+
+/**
+ * Whether the new-task model picker shows "默认模型". An explicit pick wins; otherwise the
+ * default shows whenever there is no concrete model to show (offline, or nothing saved yet),
+ * so the picker never reads as an empty "选择模型".
+ */
+export function resolveUseDefaultModel(input: {
+  intent: boolean | null;
+  isConnected: boolean;
+  hasSelectedModel: boolean;
+}): boolean {
+  return input.intent ?? !(input.isConnected && input.hasSelectedModel);
+}

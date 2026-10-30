@@ -116,6 +116,9 @@ export const ko: TranslationResources = {
   },
   composer: {
     placeholders: {
+      toTarget: "Message {{name}}, tag @files, or use /commands and /skills",
+      toTargetMobile: "Message {{name}}, @files, /commands",
+      describeNeed: "Describe what you need, tag @files, or use /commands and /skills",
       desktop: "에이전트에게 메시지를 보내거나 @files 태그, /commands, /skills를 사용하세요",
       mobile: "메시지, @files, /commands",
       fallback: "메시지...",

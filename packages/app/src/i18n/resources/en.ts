@@ -112,6 +112,9 @@ export const en = {
   },
   composer: {
     placeholders: {
+      toTarget: "Message {{name}}, tag @files, or use /commands and /skills",
+      toTargetMobile: "Message {{name}}, @files, /commands",
+      describeNeed: "Describe what you need, tag @files, or use /commands and /skills",
       desktop: "Message the agent, tag @files, or use /commands and /skills",
       mobile: "Message, @files, /commands",
       fallback: "Message...",

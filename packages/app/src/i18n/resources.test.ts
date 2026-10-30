@@ -353,7 +353,7 @@ describe("translation resources", () => {
       from: "来自助手：{{id}}",
     });
     expect(zhCN.composer.placeholders.desktop).toBe(
-      "给助手发消息，使用 @ 引用文件，或使用 / 选择命令和技能",
+      "发消息，使用 @ 引用文件，或使用 / 选择命令和技能",
     );
     expect(zhCN.composer.placeholders.mobile).toBe("发消息，使用 @ 引用文件或 / 选择命令");
   });

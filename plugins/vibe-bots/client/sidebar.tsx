@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import { BotCreateForm } from "./create-form";
+import { formatRelativeTime } from "./relative-time";
 import { botsArchiveRpc, botsCreateRpc, botsListRpc, botsOpenRpc, botsStateRpc } from "../shared/rpc";
 
 export function IndependentBotsSidebar(props: PluginSidebarGroupProps) {
@@ -71,7 +72,7 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
       setPending(false);
     }
   }, [pending, state.data, navigate]);
-  const styles = useMemo(() => ({ row: { minHeight: 54, padding: (theme.spacing?.[2] ?? 8), borderRadius: (theme.borderRadius?.md ?? 8), flexDirection: "row" as const, alignItems: "center" as const, gap: (theme.spacing?.[2] ?? 8) }, names: { flex: 1 }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted }, danger: { color: theme.colors.statusDanger } }), [theme]);
+  const styles = useMemo(() => ({ row: { minHeight: 36, paddingVertical: 4, paddingHorizontal: (theme.spacing?.[2] ?? 8), borderRadius: (theme.borderRadius?.md ?? 8), flexDirection: "row" as const, alignItems: "center" as const, gap: (theme.spacing?.[2] ?? 8) }, names: { flex: 1 }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted }, danger: { color: theme.colors.statusDanger } }), [theme]);
   const run = useCallback(async () => {
     // 点击立即响应：已有主 agent 直接跳转；没有则先显示资料页（身份可见），创建完成后自动接上对话。
     if (bot.mainAgentId) navigate(bot.mainAgentId);
@@ -96,7 +97,7 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
   const rowStyle = useMemo(() => [styles.row, selected && { backgroundColor: theme.colors.surface2 }], [styles.row, selected, theme.colors.surface2]);
   const status = state.data?.status === "failed" || error ? "failed" : activity?.status;
   return <View><Pressable {...contextMenu} accessibilityRole="button" accessibilityLabel={bot.name} onPress={onPress} onLongPress={showMenu} onHoverIn={hoverIn} onHoverOut={hoverOut} style={rowStyle}>
-    <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={36} />
+    <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={24} />
     {!sidebarCompact && <BotDetails bot={bot} activity={activity} loading={!bot.mainAgentId && (opening || state.data?.status === "creating")} theme={theme} projectName={projectName} />}
     {status ? <StatusIndicator status={status} count={activity?.count} /> : null}
     <BotMenuButton name={bot.name} hovered={hovered} onPress={showMenu} color={theme.colors.foregroundMuted} />
@@ -104,9 +105,10 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
 }
 
 function BotDetails({ bot, activity, loading, theme, projectName }: { projectName?: string; bot: import("../shared/vibe/contract/bots").Bot; activity?: import("@getpaseo/plugin/client").PluginSidebarAgentActivity; loading: boolean; theme: PluginSidebarGroupProps["theme"] }) {
-  const styles = useMemo(() => ({ names: { flex: 1 }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted } }), [theme]);
-  const time = activity?.lastMessage ? new Date(activity.lastMessage.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
-  return <View style={styles.names}><Text style={styles.text}>{bot.name}{time ? ` · ${time}` : ""}</Text><Text numberOfLines={1} style={styles.muted}>{projectName || (loading ? "正在创建…" : [bot.title, activity?.lastMessage?.text].filter(Boolean).join(" · "))}</Text></View>;
+  const styles = useMemo(() => ({ names: { flex: 1 }, head: { flexDirection: "row" as const, alignItems: "center" as const, gap: (theme.spacing?.[2] ?? 8) }, name: { flex: 1, color: theme.colors.foreground }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted } }), [theme]);
+  const time = formatRelativeTime(activity?.lastMessage?.timestamp ?? bot.updatedAt);
+  const sub = loading ? "正在创建…" : projectName;
+  return <View style={styles.names}><View style={styles.head}><Text numberOfLines={1} style={styles.name}>{bot.name}</Text>{time ? <Text style={styles.muted}>{time}</Text> : null}</View>{sub ? <Text numberOfLines={1} style={styles.muted}>{sub}</Text> : null}</View>;
 }
 
 function BotMenuButton({ name, hovered, onPress, color }: { name: string; hovered: boolean; onPress(): void; color: string }) {
