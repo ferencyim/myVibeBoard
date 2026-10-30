@@ -103,7 +103,16 @@ export const taskPanelRpc = defineRpc({
     steps: z.array(TaskStepSchema),
     board: z.array(TaskBoardItemSchema).optional(),
     otherPlans: z.array(ProjectPlanSchema).optional(),
+    /** The one next move the panel highlights; null when nothing waits on the user. */
+    nextStep: z.enum(["evaluating", "start_plan", "execute"]).nullable().optional(),
   }),
+});
+
+/** Sends #1's original requirement to the planner tab (the "让方案 tab 出方案" button). */
+export const taskPlanStartRpc = defineRpc({
+  name: "vibe.task.plan.start",
+  input: z.object({ workspaceId: z.string().min(1) }),
+  output: z.object({ message: z.string() }),
 });
 
 /** #1「发给」选择器：主会话 composer 的发送目标。`number` 为 null 表示群主（#1 自己）。 */

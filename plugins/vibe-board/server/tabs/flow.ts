@@ -255,6 +255,7 @@ export function createTaskFlow(options: {
   const provisioning = new Map<string, Promise<void>>();
   const provisionFailures = new Map<string, { attempts: number; retryAt: number; loggedAt: number }>();
   const now = options.now ?? Date.now;
+  const FLOW_EVALUATION_TIMEOUT_MS = 60_000;
   function canProvision(key: string) {
     const failure = provisionFailures.get(key);
     return !failure || now() >= failure.retryAt;
@@ -265,14 +266,15 @@ export function createTaskFlow(options: {
     const permanent = error instanceof TaskWorkspaceUnavailableError;
     const at = now();
     const attempts = (previous?.attempts ?? 0) + 1;
-    const shouldLog = permanent || !previous || at - previous.loggedAt >= 5 * 60_000;
+    // A workspace that no longer exists is marked once and never retried; it is not worth a log line.
+    const shouldLog = !permanent && (!previous || at - previous.loggedAt >= 5 * 60_000);
     provisionFailures.set(key, {
       attempts,
       retryAt: permanent ? Infinity : at + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 5)),
       loggedAt: shouldLog ? at : (previous?.loggedAt ?? at),
     });
     if (shouldLog)
-      log(permanent ? `流程 tab 预建停止：${error.message}` : "流程 tab 预建暂缓：稍后退避重试");
+      log("流程 tab 预建暂缓：稍后退避重试");
   }
   const serial = new Map<string, Promise<unknown>>();
 
@@ -771,7 +773,92 @@ export function createTaskFlow(options: {
       throw new Error("主会话模型尚未解析，请到「任务默认模型」设置选择模型");
     return { snapshot, model };
   }
+  const FLOW_LABELS = { simple: "简单", medium: "中等", full: "完整" } as const;
+  /** Tell #1 the flow is decided and which role tabs are ready: its frozen system prompt and the
+   *  placeholders it saw while the flow was being evaluated may say the roles are not enabled. */
+  async function notifyFlowDecided(
+    workspaceId: string,
+    sourceAgentId?: string,
+    onlyIfBusy = false,
+  ) {
+    const task = store.tasks.get(workspaceId);
+    if (!task) return;
+    const planner = task.tabs.find((tab) => tab.role === "planner");
+    const label = FLOW_LABELS[task.flowLevel as keyof typeof FLOW_LABELS] ?? String(task.flowLevel);
+    const text =
+      task.flowLevel === "simple"
+        ? "流程已定为简单；请由你评估并输出简短方案及完整 vibe-plan。"
+        : planner
+          ? `流程已定为${label}；#${planner.number} 方案 等已就绪。请把需求交给 #${planner.number}（send_agent_prompt），或按简单流程处理。`
+          : `流程已定为${label}；方案 tab 仍在创建，请稍后用 vibe_tabs 重读，再把需求交给它（send_agent_prompt）。`;
+    try {
+      const handle = paseo().agents.ref(task.anchorAgentId);
+      if (onlyIfBusy) {
+        await handle.refresh();
+        if (!handle.current()?.activeTurn) return;
+      }
+      const source = sourceAgentId ?? task.tabs.find((tab) => tab.role !== "main")?.agentId;
+      await handle.send(text, source ? { sourceAgentId: source } : {});
+    } catch (error) {
+      log("流程定档通知 #1 失败", error);
+    }
+  }
+  /** The planner tab that still waits for the requirement: it exists, is idle and has no history. */
+  async function idlePlanner(task: Task): Promise<TaskTab | null> {
+    if (task.flowLevel === "simple" || task.phase !== "planning" || task.plan) return null;
+    if (typeof task.control?.requirementText !== "string" || !task.control.requirementText) return null;
+    const planner = task.tabs.find((tab) => tab.role === "planner");
+    if (!planner) return null;
+    try {
+      const handle = paseo().agents.ref(planner.agentId);
+      await handle.refresh();
+      if (handle.current()?.activeTurn) return null;
+      const history = await handle.timeline.refetch({ direction: "tail", limit: 1 });
+      return history.entries.length ? null : planner;
+    } catch {
+      return null;
+    }
+  }
+  async function nextStepOf(task: Task): Promise<"evaluating" | "start_plan" | "execute" | null> {
+    if (task.control?.flowEvaluationPending === true) return "evaluating";
+    if (task.phase === "awaiting_confirmation") return "execute";
+    return (await idlePlanner(task)) ? "start_plan" : null;
+  }
+  async function startPlanner(workspaceId: string) {
+    const task = requireTask(workspaceId);
+    const planner = await idlePlanner(task);
+    if (!planner) throw new Error("方案 tab 当前不需要接收需求（已有对话、正在运行或尚未创建）");
+    const text = String(task.control?.requirementText);
+    await paseo()
+      .agents.ref(planner.agentId)
+      .send(`#1 收到的用户原始需求如下，请据此出方案：
+${text}`, { sourceAgentId: task.anchorAgentId });
+    await tabs.appendStatus(task.anchorAgentId, `已把需求交给 #${planner.number} 方案 出方案。`);
+    return { message: `已把需求交给 #${planner.number} 方案。` };
+  }
+  /** A task whose flow evaluation got no answer in time falls back to the full flow. */
+  async function settleStaleEvaluations() {
+    const at = now();
+    for (const task of store.tasks.list()) {
+      if (task.control?.flowEvaluationPending !== true) continue;
+      const started = Number(task.control.flowEvaluationAt ?? 0);
+      if (at - started < FLOW_EVALUATION_TIMEOUT_MS) continue;
+      try {
+        store.tasks.setFlow(task.workspaceId, {
+          level: "full",
+          source: "bot",
+          reason: "流程评估超时，按默认完整流程处理",
+        });
+        await tabs.appendStatus(task.anchorAgentId, "流程评估超过 60 秒未完成，已按默认完整流程定档。");
+        await provisionTabs(task.workspaceId);
+        await notifyFlowDecided(task.workspaceId);
+      } catch (error) {
+        log("流程评估超时回退失败", error);
+      }
+    }
+  }
   async function provisionMissing() {
+    await settleStaleEvaluations();
     for (const task of store.tasks.list()) {
       if (needsProvision(task))
         await provisionTabs(task.workspaceId).catch((error) =>
@@ -2302,6 +2389,7 @@ export function createTaskFlow(options: {
       blockingReason,
       tabs: views,
       steps,
+      nextStep: await nextStepOf(task),
     };
   }
   function registerPrompts() {
@@ -2342,6 +2430,8 @@ export function createTaskFlow(options: {
     panel,
     provisionTabs,
     provisionMissing,
+    notifyFlowDecided,
+    startPlanner,
     ensureRoleTab,
     workerAdmitted,
     turnStarted,

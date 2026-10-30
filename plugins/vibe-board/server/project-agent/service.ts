@@ -36,7 +36,7 @@ interface ProjectAgentOptions {
   store: VibeStore;
   getPaseo(): PaseoApi | null;
   tabs: TaskTabs;
-  flow: Pick<TaskFlow, "provisionTabs">;
+  flow: Pick<TaskFlow, "provisionTabs" | "notifyFlowDecided">;
 }
 type UserInput = PluginLifecycleEvents["agent.user_prompt_received"];
 const highRiskFlow = (text: string) => /迁移|协议|删.{0,12}数据|清空.{0,12}数据|权限|发布|migration|protocol|delet.{0,20}data|permission|release/i.test(text);
@@ -324,6 +324,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
         await options.tabs.appendStatus(input.agentId, "该任务涉及迁移、协议、删数据、权限或发布，流程已从简单升为中等。");
       }
     }
+    if (!task.control?.requirementText) store.tasks.updateControl(input.workspaceId, { requirementText: input.text });
     if (task.control?.flowEvaluationPending !== true || typeof projectId !== "string") return false;
     store.tasks.updateControl(input.workspaceId, { flowEvaluationText: input.text });
     await sendProject(projectId, `请评估任务 ${input.workspaceId} 的流程档位，仅用 vibe_set_task_flow 提交档位和理由。用户需求：\n${input.text}`);
@@ -502,6 +503,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     if (upgraded) await options.tabs.appendStatus(updated.anchorAgentId, "该任务涉及迁移、协议、删数据、权限或发布，流程已从简单升为中等。");
     await options.tabs.appendStatus(updated.anchorAgentId, `项目 bot 已评估流程：${input.flowLevel}。${input.flowReason}`);
     await options.flow.provisionTabs(input.workspaceId);
+    await options.flow.notifyFlowDecided(input.workspaceId, callerAgentId);
     return { task: updated };
   }
 

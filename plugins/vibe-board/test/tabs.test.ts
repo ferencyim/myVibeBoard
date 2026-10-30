@@ -597,6 +597,32 @@ describe("任务 workspace 标记", () => {
     expect(store.tasks.get("bot")).toMatchObject({ flowLevel: "simple", flowSource: "bot", flowReason: "范围小" });
     expect(store.tasks.get("bot")?.control?.simpleAutoExecute).not.toBe(true);
   });
+  it("定档后通知 #1；评估超时回退完整流程；面板给出下一步", async () => {
+    let clock = 1_000_000;
+    const { store, fake, flow } = await projectTask({ now: () => clock, reviewNow: () => clock });
+    store.tasks.updateControl("ws", { flowEvaluationPending: true, flowEvaluationAt: clock });
+    expect((await flow.panel("ws")).nextStep).toBe("evaluating");
+
+    await flow.provisionMissing();
+    expect(store.tasks.get("ws")?.control?.flowEvaluationPending).toBe(true);
+    clock += 61_000;
+    await flow.provisionMissing();
+    const decided = store.tasks.get("ws")!;
+    expect(decided).toMatchObject({ flowLevel: "full", flowSource: "bot" });
+    expect(decided.control?.flowEvaluationPending).toBeUndefined();
+    const planner = decided.tabs.find((tab) => tab.role === "planner")!;
+    expect(planner).toBeDefined();
+    const notice = fake.sends.find((entry) => entry.agentId === "agent-1");
+    expect(notice?.text).toContain("流程已定为完整");
+    expect(notice?.text).toContain(`#${planner.number}`);
+
+    expect((await flow.panel("ws")).nextStep).toBeNull();
+    store.tasks.updateControl("ws", { requirementText: "做一个登录页" });
+    expect((await flow.panel("ws")).nextStep).toBe("start_plan");
+    await flow.startPlanner("ws");
+    expect(fake.sends.at(-1)).toMatchObject({ agentId: planner.agentId });
+    expect(fake.sends.at(-1)!.text).toContain("做一个登录页");
+  });
   it("只有新任务表单创建的 worktree 成为任务；CLI 与 agent 创建的不算", async () => {
     const { store, tabs } = setup();
     tabs.trackWorkspaceCreate({
@@ -2746,7 +2772,7 @@ describe("预建 tab 的边界", () => {
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["not-worktree", "missing", "archived"])("%s 的任务只记一次简短日志并停止预建", async (reason) => {
+  it.each(["not-worktree", "missing", "archived"])("%s 的任务静默停止预建，不再记日志", async (reason) => {
     let now = 0;
     const log = vi.fn();
     const { fake, tabs, flow } = await projectTask({ reviewNow: () => now, flowLog: log });
@@ -2767,9 +2793,7 @@ describe("预建 tab 的边界", () => {
     }
     expect(workspace).toHaveBeenCalledTimes(1);
     expect(fake.created).toHaveLength(0);
-    expect(log).toHaveBeenCalledTimes(1);
-    expect(log.mock.calls[0]).toHaveLength(1);
-    expect(log.mock.calls[0]![0]).toContain("预建停止");
+    expect(log).not.toHaveBeenCalled();
   });
 
   it("临时 workspace 故障单飞、按分钟指数退避且日志限频，恢复后继续补建", async () => {

@@ -18,6 +18,7 @@ import {
   groupTargetsRpc,
   taskPanelRpc,
   taskFlowSetRpc,
+  taskPlanStartRpc,
   taskWorkspaceTabsRpc,
   taskTabCommandRpc,
   taskTabEnsureRpc,
@@ -112,7 +113,10 @@ export function registerTaskRuntime(
       await tabs.ensureTab(agent.id).catch((error) => log("任务 tab 登记失败", error));
       const task = agent.workspaceId ? options.store.tasks.get(agent.workspaceId) : undefined;
       if (task && task.anchorAgentId === agent.id && task.tabs.length === 1)
-        void flow.provisionTabs(task.workspaceId).catch((error) => log("流程 tab 预建失败", error));
+        void flow
+          .provisionTabs(task.workspaceId)
+          .then(() => flow.notifyFlowDecided(task.workspaceId, undefined, true))
+          .catch((error) => log("流程 tab 预建失败", error));
     }),
     // Closed or archived tabs no longer need status repeat suppression; a closed or archived plan
     // reviewer fails its review slot.
@@ -252,7 +256,13 @@ export function registerTaskRuntime(
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
     options.store.tasks.setFlow(input.workspaceId, { level: input.level, source: "user", reason: "用户调整流程" });
     await flow.provisionTabs(input.workspaceId);
+    await flow.notifyFlowDecided(input.workspaceId, undefined, true);
     return { task: options.store.tasks.get(input.workspaceId)! };
+  });
+  server.handle(taskPlanStartRpc, async (input, context) => {
+    options.onPaseo(context.paseo);
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    return flow.startPlanner(input.workspaceId);
   });
   server.handle(taskPanelRpc, async (input, context) => {
     options.onPaseo(context.paseo);

@@ -568,7 +568,7 @@ export function createTaskTabs(options: {
         task = store.tasks.setFlow(workspaceId, { level: pending.flowLevel, source: pending.source ?? "user", reason: pending.reason ?? "用户新建任务时选择" });
         if (pending.flowLevel === "simple" && pending.source === "user") task = store.tasks.updateControl(workspaceId, { simpleAutoExecute: true });
       } else if (pending?.source === "user") {
-        task = store.tasks.updateControl(workspaceId, { flowEvaluationPending: true });
+        task = store.tasks.updateControl(workspaceId, { flowEvaluationPending: true, flowEvaluationAt: now() });
       }
     }
     // The native project of every task, so the cross-task plan list still finds it later.

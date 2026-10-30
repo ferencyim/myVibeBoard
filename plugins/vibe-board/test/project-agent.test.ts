@@ -158,7 +158,7 @@ function fixture() {
     }),
   };
   const build = () =>
-    createProjectAgents({ db, store, getPaseo: () => api, tabs, flow: { provisionTabs } } as never);
+    createProjectAgents({ db, store, getPaseo: () => api, tabs, flow: { provisionTabs, notifyFlowDecided: vi.fn() } } as never);
   const service = build();
   const input = (agentId: string, text = "用户原话", messageId = "u1") => ({
     agentId,

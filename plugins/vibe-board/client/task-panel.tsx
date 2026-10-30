@@ -5,6 +5,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   taskPanelRpc,
   taskFlowSetRpc,
+  taskPlanStartRpc,
   taskTabCommandRpc,
   type ProjectPlanData,
   type TaskBoardItemData,
@@ -42,6 +43,7 @@ function TaskFlowPanelBody({
   const panel = useRpc(taskPanelRpc);
   const command = useRpc(taskTabCommandRpc);
   const setFlow = useRpc(taskFlowSetRpc);
+  const startPlan = useRpc(taskPlanStartRpc);
   const query = useQuery({
     queryKey: ["vibe-board", "task-panel", workspaceId],
     queryFn: () => panel({ workspaceId }),
@@ -97,6 +99,19 @@ function TaskFlowPanelBody({
     },
     [query, setFlow, workspaceId],
   );
+  const beginPlan = useCallback(async () => {
+    setError(null);
+    setMessage(null);
+    setPending("flow");
+    try {
+      setMessage((await startPlan({ workspaceId })).message);
+      await query.refetch();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setPending(null);
+    }
+  }, [query, startPlan, workspaceId]);
   if (query.isLoading)
     return (
       <View style={{ padding: 16 }}>
@@ -192,10 +207,23 @@ function TaskFlowPanelBody({
         </View>
       ) : null}
 
+      {data.nextStep === "evaluating" ? (
+        <Muted>项目 bot 正在评估流程档位…</Muted>
+      ) : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        {data.nextStep === "start_plan" ? (
+          <Btn
+            label="让 #2 出方案"
+            variant="primary"
+            small
+            disabled={disabled}
+            onPress={() => void beginPlan()}
+            testID="task-flow-start-plan"
+          />
+        ) : null}
         <Btn
           label="执行"
-          variant="primary"
+          variant={data.nextStep === "execute" ? "primary" : "default"}
           small
           disabled={disabled}
           onPress={() => void run("execute")}
