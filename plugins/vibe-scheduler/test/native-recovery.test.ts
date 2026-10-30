@@ -8,7 +8,8 @@ vi.mock("../server/runtime", () => ({
   DEFAULT_SETTINGS: {},
   createSchedulerRuntime: (options: { native: (id: string) => Promise<unknown> }) => {
     captured.native = options.native;
-    return {};
+    // The hub is not under test here; every hub method is a no-op.
+    return { hub: new Proxy({}, { get: () => () => undefined }) };
   },
 }));
 vi.mock("../server/directive-register", () => ({ registerDirectives: () => () => undefined }));
