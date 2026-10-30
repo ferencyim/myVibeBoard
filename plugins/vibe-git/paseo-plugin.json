@@ -1,0 +1,8 @@
+{
+  "id": "vibe-git",
+  "name": "Git/构建",
+  "description": "查看 workspace 的 Git、构建与发布状态。",
+  "requirements": {
+    "paseo": ">=0.13.0 <0.14.0"
+  }
+}

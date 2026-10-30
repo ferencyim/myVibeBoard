@@ -19,7 +19,7 @@ param(
   [string]$PushTokenFile = "",
   [string[]]$Plugins = @(
     "vibe-board", "vibe-bots", "vibe-context", "vibe-master", "vibe-scheduler",
-    "vibe-maintain", "vibe-stats", "vibe-verify", "switch-provider"
+    "vibe-maintain", "vibe-stats", "vibe-git", "vibe-verify", "switch-provider"
   ),
   [switch]$SkipCopy
 )
