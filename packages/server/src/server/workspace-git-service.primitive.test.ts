@@ -938,13 +938,8 @@ describe("WorkspaceGitServiceImpl primitive refresh entrypoint", () => {
     await flushPromises();
 
     expect(getCheckoutStatus).toHaveBeenCalledTimes(1);
-    expect(getPullRequestStatus).toHaveBeenCalledTimes(1);
-    expect(getPullRequestStatus).toHaveBeenCalledWith(
-      REPO_CWD,
-      expect.anything(),
-      { force: false, reason: "initial" },
-      expect.anything(),
-    );
+    // The initial refresh is git-only; forge/PR state is loaded on demand.
+    expect(getPullRequestStatus).not.toHaveBeenCalled();
 
     subscription.unsubscribe();
     service.dispose();
@@ -1343,6 +1338,12 @@ describe("WorkspaceGitServiceImpl primitive refresh entrypoint", () => {
     });
 
     try {
+      // The initial refresh is git-only; opening the project loads forge state first.
+      await service.getSnapshot(REPO_CWD, {
+        force: true,
+        includeForge: true,
+        reason: "open_project",
+      });
       const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
       await flushPromises();
       await vi.advanceTimersByTimeAsync(20_000);

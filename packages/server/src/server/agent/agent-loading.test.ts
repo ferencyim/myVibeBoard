@@ -288,3 +288,30 @@ test("loads an archived agent's history after its working directory is removed",
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a failed resume is not retried within the cooldown", async () => {
+  const resume = vi.fn(async () => {
+    throw new Error("app-server down");
+  });
+  const deps = {
+    agentManager: {
+      createAgent: vi.fn(),
+      getAgent: vi.fn(() => undefined),
+      getRegisteredProviderIds: () => ["codex"],
+      hydrateTimelineFromProvider: vi.fn(),
+      resumeAgentFromPersistence: resume,
+    },
+    agentStorage: {
+      get: vi.fn(async () => ({
+        id: "cooldown-agent",
+        provider: "codex",
+        persistence: { provider: "codex", sessionId: "s1" },
+      })),
+    },
+    logger: createTestLogger(),
+  } as unknown as Parameters<typeof ensureAgentLoaded>[1];
+
+  await expect(ensureAgentLoaded("cooldown-agent", deps)).rejects.toThrow("app-server down");
+  await expect(ensureAgentLoaded("cooldown-agent", deps)).rejects.toThrow("app-server down");
+  expect(resume).toHaveBeenCalledTimes(1);
+});
