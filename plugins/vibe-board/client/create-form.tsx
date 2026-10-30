@@ -37,36 +37,6 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
     if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
     setInitialized(true);
   }, [catalog.data, initialized]);
-  const styles = useMemo(() => ({ button: { padding: 10, opacity: disabled ? 0.5 : 1 }, text: { color: theme.colors.foreground } }), [theme, disabled]);
-  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={styles.button}><Text style={styles.text}>{label}</Text></Pressable>;
-}
-import { suggestedModel } from "./create-model";
-
-export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmit }: {
-  theme: PluginTheme; projectId?: string; busy: boolean; error?: string; onCancel(): void;
-  onSubmit(value: { name: string; title: string; instructions: string; presetId: string | null; provider: string | null; model: string | null; thinking: string }): void;
-}) {
-  const list = useRpc(modelsListRpc);
-  const [refreshing, setRefreshing] = useState(false);
-  const catalog = useQuery({ queryKey: ["vibe-bots", "create-models", projectId], queryFn: () => list({ projectId }), refetchInterval: refreshing ? 3000 : false });
-  const [refreshError, setRefreshError] = useState("");
-  const refreshModels = useCallback(() => {
-    setRefreshing(true); setRefreshError("");
-    void list({ projectId, refresh: true }).then(() => catalog.refetch()).catch((reason: unknown) => setRefreshError(String(reason))).finally(() => setRefreshing(false));
-  }, [list, projectId, catalog]);
-  const [name, setName] = useState("");
-  const [title, setTitle] = useState("");
-  const [instructions, setInstructions] = useState("");
-  const [provider, setProvider] = useState("");
-  const [model, setModel] = useState("");
-  const [thinking, setThinking] = useState("");
-  const [initialized, setInitialized] = useState(false);
-  useEffect(() => {
-    if (!catalog.data || initialized) return;
-    const cheap = suggestedModel(catalog.data.providers);
-    if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
-    setInitialized(true);
-  }, [catalog.data, initialized]);
   const selectedProvider = catalog.data?.providers.find((item) => item.provider === provider);
   const selectedModel = selectedProvider?.models.find((item) => item.id === model);
   const styles = useMemo(() => ({
