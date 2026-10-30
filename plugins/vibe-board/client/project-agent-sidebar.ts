@@ -34,20 +34,24 @@ export async function openProjectAgentRequest(
     setOpening(opening: boolean): void;
     setError(error: string | null): void;
     openAgent(id: string): void;
+    /** 已知主对话 agent：点击立即导航，open RPC 在后台确认。 */
+    knownAgentId?: string | null;
   },
 ) {
   if (!request.active || request.opening) return;
   request.opening = true;
-  ports.setOpening(true);
+  const known = ports.knownAgentId ?? null;
+  if (known) ports.openAgent(known);
+  else ports.setOpening(true);
   ports.setError(null);
   try {
     await ports.cancelQueries();
     if (!request.active) return;
     const result = await ports.open(request.projectId);
     if (!request.active) return;
-    request.navigate = result.status === "creating";
+    request.navigate = result.status === "creating" && !known;
     ports.setState(result);
-    if (result.status === "ready" && result.agentId) ports.openAgent(result.agentId);
+    if (result.status === "ready" && result.agentId && result.agentId !== known) ports.openAgent(result.agentId);
     if (result.error) ports.setError(result.error);
   } catch {
     if (request.active) ports.setError(`暂时无法打开${request.displayName}，请重试。`);

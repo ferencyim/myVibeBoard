@@ -69,6 +69,17 @@ describe("项目 agent 侧栏创建流程", () => {
     await first.open();
     expect(first.openAgent).toHaveBeenCalledExactlyOnceWith("agent-one");
   });
+  it("已知主对话 agent 时点击立即导航，RPC 在后台且不重复导航", async () => {
+    const fast = sidebar("bot-fast");
+    const gate = deferred<ProjectAgentState>();
+    fast.ports.open.mockReturnValue(gate.promise);
+    const run = openProjectAgentRequest(fast.request, { ...fast.ports, knownAgentId: "main" });
+    expect(fast.openAgent).toHaveBeenCalledExactlyOnceWith("main");
+    expect(fast.presentation().disabled).toBe(false);
+    gate.resolve({ ...ready, agentId: "main" });
+    await run;
+    expect(fast.openAgent).toHaveBeenCalledOnce();
+  });
   it("立即显示创建中，轮询完成后只打开一次", async () => {
     const view = sidebar();
     expect(view.interval()).toBe(15_000);

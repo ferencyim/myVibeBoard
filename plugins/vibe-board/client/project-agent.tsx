@@ -53,8 +53,8 @@ function ProjectBotRow({ bot, theme, navigation, host, sidebarCompact, Avatar, S
     cancelQueries: () => client.cancelQueries({ queryKey }),
     open: (id) => open({ id }),
     setState: (result) => client.setQueryData(queryKey, result),
-    setOpening, setError: setOpenError, openAgent,
-  }); }, [request, client, queryKey, open, openAgent]);
+    setOpening, setError: setOpenError, openAgent, knownAgentId: bot.mainAgentId,
+  }); }, [request, client, queryKey, open, openAgent, bot.mainAgentId]);
   useEffect(() => {
     if (autoOpen && !autoOpened.current) {
       autoOpened.current = true;
