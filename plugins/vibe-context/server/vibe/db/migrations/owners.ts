@@ -244,6 +244,26 @@ CREATE TABLE hub_job_log (
 CREATE INDEX idx_hub_job_log_finished ON hub_job_log(finished_at);
 `,
   },
+  {
+    version: 4,
+    name: "hub_directive",
+    sql: `
+CREATE TABLE hub_directive (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  scope_json TEXT NOT NULL DEFAULT '{"kind":"all"}',
+  kind TEXT NOT NULL CHECK (kind IN ('temporary','standing')),
+  expires_at TEXT,
+  issued_by TEXT NOT NULL CHECK (issued_by IN ('user','bot')),
+  status TEXT NOT NULL CHECK (status IN ('active','pending','revoked','expired')),
+  pause_json TEXT,
+  pause_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_hub_directive_status ON hub_directive(status, expires_at);
+`,
+  },
 ];
 
 export const STATS_MIGRATIONS: Migration[] = [

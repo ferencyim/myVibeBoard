@@ -31,6 +31,7 @@ const EXPECTED_TABLES = [
   "verification",
   "verification_item",
   "evidence_file",
+  "hub_directive",
   "memory_entry",
   "project_document",
   "project_brief_change",

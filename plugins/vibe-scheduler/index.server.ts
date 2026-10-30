@@ -32,6 +32,7 @@ import { createSchedulerRuntime, DEFAULT_SETTINGS, type RuntimeSettings } from "
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import { fromThresholds, toPageResource, toPageStatus, toThresholds } from "./server/hub-page";
 import { registerBotTools } from "./server/bot-tools";
+import { registerDirectives } from "./server/directive-register";
 
 /**
  * hub.json and the guard admission file. A dev/test daemon (VIBE_HOME set) must not touch the real
@@ -108,6 +109,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   registerBotTools(server, runtime, () => paseo);
+  const stopDirectives = registerDirectives(server, db);
 
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
@@ -231,6 +233,7 @@ export default function contribute(server: PluginServerContext) {
 
   return async () => {
     stopSettings();
+    stopDirectives();
     for (const stop of stopHooks) stop();
     await runtime.stop();
     db.close();
