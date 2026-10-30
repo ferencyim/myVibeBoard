@@ -23,3 +23,4 @@ export * from "./resource-samples";
 
 export * from "./resources";
 export * from "./bots";
+export * from "./hub-directives";

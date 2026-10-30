@@ -21,6 +21,7 @@ import {
 import { createSchedulerRuntime, DEFAULT_SETTINGS, type RuntimeSettings } from "./server/runtime";
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import { registerBotTools } from "./server/bot-tools";
+import { registerDirectives } from "./server/directive-register";
 
 export default function contribute(server: PluginServerContext) {
   const db = openVibeDb();
@@ -75,6 +76,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   registerBotTools(server, runtime, () => paseo);
+  const stopDirectives = registerDirectives(server, db);
 
   const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
     if (state.status !== "ready") return;
@@ -170,6 +172,7 @@ export default function contribute(server: PluginServerContext) {
 
   return async () => {
     stopSettings();
+    stopDirectives();
     for (const stop of stopHooks) stop();
     await runtime.stop();
     db.close();

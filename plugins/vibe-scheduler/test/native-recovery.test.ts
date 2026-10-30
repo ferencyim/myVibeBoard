@@ -11,6 +11,7 @@ vi.mock("../server/runtime", () => ({
     return {};
   },
 }));
+vi.mock("../server/directive-register", () => ({ registerDirectives: () => () => undefined }));
 vi.mock("../server/vibe/db", () => ({
   openVibeDb: () => ({}),
   migrateOwner: () => undefined,

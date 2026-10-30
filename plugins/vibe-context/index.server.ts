@@ -8,6 +8,7 @@ import { contextSettings, DEFAULT_MEMORY_TOKENS } from "./server/inject";
 import { createContextPrompts } from "./server/prompts";
 import { createVibeStore, migrateOwner, openVibeDb } from "./server/vibe/db";
 import { registerInjection } from "./server/inject";
+import { registerDirectiveInjection } from "./server/directives";
 
 export default function contribute(server: PluginServerContext) {
   // Prompt registry: register the defaults once; texts are resolved on every use.
@@ -59,6 +60,10 @@ export default function contribute(server: PluginServerContext) {
       }
     },
   });
+  const stopDirectives = registerDirectiveInjection(server, {
+    db,
+    projectIdFor: (cwd) => projectIdForDirectory(cwd, store.projects.list()),
+  });
   const taskContext = registerTaskContext(server, {
     db,
     store,
@@ -74,6 +79,7 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     await startup.close();
     unregister();
+    stopDirectives();
     stopCompaction();
     await taskContext.close();
     unsubscribe();

@@ -202,6 +202,29 @@ CREATE UNIQUE INDEX idx_device_lease_active ON device_lease(device_id) WHERE rel
     name: "workspace_task_leases",
     sql: `ALTER TABLE device_lease ADD COLUMN workspace_id TEXT;`,
   },
+  // Version 3 belongs to WP-170 (resource hub core); this placeholder only keeps the list
+  // contiguous in the WP-172 branch and is replaced by WP-170's migration on merge.
+  { version: 3, name: "reserved_for_hub_core", sql: `SELECT 1;` },
+  {
+    version: 4,
+    name: "hub_directive",
+    sql: `
+CREATE TABLE hub_directive (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  scope_json TEXT NOT NULL DEFAULT '{"kind":"all"}',
+  kind TEXT NOT NULL CHECK (kind IN ('temporary','standing')),
+  expires_at TEXT,
+  issued_by TEXT NOT NULL CHECK (issued_by IN ('user','bot')),
+  status TEXT NOT NULL CHECK (status IN ('active','pending','revoked','expired')),
+  pause_json TEXT,
+  pause_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_hub_directive_status ON hub_directive(status, expires_at);
+`,
+  },
 ];
 
 export const STATS_MIGRATIONS: Migration[] = [
