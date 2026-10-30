@@ -1,8 +1,9 @@
 import {
   closeModelPicker,
+  expectProviderTab,
   openModelPicker,
-  seedAgentProfiles,
-} from "../support/helpers/agent-profiles";
+  seedModelProvider,
+} from "../support/helpers/model-picker";
 import { expectComposerVisible } from "../support/helpers/composer";
 import { clickNewChat, gotoWorkspace } from "../support/helpers/launcher";
 import { seedWorkspace } from "../support/helpers/seed-client";
@@ -158,9 +159,12 @@ test("model selector excludes Hoplite before opt-in", async ({ page }, testInfo)
   const client = await connectDaemonClient<ProviderCatalogDaemonClient>({
     clientIdPrefix: "hoplite-picker",
   });
-  const profiles = await seedAgentProfiles([
-    { id: "hoplite-picker-anchor", name: "Picker anchor", provider: "mock" },
-  ]);
+  // The provider rail only renders with two or more providers; the anchor guarantees it does.
+  const anchor = await seedModelProvider({
+    id: "hoplite-picker-anchor",
+    label: "Picker anchor",
+    models: [{ id: "anchor-model", label: "Anchor model", description: "Keeps the rail visible" }],
+  });
   const workspace = await seedWorkspace({ repoPrefix: "hoplite-picker-" });
   try {
     await client.patchDaemonConfig({ removeProviders: ["hoplite"] });
@@ -168,13 +172,13 @@ test("model selector excludes Hoplite before opt-in", async ({ page }, testInfo)
     await clickNewChat(page);
     await expectComposerVisible(page);
     await openModelPicker(page);
-    await expect(page.getByTestId("model-provider-mock")).toBeVisible();
-    await expect(page.getByTestId("model-provider-hoplite")).toHaveCount(0);
+    await expectProviderTab(page, "mock", true);
+    await expectProviderTab(page, "hoplite", false);
     await page.screenshot({ path: testInfo.outputPath("hoplite-model-selector-absent.png") });
     await closeModelPicker(page);
   } finally {
     await workspace.cleanup();
-    await profiles.restore();
+    await anchor.restore();
     await client.close();
   }
 });

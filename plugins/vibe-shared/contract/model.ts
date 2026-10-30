@@ -98,6 +98,11 @@ export const PresetSchema = z.object({
   // First entry of roleHints (null when empty); old phones still read and write only this.
   roleHint: z.string().nullable(),
   builtin: z.boolean(),
+  /** Role setting: Fast mode of the first model (Claude Opus fast tier and similar). */
+  fastMode: z.boolean().optional(),
+  /** Role setting owner: "global" or a project id, and the role it was edited for; null = shared legacy row. */
+  ownerScope: z.string().nullable().optional(),
+  ownerRole: z.string().nullable().optional(),
   createdAt: Iso,
   updatedAt: Iso,
   updatedHlc: Hlc,

@@ -57,7 +57,7 @@ describe("settings categories and search", () => {
     expect(settingsPluginCategory("custom")).toBe("other");
   });
   it("matches translated labels without case or surrounding whitespace", () => {
-    expect(settingsSearchMatches("任务默认模型", "默认")).toBe(true);
+    expect(settingsSearchMatches("任务角色", "角色")).toBe(true);
     expect(settingsSearchMatches("Agent Settings", " agent ")).toBe(true);
     expect(settingsSearchMatches("调度器", "模型")).toBe(false);
   });

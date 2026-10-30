@@ -2,13 +2,13 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Text, View, type PressableStateCallbackType } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ChevronDown, Clock } from "lucide-react-native";
-import type { AgentProfilePicker } from "@/agent-profiles";
 import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
-import { ModelProviderGlyph } from "@/components/model-browser";
+import { ModelProviderGlyph } from "@/components/model-provider-glyph";
 import { PickerPopover } from "@/components/provider-model-picker/picker-popover";
 import {
   ProviderModelPanel,
   type PickerKeyHandler,
+  type PickerFast,
   type PickerThinking,
 } from "@/components/provider-model-picker/picker-panel";
 import { useOptimisticSelection } from "@/components/provider-model-picker/use-optimistic-selection";
@@ -22,7 +22,7 @@ import {
 } from "@/provider-selection/provider-selection";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 
-export type { PickerThinking } from "@/components/provider-model-picker/picker-panel";
+export type { PickerFast, PickerThinking } from "@/components/provider-model-picker/picker-panel";
 
 const SHEET_SNAP_POINTS = ["80%", "90%"];
 const SHEET_HEADER = { title: "选择模型" };
@@ -47,8 +47,7 @@ export interface ProviderModelPickerProps {
   onSelect: (provider: string, modelId: string) => void | Promise<unknown>;
   isLoading: boolean;
   thinking?: PickerThinking | null;
-  profiles?: AgentProfilePicker | null;
-  onApplyProfile?: (profileId: string) => void;
+  fast?: PickerFast | null;
   onRetryProvider?: (provider: string) => void;
   isRetryingProvider?: boolean;
   disabled?: boolean;
@@ -71,8 +70,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
     providers,
     isLoading,
     thinking = null,
-    profiles = null,
-    onApplyProfile,
+    fast = null,
     onRetryProvider,
     isRetryingProvider,
     disabled = false,
@@ -122,7 +120,8 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
     else handleOpen();
   }, [handleClose, handleOpen, open]);
 
-  const hasEffortRow = Boolean(selection.thinking && selection.thinking.options.length > 0);
+  const hasEffortRow =
+    Boolean(selection.thinking && selection.thinking.options.length > 0) || Boolean(fast);
   const { pick } = selection;
   const handlePick = useCallback(
     (provider: string, modelId: string) => {
@@ -132,13 +131,6 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
     },
     [handleClose, hasEffortRow, pick],
   );
-  const handleApplyProfile = useCallback(
-    (profileId: string) => {
-      handleClose();
-      onApplyProfile?.(profileId);
-    },
-    [handleClose, onApplyProfile],
-  );
 
   const panel = (
     <ProviderModelPanel
@@ -147,9 +139,8 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
       selectedModel={selection.model}
       isLoading={isLoading}
       thinking={selection.thinking}
-      profiles={profiles}
+      fast={fast}
       onPick={handlePick}
-      onApplyProfile={onApplyProfile ? handleApplyProfile : undefined}
       onRetryProvider={onRetryProvider}
       isRetryingProvider={isRetryingProvider}
       serverId={serverId}
@@ -198,6 +189,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
       glyphSize={glyphSize}
       modelLabel={modelLabel}
       effortLabel={effortLabel}
+      fastOn={Boolean(fast?.value)}
     />
   );
 
@@ -242,6 +234,7 @@ function PillTrigger(props: {
   glyphSize: number;
   modelLabel: string;
   effortLabel: string | undefined;
+  fastOn: boolean;
 }) {
   const { open, disabled } = props;
   const style = useCallback(
@@ -275,6 +268,7 @@ function PillTrigger(props: {
       <Text style={styles.pillModel} numberOfLines={1} ellipsizeMode="tail">
         {props.modelLabel}
       </Text>
+      {props.fastOn ? <Text style={styles.pillExtra}>⚡ 快速</Text> : null}
       {props.effortLabel ? (
         <Text style={styles.pillExtra} numberOfLines={1}>
           {`· ${props.effortLabel}`}

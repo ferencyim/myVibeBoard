@@ -1,11 +1,11 @@
 /* eslint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-array-as-prop -- Small plugin form; option lists depend on the loaded catalog. */
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
-import { Modal, SettingsSelect } from "@getpaseo/plugin/client/ui";
+import { ModelPickerField, Modal } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { modelsListRpc } from "../shared/rpc";
-import { modelChoices, suggestedModel } from "./create-model";
+import { suggestedModel } from "./create-model";
 import { INSTRUCTIONS_MAX, NAME_MAX, TITLE_MAX } from "./profile-mapping";
 import { Caption, ControlRow, ErrorLine, Field, Group, KitProvider, OutlineButton, TextArea } from "./settings-kit";
 
@@ -26,32 +26,21 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [presetId, setPresetId] = useState("");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [thinking, setThinking] = useState("");
   const [initialized, setInitialized] = useState(false);
   useEffect(() => {
     if (!catalog.data || initialized) return;
-    const preset = catalog.data.presets.find((item) => item.id === catalog.data.defaultPresetId);
-    if (preset) setPresetId(preset.id);
-    else {
-      const cheap = suggestedModel(catalog.data.providers);
-      if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
-    }
+    const cheap = suggestedModel(catalog.data.providers);
+    if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
     setInitialized(true);
   }, [catalog.data, initialized]);
-  const selectedProvider = catalog.data?.providers.find((item) => item.provider === provider);
-  const selectedModel = selectedProvider?.models.find((item) => item.id === model);
-  const presets = useMemo(() => [{ label: "直接选择模型", value: "" }, ...(catalog.data?.presets ?? []).map((p) => ({ label: p.name, value: p.id }))], [catalog.data]);
-  const providers = useMemo(() => [{ label: "请选择 provider", value: "" }, ...(catalog.data?.providers ?? []).map((p) => ({ label: p.provider, value: p.provider }))], [catalog.data]);
-  const modelOptions = useMemo(() => modelChoices(selectedProvider?.models, !!provider && !catalog.isLoading), [selectedProvider, provider, catalog.isLoading]);
-  const thinkingOptions = useMemo(() => [{ label: "默认", value: "" }, ...(selectedModel?.thinkingOptions ?? []).map((o) => ({ label: o.name, value: o.id }))], [selectedModel]);
-  const changeProvider = useCallback((v: string) => { setProvider(v); setModel(""); setThinking(""); }, []);
-  const changeModel = useCallback((v: string) => { setModel(v); setThinking(""); }, []);
-  const submit = useCallback(() => onSubmit({ name: name.trim(), title, instructions, presetId: presetId || null, provider: presetId ? null : provider, model: presetId ? null : model, thinking }), [onSubmit, name, title, instructions, presetId, provider, model, thinking]);
+  const selectModel = useCallback((nextProvider: string, nextModel: string) => { setProvider(nextProvider); setModel(nextModel); setThinking(""); }, []);
+  const selectThinking = useCallback((id: string) => setThinking(id), []);
+  const submit = useCallback(() => onSubmit({ name: name.trim(), title, instructions, presetId: null, provider, model, thinking }), [onSubmit, name, title, instructions, provider, model, thinking]);
   const closeModal = useCallback((open: boolean) => { if (!open) onCancel(); }, [onCancel]);
-  const canSubmit = !!presetId || (!!provider && !!model);
+  const canSubmit = !!provider && !!model;
   return <Modal title={`新建${projectId ? "项目 " : ""}bot`} open onOpenChange={closeModal}>
     <Modal.Content contentContainerStyle={contentStyle}>
       <KitProvider theme={theme}>
@@ -59,10 +48,7 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
         <Field label="头衔" value={title} onChangeText={setTitle} placeholder="这个 bot 负责什么（可选）" maxLength={TITLE_MAX} />
         <TextArea label="角色说明" value={instructions} onChangeText={setInstructions} placeholder="可选，也可稍后编辑" error={instructions.length > INSTRUCTIONS_MAX ? `最多 ${INSTRUCTIONS_MAX} 个字符` : null} />
         <Group title="模型">
-          <ControlRow icon="Cpu" label="预设"><SettingsSelect inline label="预设" value={presetId} options={presets} onValueChange={setPresetId} /></ControlRow>
-          {!presetId ? <ControlRow label="Provider"><SettingsSelect inline label="Provider" value={provider} options={providers} onValueChange={changeProvider} /></ControlRow> : null}
-          {!presetId ? <ControlRow label="模型"><SettingsSelect inline label="模型" value={model} options={modelOptions} onValueChange={changeModel} /></ControlRow> : null}
-          {!presetId ? <ControlRow icon="Brain" label="思考强度"><SettingsSelect inline label="思考强度" value={thinking} options={thinkingOptions} onValueChange={setThinking} /></ControlRow> : null}
+          <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading} onSelect={selectModel} onSelectThinking={selectThinking} />
           <ControlRow label="模型列表"><OutlineButton label={refreshing ? "正在刷新…" : "刷新"} disabled={refreshing} onPress={refreshModels} /></ControlRow>
         </Group>
         <Caption>{catalog.isLoading ? "正在读取缓存模型…" : "缓存目录没有价格信息，无法确定最低价；请确认或选择合适的模型。"}</Caption>

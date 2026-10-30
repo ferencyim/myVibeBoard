@@ -58,6 +58,10 @@ const presetFields = {
   roleHints: z.array(RoleHintSchema),
   // COMPAT(preset-role-hints): added 2026-10-21, remove after 2027-04-01
   roleHint: z.enum(PRESET_ROLE_HINTS).nullable(),
+  /** Role setting: Fast mode, and which scope ("global" or a project id) and role owns the row. */
+  fastMode: z.boolean(),
+  ownerScope: z.string().nullable(),
+  ownerRole: z.string().nullable(),
 };
 
 export const projectsListRpc = defineRpc({
@@ -158,6 +162,9 @@ export const presetsCreateRpc = defineRpc({
     fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
     roleHints: presetFields.roleHints.optional(),
     roleHint: presetFields.roleHint.optional(),
+    fastMode: presetFields.fastMode.optional(),
+    ownerScope: presetFields.ownerScope.optional(),
+    ownerRole: presetFields.ownerRole.optional(),
   }),
   output: z.object({ preset: PresetSchema }),
 });
@@ -179,6 +186,9 @@ export const presetsUpdateRpc = defineRpc({
     fallbackPresetIds: presetFields.fallbackPresetIds.optional(),
     roleHints: presetFields.roleHints.optional(),
     roleHint: presetFields.roleHint.optional(),
+    fastMode: presetFields.fastMode.optional(),
+    ownerScope: presetFields.ownerScope.optional(),
+    ownerRole: presetFields.ownerRole.optional(),
   }),
   output: z.object({ preset: PresetSchema }),
 });

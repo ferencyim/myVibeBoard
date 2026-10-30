@@ -18,8 +18,8 @@ agent-device test packages/app/e2e/mobile/modal-sheet/model.android.ad \
 
 The plugin journey checks body dismissal, reopening, expansion and last-row reachability with SDK
 ScrollView and FlatList, programmatic scrolling after expansion, downward list scrolling, and
-horizontal tab selection. The model journey checks body dismissal and the nested sheet's return to
-its parent without selecting a model or submitting a prompt. It does not assert catalog contents.
+horizontal tab selection. The model journey checks that the unified model picker sheet dismisses by
+its body and reopens, without selecting a model or submitting a prompt. It does not assert catalog contents.
 
 These scripts live outside the default mobile suite because they require the installed example and
 an explicit connected host. See [mobile testing](../../../../../docs/mobile-testing.md) for device setup.
@@ -51,12 +51,12 @@ was not. iOS and Electron were not exercised.
 ## Tablet model selection
 
 `model-tablet.android.ad` exercises the New workspace popover. `model-tablet-agent.android.ad`
-exercises the modal used by an existing agent's narrow composer on a wide device. Both drill into
-a populated provider, select a real model, assert the updated trigger, reopen, and dismiss with
+exercises the modal used by an existing agent's narrow composer on a wide device. Both open a
+populated provider's tab, select a real model, assert the updated trigger, reopen, and dismiss with
 Android Back. New workspace also pans beyond the short list viewport and flings back without
 selecting a row or dismissing the popover. They do not submit a prompt.
 
-Use an English-language Android tablet at 1600×2560, density 320 (800dp), with this checkout's
+Use an Android tablet at 1600×2560, density 320 (800dp), with this checkout's
 JavaScript and a connected isolated daemon. On a Pixel Tablet AVD, rotate to portrait explicitly;
 its natural landscape orientation letterboxes this portrait-locked app into the compact layout:
 
@@ -69,7 +69,9 @@ adb -s "$ANDROID_SERIAL" shell wm density 320
 Prepare an idle agent through the daemon's public `createAgent` API with a real provider/model and
 no initial prompt. Set `MODEL_QA_AGENT_ID` and `MODEL_QA_AGENT_TITLE` to that agent. In New workspace,
 remember a model first (the phone layout works on the broken baseline), then close the picker.
-Choose a model visible on the provider's first page and set its catalog ID and displayed label.
+Choose a model visible on the provider's first page that offers effort levels (the picker stays
+open after the pick so its effort row can be used) and set its catalog ID. Set `MODEL_QA_TRIGGER_LABEL`
+to the trigger's label afterwards, `模型：<model label> · <effort label>`.
 Set `MODEL_QA_LAST_MODEL_ID` to its initially offscreen last model; use a short overflowing catalog
 (six rows during this verification) for the coordinate-based pan/fling regression:
 
@@ -81,7 +83,7 @@ agent-device test packages/app/e2e/mobile/modal-sheet/model-tablet.android.ad \
   --env AGENT_URL="paseo://h/${SHEET_QA_SERVER_ID}/agent/${MODEL_QA_AGENT_ID}" \
   --env AGENT_TITLE="$MODEL_QA_AGENT_TITLE" \
   --env PROVIDER_ID=codex --env MODEL_ID="$MODEL_QA_MODEL_ID" \
-  --env MODEL_LABEL="$MODEL_QA_MODEL_LABEL" --env LAST_MODEL_ID="$MODEL_QA_LAST_MODEL_ID" \
+  --env TRIGGER_LABEL="$MODEL_QA_TRIGGER_LABEL" --env LAST_MODEL_ID="$MODEL_QA_LAST_MODEL_ID" \
   --artifacts-dir /tmp/paseo-model-tablet-qa
 ```
 

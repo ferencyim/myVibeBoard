@@ -208,6 +208,9 @@ export interface ModelPickerFieldProps {
   /** A rejection rolls the optimistic selection back. */
   onSelect(provider: string, model: string): void | Promise<unknown>;
   onSelectThinking?(id: string): void | Promise<unknown>;
+  /** Fast mode of the selected model; the picker shows the switch only when `onFastChange` is given. */
+  fast?: boolean;
+  onFastChange?(value: boolean): void | Promise<unknown>;
   /** Called when the picker opens; use it to refresh the catalog in the background. */
   onOpen?(): void;
 }

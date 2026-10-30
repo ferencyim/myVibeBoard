@@ -234,6 +234,18 @@ describe("bot 服务主对话与模型变更", () => {
     expect(f.service.bots.require(bot.id).mainAgentId).toBe(first.agentId);
   });
 
+  it("预设的快速开关随主对话创建传给 agent，无预设时不带", async () => {
+    const f = fixture();
+    const preset = createVibeStore(f.db).presets.create({
+      name: "快速助理", models: [{ provider: "codex", model: "initial", thinking: "high", permissionMode: "accept-edits" }], fastMode: true,
+    } as never);
+    const fast = await f.service.create({ kind: "independent", name: "快", presetId: preset.id } as never);
+    await f.service.waitOpen(fast.id);
+    expect(f.createAgent.mock.calls[0]![0].config).toMatchObject({ featureValues: { fast_mode: true } });
+    const plain = await f.createProjectBot();
+    await f.service.waitOpen(plain.id);
+    expect(f.createAgent.mock.calls[1]![0].config).not.toHaveProperty("featureValues");
+  });
   it("缓存目录存在时拒绝未知模型", async () => {
     const f = fixture();
     await expect(f.service.create({ kind: "project", projectId: "p", name: "助理", provider: "codex", model: "unknown" }))

@@ -370,7 +370,8 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
       if (!preset) throw new Error("预设不存在：" + bot.presetId);
       const first = presetModels(preset)[0];
       if (!first) throw new Error("预设没有可用模型");
-      return { ...first, thinking: bot.thinking || first.thinking, instructions: preset.instructions, runtimeEnv: preset.runtimeEnv };
+      return { ...first, thinking: bot.thinking || first.thinking, instructions: preset.instructions, runtimeEnv: preset.runtimeEnv,
+        fastMode: !!preset.fastMode };
     }
     if (bot.provider && bot.model) {
       return {
@@ -607,6 +608,7 @@ ${COORDINATOR_PROMPT}` : base;
         config: { provider: target.provider + "/" + target.model,
           systemPrompt: [prompt(bot), bot.instructions, target.instructions, memoryContext(memories)].filter(Boolean).join("\n\n"),
           ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
+          ...("fastMode" in target && target.fastMode ? { featureValues: { fast_mode: true } } : {}),
           ...(permission ? { modeId: permission } : {}) },
       });
       threads.setAgent(botId, id, created.id);
@@ -664,6 +666,7 @@ ${COORDINATOR_PROMPT}` : base;
         provider: target.provider + "/" + target.model,
         systemPrompt: [prompt(bot), bot.instructions, target.instructions, memoryContext(memories), handoff].filter(Boolean).join("\n\n"),
         ...(target.thinking ? { thinkingOptionId: target.thinking } : {}),
+        ...("fastMode" in target && target.fastMode ? { featureValues: { fast_mode: true } } : {}),
         ...(permission ? { modeId: permission } : {}),
       },
     };

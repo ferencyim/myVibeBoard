@@ -1,5 +1,11 @@
 import { expect, test } from "../support/fixtures";
 import type { FormPreferences } from "@/create-agent-preferences/preferences";
+import {
+  closeModelPicker,
+  expectEffortSelected,
+  modelPickerTrigger,
+  openModelPicker,
+} from "../support/helpers/model-picker";
 import { closeCommandCenter, openCommandCenter } from "../support/helpers/command-center";
 import {
   applyCommandCenterAgentControls,
@@ -93,9 +99,11 @@ test.describe("Command Center agent controls", () => {
         agentId: workspace.agentId,
       });
 
-      await expect(
-        page.getByTestId("agent-thinking-selector").filter({ visible: true }),
-      ).toHaveAccessibleName("Select thinking option (Max)");
+      // Effort lives in the unified model picker: the trigger names it and the panel marks it.
+      await expect(modelPickerTrigger(page)).toHaveAccessibleName(/ · Max$/, { timeout: 30_000 });
+      await openModelPicker(page);
+      await expectEffortSelected(page, "最高");
+      await closeModelPicker(page);
     } finally {
       await workspace.cleanup();
     }

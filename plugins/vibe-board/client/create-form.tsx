@@ -1,16 +1,16 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
-import { Modal, SettingsSelect } from "@getpaseo/plugin/client/ui";
+import { ModelPickerField, Modal } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { Text, TextInput } from "react-native";
 import { botModelsListRpc as modelsListRpc } from "../shared/project-bots";
 import { Pressable } from "react-native";
 function Button({ theme, label, onPress, disabled }: { theme: PluginTheme; label: string; onPress(): void; disabled?: boolean }) {
   const styles = useMemo(() => ({ button: { padding: 10, opacity: disabled ? 0.5 : 1 }, text: { color: theme.colors.foreground } }), [theme, disabled]);
   return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={styles.button}><Text style={styles.text}>{label}</Text></Pressable>;
 }
-import { modelChoices, suggestedModel } from "./create-model";
+import { suggestedModel } from "./create-model";
 
 export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmit }: {
   theme: PluginTheme; projectId?: string; busy: boolean; error?: string; onCancel(): void;
@@ -27,19 +27,44 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [presetId, setPresetId] = useState("");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [thinking, setThinking] = useState("");
   const [initialized, setInitialized] = useState(false);
   useEffect(() => {
     if (!catalog.data || initialized) return;
-    const preset = catalog.data.presets.find((item) => item.id === catalog.data.defaultPresetId);
-    if (preset) setPresetId(preset.id);
-    else {
-      const cheap = suggestedModel(catalog.data.providers);
-      if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
-    }
+    const cheap = suggestedModel(catalog.data.providers);
+    if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
+    setInitialized(true);
+  }, [catalog.data, initialized]);
+  const styles = useMemo(() => ({ button: { padding: 10, opacity: disabled ? 0.5 : 1 }, text: { color: theme.colors.foreground } }), [theme, disabled]);
+  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={styles.button}><Text style={styles.text}>{label}</Text></Pressable>;
+}
+import { suggestedModel } from "./create-model";
+
+export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmit }: {
+  theme: PluginTheme; projectId?: string; busy: boolean; error?: string; onCancel(): void;
+  onSubmit(value: { name: string; title: string; instructions: string; presetId: string | null; provider: string | null; model: string | null; thinking: string }): void;
+}) {
+  const list = useRpc(modelsListRpc);
+  const [refreshing, setRefreshing] = useState(false);
+  const catalog = useQuery({ queryKey: ["vibe-bots", "create-models", projectId], queryFn: () => list({ projectId }), refetchInterval: refreshing ? 3000 : false });
+  const [refreshError, setRefreshError] = useState("");
+  const refreshModels = useCallback(() => {
+    setRefreshing(true); setRefreshError("");
+    void list({ projectId, refresh: true }).then(() => catalog.refetch()).catch((reason: unknown) => setRefreshError(String(reason))).finally(() => setRefreshing(false));
+  }, [list, projectId, catalog]);
+  const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [thinking, setThinking] = useState("");
+  const [initialized, setInitialized] = useState(false);
+  useEffect(() => {
+    if (!catalog.data || initialized) return;
+    const cheap = suggestedModel(catalog.data.providers);
+    if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
     setInitialized(true);
   }, [catalog.data, initialized]);
   const selectedProvider = catalog.data?.providers.find((item) => item.provider === provider);
@@ -51,15 +76,11 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
     muted: { color: theme.colors.foregroundMuted },
     danger: { color: theme.colors.statusDanger }, fields: { gap: 8 },
   }), [theme]);
-  const presets = useMemo(() => [{ label: "直接选择模型", value: "" }, ...(catalog.data?.presets ?? []).map((p) => ({ label: p.name, value: p.id }))], [catalog.data]);
-  const providers = useMemo(() => [{ label: "请选择 provider", value: "" }, ...(catalog.data?.providers ?? []).map((p) => ({ label: p.provider, value: p.provider }))], [catalog.data]);
-  const modelOptions = useMemo(() => modelChoices(selectedProvider?.models, !!provider && !catalog.isLoading), [selectedProvider, provider, catalog.isLoading]);
-  const thinkingOptions = useMemo(() => [{ label: "默认", value: "" }, ...(selectedModel?.thinkingOptions ?? []).map((o) => ({ label: o.name, value: o.id }))], [selectedModel]);
-  const changeProvider = useCallback((v: string) => { setProvider(v); setModel(""); setThinking(""); }, []);
-  const changeModel = useCallback((v: string) => { setModel(v); setThinking(""); }, []);
-  const submit = useCallback(() => onSubmit({ name: name.trim(), title, instructions, presetId: presetId || null, provider: presetId ? null : provider, model: presetId ? null : model, thinking }), [onSubmit, name, title, instructions, presetId, provider, model, thinking]);
+  const selectModel = useCallback((nextProvider: string, nextModel: string) => { setProvider(nextProvider); setModel(nextModel); setThinking(""); }, []);
+  const selectThinking = useCallback((id: string) => setThinking(id), []);
+  const submit = useCallback(() => onSubmit({ name: name.trim(), title, instructions, presetId: null, provider, model, thinking }), [onSubmit, name, title, instructions, provider, model, thinking]);
   const closeModal = useCallback((open: boolean) => { if (!open) onCancel(); }, [onCancel]);
-  const canSubmit = presetId || (provider && model);
+  const canSubmit = !!provider && !!model;
   return <Modal title={`新建${projectId ? "项目 " : ""}bot`} open onOpenChange={closeModal}>
     <Modal.Content contentContainerStyle={styles.content}>
       <TextInput accessibilityLabel="名字" placeholder="名字（必填）" placeholderTextColor={theme.colors.foregroundMuted} value={name} onChangeText={setName} maxLength={100} style={styles.input} />
@@ -69,13 +90,7 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
       {catalog.error ? <Text style={styles.danger}>模型目录加载失败：{String(catalog.error)}</Text> : null}
       <Button theme={theme} label={refreshing ? "正在刷新模型列表…" : "刷新模型列表"} disabled={refreshing} onPress={refreshModels} />
       {refreshError ? <Text style={styles.danger}>刷新模型列表失败：{refreshError}</Text> : null}
-      <SettingsSelect label="预设" value={presetId} options={presets} onValueChange={setPresetId} />
-      {!presetId ? <View style={styles.fields}>
-        <SettingsSelect label="Provider" value={provider} options={providers} onValueChange={changeProvider} />
-        {provider && !catalog.isLoading && !selectedProvider?.models.length ? <Text style={styles.muted}>暂无缓存模型（可稍后重试或改选其它 provider）</Text> : null}
-        <SettingsSelect label="模型" value={model} options={modelOptions} onValueChange={changeModel} />
-        <SettingsSelect label="思考强度" value={thinking} options={thinkingOptions} onValueChange={setThinking} />
-      </View> : null}
+      <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading} onSelect={selectModel} onSelectThinking={selectThinking} />
       {error ? <Text accessibilityRole="alert" style={styles.danger}>{error}</Text> : null}
       <Button theme={theme} label={busy ? "正在新建…" : "确认新建"} disabled={busy || !name.trim() || !canSubmit} onPress={submit} />
       <Button theme={theme} label="取消" disabled={busy} onPress={onCancel} />

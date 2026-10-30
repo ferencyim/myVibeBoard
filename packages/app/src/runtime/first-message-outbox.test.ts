@@ -266,7 +266,7 @@ describe("首消息 outbox 冷重启自动恢复", () => {
       expect(host.client.createWorkspace).not.toHaveBeenCalled();
       expect(runtime.firstMessageOutbox.getSnapshot()[0]).toMatchObject({
         text: "离线首消息",
-        error: expect.stringContaining("任务默认模型"),
+        error: expect.stringContaining("任务角色"),
       });
     },
   );

@@ -46,7 +46,7 @@ test("remembers real Codex GPT-6 Astra after repeated successful workspace creat
     for (const [index, select] of [chooseModel, reselectModel].entries()) {
       const count = index + 1;
       await test.step(`create workspace ${count} and return`, async () => {
-        await select(page, "codex", label);
+        await select(page, "codex", "gpt-6-astra", label);
         await expectSavedSelection(page, "codex", "gpt-6-astra");
         await submitNewWorkspacePrompt(page, "Reply with OK. Do not use tools or change files.");
         await expect(page).toHaveURL(/\/workspace\//);

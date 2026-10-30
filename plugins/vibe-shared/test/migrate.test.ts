@@ -47,6 +47,8 @@ const EXPECTED_TABLES = [
   "bot_routine_run",
   "bot_continuation_request",
   "resource_sample",
+  "role_setting",
+  "role_setting_migration_note",
   "device",
   "device_lease",
   "hub_resource",

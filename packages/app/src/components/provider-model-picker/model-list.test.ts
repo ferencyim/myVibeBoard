@@ -5,6 +5,7 @@ import {
   filterModelGroups,
   flattenModelGroups,
   groupModelItems,
+  localizeEffortLabel,
   moveHighlight,
   resolveEffortControlKind,
   toModelItem,
@@ -64,5 +65,19 @@ describe("model list", () => {
     expect(resolveEffortControlKind(["Low", "Medium", "High", "Extra high", "Maximum"])).toBe(
       "select",
     );
+  });
+
+  it("localizes known effort levels and keeps unknown ones", () => {
+    const labels = [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "xhigh", label: "Extra high" },
+      { id: "max", label: "Max" },
+    ].map(localizeEffortLabel);
+    expect(labels).toEqual(["低", "中", "高", "极高", "最高"]);
+    expect(resolveEffortControlKind(labels)).toBe("segmented");
+    expect(localizeEffortLabel({ id: "x", label: "Extra High" })).toBe("极高");
+    expect(localizeEffortLabel({ id: "ultracode", label: "Ultracode" })).toBe("Ultracode");
   });
 });

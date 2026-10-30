@@ -201,7 +201,7 @@ describe("WP-130 方案模型列表编辑", () => {
   });
 });
 
-describe("WP-133 任务默认模型", () => {
+describe("WP-133 任务角色", () => {
   it("表单只允许探路/复核关闭，继承清除覆盖，保存与放弃有独立基准", () => {
     const model = openDefaultsForm({ main: "m", project: "p" });
     model.change(setModelDefault(model.getState().value, "scout", DISABLED));

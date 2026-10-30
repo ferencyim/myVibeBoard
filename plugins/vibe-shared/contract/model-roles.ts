@@ -179,6 +179,8 @@ export const TaskPresetSnapshotSchema = z
     environmentKind: PresetEnvironmentKindSchema,
     runtimeEnv: z.string().nullable(),
     instructions: z.string(),
+    /** Role setting: start the agent in Fast mode. Absent in snapshots frozen before role settings. */
+    fastMode: z.boolean().optional(),
   })
   .strict();
 export type TaskPresetSnapshot = z.infer<typeof TaskPresetSnapshotSchema>;
@@ -308,6 +310,7 @@ export function resolveTaskRoles(
       environmentKind: preset.environmentKind,
       runtimeEnv: preset.runtimeEnv,
       instructions: preset.instructions,
+      ...(preset.fastMode ? { fastMode: true } : {}),
     });
   }
   return TaskRoleSnapshotSchema.parse(result);
@@ -333,6 +336,7 @@ export function freezeTaskSubtaskPresets(
       environmentKind: preset.environmentKind,
       runtimeEnv: preset.runtimeEnv,
       instructions: preset.instructions,
+      ...(preset.fastMode ? { fastMode: true } : {}),
     });
   }
   return TaskRoleSnapshotSchema.parse({ ...frozen, subtaskPresets });

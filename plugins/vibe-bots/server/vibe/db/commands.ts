@@ -131,6 +131,10 @@ export interface CreatePresetInput {
   // Old replicas send only this; it becomes roleHints = [roleHint] (unknown values: []).
   roleHint?: string | null;
   builtin?: boolean;
+  /** Role setting fields (the former preset is now a per-role setting). */
+  fastMode?: boolean;
+  ownerScope?: string | null;
+  ownerRole?: string | null;
 }
 export type UpdatePresetInput = Partial<CreatePresetInput>;
 
@@ -203,6 +207,9 @@ const PRESET_FIELDS: FieldMap = {
   fallbackPresetIds: ["fallback_preset_ids_json", asJsonOrNull],
   roleHints: ["role_hints_json", asJson],
   roleHint: ["role_hint", asIs],
+  fastMode: ["fast_mode", (v) => (v ? 1 : 0)],
+  ownerScope: ["owner_scope", asIs],
+  ownerRole: ["owner_role", asIs],
 };
 /** Collects optional WHERE conditions; a condition with an undefined parameter is skipped. */
 class WhereBuilder {
@@ -463,7 +470,7 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
   // ---- presets & tags ----
 
   function mustPreset(id: string): Preset {
-    const row = db.prepare("SELECT * FROM preset WHERE id = ?").get(id);
+    const row = db.prepare("SELECT * FROM role_setting WHERE id = ?").get(id);
     if (!row) throw new CommandError("not_found", `Preset not found: ${id}`);
     return decodeRow(PresetSchema, row);
   }
@@ -510,9 +517,10 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
         const id = input.id ?? newId(now().getTime());
         try {
           db.prepare(
-            `INSERT INTO preset (id, name, provider, model, thinking, permission_mode, environment_kind, base_branch,
-               runtime_env, instructions, fallback_preset_ids_json, role_hint, role_hints_json, builtin, created_at, updated_at, updated_hlc, models_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO role_setting (id, name, provider, model, thinking, permission_mode, environment_kind, base_branch,
+               runtime_env, instructions, fallback_preset_ids_json, role_hint, role_hints_json, builtin, created_at, updated_at, updated_hlc, models_json,
+               fast_mode, owner_scope, owner_role)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             id,
             input.name,
@@ -532,6 +540,9 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
             iso(),
             hlc,
             JSON.stringify(models),
+            input.fastMode ? 1 : 0,
+            input.ownerScope ?? null,
+            input.ownerRole ?? null,
           );
         } catch (error) {
           if (String(error).includes("UNIQUE"))
@@ -561,7 +572,7 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
               : legacyPresetModels(models[0], patch.fallbackPresetIds ?? []);
           Object.assign(rest, models[0], { models: candidates });
         }
-        patchRow("preset", id, PRESET_FIELDS, rest, hlc);
+        patchRow("role_setting", id, PRESET_FIELDS, rest, hlc);
         return mustPreset(id);
       });
     },
@@ -583,13 +594,13 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
         const globals = modelDefaults.global();
         if (defaultsPresetIds(globals).includes(id))
           writeGlobalDefaults(withoutPreset(globals, id));
-        db.prepare("DELETE FROM preset WHERE id = ?").run(id);
+        db.prepare("DELETE FROM role_setting WHERE id = ?").run(id);
         // Drop the deleted id from other presets' fallback chains.
         for (const other of presets.list()) {
           if (!other.fallbackPresetIds?.includes(id)) continue;
           const rest = other.fallbackPresetIds.filter((x) => x !== id);
           patchRow(
-            "preset",
+            "role_setting",
             other.id,
             PRESET_FIELDS,
             { fallbackPresetIds: rest.length ? rest : null },
@@ -599,11 +610,11 @@ export function createVibeStore(db: VibeDb, storeOptions: StoreOptions = {}) {
       });
     },
     get: (id: string): Preset | undefined => {
-      const row = db.prepare("SELECT * FROM preset WHERE id = ?").get(id);
+      const row = db.prepare("SELECT * FROM role_setting WHERE id = ?").get(id);
       return row ? decodeRow(PresetSchema, row) : undefined;
     },
     list: (): Preset[] =>
-      decodeRows(PresetSchema, db.prepare("SELECT * FROM preset ORDER BY name").all()),
+      decodeRows(PresetSchema, db.prepare("SELECT * FROM role_setting ORDER BY name").all()),
   };
 
   // ---- agent sessions ----
