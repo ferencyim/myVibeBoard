@@ -250,7 +250,7 @@ function BuildSection({ theme, build }: { theme: PluginTheme; build?: Status["bu
             </Line>
             <Line theme={theme}>{`开始 ${date(pipeline.startedAt)} · 结束 ${date(pipeline.finishedAt)}`}</Line>
             <Line theme={theme}>
-              {`构建提交 ${pipeline.sourceSha ?? "未知"} · ${pipeline.shaRelation.status === "same"
+              {`构建提交 ${pipeline.sourceSha?.slice(0, 9) ?? "未知"} · ${pipeline.shaRelation.status === "same"
                 ? "与 origin/main 相同"
                 : pipeline.shaRelation.status === "behind"
                   ? `落后 origin/main ${pipeline.shaRelation.count} 个提交`
