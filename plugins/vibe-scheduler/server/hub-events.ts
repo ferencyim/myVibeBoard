@@ -56,7 +56,8 @@ export function createHubWatcher(options: {
       options.notify(
         "queue:" + q.id,
         `重任务已排队 ${Math.round(waited / 60_000)} 分钟：${q.owner} 的「${q.summary.slice(0, 80)}」，` +
-          `等待原因：${q.waitReasons.map(describeWaitReason).join("、") || "排在前面的任务之后"}。`,
+          `等待原因：${q.waitReasons.map(describeWaitReason).join("、") || "排在前面的任务之后"}。` +
+          `[阈值复核] 若此时机器资源其实闲置，请用 vibe_hub_history 复核阈值是否过紧。`,
       );
     }
 

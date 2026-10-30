@@ -263,6 +263,41 @@ CREATE TABLE hub_directive (
 CREATE INDEX idx_hub_directive_status ON hub_directive(status, expires_at);
 `,
   },
+  {
+    version: 5,
+    name: "hub_history",
+    sql: `
+CREATE TABLE hub_metric_minute (
+  minute TEXT PRIMARY KEY,
+  samples INTEGER NOT NULL,
+  min_available_gb REAL,
+  max_commit_percent REAL,
+  avg_cpu_percent REAL,
+  max_cpu_percent REAL,
+  max_processes INTEGER,
+  max_handles INTEGER,
+  max_disk_queue REAL,
+  max_running INTEGER NOT NULL DEFAULT 0,
+  max_queue_wait_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE hub_event (
+  id TEXT PRIMARY KEY,
+  at TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  detail_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX idx_hub_event_at ON hub_event(at);
+CREATE TABLE hub_threshold_change (
+  id TEXT PRIMARY KEY,
+  at TEXT NOT NULL,
+  actor TEXT NOT NULL CHECK (actor IN ('user','coordinator')),
+  old_json TEXT NOT NULL,
+  new_json TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_hub_threshold_change_at ON hub_threshold_change(at);
+`,
+  },
 ];
 
 export const STATS_MIGRATIONS: Migration[] = [

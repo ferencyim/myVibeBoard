@@ -29,12 +29,16 @@ import {
   hubPauseRevokeRpc,
   hubTakeoverGetRpc,
   hubTakeoverSetRpc,
+  hubHistoryRpc,
+  hubThresholdsSetRpc,
+  hubThresholdsHistoryRpc,
 } from "./shared/rpc";
 import { createSchedulerRuntime, DEFAULT_SETTINGS, type RuntimeSettings } from "./server/runtime";
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import { fromThresholds, toPageResource, toPageStatus, toThresholds } from "./server/hub-page";
 import { registerBotTools, requireIndependentBot } from "./server/bot-tools";
 import { createCoordinatorNotifier, createHubWatcher } from "./server/hub-events";
+import { createHubHistory, createHubTuning } from "./server/hub-tuning";
 import { registerDirectives } from "./server/directive-register";
 
 /**
@@ -140,6 +144,35 @@ export default function contribute(server: PluginServerContext) {
       },
     },
   });
+  const history = createHubHistory({
+    db,
+    load: () => runtime.hub.load(),
+    lockDir: hubPaths().hubDir,
+    onEvent: (event) => {
+      const label: Record<string, string> = {
+        commit_high: "提交内存 commit 已达 95% 以上",
+        memory_low: "可用内存低于 2GB",
+        job_oom: "有重任务因内存或提交上限失败",
+        job_commit_limit: "有重任务触到单任务提交上限",
+      };
+      notifyCoordinator(
+        "tune-event:" + event.kind,
+        `[阈值复核] ${label[event.kind] ?? event.kind}。请用 vibe_hub_history 复核阈值是否过松，必要时下调。`,
+      );
+    },
+  });
+  runtime.hub.onSample((m) => history.record(m));
+  runtime.hub.onJobFinished((job) => history.jobFinished(job));
+  const flushHistory = setInterval(() => history.flush(), 60_000);
+  (flushHistory as unknown as { unref?: () => void }).unref?.();
+  const tuning = createHubTuning({
+    db,
+    history,
+    settings: () => runtime.hub.settings(),
+    update: (patch) => runtime.hub.updateSettings(patch),
+    notifyUser: (title, body) => server.notify({ title, body }),
+    tellCoordinator: (key, text) => notifyCoordinator(key, text),
+  });
   const watchHub = createHubWatcher({ hub: runtime.hub, notify: notifyCoordinator });
   const hubWatchTimer = setInterval(() => {
     watchHub().catch((error) => console.error("vibe-scheduler: 中枢事件检查失败：", error));
@@ -243,10 +276,19 @@ export default function contribute(server: PluginServerContext) {
   );
   server.handle(hubResourcesRemoveRpc, ({ name }) => ({ ok: runtime.hub.removeResource(name) }));
   server.handle(hubSettingsGetRpc, () => ({ thresholds: toThresholds(runtime.hub.settings()) }));
-  server.handle(hubSettingsSetRpc, async ({ thresholds }) => {
+  server.handle(hubSettingsSetRpc, async ({ thresholds }, { callerAgentId }) => {
+    if (callerAgentId) throw new Error("总协调请用 vibe_hub_thresholds_set（有安全底线与幅度限制）");
+    const before = runtime.hub.settings();
     const result = await runtime.hub.updateSettings(fromThresholds(thresholds));
+    tuning.recordUser(before, result.settings);
     return { thresholds: toThresholds(result.settings), fileError: result.fileError };
   });
+  server.handle(hubHistoryRpc, ({ hours }) => ({ ...history.query(hours ?? 24), limits: tuning.limits }));
+  server.handle(hubThresholdsSetRpc, async (input, { callerAgentId }) => {
+    if (!callerAgentId) throw new Error("阈值自动调整只能由总协调 bot 调用");
+    return { ...(await tuning.set(input)) };
+  });
+  server.handle(hubThresholdsHistoryRpc, ({ limit }) => ({ changes: tuning.history(limit) }));
   server.handle(hubPauseCreateRpc, async (input, { callerAgentId }) => {
     const bot = !!callerAgentId || input.issuedBy === "bot";
     if (bot) {
@@ -302,6 +344,8 @@ export default function contribute(server: PluginServerContext) {
     stopSettings();
     stopDirectives();
     clearInterval(hubWatchTimer);
+    clearInterval(flushHistory);
+    history.flush();
     for (const stop of stopHooks) stop();
     await runtime.stop();
     db.close();

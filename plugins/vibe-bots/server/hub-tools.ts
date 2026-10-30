@@ -74,6 +74,26 @@ export function registerHubTools(server: PluginServerContext, service: BotServic
       return hub("hub.pause.revoke", { id });
     },
   });
+  tool("vibe_hub_history", "按时间窗口（hours，默认 24，最多 336）返回中枢聚合指标（可用内存最低值、commit 峰值、CPU 均值/峰值、进程/句柄/磁盘队列峰值、同时运行重任务数、排队时长）、按小时的曲线、以及 commit≥95%、可用内存<2GB、任务因内存失败等事件。用于判断阈值过紧还是过松。", "hub.history.query",
+    z.object({ hours: z.number().min(1).max(336).optional() }).strict());
+  const thresholdsSet = z.object({
+    changes: z.object({
+      minAvailableGb: z.number().optional(), deployMinAvailableGb: z.number().optional(),
+      maxCommitPercent: z.number().optional(), maxCpuPercent: z.number().optional(), hardLimit: z.number().optional(),
+    }).strict(),
+    reason: z.string().trim().min(1).max(1000),
+  }).strict();
+  server.registerAgentTool({
+    name: "vibe_hub_thresholds_set",
+    description: "调整中枢机器阈值（写回 guard 配置并通知用户）。安全底线不可越过：minAvailableGb≥2、deployMinAvailableGb≥2、maxCommitPercent≤92、maxCpuPercent≤98、hardLimit 1-8；单次幅度：内存 ±3GB、百分比 ±5、hardLimit ±1；两次调整至少间隔 30 分钟；用户 30 分钟内手改过的值不覆盖（出现内存事件除外）。必须写明理由。",
+    input: thresholdsSet,
+    handler: async (value, ctx) => {
+      await coordinator(ctx.callerAgentId);
+      return hub("hub.thresholds.set", thresholdsSet.parse(value));
+    },
+  });
+  tool("vibe_hub_thresholds_history", "列出阈值调整历史（旧值、新值、原因、时间、操作者：用户或总协调）。", "hub.thresholds.history",
+    z.object({ limit: z.number().int().min(1).max(200).optional() }).strict());
   server.registerAgentTool({
     name: "vibe_directive_issue",
     description: "下发全局指令。临时运维指令（须带 expiresAt，不超过 24 小时）立即生效并通知用户；长期规则（standing）只会进入待确认，由用户决定。需要强制暂停时带 pause（范围同 vibe_hub_pause）。",

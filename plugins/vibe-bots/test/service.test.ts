@@ -591,6 +591,9 @@ describe("总协调与 bot 消息", () => {
     const restarted = f.start();
     await restarted.ready();
     expect(restarted.bots.list({ kind: "independent" }).filter((bot) => bot.role === "coordinator")).toHaveLength(1);
+    const routines = f.db.prepare<{ title: string; schedule_json: string }>("SELECT title,schedule_json FROM bot_routine WHERE bot_id=?").all(coordinator.id);
+    expect(routines).toEqual([{ title: "阈值复核", schedule_json: JSON.stringify({ kind: "interval", minutes: 360 }) }]);
+    expect(coordinator.instructions).toContain("vibe_hub_thresholds_set");
 
     const g = fixture();
     const legacy = g.service.bots.legacy("master", { kind: "independent", name: "小明", instructions: "" }, null);
