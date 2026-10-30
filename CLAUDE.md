@@ -28,6 +28,7 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/vibe/ROUND8-DESIGN.md](docs/vibe/ROUND8-DESIGN.md)             | 第八轮：#1 即群聊、方案多模型互审、共享探路、任务间方案感知                                                                    |
 | [docs/vibe/ROUND9-DESIGN.md](docs/vibe/ROUND9-DESIGN.md)             | 第九轮：离线首消息默认模型、本机模型缓存与任务默认模型设置                                                                     |
 | [docs/vibe/ROUND10-DESIGN.md](docs/vibe/ROUND10-DESIGN.md)           | 第十轮：bot（多总 bot/多项目 bot、自配置、记忆、例程、旁线程、可视化回复）与 openbot 风格界面分包                              |
+| [docs/vibe/HUB-DESIGN.md](docs/vibe/HUB-DESIGN.md)                   | 资源中枢（调度器与 win-heavy-guard 合并的规则准入）、全局指令、总协调 bot 与 bot 间消息                                        |
 | [docs/architecture.md](docs/architecture.md)                         | System design, package layering, WebSocket protocol, agent lifecycle, data flow                                                |
 | [docs/agent-lifecycle.md](docs/agent-lifecycle.md)                   | Agent states, parent/child relationships, archive semantics, tabs vs archive, subagents track                                  |
 | [docs/data-model.md](docs/data-model.md)                             | File-based JSON persistence, Zod schemas, atomic writes, no migrations                                                         |
