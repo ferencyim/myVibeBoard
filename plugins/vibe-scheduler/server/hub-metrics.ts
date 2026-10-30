@@ -36,6 +36,8 @@ export function createHubMetrics(options: {
   /** A cached reading older than this is flagged stale (still served). */
   staleMs?: number;
   cpuWindowSeconds: () => number;
+  /** Called after every completed sample (history recording). */
+  onSample?: (value: HubMetrics) => void;
   platform?: NodeJS.Platform;
 }) {
   const run = options.run ?? runCommand;
@@ -89,6 +91,7 @@ export function createHubMetrics(options: {
 
   async function sample(): Promise<void> {
     cached = { at: now().getTime(), value: await collect() };
+    options.onSample?.(cached.value);
   }
 
   /** A reading that costs nothing (no CIM): used until the first background sample lands. */

@@ -19,7 +19,8 @@ import { createTaskRuntimeCommands } from "./vibe/db/task-runtime";
 import { resolveVibeHome, type VibeDb } from "./vibe/db/sqlite";
 
 import { createMemoryDelivery, memoryContext } from "./memory";
-import { COORDINATOR_DEFAULTS, COORDINATOR_PROMPT } from "./coordinator-defaults";
+import { COORDINATOR_DEFAULTS, COORDINATOR_PROMPT, THRESHOLD_ROUTINE_PROMPT, THRESHOLD_ROUTINE_TITLE } from "./coordinator-defaults";
+import { createRoutineStore } from "./vibe/db/routines";
 export { memoryContext } from "./memory";
 
 export interface BotOpenState {
@@ -233,9 +234,23 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     }
   }
 
+  /** One-time preset: the coordinator reviews the hub thresholds every 6 hours (the user may edit or delete it). */
+  function seedThresholdRoutine() {
+    const coordinator = bots.coordinator();
+    if (!coordinator || db.prepare("SELECT 1 FROM bot_legacy_migration WHERE source='threshold-routine'").get()) return;
+    db.immediate(() => {
+      createRoutineStore(db).create({
+        botId: coordinator.id, title: THRESHOLD_ROUTINE_TITLE, schedule: { kind: "interval", minutes: 360 },
+        timezone: "UTC", prompt: THRESHOLD_ROUTINE_PROMPT, target: "main", quiet: true, missedPolicy: "skip",
+      });
+      db.prepare("INSERT INTO bot_legacy_migration(source,bot_id) VALUES('threshold-routine',?)").run(coordinator.id);
+    });
+  }
+
   function ready() {
     if (!migration) {
       migration = migrate().then(() => {
+        seedThresholdRoutine();
         for (const bot of bots.list()) if (bot.pendingModel) scheduleApply(bot.id);
         migrateMasterSettings();
         return undefined;

@@ -292,9 +292,24 @@ export function createHub(deps: HubDeps) {
   }
 
   const lockDir = deps.lockDir ?? null;
+  const sampleListeners: Array<(m: HubMetrics) => void> = [];
+  const finishListeners: Array<(r: { owner: string; exitCode: number | null; outcome: "released" | "reaped" }) => void> = [];
   const sampler = deps.metrics
     ? null
-    : createHubMetrics({ run: deps.run, now, cpuWindowSeconds: () => settings.cpuWindowSeconds });
+    : createHubMetrics({
+        run: deps.run,
+        now,
+        cpuWindowSeconds: () => settings.cpuWindowSeconds,
+        onSample: (m) => {
+          for (const cb of sampleListeners) {
+            try {
+              cb(m);
+            } catch (error) {
+              onError(error);
+            }
+          }
+        },
+      });
   const readMetrics = deps.metrics ?? (() => sampler!.read());
 
   const jobs = new Map<string, Job>();
@@ -449,6 +464,13 @@ export function createHub(deps: HubDeps) {
     } catch (error) {
       onError(error);
     }
+    for (const cb of finishListeners) {
+      try {
+        cb({ owner: job.owner, exitCode, outcome });
+      } catch (error) {
+        onError(error);
+      }
+    }
     notify(job.id);
   }
 
@@ -546,6 +568,18 @@ export function createHub(deps: HubDeps) {
 
   return {
     settings: () => ({ ...settings }),
+
+    /** History hooks: every background sample, and every finished job. */
+    onSample: (cb: (m: HubMetrics) => void) => void sampleListeners.push(cb),
+    onJobFinished: (cb: (r: { owner: string; exitCode: number | null; outcome: "released" | "reaped" }) => void) =>
+      void finishListeners.push(cb),
+    /** Cheap load snapshot for history: running heavy jobs and the longest current queue wait. */
+    load: () => {
+      const t = now().getTime();
+      let wait = 0;
+      for (const j of jobs.values()) if (j.state === "queued") wait = Math.max(wait, t - Date.parse(j.queuedAt));
+      return { running: holders().length, maxQueueWaitMs: wait };
+    },
 
     /** Start / stop the background machine sampling (no-op when metrics are injected). */
     startSampling: () => sampler?.start(),

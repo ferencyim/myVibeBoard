@@ -182,6 +182,33 @@ export const hubSettingsSetRpc = defineRpc({
   input: z.object({ thresholds: z.object(thresholdsShape).partial() }),
   output: loose,
 });
+export const hubHistoryRpc = defineRpc({
+  name: "hub.history.query",
+  input: z.object({ hours: z.number().min(1).max(336).optional() }),
+  output: loose,
+});
+export const hubThresholdsSetRpc = defineRpc({
+  name: "hub.thresholds.set",
+  input: z.object({
+    changes: z
+      .object({
+        minAvailableGb: z.number(),
+        deployMinAvailableGb: z.number(),
+        maxCommitPercent: z.number(),
+        maxCpuPercent: z.number(),
+        hardLimit: z.number(),
+      })
+      .partial()
+      .strict(),
+    reason: z.string().trim().min(1).max(1000),
+  }),
+  output: loose,
+});
+export const hubThresholdsHistoryRpc = defineRpc({
+  name: "hub.thresholds.history",
+  input: z.object({ limit: z.number().int().min(1).max(200).optional() }),
+  output: loose,
+});
 export const hubPauseCreateRpc = defineRpc({
   name: "hub.pause.create",
   input: z.object({
