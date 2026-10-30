@@ -36,7 +36,7 @@ export function contributeWorkspaceTabs(client: PluginClientContext) {
         if (!main) throw new Error("主会话暂时不可用，请稍后重试。");
         return { agentId: main.agentId };
       }
-      if (!model) throw new Error("无法确定此角色的模型，请前往「任务默认模型」设置后重试。");
+      if (!model) throw new Error("无法确定此角色的模型，请前往「任务角色」设置后重试。");
       return client.rpc(taskTabEnsureRpc, {
         workspaceId,
         role: roleForTab(tabId),

@@ -3,7 +3,16 @@ import path from "node:path";
 import type { Locator, TestInfo } from "@playwright/test";
 import { expect, test as base, type Page } from "../fixtures";
 import { gotoAppShell, openSettings } from "./app";
-import { openModelPicker } from "./agent-profiles";
+import {
+  closeModelPickerIfOpen,
+  expectComposerModel,
+  modelPickerTrigger,
+  openModelPicker,
+  selectModelRow,
+  selectProviderTab,
+  modelPickerPanel,
+  modelRow,
+} from "./model-picker";
 import { openAgentRoute } from "./mock-agent";
 import { connectNewWorkspaceDaemonClient, openGlobalNewWorkspaceComposer } from "./new-workspace";
 import { copyPluginExample } from "./plugin-fixture";
@@ -11,7 +20,7 @@ import { seedWorkspace, type SeededWorkspace } from "./seed-client";
 import { getServerId } from "./server-id";
 import { openSettingsHostSection } from "./settings";
 
-const MODEL_LABEL = "Select model (Example 1)";
+const MODEL_LABEL = "Example 1";
 const WIDE = { width: 1400, height: 950 };
 const COMPACT = { width: 390, height: 844 };
 
@@ -44,10 +53,10 @@ async function expectProviderIcon(surface: Locator, paths: string[]): Promise<vo
 
 async function selectPluginModel(page: Page): Promise<void> {
   await openModelPicker(page);
-  await page.getByRole("button", { name: "Back", exact: true }).click();
-  await page.getByText("Direct provider example", { exact: true }).click();
-  await page.getByText("Example 1", { exact: true }).click();
-  await expect(page.getByRole("button", { name: MODEL_LABEL, exact: true })).toBeVisible();
+  await selectProviderTab(page, "direct-example");
+  await selectModelRow(page, "example-1");
+  await expectComposerModel(page, MODEL_LABEL);
+  await closeModelPickerIfOpen(page);
 }
 
 async function capture(page: Page, testInfo: TestInfo, name: string): Promise<void> {
@@ -124,13 +133,14 @@ export async function verifyNewWorkspaceModelIcon({
     await openGlobalNewWorkspaceComposer(page);
     await selectPluginModel(page);
     await openModelPicker(page);
-    await expectProviderIcon(page.getByTestId("model-row-direct-example-example-1"), iconPaths);
-    await capture(page, testInfo, "new-workspace-picker");
-    await page.keyboard.press("Escape");
     await expectProviderIcon(
-      page.getByRole("button", { name: MODEL_LABEL, exact: true }),
+      modelPickerPanel(page).getByTestId("provider-model-picker-tab-direct-example"),
       iconPaths,
     );
+    await expect(modelRow(page, "example-1")).toBeVisible();
+    await capture(page, testInfo, "new-workspace-picker");
+    await page.keyboard.press("Escape");
+    await expectProviderIcon(modelPickerTrigger(page), iconPaths);
     await capture(page, testInfo, "new-workspace-selected-model");
   });
 }
@@ -142,10 +152,7 @@ export async function verifyCompactModelIcon({
 }: ProviderIconJourney): Promise<void> {
   await test.step("compact composer preserves the same provider icon", async () => {
     await page.setViewportSize(COMPACT);
-    await expectProviderIcon(
-      page.getByRole("button", { name: MODEL_LABEL, exact: true }),
-      iconPaths,
-    );
+    await expectProviderIcon(modelPickerTrigger(page), iconPaths);
     await capture(page, testInfo, "compact-selected-model");
   });
 }
@@ -166,10 +173,7 @@ export async function verifyExistingAgentModelIcon({
     });
     await page.setViewportSize(WIDE);
     await openAgentRoute(page, { workspaceId: workspace.workspaceId, agentId: agent.id });
-    await expectProviderIcon(
-      page.getByRole("button", { name: MODEL_LABEL, exact: true }),
-      iconPaths,
-    );
+    await expectProviderIcon(modelPickerTrigger(page), iconPaths);
     await capture(page, testInfo, "agent-selected-model");
   });
 }

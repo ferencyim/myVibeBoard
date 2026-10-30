@@ -1124,6 +1124,19 @@ describe("打开 tab 的任务流程", () => {
     expect(fake.appended.at(-1)?.item).toMatchObject({ kind: "task-status" });
   });
 
+  it("方案/审阅预设的快速开关进入实时快照，未开启时不带该字段", async () => {
+    const { store } = await confirmedTask();
+    store.presets.create({
+      id: "p-fast", name: "快", provider: "claude", model: "opus", permissionMode: "full", fastMode: true,
+    });
+    store.presets.create({ id: "p-slow", name: "慢", provider: "codex", model: "first", permissionMode: "full" });
+    store.tasks.setRoleSelections("ws", { planner: { mode: "preset", presetId: "p-fast" } });
+    const [writer] = resolvePlannerPresets(store, { selections: store.tasks.get("ws")!.roleSelections });
+    expect(writer).toMatchObject({ presetId: "p-fast", fastMode: true });
+    store.tasks.setRoleSelections("ws", { planner: { mode: "preset", presetId: "p-slow" } });
+    const [plain] = resolvePlannerPresets(store, { selections: store.tasks.get("ws")!.roleSelections });
+    expect(plain).not.toHaveProperty("fastMode");
+  });
   it("/执行 允许任意 provider 担任复核角色（复核仅靠提示词只读）", async () => {
     const { store, fake, flow } = await confirmedTask();
     store.presets.create({

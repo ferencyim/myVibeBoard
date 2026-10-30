@@ -1,34 +1,36 @@
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { expect, type Page } from "../fixtures";
-import { drillIntoProvider, openModelPicker } from "./agent-profiles";
+import {
+  closeModelPickerIfOpen,
+  expectComposerModel,
+  expectModelRowVisible,
+  openModelPicker,
+  selectModelRow,
+  selectProviderTab,
+} from "./model-picker";
 
 export async function startWithoutRememberedModel(page: Page) {
   await page.addInitScript(() => localStorage.removeItem("@paseo:create-agent-preferences"));
 }
 
-export async function chooseModel(page: Page, provider: string, label: string) {
+export async function chooseModel(page: Page, provider: string, modelId: string, label: string) {
   await openModelPicker(page);
-  await expect(
-    page.getByRole("dialog").getByRole("button", { name: "Back", exact: true }),
-  ).toHaveCount(0);
-  await selectProviderModel(page, provider, label);
+  await selectProviderModel(page, provider, modelId, label);
 }
 
-export async function reselectModel(page: Page, provider: string, label: string) {
+/** Reopens the picker: the remembered provider's tab is already active; pick again via the rail. */
+export async function reselectModel(page: Page, provider: string, modelId: string, label: string) {
   await expectRememberedModel(page, label);
   await openModelPicker(page);
-  await page.getByRole("dialog").getByRole("button", { name: "Back", exact: true }).click();
-  await selectProviderModel(page, provider, label);
+  await selectProviderModel(page, provider, modelId, label);
 }
 
-async function selectProviderModel(page: Page, provider: string, label: string) {
-  await drillIntoProvider(page, provider);
-  await page.getByTestId("combobox-desktop-container").getByText(label, { exact: true }).click();
-  await expect(
-    page
-      .getByRole("button", { name: `Select model (${label})`, exact: true })
-      .filter({ visible: true }),
-  ).toBeVisible();
+async function selectProviderModel(page: Page, provider: string, modelId: string, label: string) {
+  await selectProviderTab(page, provider);
+  await expectModelRowVisible(page, modelId, label);
+  await selectModelRow(page, modelId);
+  await expectComposerModel(page, label);
+  await closeModelPickerIfOpen(page);
 }
 
 export async function expectSavedSelection(page: Page, provider: string, model: string) {
@@ -63,9 +65,5 @@ export async function expectCreatedModelAgents(
 }
 
 export async function expectRememberedModel(page: Page, label: string) {
-  await expect(
-    page
-      .getByRole("button", { name: `Select model (${label})`, exact: true })
-      .filter({ visible: true }),
-  ).toBeVisible();
+  await expectComposerModel(page, label);
 }

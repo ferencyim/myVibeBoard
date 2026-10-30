@@ -4,9 +4,9 @@ import { expect, test, type Page } from "../support/fixtures";
 import { gotoAppShell, openSettings } from "../support/helpers/app";
 import {
   closeModelPicker,
-  drillIntoProvider,
   openModelPicker,
-} from "../support/helpers/agent-profiles";
+  selectProviderTab,
+} from "../support/helpers/model-picker";
 import { expectComposerVisible, expectComposerFocused } from "../support/helpers/composer";
 import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
 import { clickNewChat, gotoWorkspace } from "../support/helpers/launcher";
@@ -55,8 +55,7 @@ async function openWorkspaceModels(page: Page, workspaceId: string): Promise<voi
   await expectComposerVisible(page);
   await expectComposerFocused(page);
   await openModelPicker(page);
-  await page.getByTestId("sheet-header-back").click();
-  await drillIntoProvider(page, "hoplite");
+  await selectProviderTab(page, "hoplite");
 }
 
 test("real Hoplite has an empty global catalog and discovers models in its linked workspace", async ({

@@ -223,7 +223,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
       const selected = models.find((candidate) => candidate.isDefault) ?? models[0];
       if (selected) return { config: { provider: entry.provider + "/" + selected.id } };
     }
-    throw new Error("缓存中没有可用 provider 的模型，请到「任务默认模型」选择具体模型后重试");
+    throw new Error("缓存中没有可用 provider 的模型，请到「任务角色」选择具体模型后重试");
   }
   async function openNow(projectId: string): Promise<ProjectAgentState> {
     await project(projectId);

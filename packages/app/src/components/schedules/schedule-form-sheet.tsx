@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Text, View } from "react-native";
-import { Brain, Folder, GitBranch } from "lucide-react-native";
+import { Folder, GitBranch } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import type { ScheduleCadence, ScheduleSummary } from "@getpaseo/protocol/schedule/types";
@@ -99,10 +99,6 @@ function resolveCreateServerId(input: {
 
 function buildScheduleHostOptionTestId(serverId: string): string {
   return `schedule-host-option-${serverId}`;
-}
-
-function buildThinkingOptionTestId(optionId: string): string {
-  return `schedule-thinking-option-${optionId}`;
 }
 
 function openKey(props: ScheduleFormSheetProps): string {
@@ -599,13 +595,11 @@ function ScheduleTargetFields({
       })),
     [state.modeOptions],
   );
-  const thinkingOptions = useMemo<SelectFieldOption<string>[]>(
+  const pickerThinkingOptions = useMemo(
     () =>
       state.availableThinkingOptions.map((option) => ({
         id: option.id,
-        value: option.id,
         label: formatThinkingOptionLabel(option),
-        testID: buildThinkingOptionTestId(option.id),
       })),
     [state.availableThinkingOptions],
   );
@@ -654,10 +648,6 @@ function ScheduleTargetFields({
   );
   const renderProjectOption = useCallback(
     (input: SelectFieldRenderOptionInput<string>) => <ProjectOptionItem {...input} />,
-    [],
-  );
-  const renderThinkingOption = useCallback(
-    (input: SelectFieldRenderOptionInput<string>) => <ThinkingOptionItem {...input} />,
     [],
   );
   const modelTriggerLeading = useMemo(
@@ -755,25 +745,11 @@ function ScheduleTargetFields({
             onOpen={handleModelOpen}
             onRetryProvider={handleRetryProvider}
             isRetryingProvider={providerSnapshot.isRefreshing}
+            thinkingOptions={state.disclosure.showThinkingField ? pickerThinkingOptions : undefined}
+            selectedThinkingOptionId={state.selectedThinkingOptionId || undefined}
+            onSelectThinkingOption={handleSelectThinking}
           />
         </Field>
-      ) : null}
-
-      {state.disclosure.showThinkingField ? (
-        <SelectField
-          label="Thinking"
-          value={state.selectedThinkingOptionId || null}
-          selectedDisplay={state.selectedThinkingDisplay}
-          options={thinkingOptions}
-          onChange={handleSelectThinking}
-          placeholder="Select thinking"
-          emptyText="No thinking options found"
-          searchable={thinkingOptions.length > 6}
-          title="Select thinking"
-          size={controlSize}
-          triggerTestID="schedule-thinking-trigger"
-          renderOption={renderThinkingOption}
-        />
       ) : null}
 
       {state.disclosure.showModeField ? (
@@ -975,33 +951,6 @@ function ProjectOptionItem({
     () => (
       <View style={styles.optionIconBox}>
         <Folder size={16} color={styles.providerIcon.color} />
-      </View>
-    ),
-    [],
-  );
-
-  return (
-    <ComboboxItem
-      testID={option.testID}
-      label={option.label}
-      selected={selected}
-      active={active}
-      onPress={onPress}
-      leadingSlot={leadingSlot}
-    />
-  );
-}
-
-function ThinkingOptionItem({
-  option,
-  selected,
-  active,
-  onPress,
-}: SelectFieldRenderOptionInput<string>): ReactElement {
-  const leadingSlot = useMemo(
-    () => (
-      <View style={styles.optionIconBox}>
-        <Brain size={16} color={styles.providerIcon.color} />
       </View>
     ),
     [],

@@ -248,6 +248,9 @@ export function registerEnvironmentMonitor(
         config: {
           provider: candidate.provider + "/" + candidate.model,
           ...(candidate.thinking ? { thinkingOptionId: candidate.thinking } : {}),
+          ...((validated.success ? validated.data.fastMode : preset?.fastMode)
+            ? { featureValues: { fast_mode: true } }
+            : {}),
         },
         labels: {
           [TASK_TAB_ROLE_LABEL]: tab.role,

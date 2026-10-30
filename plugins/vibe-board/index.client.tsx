@@ -120,13 +120,13 @@ export default function contribute(client: PluginClientContext) {
     }),
     client.addProjectSettingsSection({
       id: "task-default-models",
-      title: "任务默认模型",
+      title: "任务角色",
       Component: ProjectTaskDefaultsSection,
     }),
     client.addSettingsScreen({
       order: -50,
       id: "task-default-models",
-      title: "任务默认模型",
+      title: "任务角色",
       icon: "Bot",
       Component: TaskDefaultsScreen,
     }),

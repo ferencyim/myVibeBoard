@@ -5,6 +5,7 @@ import type { z } from "zod";
 const BOOLEAN_COLUMNS = new Set([
   "needs_evidence",
   "builtin",
+  "fast_mode",
   "evidence",
   "simulated",
   "archived",

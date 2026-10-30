@@ -687,6 +687,7 @@ export function createTaskFlow(options: {
             ? { thinkingOptionId: model.thinking }
             : {}),
           ...(snapshot.instructions ? { systemPrompt: snapshot.instructions } : {}),
+          ...(snapshot.fastMode ? { featureValues: { fast_mode: true } } : {}),
         },
         env: {
           VIBE_ROLE: input.role,
@@ -734,7 +735,7 @@ export function createTaskFlow(options: {
     }
     if (!preset && input.enable) {
       const main = task.tabs.find((tab) => tab.role === "main");
-      if (!main) throw new Error("主会话模型尚未就绪，请到「任务默认模型」设置选择模型");
+      if (!main) throw new Error("主会话模型尚未就绪，请到「任务角色」设置选择模型");
       const snapshot = mainFallbackSnapshot(main);
       const model = snapshot.models[0]!;
       preset = { snapshot, model };
@@ -753,7 +754,7 @@ export function createTaskFlow(options: {
     }
     if (!preset)
       throw new Error(
-        "该流程角色未启用或默认模型不可用；请到「任务默认模型」设置选择模型，或先启用该 tab",
+        "该流程角色未启用或默认模型不可用；请到「任务角色」设置选择模型，或先启用该 tab",
       );
     const { snapshot } = preset;
     let model = preset.model;
@@ -770,7 +771,7 @@ export function createTaskFlow(options: {
     if (input.thinkingOptionId !== undefined)
       model = { ...model, thinking: input.thinkingOptionId };
     if (!model.provider || !model.model || model.model === UNRESOLVED_TAB_MODEL)
-      throw new Error("主会话模型尚未解析，请到「任务默认模型」设置选择模型");
+      throw new Error("主会话模型尚未解析，请到「任务角色」设置选择模型");
     return { snapshot, model };
   }
   const FLOW_LABELS = { simple: "简单", medium: "中等", full: "完整" } as const;
@@ -1032,6 +1033,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
             provider: `${model.provider}/${model.model}`,
             ...(modeId ? { modeId } : {}),
             ...(model.thinking ? { thinkingOptionId: model.thinking } : {}),
+            ...(preset.fastMode ? { featureValues: { fast_mode: true } } : {}),
           },
           env: {
             VIBE_ROLE: "worker",
@@ -1768,6 +1770,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
         let candidateIndex = input.candidateIndex;
         let presetId: string | undefined;
         let runtimeEnv: string | null | undefined;
+        let fastMode = false;
         if (from.role === "worker") {
           const preset =
             findTaskActualPreset(initial, { role: "worker", admittedOnly: true }) ??
@@ -1789,6 +1792,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
           candidateIndex = index;
           presetId = preset.presetId;
           runtimeEnv = preset.runtimeEnv;
+          fastMode = !!preset.fastMode;
         } else {
           if (!fromView || fromView.model === UNRESOLVED_TAB_MODEL)
             return fail("来源 tab 的模型尚未解析，请稍后重试");
@@ -1803,6 +1807,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
               provider: `${provider}/${model}`,
               ...(modeId ? { modeId } : {}),
               ...(thinking && thinking !== "default" ? { thinkingOptionId: thinking } : {}),
+              ...(fastMode ? { featureValues: { fast_mode: true } } : {}),
             },
             env: {
               VIBE_ROLE: sessionRole,

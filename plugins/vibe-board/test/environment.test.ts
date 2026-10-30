@@ -156,6 +156,7 @@ describe("环境故障监控", () => {
           tasks: { get: () => task },
           presets: {
             get: () => ({
+              fastMode: true,
               models: [
                 { provider: "codex", model: "first" },
                 { provider: "claude", model: "next" },
@@ -185,7 +186,9 @@ describe("环境故障监控", () => {
     active = false;
     await recover.handler({ agentId: "target", action: "fallback" }, { callerAgentId: "project" });
     expect(created).toHaveBeenCalledWith(
-      expect.objectContaining({ config: { provider: "claude/next" } }),
+      expect.objectContaining({
+        config: { provider: "claude/next", featureValues: { fast_mode: true } },
+      }),
     );
     expect(ensureTab).toHaveBeenCalledWith("replacement");
     expect(handoff).toHaveBeenCalledWith(

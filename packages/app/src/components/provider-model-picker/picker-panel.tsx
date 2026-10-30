@@ -17,19 +17,26 @@ import {
   type PressableStateCallbackType,
 } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { Check, ChevronDown, Search } from "lucide-react-native";
-import { AgentProfileGlyph, type AgentProfilePicker } from "@/agent-profiles";
 import { AdaptiveTextInput } from "@/components/adaptive-text-input";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
+import { Switch } from "@/components/ui/switch";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ModelProviderGlyph } from "@/components/model-browser";
+import { ModelProviderGlyph } from "@/components/model-provider-glyph";
 import {
   filterModelGroups,
   flattenModelGroups,
   groupModelItems,
+  localizeEffortLabel,
   moveHighlight,
   resolveEffortControlKind,
   toModelItem,
@@ -38,6 +45,12 @@ import {
 import { getProviderModelRows } from "@/provider-selection/provider-selection";
 import type { ProviderSelectorProvider } from "@/provider-selection/provider-selection";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
+
+/** Fast-mode toggle of the selected model; absent when the model has no fast tier. */
+export interface PickerFast {
+  value: boolean;
+  onChange: (value: boolean) => void;
+}
 
 export interface PickerThinking {
   options: { id: string; label: string }[];
@@ -54,9 +67,8 @@ export interface PickerPanelProps {
   selectedModel: string;
   isLoading: boolean;
   thinking?: PickerThinking | null;
-  profiles?: AgentProfilePicker | null;
+  fast?: PickerFast | null;
   onPick: (provider: string, modelId: string) => void;
-  onApplyProfile?: (profileId: string) => void;
   onRetryProvider?: (provider: string) => void;
   isRetryingProvider?: boolean;
   serverId: string | null;
@@ -64,7 +76,6 @@ export interface PickerPanelProps {
   keyHandlerRef?: MutableRefObject<PickerKeyHandler | null>;
 }
 
-const PROFILES_TAB = "__profiles__";
 const ThemedCheck = withUnistyles(Check);
 const ThemedChevron = withUnistyles(ChevronDown);
 const ThemedSearch = withUnistyles(Search);
@@ -81,16 +92,14 @@ interface ListEntry {
 function resolveInitialTab(providers: ProviderSelectorProvider[], selectedProvider: string) {
   return providers.some((entry) => entry.id === selectedProvider)
     ? selectedProvider
-    : (providers[0]?.id ?? PROFILES_TAB);
+    : (providers[0]?.id ?? "");
 }
 
 export function ProviderModelPanel(props: PickerPanelProps) {
-  const { providers, selectedProvider, profiles, onApplyProfile, serverId } = props;
-  const hasProfiles = Boolean(profiles && profiles.rows.length > 0 && onApplyProfile);
+  const { providers, selectedProvider, serverId } = props;
   const [activeTab, setActiveTab] = useState(() => resolveInitialTab(providers, selectedProvider));
-  const showRail = providers.length + (hasProfiles ? 1 : 0) > 1;
+  const showRail = providers.length > 1;
   const activeProvider = providers.find((entry) => entry.id === activeTab) ?? null;
-  const showProfiles = activeTab === PROFILES_TAB && profiles && onApplyProfile;
 
   return (
     <View style={styles.root} testID="provider-model-picker">
@@ -108,25 +117,10 @@ export function ProviderModelPanel(props: PickerPanelProps) {
               onSelect={setActiveTab}
             />
           ))}
-          {hasProfiles ? (
-            <RailTab
-              id={PROFILES_TAB}
-              label="配置"
-              subtitle="预设的模型与参数组合"
-              active={activeTab === PROFILES_TAB}
-              unavailable={false}
-              serverId={serverId}
-              onSelect={setActiveTab}
-            />
-          ) : null}
         </View>
       ) : null}
       <View style={styles.panel}>
-        {showProfiles ? (
-          <ProfilesPanel rows={profiles.rows} onApply={onApplyProfile} />
-        ) : (
-          <ProviderBody key={activeTab} {...props} provider={activeProvider} />
-        )}
+        <ProviderBody key={activeTab} {...props} provider={activeProvider} />
       </View>
     </View>
   );
@@ -138,6 +132,7 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
     selectedProvider,
     selectedModel,
     thinking,
+    fast,
     onPick,
     onRetryProvider,
     isRetryingProvider = false,
@@ -217,8 +212,9 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
     if (provider) onRetryProvider?.(provider.id);
   }, [onRetryProvider, provider]);
 
+  const selectionKind = provider?.modelSelection.kind;
   const ownsSelection = provider?.id === selectedProvider;
-  const showEffort = ownsSelection && thinking && thinking.options.length > 0;
+  const showEffort = Boolean(ownsSelection && thinking && thinking.options.length > 0);
   const highlightedKey = highlight >= 0 ? flatItems[highlight]?.key : undefined;
 
   return (
@@ -280,14 +276,18 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
             )}
             {entries.length === 0 ? (
               <EmptyState
-                loading={isLoading || provider?.modelSelection.kind === "loading"}
+                loading={isLoading || selectionKind === "loading"}
                 text={resolveEmptyText(query, isLoading, provider?.label ?? "")}
               />
             ) : null}
           </ScrollView>
         </>
       )}
-      {showEffort && thinking ? <EffortRow thinking={thinking} /> : null}
+      <PickerFooter
+        thinking={showEffort ? thinking : null}
+        fast={ownsSelection ? fast : null}
+        disabled={selectionKind === "error"}
+      />
     </>
   );
 }
@@ -372,16 +372,12 @@ const RailTab = memo(function RailTab(props: {
           testID={`provider-model-picker-tab-${id}`}
         >
           <View style={[styles.railGlyph, dim]}>
-            {id === PROFILES_TAB ? (
-              <AgentProfileGlyph size={19} />
-            ) : (
-              <ModelProviderGlyph
-                provider={id}
-                serverId={props.serverId}
-                size={19}
-                tone={props.active ? "foreground" : "muted"}
-              />
-            )}
+            <ModelProviderGlyph
+              provider={id}
+              serverId={props.serverId}
+              size={19}
+              tone={props.active ? "foreground" : "muted"}
+            />
           </View>
           {props.unavailable ? <View style={styles.railDot} /> : null}
         </PressHighlight>
@@ -444,92 +440,155 @@ const ModelRow = memo(function ModelRow(props: {
   );
 });
 
-function ProfilesPanel(props: {
-  rows: AgentProfilePicker["rows"];
-  onApply: (profileId: string) => void;
+function PickerFooter(props: {
+  thinking?: PickerThinking | null;
+  fast?: PickerFast | null;
+  disabled?: boolean;
 }) {
   return (
     <>
-      <View style={styles.titleBlock}>
-        <Text style={styles.title}>配置</Text>
-        <Text style={styles.subtitle}>预设的模型与参数组合</Text>
-      </View>
-      <ScrollView
-        style={styles.list}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {props.rows.map((row) => (
-          <ProfileRow key={row.id} row={row} onApply={props.onApply} />
-        ))}
-      </ScrollView>
+      {props.thinking ? <EffortRow thinking={props.thinking} disabled={props.disabled} /> : null}
+      {props.fast ? <FastRow fast={props.fast} /> : null}
     </>
   );
 }
 
-function ProfileRow(props: {
-  row: AgentProfilePicker["rows"][number];
-  onApply: (profileId: string) => void;
-}) {
-  const { row, onApply } = props;
-  const handlePress = useCallback(() => onApply(row.id), [onApply, row.id]);
-  const style = useCallback(
-    ({ hovered }: PressableStateCallbackType & { hovered?: boolean }) => [
-      styles.profileRow,
-      Boolean(hovered) && styles.rowHovered,
-    ],
-    [],
+function EffortRow({ thinking, disabled }: { thinking: PickerThinking; disabled?: boolean }) {
+  const options = useMemo(
+    () => thinking.options.map((option) => ({ id: option.id, label: localizeEffortLabel(option) })),
+    [thinking.options],
   );
-  return (
-    <PressHighlight onPress={handlePress} style={style} accessibilityRole="button">
-      <AgentProfileGlyph icon={row.icon} color={row.color} />
-      <View style={styles.profileText}>
-        <Text style={styles.rowText} numberOfLines={1}>
-          {row.name}
-        </Text>
-        <Text style={styles.subtitle} numberOfLines={1}>
-          {row.summary}
-        </Text>
-      </View>
-    </PressHighlight>
-  );
-}
-
-function EffortRow({ thinking }: { thinking: PickerThinking }) {
-  const labels = thinking.options.map((option) => option.label);
-  const kind = resolveEffortControlKind(labels);
+  const kind = resolveEffortControlKind(options.map((option) => option.label));
   return (
     <View style={styles.effortRow} testID="provider-model-picker-effort">
-      <Text style={styles.effortLabel}>思考强度</Text>
+      <Text style={styles.effortLabel}>推理强度</Text>
       {kind === "segmented" ? (
-        <View style={styles.segments} accessibilityRole="radiogroup">
-          {thinking.options.map((option) => (
-            <Segment
-              key={option.id}
-              option={option}
-              selected={option.id === thinking.selectedId}
-              onSelect={thinking.onSelect}
-            />
-          ))}
-        </View>
+        <SegmentedEffort
+          options={options}
+          selectedId={thinking.selectedId}
+          onSelect={thinking.onSelect}
+          disabled={disabled}
+        />
       ) : (
-        <EffortSelect thinking={thinking} />
+        <EffortSelect
+          options={options}
+          selectedId={thinking.selectedId}
+          onSelect={thinking.onSelect}
+        />
       )}
     </View>
   );
 }
 
+function FastRow({ fast }: { fast: PickerFast }) {
+  return (
+    <View style={styles.fastRow} testID="provider-model-picker-fast">
+      <Text style={styles.effortLabel}>快速</Text>
+      <Switch value={fast.value} onValueChange={fast.onChange} accessibilityLabel="快速模式" />
+    </View>
+  );
+}
+
+interface EffortOption {
+  id: string;
+  label: string;
+}
+
+interface SegmentBox {
+  x: number;
+  width: number;
+}
+
+function noop() {}
+
+const SLIDE_EASING = Easing.bezier(0.22, 1, 0.36, 1);
+
+function SegmentedEffort(props: {
+  options: EffortOption[];
+  selectedId: string | undefined;
+  onSelect: (id: string) => void;
+  disabled?: boolean;
+}) {
+  const { options, selectedId, onSelect, disabled = false } = props;
+  const boxes = useRef(new Map<string, SegmentBox>());
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const x = useSharedValue(0);
+  const width = useSharedValue(0);
+  const prevSelected = useRef<string | undefined>(undefined);
+
+  const handleSegmentLayout = useCallback((id: string, box: SegmentBox) => {
+    const prev = boxes.current.get(id);
+    if (prev && prev.x === box.x && prev.width === box.width) return;
+    boxes.current.set(id, box);
+    setLayoutVersion((version) => version + 1);
+  }, []);
+
+  // First placement and resizes jump; only a selection change slides.
+  useEffect(() => {
+    const box = selectedId ? boxes.current.get(selectedId) : undefined;
+    if (!box) {
+      width.value = 0;
+      return;
+    }
+    const slide =
+      prevSelected.current !== undefined && prevSelected.current !== selectedId && width.value > 0;
+    prevSelected.current = selectedId;
+    if (slide) {
+      x.value = withTiming(box.x, { duration: 250, easing: SLIDE_EASING });
+      width.value = withTiming(box.width, { duration: 250, easing: SLIDE_EASING });
+    } else {
+      x.value = box.x;
+      width.value = box.width;
+    }
+  }, [layoutVersion, selectedId, width, x]);
+
+  const pillStyle = useAnimatedStyle(() => ({
+    width: width.value,
+    opacity: width.value > 0 ? 1 : 0,
+    transform: [{ translateX: x.value }],
+  }));
+
+  return (
+    <View
+      style={[styles.segments, disabled && styles.segmentsDisabled]}
+      accessibilityRole="radiogroup"
+      aria-disabled={disabled}
+    >
+      <Animated.View pointerEvents="none" style={[styles.segmentPill, pillStyle]}>
+        <View style={styles.segmentPillFill} />
+        <View style={styles.segmentPillHighlight} />
+      </Animated.View>
+      {options.map((option) => (
+        <Segment
+          key={option.id}
+          option={option}
+          selected={option.id === selectedId}
+          onSelect={disabled ? noop : onSelect}
+          onBox={handleSegmentLayout}
+        />
+      ))}
+    </View>
+  );
+}
+
 function Segment(props: {
-  option: { id: string; label: string };
+  option: EffortOption;
   selected: boolean;
   onSelect: (id: string) => void;
+  onBox: (id: string, box: SegmentBox) => void;
 }) {
-  const { option, onSelect } = props;
+  const { option, onSelect, onBox } = props;
   const handlePress = useCallback(() => onSelect(option.id), [onSelect, option.id]);
+  const handleLayout = useCallback(
+    (event: LayoutChangeEvent) =>
+      onBox(option.id, { x: event.nativeEvent.layout.x, width: event.nativeEvent.layout.width }),
+    [onBox, option.id],
+  );
   return (
     <PressHighlight
       onPress={handlePress}
-      style={props.selected ? styles.segmentOn : styles.segment}
+      onLayout={handleLayout}
+      style={styles.segment}
       accessibilityRole="radio"
       aria-checked={props.selected}
     >
@@ -538,14 +597,15 @@ function Segment(props: {
   );
 }
 
-function EffortSelect({ thinking }: { thinking: PickerThinking }) {
+function EffortSelect(props: {
+  options: EffortOption[];
+  selectedId: string | undefined;
+  onSelect: (id: string) => void;
+}) {
+  const { options, selectedId, onSelect } = props;
   const anchorRef = useRef<View>(null);
   const [open, setOpen] = useState(false);
-  const options = useMemo(
-    () => thinking.options.map((option) => ({ id: option.id, label: option.label })),
-    [thinking.options],
-  );
-  const current = thinking.options.find((option) => option.id === thinking.selectedId);
+  const current = options.find((option) => option.id === selectedId);
   const handleOpen = useCallback(() => setOpen(true), []);
   return (
     <>
@@ -563,8 +623,8 @@ function EffortSelect({ thinking }: { thinking: PickerThinking }) {
       </PressHighlight>
       <Combobox
         options={options}
-        value={thinking.selectedId ?? ""}
-        onSelect={thinking.onSelect}
+        value={selectedId ?? ""}
+        onSelect={onSelect}
         searchable={false}
         open={open}
         onOpenChange={setOpen}
@@ -705,14 +765,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   empty: { alignItems: "center", gap: theme.spacing[2], padding: theme.spacing[4] },
   emptyText: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
-  profileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-    borderRadius: 10,
-    padding: 10,
-  },
-  profileText: { flex: 1, minWidth: 0 },
   effortRow: {
     flexShrink: 0,
     flexDirection: "row",
@@ -728,6 +780,17 @@ const styles = StyleSheet.create((theme) => ({
     borderTopColor: theme.colors.border,
   },
   effortLabel: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  fastRow: {
+    flexShrink: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: -theme.spacing[1.5],
+    paddingTop: theme.spacing[1],
+    paddingLeft: theme.spacing[4],
+    paddingRight: theme.spacing[3],
+    minHeight: 32,
+  },
   segments: {
     flexDirection: "row",
     gap: 2,
@@ -735,20 +798,36 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: 10,
     backgroundColor: theme.colors.hoverTint,
   },
+  segmentPill: {
+    position: "absolute",
+    top: 2,
+    bottom: 2,
+    left: 0,
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  // Text color at 12% plus a one-pixel top highlight, both from theme tokens.
+  segmentPillFill: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: theme.colors.foreground,
+    opacity: 0.12,
+  },
+  segmentPillHighlight: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: theme.colors.foreground,
+    opacity: 0.16,
+  },
+  segmentsDisabled: { opacity: 0.5 },
   segment: {
     height: 28,
-    paddingHorizontal: theme.spacing[2],
+    paddingHorizontal: 8,
     borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
-  },
-  segmentOn: {
-    height: 28,
-    paddingHorizontal: theme.spacing[2],
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.colors.borderStrong,
   },
   segmentText: {
     color: theme.colors.foregroundMuted,

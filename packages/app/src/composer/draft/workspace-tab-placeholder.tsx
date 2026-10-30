@@ -140,7 +140,7 @@ export function useWorkspaceTabPlaceholder(input: {
     if (target.disabled) throw new Error("此流程未启用，请先启用。");
     const recipientSetup = recipient && recipient.id !== placeholder.tabId ? recipient.setup : null;
     const selectedProvider = recipientSetup?.provider ?? config.provider;
-    if (!selectedProvider) throw new Error("请在任务默认模型设置中选择模型。");
+    if (!selectedProvider) throw new Error("请在任务角色设置中选择模型。");
     const images = await encodeImages(attempt.images);
     const result = await submitWorkspaceTabMessage({
       provider,

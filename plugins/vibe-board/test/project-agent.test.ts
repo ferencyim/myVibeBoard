@@ -292,9 +292,9 @@ describe("项目 agent", () => {
     const f = fixture();
     f.taskRows.length = 0;
     f.providers.snapshot.mockRejectedValueOnce(new Error("目录离线")).mockRejectedValueOnce(new Error("目录离线"));
-    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务角色");
     f.providers.snapshot.mockResolvedValue({ entries: [] });
-    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务角色");
     expect(f.createAgent).not.toHaveBeenCalled();
   });
   it("跳过正在初始化或失败 provider，只用缓存目录且不启动慢 provider 查询", async () => {
@@ -326,7 +326,7 @@ describe("项目 agent", () => {
       const failed = fixture();
       failed.taskRows.length = 0;
       failed.providers.snapshot.mockImplementation(() => new Promise(() => {}));
-      const failure = expect(failed.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+      const failure = expect(failed.service.resolveModel("p")).rejects.toThrow("任务角色");
       await vi.advanceTimersByTimeAsync(1_500);
       await failure;
       failed.providers.snapshot.mockResolvedValue({ entries: [{ provider: "codex", enabled: true, status: "loading", models: [{ id: "stale", isDefault: true }] }] });
@@ -368,7 +368,7 @@ describe("项目 agent", () => {
     const f = fixture();
     f.main.tabs[0].model = UNRESOLVED_TAB_MODEL;
     f.providers.snapshot.mockRejectedValueOnce(new Error("catalog unavailable")).mockRejectedValueOnce(new Error("catalog unavailable"));
-    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务角色");
     expect(f.createAgent).not.toHaveBeenCalled();
     expect((await f.service.resolveModel("p")).config.provider).toBe("codex/default-model");
   });
@@ -376,7 +376,7 @@ describe("项目 agent", () => {
     const f = fixture();
     f.taskRows.length = 0;
     f.providers.snapshot.mockResolvedValue({ entries: [] });
-    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务角色");
     expect(f.providers.listModels).not.toHaveBeenCalled();
     expect(f.createAgent).not.toHaveBeenCalled();
   });
@@ -384,7 +384,7 @@ describe("项目 agent", () => {
     const f = fixture();
     f.taskRows.length = 0;
     f.providers.snapshot.mockResolvedValue({ entries: [] });
-    await expect(f.service.resolveModel("p")).rejects.toThrow("任务默认模型");
+    await expect(f.service.resolveModel("p")).rejects.toThrow("任务角色");
     expect(f.createAgent).not.toHaveBeenCalled();
     f.providers.snapshot.mockResolvedValue({ entries: [{ provider: "codex", enabled: true, status: "ready", models: [{ id: "first", isDefault: false }] }] });
     expect((await f.service.resolveModel("p")).config.provider).toBe("codex/first");

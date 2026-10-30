@@ -1,47 +1,28 @@
-// Project extensions and ordered model presets.
+// Project management.
 
 import { Modal, useToast } from "@getpaseo/plugin/client/react-native";
-import { SettingsSelect } from "@getpaseo/plugin/client/ui";
-import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import {
-  PRESET_ENVIRONMENT_KINDS,
-  PRESET_PERMISSION_MODES,
   PROJECT_TYPES,
-  presetModels,
-  type Preset,
   type Project,
 } from "../../shared/vibe/contract";
 import { errorMessage, projectColor } from "../common/logic";
-import { queryKey, type BoardApi } from "../common/api";
+import { type BoardApi } from "../common/api";
 import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Chip, Dot, Field, Muted, TextField } from "../common/ui";
 import {
-  ENVIRONMENT_LABELS,
-  EMPTY_PRESET_DRAFT,
-  EMPTY_MODEL_DRAFT,
-  movePresetModel,
-  PERMISSION_LABELS,
   PROJECT_TYPE_LABELS,
-  draftToPayload,
   emptyProjectDraft,
-  presetToDraft,
   projectDraftToPayload,
   projectToDraft,
-  thinkingAfterModelChange,
-  thinkingChoices,
   toggleProjectType,
-  validateDraft,
   validateProjectDraft,
-  type PresetDraft,
-  type PresetModelDraft,
   type ProjectDraft,
   type ProviderUsageLike,
 } from "./logic";
 
 import { RequirementsPanel } from "./requirements";
-import { QuotaBadge } from "./usage";
 
 export const COLOR_CHOICES = [
   "#3b82f6",
@@ -54,38 +35,24 @@ export const COLOR_CHOICES = [
   "#f97316",
 ];
 
-type Tab = "projects" | "presets";
-
 export interface ManageProps {
   open: boolean;
   onClose: () => void;
   api: BoardApi;
   projects: readonly Project[];
-  presets: readonly Preset[];
   usage: readonly ProviderUsageLike[] | null;
   refresh: () => void;
-  initialTab?: Tab;
 }
 
 export function ManageModal(props: ManageProps) {
   const host = useHost(); // Modal content renders in a host portal: bridge the host value.
   const { theme } = host;
-  const [tab, setTab] = useState<Tab>(props.initialTab ?? "projects");
   return (
-    <Modal title="管理" open={props.open} onOpenChange={(o) => !o && props.onClose()}>
+    <Modal title="管理项目" open={props.open} onOpenChange={(o) => !o && props.onClose()}>
       <Modal.Content>
         <HostProvider value={host}>
           <View style={{ gap: 14 }}>
-            <View style={{ flexDirection: "row", gap: 6 }}>
-              <Chip label="项目" selected={tab === "projects"} onPress={() => setTab("projects")} />
-              <Chip
-                label="Agent 预设"
-                selected={tab === "presets"}
-                onPress={() => setTab("presets")}
-              />
-            </View>
-            {tab === "projects" ? <ProjectsTab {...props} /> : null}
-            {tab === "presets" ? <PresetsTab {...props} /> : null}
+            <ProjectsTab {...props} />
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
               数据保存在本机 vibe.db，所有端共享。
             </Text>
@@ -170,7 +137,7 @@ function ProjectForm({
           autoCapitalize="none"
         />
       </Field>
-      {openTaskDefaults ? <Btn label="打开任务默认模型设置" onPress={openTaskDefaults} /> : null}
+      {openTaskDefaults ? <Btn label="打开任务角色设置" onPress={openTaskDefaults} /> : null}
       <Field label="并发上限（留空不限）">
         <TextField
           value={draft.concurrencyLimit}
@@ -300,269 +267,6 @@ function ProjectsTab({ api, projects, refresh }: ManageProps) {
           onPress={create}
         />
       </View>
-    </View>
-  );
-}
-
-function PresetModelEditor({
-  value,
-  providers,
-  onChange: patch,
-}: {
-  value: PresetModelDraft;
-  providers: Awaited<ReturnType<BoardApi["providersCatalog"]>>["providers"];
-  onChange: (change: Partial<PresetModelDraft>) => void;
-}) {
-  const models = providers.find((p) => p.id === value.provider)?.models ?? [];
-  return (
-    <ScrollView
-      horizontal
-      contentContainerStyle={{ flexDirection: "row", alignItems: "center", gap: 8 }}
-    >
-      <SettingsSelect
-        inline
-        label="Agent（provider）"
-        value={value.provider}
-        options={[
-          ...(!value.provider ? [{ value: "", label: "请选择" }] : []),
-          ...providers.map((p) => ({
-            value: p.id,
-            label: `${p.id}${p.available ? "" : "（不可用）"}`,
-          })),
-          ...(value.provider && !providers.some((p) => p.id === value.provider)
-            ? [{ value: value.provider, label: `${value.provider}（已保存）` }]
-            : []),
-        ]}
-        onValueChange={(provider) => {
-          if (provider !== value.provider) patch({ provider, model: "", thinking: "" });
-        }}
-      />
-      <SettingsSelect
-        inline
-        label="模型（必填）"
-        value={value.model}
-        options={[
-          ...(!value.model ? [{ value: "", label: "请选择" }] : []),
-          ...models.map((m) => ({ value: m.id, label: m.name })),
-          ...(value.model && !models.some((m) => m.id === value.model)
-            ? [{ value: value.model, label: `${value.model}（已保存）` }]
-            : []),
-        ]}
-        onValueChange={(model) => {
-          if (model !== value.model) {
-            patch({ model, thinking: thinkingAfterModelChange(models, model, value.thinking) });
-          }
-        }}
-      />
-      <SettingsSelect
-        inline
-        label="思考强度"
-        value={value.thinking}
-        options={thinkingChoices(models, value.model, value.thinking).map((o) => ({
-          value: o.id,
-          label: o.label,
-        }))}
-        onValueChange={(thinking) => patch({ thinking })}
-      />
-      <SettingsSelect
-        inline
-        label="权限模式"
-        value={value.permissionMode}
-        options={PRESET_PERMISSION_MODES.map((m) => ({ value: m, label: PERMISSION_LABELS[m] }))}
-        onValueChange={(permissionMode) => patch({ permissionMode })}
-      />
-    </ScrollView>
-  );
-}
-
-function PresetsTab({ api, presets, usage, refresh }: ManageProps) {
-  const { openTaskDefaults } = useHost();
-  const toast = useToast();
-  const [editing, setEditing] = useState<string | "new" | null>(null);
-  const [draft, setDraft] = useState<PresetDraft>(EMPTY_PRESET_DRAFT);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const catalog = useQuery({
-    queryKey: queryKey("providers-catalog"),
-    queryFn: () => api.providersCatalog({}),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const providers = catalog.data?.providers ?? [];
-  const patch = (p: Partial<PresetDraft>) => setDraft((d) => ({ ...d, ...p }));
-
-  const save = async () => {
-    const problem = validateDraft(draft);
-    if (problem) return setSaveError(problem);
-    if (saving) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      if (editing === "new") await api.presetsCreate(draftToPayload(draft));
-      else if (editing) await api.presetsUpdate({ presetId: editing, ...draftToPayload(draft) });
-      setEditing(null);
-      refresh();
-    } catch (e) {
-      setSaveError(errorMessage(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (editing) {
-    return (
-      <View style={{ gap: 10 }}>
-        <Field label="名称">
-          <TextField value={draft.name} onChangeText={(name) => patch({ name })} />
-        </Field>
-        {catalog.isPending ? <Muted>正在加载 provider 和模型目录…</Muted> : null}
-        {catalog.error ? <Muted>{errorMessage(catalog.error)}</Muted> : null}
-        <Field label="候选模型（按顺序尝试，不可用时自动切换下一个）">
-          {draft.models.map((candidate, index) => (
-            <View key={index} style={{ gap: 8, paddingVertical: 8 }}>
-              <Row>
-                <Text style={{ fontWeight: "600" }}>候选 {index + 1}</Text>
-                <Btn
-                  small
-                  label="上移"
-                  disabled={index === 0}
-                  onPress={() => patch({ models: movePresetModel(draft.models, index, -1) })}
-                />
-                <Btn
-                  small
-                  label="下移"
-                  disabled={index === draft.models.length - 1}
-                  onPress={() => patch({ models: movePresetModel(draft.models, index, 1) })}
-                />
-                <Btn
-                  small
-                  label="删除候选"
-                  variant="danger"
-                  disabled={draft.models.length === 1}
-                  onPress={() => patch({ models: draft.models.filter((_, i) => i !== index) })}
-                />
-              </Row>
-              <PresetModelEditor
-                value={candidate}
-                providers={providers}
-                onChange={(change) =>
-                  patch({
-                    models: draft.models.map((m, i) => (i === index ? { ...m, ...change } : m)),
-                  })
-                }
-              />
-            </View>
-          ))}
-          <Btn
-            label="添加候选模型"
-            icon="Plus"
-            onPress={() => patch({ models: [...draft.models, { ...EMPTY_MODEL_DRAFT }] })}
-          />
-        </Field>
-        <Field label="运行环境">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {PRESET_ENVIRONMENT_KINDS.map((k) => (
-              <Chip
-                key={k}
-                label={ENVIRONMENT_LABELS[k]}
-                selected={draft.environmentKind === k}
-                onPress={() => patch({ environmentKind: k })}
-              />
-            ))}
-          </View>
-        </Field>
-        <Field label="基础分支">
-          <TextField
-            value={draft.baseBranch}
-            onChangeText={(baseBranch) => patch({ baseBranch })}
-            placeholder="main"
-            autoCapitalize="none"
-          />
-        </Field>
-        <Field label="运行时环境（如 android-emulator）">
-          <TextField
-            value={draft.runtimeEnv}
-            onChangeText={(runtimeEnv) => patch({ runtimeEnv })}
-            autoCapitalize="none"
-          />
-        </Field>
-        <Field label="附加指令">
-          <TextField
-            multiline
-            value={draft.instructions}
-            onChangeText={(instructions) => patch({ instructions })}
-          />
-        </Field>
-        {saveError ? <Muted>{saveError}</Muted> : null}
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <Btn
-            variant="primary"
-            label={saving ? "正在保存…" : "保存"}
-            disabled={saving}
-            onPress={save}
-          />
-          <Btn label="取消" disabled={saving} onPress={() => setEditing(null)} />
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ gap: 10 }}>
-      {openTaskDefaults ? <Btn label="打开任务默认模型设置" onPress={openTaskDefaults} /> : null}
-      <Text style={{ fontWeight: "600", marginTop: 8 }}>预设列表</Text>
-      {presets.map((p) => (
-        <View key={p.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontWeight: "600" }}>{p.name}</Text>
-            <Muted>
-              {presetModels(p)
-                .map((m) => `${m.provider} / ${m.model}`)
-                .join(" → ")}
-            </Muted>
-          </View>
-          <View style={{ gap: 4 }}>
-            {[...new Set(presetModels(p).map((m) => m.provider))].map((provider) => (
-              <QuotaBadge key={provider} provider={provider} usage={usage} />
-            ))}
-          </View>
-          <Btn
-            small
-            label="编辑"
-            onPress={() => {
-              setSaveError(null);
-              setDraft(presetToDraft(p));
-              setEditing(p.id);
-            }}
-          />
-          {!p.builtin ? (
-            <Btn
-              small
-              variant="danger"
-              icon="Trash2"
-              onPress={async () => {
-                try {
-                  await api.presetsDelete({ presetId: p.id });
-                  refresh();
-                } catch (e) {
-                  toast.error(errorMessage(e));
-                }
-              }}
-            />
-          ) : null}
-        </View>
-      ))}
-      {presets.length === 0 ? <Muted>还没有预设。</Muted> : null}
-      <Btn
-        variant="primary"
-        icon="Plus"
-        label="新建预设"
-        onPress={() => {
-          setSaveError(null);
-          setDraft(EMPTY_PRESET_DRAFT);
-          setEditing("new");
-        }}
-      />
     </View>
   );
 }

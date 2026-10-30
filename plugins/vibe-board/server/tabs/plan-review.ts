@@ -28,6 +28,8 @@ export interface PlanReviewer extends ReviewerModel {
   /** Every model of the reviewer's preset in order; a failed start or run moves to the next. */
   candidates?: ReviewerModel[];
   attempt?: number;
+  /** Role setting of the reviewer's preset: start in Fast mode. */
+  fastMode?: boolean;
   agentId: string | null;
   status: "pending" | "running" | "done" | "failed";
   error?: string;
@@ -221,6 +223,7 @@ export function createPlanReview(options: {
       .slice(1)
       .map((preset) => ({
         presetId: preset.presetId,
+        fastMode: !!preset.fastMode,
         candidates: preset.models.map((model) => ({
           provider: model.provider,
           model: model.model,
@@ -231,6 +234,7 @@ export function createPlanReview(options: {
       .map((entry, index) => ({
         index,
         presetId: entry.presetId,
+        ...(entry.fastMode ? { fastMode: true } : {}),
         ...entry.candidates[0]!,
         candidates: entry.candidates,
         attempt: 0,
@@ -378,6 +382,7 @@ export function createPlanReview(options: {
             provider: `${reviewer.provider}/${reviewer.model}`,
             ...(modeId ? { modeId } : {}),
             ...(reviewer.thinking ? { thinkingOptionId: reviewer.thinking } : {}),
+            ...(reviewer.fastMode ? { featureValues: { fast_mode: true } } : {}),
           },
           parent: state.plannerAgentId,
           title: `#${state.plannerTab} 方案审阅 ${index + 1}/${total}`,

@@ -30,7 +30,6 @@ import {
   cacheBranchSuggestions,
 } from "@/data/branch-suggestions-cache";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
-import type { MaterializedAgentProfile } from "@/agent-profiles";
 import type { ProviderSelectorProvider } from "@/provider-selection/provider-selection";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { resolveTerminalProfiles } from "@getpaseo/protocol/terminal-profiles";
@@ -1447,10 +1446,6 @@ export function NewWorkspaceScreen({
               });
               if (provider !== DEFAULT_MODEL_PROVIDER)
                 composerState.agentControls.onSelectProviderAndModel(provider, modelId);
-            },
-            onApplyAgentProfile: (profile: MaterializedAgentProfile) => {
-              setModelIntent({ serverId: selectedServerId, useDefault: false });
-              composerState.agentControls.onApplyAgentProfile(profile);
             },
           }
         : undefined,

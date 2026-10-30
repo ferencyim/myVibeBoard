@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { test, expect } from "../support/fixtures";
-import { seedModelProvider } from "../support/helpers/agent-profiles";
+import { seedModelProvider } from "../support/helpers/model-picker";
 import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
 import { gotoWorkspace } from "../support/helpers/launcher";
 import {
@@ -84,7 +84,7 @@ for (const hostStatus of ["ready", "unavailable"] as const) {
       for (const [index, select] of [chooseModel, reselectModel].entries()) {
         const count = index + 1;
         await test.step(`create workspace ${count} and return`, async () => {
-          await select(page, PROVIDER, LABEL);
+          await select(page, PROVIDER, MODEL, LABEL);
           await expectSavedSelection(page, PROVIDER, MODEL);
           await submitNewWorkspacePrompt(page, "Remember this model on the next workspace");
           await expect(page).toHaveURL(/\/workspace\//);

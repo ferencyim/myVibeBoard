@@ -121,6 +121,7 @@ function snapshotOf(
     environmentKind: preset.environmentKind,
     runtimeEnv: preset.runtimeEnv,
     instructions: preset.instructions,
+    ...(preset.fastMode ? { fastMode: true } : {}),
   });
 }
 
@@ -996,6 +997,7 @@ export function createTaskTabs(options: {
     const config: Record<string, unknown> = { provider: spec };
     if (preset?.thinking && preset.thinking !== "default")
       config.thinkingOptionId = preset.thinking;
+    if (preset?.fastMode) config.featureValues = { fast_mode: true };
     const handle = await paseo()
       .workspaces.ref(workspaceId)
       .agents.create({

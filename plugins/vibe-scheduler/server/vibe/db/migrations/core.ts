@@ -743,4 +743,185 @@ WHERE key = 'models.defaults' AND json_valid(value)
 ALTER TABLE task ADD COLUMN updated_at TEXT;
 `,
   },
+  {
+    // WP-177: presets become per-role settings (and bots expand theirs). The preset table is kept but no longer read or written.
+    version: 21,
+    name: "role_settings",
+    sql: `
+CREATE TABLE role_setting (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  thinking TEXT NOT NULL DEFAULT '',
+  permission_mode TEXT NOT NULL DEFAULT 'accept-edits'
+    CHECK (permission_mode IN ('accept-edits','auto','full')),
+  environment_kind TEXT NOT NULL DEFAULT 'project-default'
+    CHECK (environment_kind IN ('project-default','new-worktree')),
+  base_branch TEXT,
+  runtime_env TEXT,
+  instructions TEXT NOT NULL DEFAULT '',
+  builtin INTEGER NOT NULL DEFAULT 0 CHECK (builtin IN (0,1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_hlc TEXT NOT NULL DEFAULT '',
+  fallback_preset_ids_json TEXT,
+  role_hint TEXT,
+  role_hints_json TEXT NOT NULL DEFAULT '[]',
+  models_json TEXT NOT NULL DEFAULT '[]',
+  fast_mode INTEGER NOT NULL DEFAULT 0 CHECK (fast_mode IN (0,1)),
+  owner_scope TEXT,
+  owner_role TEXT
+);
+CREATE TABLE role_setting_migration_note (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+-- Every preset moves over unchanged, ids included, so each stored reference (defaults, bots, task
+-- snapshots, fallback chains) keeps resolving. The preset table stays, unread and unwritten.
+INSERT OR IGNORE INTO role_setting (id, name, provider, model, thinking, permission_mode, environment_kind,
+  base_branch, runtime_env, instructions, builtin, created_at, updated_at, updated_hlc,
+  fallback_preset_ids_json, role_hint, role_hints_json, models_json)
+SELECT id, name, provider, model, thinking, permission_mode, environment_kind,
+  base_branch, runtime_env, instructions, builtin, created_at, updated_at, updated_hlc,
+  fallback_preset_ids_json, role_hint, role_hints_json, models_json
+FROM preset;
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.main', id, json_extract(default_presets_json, '$.main'), datetime('now') FROM project
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.main') = 'text'
+  AND json_extract(default_presets_json, '$.main') NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_remove(default_presets_json, '$.main')
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.main') = 'text'
+  AND json_extract(default_presets_json, '$.main') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.main', key, json_extract(value, '$.main'), datetime('now') FROM vibe_meta
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.main') = 'text'
+  AND json_extract(value, '$.main') NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_remove(value, '$.main')
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.main') = 'text'
+  AND json_extract(value, '$.main') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.project', id, json_extract(default_presets_json, '$.project'), datetime('now') FROM project
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.project') = 'text'
+  AND json_extract(default_presets_json, '$.project') NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_remove(default_presets_json, '$.project')
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.project') = 'text'
+  AND json_extract(default_presets_json, '$.project') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.project', key, json_extract(value, '$.project'), datetime('now') FROM vibe_meta
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.project') = 'text'
+  AND json_extract(value, '$.project') NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_remove(value, '$.project')
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.project') = 'text'
+  AND json_extract(value, '$.project') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.scout', id, json_extract(default_presets_json, '$.scout'), datetime('now') FROM project
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.scout') = 'text'
+  AND json_extract(default_presets_json, '$.scout') NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_remove(default_presets_json, '$.scout')
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.scout') = 'text'
+  AND json_extract(default_presets_json, '$.scout') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.scout', key, json_extract(value, '$.scout'), datetime('now') FROM vibe_meta
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.scout') = 'text'
+  AND json_extract(value, '$.scout') NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_remove(value, '$.scout')
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.scout') = 'text'
+  AND json_extract(value, '$.scout') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.worker', id, json_extract(default_presets_json, '$.worker'), datetime('now') FROM project
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.worker') = 'text'
+  AND json_extract(default_presets_json, '$.worker') NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_remove(default_presets_json, '$.worker')
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.worker') = 'text'
+  AND json_extract(default_presets_json, '$.worker') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.worker', key, json_extract(value, '$.worker'), datetime('now') FROM vibe_meta
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.worker') = 'text'
+  AND json_extract(value, '$.worker') NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_remove(value, '$.worker')
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.worker') = 'text'
+  AND json_extract(value, '$.worker') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.subagent', id, json_extract(default_presets_json, '$.subagent'), datetime('now') FROM project
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.subagent') = 'text'
+  AND json_extract(default_presets_json, '$.subagent') NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_remove(default_presets_json, '$.subagent')
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.subagent') = 'text'
+  AND json_extract(default_presets_json, '$.subagent') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.subagent', key, json_extract(value, '$.subagent'), datetime('now') FROM vibe_meta
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.subagent') = 'text'
+  AND json_extract(value, '$.subagent') NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_remove(value, '$.subagent')
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.subagent') = 'text'
+  AND json_extract(value, '$.subagent') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.reviewer', id, json_extract(default_presets_json, '$.reviewer'), datetime('now') FROM project
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.reviewer') = 'text'
+  AND json_extract(default_presets_json, '$.reviewer') NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_remove(default_presets_json, '$.reviewer')
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.reviewer') = 'text'
+  AND json_extract(default_presets_json, '$.reviewer') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.reviewer', key, json_extract(value, '$.reviewer'), datetime('now') FROM vibe_meta
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.reviewer') = 'text'
+  AND json_extract(value, '$.reviewer') NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_remove(value, '$.reviewer')
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.reviewer') = 'text'
+  AND json_extract(value, '$.reviewer') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.verifier', id, json_extract(default_presets_json, '$.verifier'), datetime('now') FROM project
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.verifier') = 'text'
+  AND json_extract(default_presets_json, '$.verifier') NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_remove(default_presets_json, '$.verifier')
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.verifier') = 'text'
+  AND json_extract(default_presets_json, '$.verifier') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.verifier', key, json_extract(value, '$.verifier'), datetime('now') FROM vibe_meta
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.verifier') = 'text'
+  AND json_extract(value, '$.verifier') NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_remove(value, '$.verifier')
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.verifier') = 'text'
+  AND json_extract(value, '$.verifier') NOT IN (SELECT id FROM role_setting);
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'project.default.planners', p.id, j.value, datetime('now') FROM project p, json_each(p.default_presets_json, '$.planners') j
+WHERE json_valid(p.default_presets_json) AND json_type(p.default_presets_json, '$.planners') = 'array'
+  AND j.value NOT IN (SELECT id FROM role_setting);
+UPDATE project SET default_presets_json = json_set(default_presets_json, '$.planners',
+  json((SELECT COALESCE(json_group_array(value), '[]') FROM json_each(default_presets_json, '$.planners')
+        WHERE value IN (SELECT id FROM role_setting))))
+WHERE json_valid(default_presets_json) AND json_type(default_presets_json, '$.planners') = 'array'
+  AND EXISTS (SELECT 1 FROM json_each(default_presets_json, '$.planners') WHERE value NOT IN (SELECT id FROM role_setting));
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'global.default.planners', v.key, j.value, datetime('now') FROM vibe_meta v, json_each(v.value, '$.planners') j
+WHERE v.key = 'models.defaults' AND json_valid(v.value) AND json_type(v.value, '$.planners') = 'array'
+  AND j.value NOT IN (SELECT id FROM role_setting);
+UPDATE vibe_meta SET value = json_set(value, '$.planners',
+  json((SELECT COALESCE(json_group_array(value), '[]') FROM json_each(vibe_meta.value, '$.planners')
+        WHERE value IN (SELECT id FROM role_setting))))
+WHERE key = 'models.defaults' AND json_valid(value) AND json_type(value, '$.planners') = 'array'
+  AND EXISTS (SELECT 1 FROM json_each(vibe_meta.value, '$.planners') WHERE value NOT IN (SELECT id FROM role_setting));
+-- Bots (owner vibe-bots, created before this runs): the setting a bot pointed at becomes the bot's
+-- own model fields. The id stays so the setting's prompt and runtime environment keep applying; a
+-- missing setting is dropped and logged and the bot follows the default model.
+
+INSERT INTO role_setting_migration_note (kind, ref, detail, at)
+SELECT 'bot.preset_id', id, preset_id, datetime('now') FROM bot
+WHERE preset_id IS NOT NULL AND preset_id NOT IN (SELECT id FROM role_setting);
+UPDATE bot SET preset_id = NULL
+WHERE preset_id IS NOT NULL AND preset_id NOT IN (SELECT id FROM role_setting);
+UPDATE bot SET
+  provider = (SELECT provider FROM role_setting WHERE id = bot.preset_id),
+  model = (SELECT model FROM role_setting WHERE id = bot.preset_id),
+  thinking = CASE WHEN thinking = '' THEN (SELECT thinking FROM role_setting WHERE id = bot.preset_id) ELSE thinking END,
+  permission_mode = (SELECT permission_mode FROM role_setting WHERE id = bot.preset_id),
+  backup_models_json = (SELECT COALESCE(json_group_array(json(j.value)), '[]')
+    FROM role_setting r, json_each(r.models_json) j WHERE r.id = bot.preset_id AND j.key > 0)
+WHERE preset_id IS NOT NULL AND (provider IS NULL OR model IS NULL OR provider = '' OR model = '');
+`,
+  },
 ];

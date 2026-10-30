@@ -1,3 +1,4 @@
+import { useRpc } from "@getpaseo/plugin/client";
 import { SettingsSection } from "@getpaseo/plugin/client/ui";
 import type {
   PluginSurfaceProps,
@@ -5,14 +6,17 @@ import type {
 } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
-import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import React, { type ComponentProps, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { StyleSheet, View } from "react-native";
 import type { ModelDefaults, Preset } from "../../shared/vibe/contract";
 import { useBoardApi, type BoardApi } from "../common/api";
 import { HostProvider } from "../common/ctx";
 import { errorMessage } from "../common/logic";
 import { Btn, Muted } from "../common/ui";
+import { botModelsListRpc } from "../../shared/project-bots";
+import { saveRoleSetting, scopeKey } from "./role-setting";
 import { DefaultModelsEditor } from "./defaults";
+import type { RoleDraft } from "./role-setting";
 import { openDefaultsForm } from "./defaults-model";
 
 export function TaskDefaultsScreen(props: PluginSurfaceProps) {
@@ -22,7 +26,7 @@ export function TaskDefaultsScreen(props: PluginSurfaceProps) {
   );
   return (
     <HostProvider value={host}>
-      <SettingsSection title="任务默认模型">
+      <SettingsSection title="任务角色">
         <DefaultsContent serverId={props.host.id} />
       </SettingsSection>
     </HostProvider>
@@ -55,6 +59,12 @@ function DefaultsContent({ serverId, projectId }: { serverId: string; projectId?
     queryFn: () => api.presetsList({}),
     retry: false,
   });
+  const listModels = useRpc(botModelsListRpc);
+  const catalog = useQuery({
+    queryKey: ["vibe-board", "task-defaults-models", serverId],
+    queryFn: () => listModels({}),
+    staleTime: 60_000,
+  });
   const refetchDefaults = defaults.refetch;
   const refetchPresets = presets.refetch;
   const retry = useCallback(() => {
@@ -64,7 +74,7 @@ function DefaultsContent({ serverId, projectId }: { serverId: string; projectId?
   const onSaved = useCallback(async () => {
     await refetchDefaults();
   }, [refetchDefaults]);
-  if (defaults.isPending || presets.isPending) return <Muted>正在加载任务默认模型…</Muted>;
+  if (defaults.isPending || presets.isPending) return <Muted>正在加载任务角色…</Muted>;
   if (defaults.error || presets.error)
     return (
       <View style={styles.stack}>
@@ -79,6 +89,8 @@ function DefaultsContent({ serverId, projectId }: { serverId: string; projectId?
       initial={project ?? defaults.data.global}
       inherited={projectId ? defaults.data.global : undefined}
       presets={presets.data.presets}
+      providers={catalog.data?.providers ?? []}
+      refetchPresets={refetchPresets}
       api={api}
       projectId={projectId}
       onSaved={onSaved}
@@ -89,6 +101,8 @@ function DefaultsForm({
   initial,
   inherited,
   presets,
+  providers,
+  refetchPresets,
   api,
   projectId,
   onSaved,
@@ -96,6 +110,8 @@ function DefaultsForm({
   initial: ModelDefaults;
   inherited?: ModelDefaults;
   presets: readonly Preset[];
+  providers: ComponentProps<typeof DefaultModelsEditor>["providers"];
+  refetchPresets: () => Promise<unknown>;
   api: BoardApi;
   projectId?: string;
   onSaved: () => Promise<void>;
@@ -106,6 +122,25 @@ function DefaultsForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
+  const saveRole = useCallback(
+    (role: string, current: Preset | undefined, draft: RoleDraft) =>
+      saveRoleSetting({
+        api: {
+          create: async (body) => (await api.presetsCreate(body)).preset,
+          update: async (id, body) => (await api.presetsUpdate({ presetId: id, ...body })).preset,
+        },
+        settings: presets,
+        current,
+        draft,
+        scope: scopeKey(projectId),
+        scopeLabel: projectId ? "项目" : "全局",
+        role,
+      }).then(async (id) => {
+        await refetchPresets();
+        return id;
+      }),
+    [api, presets, projectId, refetchPresets],
+  );
   const save = useCallback(async () => {
     if (saving) return;
     setSaving(true);
@@ -116,7 +151,7 @@ function DefaultsForm({
         : await api.defaultsSet({ global: state.value });
       model.saved("project" in response ? (response.project as ModelDefaults) : response.global);
       await onSaved();
-      toast.show("已保存任务默认模型", { variant: "success" });
+      toast.show("已保存任务角色", { variant: "success" });
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -129,13 +164,15 @@ function DefaultsForm({
         disabled={saving}
         value={state.value}
         onChange={model.change}
-        presets={presets}
+        settings={presets}
+        providers={providers}
+        saveRole={saveRole}
         inherited={inherited}
       />
       {error ? <Muted>{error}</Muted> : null}
       <View style={styles.actions}>
         <Btn
-          label={saving ? "正在保存…" : "保存任务默认模型"}
+          label={saving ? "正在保存…" : "保存任务角色"}
           variant="primary"
           disabled={!state.dirty || saving}
           onPress={save}

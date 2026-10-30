@@ -1,7 +1,7 @@
 import { useMemo } from "react";
-import type { AgentProfilePicker } from "@/agent-profiles";
 import {
   ProviderModelPicker,
+  type PickerFast,
   type PickerThinking,
   type ProviderModelPickerTriggerState,
 } from "@/components/provider-model-picker/provider-model-picker";
@@ -13,8 +13,7 @@ interface CombinedModelSelectorProps {
   selectedModel: string;
   onSelect: (provider: string, modelId: string) => void | Promise<unknown>;
   isLoading: boolean;
-  profiles?: AgentProfilePicker | null;
-  onApplyProfile?: (profileId: string) => void;
+  fast?: PickerFast | null;
   renderTrigger?: (input: ProviderModelPickerTriggerState) => React.ReactNode;
   onOpen?: () => void;
   onClose?: () => void;
@@ -58,8 +57,7 @@ export function CombinedModelSelector({
       onSelect={rest.onSelect}
       isLoading={rest.isLoading}
       thinking={thinking}
-      profiles={rest.profiles}
-      onApplyProfile={rest.onApplyProfile}
+      fast={rest.fast}
       onRetryProvider={rest.onRetryProvider}
       isRetryingProvider={rest.isRetryingProvider}
       disabled={rest.disabled}

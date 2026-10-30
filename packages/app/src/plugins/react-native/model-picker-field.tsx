@@ -1,7 +1,7 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import type { ModelPickerFieldProps } from "@getpaseo/plugin/client/ui";
 import { ProviderModelPicker } from "@/components/provider-model-picker/provider-model-picker";
-import { ModelProviderGlyph } from "@/components/model-browser";
+import { ModelProviderGlyph } from "@/components/model-provider-glyph";
 import { SelectFieldTrigger } from "@/components/ui/select-field";
 import type {
   ProviderSelectorProvider,
@@ -55,6 +55,14 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
         : null,
     [efforts, thinking, props],
   );
+  const { fast, onFastChange } = props;
+  const pickerFast = useMemo(
+    () =>
+      onFastChange
+        ? { value: fast === true, onChange: (value: boolean) => void onFastChange(value) }
+        : null,
+    [fast, onFastChange],
+  );
   const effortLabel = efforts.find((item) => item.id === thinking)?.name;
   const leading = useMemo(
     () => (provider ? <ModelProviderGlyph provider={provider} serverId={null} size={16} /> : null),
@@ -69,7 +77,13 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
       pressed: boolean;
     }): ReactNode => (
       <SelectFieldTrigger
-        label={[state.selectedModelLabel, effortLabel].filter(Boolean).join(" · ")}
+        label={[
+          state.selectedModelLabel,
+          fast === true && onFastChange ? "⚡ 快速" : null,
+          effortLabel,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         isPlaceholder={!model}
         placeholder="选择模型"
         leading={leading}
@@ -78,7 +92,7 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
         testID="plugin-model-picker-field"
       />
     ),
-    [effortLabel, model, leading],
+    [effortLabel, fast, model, leading, onFastChange],
   );
   return (
     <ProviderModelPicker
@@ -88,6 +102,7 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
       onSelect={onSelect}
       isLoading={loading}
       thinking={pickerThinking}
+      fast={pickerFast}
       disabled={disabled}
       onOpen={onOpen}
       renderTrigger={renderTrigger}

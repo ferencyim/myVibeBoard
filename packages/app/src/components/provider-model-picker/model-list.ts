@@ -83,3 +83,19 @@ export function resolveEffortControlKind(labels: string[]): EffortControlKind {
   const total = labels.reduce((sum, label) => sum + label.length, 0);
   return labels.length <= 5 && total <= 26 ? "segmented" : "select";
 }
+
+const EFFORT_LABELS: Record<string, string> = {
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  extrahigh: "极高",
+  max: "最高",
+  maximum: "最高",
+};
+
+/** Chinese label of a known effort level (matched on id, then label); other levels keep their label. */
+export function localizeEffortLabel(option: { id: string; label: string }): string {
+  const compact = (value: string) => value.replace(/[\s_-]+/g, "").toLowerCase();
+  return EFFORT_LABELS[compact(option.id)] ?? EFFORT_LABELS[compact(option.label)] ?? option.label;
+}

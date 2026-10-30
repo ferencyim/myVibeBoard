@@ -1,5 +1,5 @@
 import { expect, test } from "../support/fixtures";
-import { expectComposerModel } from "../support/helpers/agent-profiles";
+import { expectComposerModel } from "../support/helpers/model-picker";
 import { installDaemonWebSocketGate } from "../support/helpers/daemon-websocket-gate";
 import { createAgentTabFromMenu } from "../support/helpers/workspace-tabs";
 import { submitMessage } from "../support/helpers/composer";
