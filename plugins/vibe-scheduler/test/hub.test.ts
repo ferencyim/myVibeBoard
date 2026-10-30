@@ -52,7 +52,7 @@ function setup(options: { admissionFile?: string; agentQueue?: string[] } = {}) 
       commandSha256: "x",
       priority: 1,
       exclusive: false,
-      slots: 1,
+      units: 1,
       pid: 100,
       ...extra,
     }),
@@ -63,6 +63,7 @@ describe("hub admission", () => {
   it("blocks on a known metric and ignores unknown ones", async () => {
     const t = setup();
     await t.hub.updateSettings({ admissionIntervalSeconds: 0 });
+    await t.hub.submit(t.job()); // a holder: on an empty machine the deadlock guard ignores metrics
     t.metrics.availableGb = 5;
     const blocked = await t.hub.submit(t.job());
     expect(blocked.state).toBe("queued");
@@ -76,6 +77,8 @@ describe("hub admission", () => {
 
   it("deploy uses its own memory floor and may be admitted when normal jobs are not", async () => {
     const t = setup();
+    await t.hub.updateSettings({ admissionIntervalSeconds: 0 });
+    await t.hub.submit(t.job());
     t.metrics.availableGb = 6;
     expect((await t.hub.submit(t.job())).waitReasons).toContain("memory_low");
     expect((await t.hub.submit(t.job({ priority: 0 }))).state).toBe("admitted");
@@ -284,7 +287,7 @@ describe("hub http", () => {
       });
       return { status: res.status, body: (await res.json()) as Record<string, any> };
     };
-    const req = { owner: "o", command: "npm", commandSha256: "h", priority: 1, exclusive: false, slots: 1, pid: process.pid };
+    const req = { owner: "o", command: "npm", commandSha256: "h", priority: 1, exclusive: false, units: 1, pid: process.pid };
 
     expect((await call("GET", "/v1/status", undefined, "bad")).status).toBe(401);
     expect((await call("POST", "/v1/jobs", { owner: "" })).status).toBe(400);

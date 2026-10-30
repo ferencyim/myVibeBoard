@@ -16,7 +16,8 @@ const JobBody = z.object({
   commandSha256: z.string().min(1).max(128),
   priority: z.number().int().min(0).max(9),
   exclusive: z.boolean().default(false),
-  slots: z.number().int().min(1).max(64).default(1),
+  // Legacy `slots` (older guards sent the machine's slot count) is ignored: unknown keys are stripped.
+  units: z.number().int().min(1).max(8).default(1),
   memGb: z.number().min(0).max(1024).optional(),
   resources: z
     .array(z.object({ name: z.string().min(1).max(200), mode: z.enum(["shared", "exclusive"]) }))

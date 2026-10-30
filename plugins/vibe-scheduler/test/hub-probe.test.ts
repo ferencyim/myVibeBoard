@@ -23,6 +23,8 @@ function setup(lockDir: string | null, alive: Set<number> = new Set()) {
   const db = openVibeDb({ path: ":memory:" });
   closers.push(() => db.close());
   migrateOwner(db, "scheduler");
+  // The guard is in dynamic mode (otherwise its capacity is min(2, slots)).
+  if (lockDir) writeFileSync(join(lockDir, "admission-state.json"), JSON.stringify({ version: 2 }));
   const metrics: HubMetrics = { ts: "", availableGb: 40, cpuPercent: 10 };
   const hub = createHub({
     store: createHubStore(db, () => new Date()),
@@ -36,7 +38,7 @@ function setup(lockDir: string | null, alive: Set<number> = new Set()) {
     commandSha256: "x",
     priority: 1,
     exclusive: false,
-    slots: 1,
+    units: 1,
     pid: 100,
     ...extra,
   });
@@ -133,7 +135,7 @@ describe("mixed mode with the local lock directory", () => {
     const dir = tempDir();
     const t = setup(dir);
     await t.hub.updateSettings({ hardLimit: 4, admissionIntervalSeconds: 0 });
-    const view = await t.hub.submit(t.job({ slots: 2 }));
+    const view = await t.hub.submit(t.job({ units: 2 }));
     expect(view!.state).toBe("admitted");
     const dirs = readdirSync(dir).filter((n) => n.startsWith("slot-"));
     expect(dirs).toHaveLength(2);

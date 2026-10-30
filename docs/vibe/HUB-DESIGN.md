@@ -22,24 +22,26 @@
 
 - **机器指标**：沿用 guard 的指标与阈值（`win-heavy-guard.admission.json`：可用内存、commit 比例、CPU 窗口、进程数、句柄、磁盘队列、两次启动最小间隔、硬上限、部署保留名额）。中枢启动时读该文件作为默认值，之后以中枢设置为准，并写回该文件，供中枢不可用时的本地回退使用。采样复用调度器 `server/resources.ts`，补齐 guard 有而它没有的指标（进程数、句柄、磁盘队列）。
 - **重任务名额**：agent 任务和 shell 重任务共用机器阈值（agent 任务只在接管开关打开后才受机器阈值约束；开关关闭时只受 `agents` / `project:名称` 暂停约束）；重任务另有硬上限（默认 4），优先级 0（部署）始终保留一个名额。
+  - **名额语义**：每个 job 占 1 个名额（可选字段 `units` 占多个，默认 1，guard 不传；独占 job 视为占整机）。机器总容量 = min(中枢 `hardLimit`, guard 的名额数)，guard 的名额数读锁目录 `slots.txt`（1–8，缺失用 `hardLimit`），且只有锁目录存在 `admission-state.json`（动态模式）才用该值，否则与 guard 一样取 min(2, 值)。普通任务最多占 容量−1，优先级 0 可用最后一个（与 guard 的 `admission_reasons` 一致）。guard 的 `--slots`/`slots.txt` 是**机器总名额**，绝不能当作某个 job 的占用发给中枢。
+  - **防死锁保险**：中枢与本地都没有存活持有者时，队首（未被暂停、无共用资源冲突）直接放行，忽略名额、间隔与机器指标；若本来会被拦（如内存不足）则在锁目录 `logs/<日期>.jsonl` 写 `hub_empty_machine_bypass` 事件（含被忽略的原因）。
 - **共用资源**：命名资源，如 `pg:5435`。每个资源可设共享并发上限（默认 1，即排他）。申请时声明 `shared` 或 `exclusive`。
 
 ### 2.2 本机接口（给 guard 与其它进程）
 
 中枢在 `127.0.0.1` 随机端口开 HTTP 服务，启动后把 `{ "port", "token", "pid", "startedAt" }` 写到 `D:\devRepoCaches\validation\locks\win-heavy\hub.json`（与 guard 锁目录同处；token 防本机其它程序误调用，文件仅当前用户可读）。所有请求带 `Authorization: Bearer <token>`。
 
-| 方法 | 路径                     | 作用                                                                                                                                                                                           |
-| ---- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST | `/v1/jobs`               | 申请：`{ owner, project?, command, commandSha256, priority, exclusive, slots, memGb?, resources?: [{ name, mode }], pid }` → `{ jobId, state: "admitted"\|"queued", position?, waitReasons? }` |
-| GET  | `/v1/jobs/:id?wait=30`   | 长轮询直到放行或超时，返回同上结构                                                                                                                                                             |
-| POST | `/v1/jobs/:id/heartbeat` | 每 15 秒一次；60 秒无心跳且 pid 已死则回收                                                                                                                                                     |
-| POST | `/v1/jobs/:id/release`   | 结束：`{ exitCode, durationMs }`                                                                                                                                                               |
-| GET  | `/v1/ping`               | 只校验 token，立即返回 `{ ok: true, pid, startedAt }`；guard 用它探测中枢是否可用                                                                                                              |
-| GET  | `/v1/status`             | 机器指标（读缓存，过旧时带 `stale`）、持有者、排队、等待原因、生效中的暂停与指令                                                                                                               |
+| 方法 | 路径                     | 作用                                                                                                                                                                                            |
+| ---- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST | `/v1/jobs`               | 申请：`{ owner, project?, command, commandSha256, priority, exclusive, units?, memGb?, resources?: [{ name, mode }], pid }` → `{ jobId, state: "admitted"\|"queued", position?, waitReasons? }` |
+| GET  | `/v1/jobs/:id?wait=30`   | 长轮询直到放行或超时，返回同上结构                                                                                                                                                              |
+| POST | `/v1/jobs/:id/heartbeat` | 每 15 秒一次；60 秒无心跳且 pid 已死则回收                                                                                                                                                      |
+| POST | `/v1/jobs/:id/release`   | 结束：`{ exitCode, durationMs }`                                                                                                                                                                |
+| GET  | `/v1/ping`               | 只校验 token，立即返回 `{ ok: true, pid, startedAt }`；guard 用它探测中枢是否可用                                                                                                               |
+| GET  | `/v1/status`             | 机器指标（读缓存，过旧时带 `stale`）、持有者、排队、等待原因、生效中的暂停与指令                                                                                                                |
 
 **机器指标后台采样**：中枢每 5 秒在后台采样一次（CIM 查询最长 8 秒，单飞不重叠），`/v1/status`、`/v1/jobs` 准入、`hub.status` RPC 一律读最近缓存，请求路径上从不等待采样；缓存超过 30 秒或尚无采样时在 `machine.metrics.stale` 标注，仍照常服务（缺失指标视为未知，不阻塞）。
 
-**与本地锁互相可见（混用安全）**：中枢的锁目录就是 `hub.json` 所在目录。中枢放行一个 job 时，在锁目录写与本地模式相同的持有者目录 `slot-<n>-<申请方pid>-<jobId去掉连字符>`，`owner.txt` 字段与 guard 一致并带 `"via": "hub"`、`hub_job_id`（独占 job 写一个目录，其余按 slots 写多个）；release 或回收时删除。中枢准入时读取锁目录里不属于自己的 `slot-*` 目录，进程存活的计入名额，`exclusive` 不为 false 的（含无法读取元数据的）按独占持有者处理；进程已死的忽略，其中 `via=hub` 的残留目录顺手清掉。这样 guard 退回本地锁时，本地模式也能数到中枢放行的任务。已知余量：中枢读写目录不持有 guard 的 `admission.lock`，两边恰好同一毫秒级窗口同时放行时仍可能多放一个，下一轮即互相可见。
+**与本地锁互相可见（混用安全）**：中枢的锁目录就是 `hub.json` 所在目录。中枢放行一个 job 时，在锁目录写与本地模式相同的持有者目录 `slot-<n>-<申请方pid>-<jobId去掉连字符>`，`owner.txt` 字段与 guard 一致并带 `"via": "hub"`、`hub_job_id`（独占 job 写一个目录，其余按 units 写多个）；release 或回收时删除。中枢准入时读取锁目录里不属于自己的 `slot-*` 目录，进程存活的计入名额，`exclusive` 不为 false 的（含无法读取元数据的）按独占持有者处理；进程已死的忽略，其中 `via=hub` 的残留目录顺手清掉。这样 guard 退回本地锁时，本地模式也能数到中枢放行的任务。已知余量：中枢读写目录不持有 guard 的 `admission.lock`，两边恰好同一毫秒级窗口同时放行时仍可能多放一个，下一轮即互相可见。
 
 排队顺序：先看暂停（被暂停类别的申请一律排队并给出原因），再按 `(priority, 用户手动顺序, queuedAt)`。每次放行重新核对机器指标与资源。
 

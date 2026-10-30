@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,7 +47,7 @@ function setupHub(lockDir: string | null = null) {
     commandSha256: "x",
     priority: 1,
     exclusive: false,
-    slots: 1,
+    units: 1,
     pid: 100,
     ...extra,
   });
@@ -141,6 +141,7 @@ describe("coordinator notifications", () => {
       now: t.now,
     });
     await t.hub.updateSettings({ admissionIntervalSeconds: 0 });
+    await t.hub.submit(t.job()); // a holder: an empty machine admits regardless of metrics
     t.metrics.availableGb = 3;
     const queued = await t.hub.submit(t.job());
     expect(queued.state).toBe("queued");
@@ -277,6 +278,39 @@ describe.skipIf(!canRunGuard)("win-heavy-guard against the real hub", () => {
     expect(status.recentJobs).toHaveLength(1);
     expect(status.recentJobs[0]).toMatchObject({ owner: "e2e", outcome: "released", exitCode: 0 });
   }, 90_000);
+
+  /** The real lock directory's shape: dynamic guard (state file), slots.txt=4, admission.lock, logs/. */
+  function realShape(lockDir: string) {
+    writeFileSync(join(lockDir, "slots.txt"), "4");
+    writeFileSync(join(lockDir, "admission-state.json"), JSON.stringify({ version: 2, last_started_at: 0 }));
+    writeFileSync(join(lockDir, "admission.lock"), "");
+    mkdirSync(join(lockDir, "logs"), { recursive: true });
+  }
+
+  it("admits an idle machine at once although the guard was started with --slots 4", async () => {
+    const t = await start();
+    realShape(t.lockDir);
+    const run = runGuard(t.lockDir, ["python", "-c", "print(1)"], { extra: ["--slots", "4"] });
+    expect(await run.done).toBe(0);
+    expect(run.err()).not.toContain("slots_full");
+    expect(auditStarts(t.lockDir).map((e) => e.admission_path)).toEqual(["hub"]);
+  }, 90_000);
+
+  it("runs three normal guards side by side under slots.txt=4 and queues the fourth", async () => {
+    const t = await start();
+    realShape(t.lockDir);
+    const gate = join(t.lockDir, "gate").replaceAll("\\", "/");
+    const wait = ["python", "-c", `import time,os;exec("while not os.path.exists('${gate}'): time.sleep(0.1)")`];
+    const runs = [1, 2, 3, 4].map((n) => runGuard(t.lockDir, wait, { owner: "n" + n, extra: ["--slots", "4"] }));
+    const state = await until(
+      async () => (await t.hub.status()),
+      (s) => s.holders.length === 3 && s.queue.length === 1,
+    );
+    expect(state.queue[0]!.waitReasons).toContain("slots_full");
+    writeFileSync(join(t.lockDir, "gate"), "go");
+    for (const r of runs) expect(await r.done).toBe(0);
+    expect((await t.hub.status()).recentJobs).toHaveLength(4);
+  }, 120_000);
 
   it("ignores the hub while hub.disabled exists", async () => {
     const t = await start();

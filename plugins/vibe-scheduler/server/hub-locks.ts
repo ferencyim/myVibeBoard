@@ -14,7 +14,7 @@ export interface MirroredJob {
   pid: number;
   priority: number;
   exclusive: boolean;
-  slots: number;
+  units?: number;
   memGb?: number;
   command: string;
   commandSha256: string;
@@ -65,7 +65,7 @@ export function mirrorJob(lockDir: string, job: MirroredJob, now: Date): string[
   mkdirSync(lockDir, { recursive: true });
   const token = tokenOf(job.id);
   const used = new Set(slotDirs(lockDir).map((d) => Number(d.name.split("-")[1])));
-  const count = job.exclusive ? 1 : job.slots;
+  const count = job.exclusive ? 1 : (job.units ?? 1);
   const created: string[] = [];
   for (let n = 1; created.length < count; n++) {
     if (used.has(n)) continue;

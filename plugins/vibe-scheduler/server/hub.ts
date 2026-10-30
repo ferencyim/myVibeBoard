@@ -3,8 +3,8 @@
 // the unified view and forwards agent reordering to it. All decisions are deterministic rules.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createHubMetrics, type HubMetrics } from "./hub-metrics";
 import { mirrorJob, readLocalHolders, unmirrorJob } from "./hub-locks";
 import type { CommandRunner } from "./resources";
@@ -88,7 +88,11 @@ export interface JobRequest {
   /** 0 = deploy (reserved slot, bypasses the launch interval), 1 = normal, 2 = low. */
   priority: number;
   exclusive: boolean;
-  slots: number;
+  /**
+   * Slots this one job occupies (default 1; an exclusive job takes the whole machine). This is NOT
+   * the machine's slot count: the guard's `--slots`/slots.txt is the capacity, see `guardSlots`.
+   */
+  units?: number;
   memGb?: number;
   resources?: Array<{ name: string; mode: "shared" | "exclusive" }>;
   /** Reported by the client (win-heavy-guard infers it locally); the command name is the fallback. */
@@ -98,6 +102,7 @@ export interface JobRequest {
 
 type JobState = "queued" | "admitted";
 interface Job extends JobRequest {
+  units: number;
   id: string;
   state: JobState;
   queuedAt: string;
@@ -141,6 +146,8 @@ export interface HubDeps {
   admissionFile?: string | null;
   agents?: HubAgents;
   onError?: (error: unknown) => void;
+  /** Notable decisions (e.g. the no-holder escape); also appended to the lock directory's audit log. */
+  onEvent?: (event: string, detail: Record<string, unknown>) => void;
 }
 
 const HEARTBEAT_TIMEOUT_MS = 60_000;
@@ -374,12 +381,32 @@ export function createHub(deps: HubDeps) {
     return out;
   }
 
+  /**
+   * The guard's machine slot count, read the way win-heavy-guard does: slots.txt (1-8, else the
+   * hard limit); without admission-state.json the guard is still in legacy mode and uses min(2, n).
+   */
+  function guardSlots(): number {
+    if (!lockDir) return settings.hardLimit;
+    let slots = settings.hardLimit;
+    try {
+      const n = Number.parseInt(readFileSync(join(lockDir, "slots.txt"), "utf8").trim(), 10);
+      if (n >= 1 && n <= 8) slots = n;
+    } catch {
+      // no slots.txt: the guard's default is its hard_limit
+    }
+    return existsSync(join(lockDir, "admission-state.json")) ? slots : Math.min(2, slots);
+  }
+  /** Machine capacity in slots: the smaller of the hub's hard limit and the guard's slot count. */
+  const capacity = () => Math.max(1, Math.min(settings.hardLimit, guardSlots()));
+
   function machineReasons(job: Job, metrics: HubMetrics, local = localHolders()): string[] {
     const out: string[] = [];
     const held = holders();
-    const used = held.reduce((n, h) => n + h.slots, 0) + local.slots;
-    const cap = job.priority === 0 ? settings.hardLimit : Math.max(1, settings.hardLimit - 1);
-    if (used + job.slots > cap) out.push("slots_full");
+    const used = held.reduce((n, h) => n + h.units, 0) + local.slots;
+    // Same rule as the guard: deploy (priority 0) may take the last slot, others leave it free.
+    const total = capacity();
+    const cap = job.priority === 0 ? total : Math.max(1, total - 1);
+    if (used + (job.exclusive ? 1 : job.units) > cap) out.push("slots_full");
     if (job.exclusive && held.length + local.slots > 0) out.push("exclusive_wait");
     if (local.exclusive || held.some((h) => h.exclusive)) out.push("exclusive_running");
     if (job.priority > 0 && lastAdmitAt !== null) {
@@ -434,6 +461,22 @@ export function createHub(deps: HubDeps) {
     }
   }
 
+  function audit(event: string, detail: Record<string, unknown>) {
+    deps.onEvent?.(event, detail);
+    if (!lockDir) return;
+    try {
+      const logs = join(lockDir, "logs");
+      mkdirSync(logs, { recursive: true });
+      const day = now().toISOString().slice(0, 10);
+      appendFileSync(
+        join(logs, day + ".jsonl"),
+        JSON.stringify({ time: now().toISOString(), event, via: "hub", ...detail }) + "\n",
+      );
+    } catch (error) {
+      onError(error);
+    }
+  }
+
   /** One admission pass: reap dead clients, then admit in queue order, re-checking everything. */
   async function pass(): Promise<void> {
     reap();
@@ -452,7 +495,19 @@ export function createHub(deps: HubDeps) {
         continue;
       }
       const reasons = resourceReasons(job, registry);
-      const machine = machineReasons(job, metrics, local);
+      let machine = machineReasons(job, metrics, local);
+      // Deadlock guard: nobody holds anything, so waiting cannot help. Let the first job that is
+      // not paused and has no resource conflict in, whatever the slot count, interval or metrics say.
+      if (machine.length > 0 && reasons.length === 0 && holders().length === 0 && local.slots === 0) {
+        audit("hub_empty_machine_bypass", {
+          jobId: job.id,
+          owner: job.owner,
+          priority: job.priority,
+          ignoredReasons: machine,
+          capacity: capacity(),
+        });
+        machine = [];
+      }
       reasons.push(...machine);
       if (machine.length > 0) machineBlocked = true;
       // Do not let later jobs overtake one that waits for the machine.
@@ -500,7 +555,7 @@ export function createHub(deps: HubDeps) {
       exclusive(async () => {
         const job: Job = {
           ...request,
-          slots: Math.max(1, Math.floor(request.slots)),
+          units: Math.max(1, Math.floor(request.units ?? 1)),
           resources: request.resources ?? [],
           id: randomUUID(),
           state: "queued",
@@ -611,7 +666,7 @@ export function createHub(deps: HubDeps) {
           project: j.project ?? null,
           command: j.command.slice(0, 300),
           priority: j.priority,
-          slots: j.slots,
+          units: j.units,
           exclusive: j.exclusive,
           resources: j.resources ?? [],
           pid: j.pid,
