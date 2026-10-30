@@ -45,9 +45,19 @@ export function rememberAvailableReports(
   let next: Record<string, RememberedUsage> | null = null;
   for (const entry of reports) {
     if (entry.report.status !== "available") continue;
-    if ((next ?? snapshot[serverId])?.[entry.id]?.fetchedAt === entry.fetchedAt) continue;
+    const known = (next ?? snapshot[serverId])?.[entry.id];
+    if (known?.fetchedAt === entry.fetchedAt && known.source) continue;
     next ??= { ...snapshot[serverId] };
-    next[entry.id] = { fetchedAt: entry.fetchedAt, report: entry.report };
+    next[entry.id] = {
+      fetchedAt: entry.fetchedAt,
+      report: entry.report,
+      source: {
+        sourceId: entry.sourceId,
+        sourceLabel: entry.sourceLabel,
+        icon: entry.icon,
+        accountLabel: entry.account.label,
+      },
+    };
   }
   if (!next) return;
   snapshot = { ...snapshot, [serverId]: next };

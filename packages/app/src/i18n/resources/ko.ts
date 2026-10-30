@@ -2188,6 +2188,7 @@ export const ko: TranslationResources = {
     staleReasonError: "{{source}} could not be reached",
     staleReasonNoQuota: "{{source}} reports no quota",
     staleNever: "No successful read yet; waiting to read ({{reason}}).",
+    openUsage: "Open usage",
     loginRejected: "로그인이 거부되었습니다 (HTTP {{status}}). {{remedy}}",
     loginExpired: "로그인이 {{relativeTime}}에 만료되었습니다. {{remedy}}",
     title: "플랜 사용량",

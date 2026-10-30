@@ -54,6 +54,8 @@ export interface RingStale {
 export interface RememberedUsage {
   fetchedAt: string;
   report: AvailableUsageReport;
+  /** Who the read came from, so the account keeps its ring when the daemon stops listing it. */
+  source?: { sourceId: string; sourceLabel: string; icon?: string; accountLabel?: string };
 }
 
 const MAX_RINGS = 2;
@@ -127,6 +129,16 @@ function isNoQuota(entry: UsageReportEntry): boolean {
   return entry.report.status === "unavailable" && entry.report.problem.kind === "no_quota";
 }
 
+/**
+ * Whether a never-read account is a live subscription worth a ring: its provider is enabled in
+ * Paseo and the login is not refused. A rejected login or a source with no quota is not one.
+ */
+function isLiveSubscription(entry: UsageReportEntry, enabledProviders: ReadonlySet<string>) {
+  if (!enabledProviders.has(entry.sourceId)) return false;
+  if (entry.report.status !== "unavailable") return true;
+  return entry.report.problem.kind !== "rejected" && entry.report.problem.kind !== "no_quota";
+}
+
 function placeholderAccount(entry: UsageReportEntry, t: TFunction): RingAccount {
   const name = accountName(entry);
   const reason = staleReason(entry, t);
@@ -156,6 +168,7 @@ function resolveAccount(
   entry: UsageReportEntry,
   t: TFunction,
   remembered: RememberedUsage | undefined,
+  enabledProviders: ReadonlySet<string>,
 ): RingAccount | null {
   let source: AvailableUsageReport;
   let stale: RingStale | null = null;
@@ -163,7 +176,8 @@ function resolveAccount(
     source = entry.report;
   } else {
     const good = lastGood(entry, remembered);
-    if (!good) return isNoQuota(entry) ? null : placeholderAccount(entry, t);
+    if (!good)
+      return isLiveSubscription(entry, enabledProviders) ? placeholderAccount(entry, t) : null;
     source = good.report;
     const reason = staleReason(entry, t);
     stale = {
@@ -210,20 +224,53 @@ function resolveAccount(
 }
 
 /**
- * The provider accounts that get a ring, in report order with each source's accounts together.
- * A report with no windowed limit (no usage, or only balances) gets none. An account that cannot
- * be read now keeps its ring, marked `stale`, and is never hidden.
+ * An account the device read before but the daemon no longer lists (its login could not even be
+ * discovered) as an entry that cannot be reached now, so it keeps its greyed ring. A source the
+ * daemon still lists under another account id is left to that listing.
+ */
+function missingEntries(
+  reports: readonly UsageReportEntry[],
+  remembered: Readonly<Record<string, RememberedUsage>>,
+): UsageReportEntry[] {
+  const ids = new Set(reports.map((entry) => entry.id));
+  const sources = new Set(reports.map((entry) => entry.sourceId));
+  const entries: UsageReportEntry[] = [];
+  for (const [id, memory] of Object.entries(remembered)) {
+    if (ids.has(id)) continue;
+    const sourceId = memory.source?.sourceId ?? id.split(":")[0] ?? id;
+    if (sources.has(sourceId)) continue;
+    const fallbackLabel = sourceId.charAt(0).toUpperCase() + sourceId.slice(1);
+    entries.push({
+      id,
+      sourceId,
+      sourceLabel: memory.source?.sourceLabel ?? fallbackLabel,
+      icon: memory.source?.icon,
+      account: memory.source?.accountLabel ? { label: memory.source.accountLabel } : {},
+      fetchedAt: memory.fetchedAt,
+      report: { status: "error", error: "not listed by the host" },
+    } as UsageReportEntry);
+  }
+  return entries;
+}
+
+/**
+ * The provider accounts that get a ring, in report order with each source's accounts together:
+ * every account that was ever read (greyed while it cannot be read now, or when the host stops
+ * listing it) and every never-read account whose provider is enabled in Paseo and whose login
+ * is not refused. A report with no windowed limit (balances only) or no quota gets none.
  */
 export function resolveUsageRings(
   reports: readonly UsageReportEntry[],
   t: TFunction = i18n.t,
   remembered: Readonly<Record<string, RememberedUsage>> = {},
+  enabledProviders: ReadonlySet<string> = new Set(),
 ): RingAccount[] {
-  const sourceIds = [...new Set(reports.map((entry) => entry.sourceId))];
+  const all = [...reports, ...missingEntries(reports, remembered)];
+  const sourceIds = [...new Set(all.map((entry) => entry.sourceId))];
   return sourceIds
-    .flatMap((sourceId) => reports.filter((entry) => entry.sourceId === sourceId))
+    .flatMap((sourceId) => all.filter((entry) => entry.sourceId === sourceId))
     .flatMap((entry) => {
-      const account = resolveAccount(entry, t, remembered[entry.id]);
+      const account = resolveAccount(entry, t, remembered[entry.id], enabledProviders);
       return account ? [account] : [];
     });
 }

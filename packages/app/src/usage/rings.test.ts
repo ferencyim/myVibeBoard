@@ -110,6 +110,8 @@ describe("resolveUsageRings", () => {
         entry("ok", [{ id: "a", usedPct: 40 }]),
       ],
       t,
+      {},
+      new Set(["off"]),
     );
     expect(accounts.map((account) => account.reportId)).toEqual(["off", "ok"]);
     expect(accounts[0]?.stale).not.toBeNull();
@@ -177,7 +179,7 @@ describe("resolveUsageRings with unavailable accounts", () => {
   });
 
   it("draws an empty grey ring with the reason for an account that was never read", () => {
-    const [account] = resolveUsageRings([expired], t, {});
+    const [account] = resolveUsageRings([expired], t, {}, new Set(["claude"]));
     expect(account?.rings).toEqual([]);
     expect(account?.stale?.summary).toContain("providerUsage.staleNever");
     expect(account?.stale?.summary).toContain("staleReasonExpired");
@@ -197,5 +199,73 @@ describe("resolveUsageRings with unavailable accounts", () => {
       lastSuccessful: remembered("2026-10-29T10:00:00.000Z").claude,
     } as UsageReportEntry;
     expect(resolveUsageRings([withDaemon], t, {})[0]?.stale).not.toBeNull();
+  });
+});
+
+describe("resolveUsageRings subscriptions", () => {
+  // The Claude entry as the host lists it: a profile-keyed id, one weekly and one session window.
+  const claudeId = "claude:acct-1.org-1";
+  const claude = entry(
+    claudeId,
+    [
+      { id: "five_hour", usedPct: 20, durationMins: 300 },
+      { id: "weekly", usedPct: 55, durationMins: 10080 },
+    ],
+    { sourceId: "claude", sourceLabel: "Claude" },
+  );
+  const unavailable = (id: string, sourceId: string, problem: object) =>
+    ({
+      ...entry(id, []),
+      sourceId,
+      sourceLabel: sourceId,
+      report: { status: "unavailable", problem },
+    }) as UsageReportEntry;
+  const memory = (fetchedAt = "2026-10-29T09:00:00.000Z") => ({
+    [claudeId]: {
+      fetchedAt,
+      report: claude.report as Extract<UsageReportEntry["report"], { status: "available" }>,
+      source: { sourceId: "claude", sourceLabel: "Claude" },
+    },
+  });
+
+  it("colours a Claude subscription that reads, with both windows", () => {
+    const [account] = resolveUsageRings([claude], t, {}, new Set(["claude"]));
+    expect(account?.stale).toBeNull();
+    expect(account?.rings.map((ring) => ring.id)).toEqual(["weekly", "five_hour"]);
+  });
+
+  it("keeps a greyed Claude ring when the host no longer lists the account", () => {
+    const codex = entry("codex:x", [{ id: "weekly", usedPct: 100 }], { sourceId: "codex" });
+    const accounts = resolveUsageRings([codex], t, memory(), new Set(["codex", "claude"]));
+    const ring = accounts.find((account) => account.reportId === claudeId);
+    expect(ring?.stale).not.toBeNull();
+    expect(ring?.remaining).toBe(45);
+    expect(ring?.name).toBe("Claude");
+  });
+
+  it("does not repeat a remembered account the host lists under another id", () => {
+    const relisted = entry("claude:acct-2", [{ id: "weekly", usedPct: 10 }], {
+      sourceId: "claude",
+    });
+    const accounts = resolveUsageRings([relisted], t, memory(), new Set(["claude"]));
+    expect(accounts.map((account) => account.reportId)).toEqual(["claude:acct-2"]);
+  });
+
+  it("draws no ring for Grok or Kimi that were never read and are not enabled or are refused", () => {
+    const grok = unavailable("grok:default", "grok", { kind: "rejected", status: 401 });
+    const kimi = unavailable("kimi:default", "kimi", {
+      kind: "expired",
+      expiresAt: "2026-10-09T11:44:05.000Z",
+    });
+    expect(resolveUsageRings([grok, kimi], t, {}, new Set(["claude"]))).toEqual([]);
+    // Even enabled, a refused login is not a live subscription.
+    expect(resolveUsageRings([grok], t, {}, new Set(["grok"]))).toEqual([]);
+  });
+
+  it("greys the last read of an account whose login is now refused", () => {
+    const refused = unavailable(claudeId, "claude", { kind: "rejected", status: 401 });
+    const [account] = resolveUsageRings([refused], t, memory(), new Set());
+    expect(account?.stale).not.toBeNull();
+    expect(account?.rings).toHaveLength(2);
   });
 });

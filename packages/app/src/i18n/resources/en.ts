@@ -2210,6 +2210,7 @@ export const en = {
     staleReasonError: "{{source}} could not be reached",
     staleReasonNoQuota: "{{source}} reports no quota",
     staleNever: "No successful read yet; waiting to read ({{reason}}).",
+    openUsage: "Open usage",
     loginRejected: "Login rejected (HTTP {{status}}). {{remedy}}",
     loginExpired: "Login expired {{relativeTime}}. {{remedy}}",
     title: "Plan usage",

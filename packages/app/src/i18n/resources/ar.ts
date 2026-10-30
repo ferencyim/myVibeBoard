@@ -2178,6 +2178,7 @@ export const ar: TranslationResources = {
     staleReasonError: "{{source}} could not be reached",
     staleReasonNoQuota: "{{source}} reports no quota",
     staleNever: "No successful read yet; waiting to read ({{reason}}).",
+    openUsage: "Open usage",
     loginRejected: "تم رفض تسجيل الدخول (HTTP {{status}}). {{remedy}}",
     loginExpired: "انتهت صلاحية تسجيل الدخول {{relativeTime}}. {{remedy}}",
     title: "استخدام الخطة",

@@ -2163,6 +2163,7 @@ export const zhCN: TranslationResources = {
     staleReasonError: "暂时无法读取 {{source}}",
     staleReasonNoQuota: "{{source}} 未提供额度",
     staleNever: "尚未成功读取过额度；等待读取（{{reason}}）。",
+    openUsage: "打开用量",
     loginRejected: "登录被拒绝（HTTP {{status}}）。{{remedy}}",
     loginExpired: "登录已于{{relativeTime}}过期。{{remedy}}",
     title: "套餐用量",

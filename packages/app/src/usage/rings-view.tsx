@@ -7,6 +7,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { PressHighlight } from "@/components/ui/press-highlight";
 import type { Theme } from "@/styles/theme";
 import { formatPct, formatResetLabel } from "./format";
+import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { useUsageHostId } from "./hosts";
 import { useRememberedUsage } from "./last-good";
 import { useUsageHostReports, useUsageReportsAutoRefresh } from "./queries";
@@ -250,9 +251,15 @@ export function UsageRings({
   useUsageReportsAutoRefresh(serverId);
   const reports = useUsageHostReports(serverId);
   const remembered = useRememberedUsage(serverId, reports);
+  const { entries: providers } = useProvidersSnapshot(serverId, { cwd: null });
+  const enabledProviders = useMemo(
+    () =>
+      new Set((providers ?? []).filter((entry) => entry.enabled).map((entry) => entry.provider)),
+    [providers],
+  );
   const accounts = useMemo(
-    () => resolveUsageRings(reports, t, remembered),
-    [reports, t, remembered],
+    () => resolveUsageRings(reports, t, remembered, enabledProviders),
+    [reports, t, remembered, enabledProviders],
   );
   if (accounts.length === 0) return null;
   if (!horizontal) {
