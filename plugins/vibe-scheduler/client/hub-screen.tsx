@@ -37,6 +37,9 @@ import {
   parseDirectives,
   parseHubStatus,
   parseNumberField,
+  parseThresholdInput,
+  thresholdDisplayRange,
+  thresholdToDisplay,
   parseTakeover,
   parseThresholds,
   takeoverLabel,
@@ -190,15 +193,18 @@ function MachineSection({
             >
               <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{field.label}</Text>
               {field.metric ? (
-                <Text
-                  style={{
-                    color: over ? theme.colors.statusWarning : theme.colors.foreground,
-                    fontSize: 18,
-                    fontWeight: "600",
-                  }}
-                >
-                  {formatMetric(field, status.machine[field.metric])}
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
+                  <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, width: 32 }}>当前</Text>
+                  <Text
+                    style={{
+                      color: over ? theme.colors.statusWarning : theme.colors.foreground,
+                      fontSize: 18,
+                      fontWeight: "600",
+                    }}
+                  >
+                    {formatMetric(field, status.machine[field.metric])}
+                  </Text>
+                </View>
               ) : null}
               <NumberEdit
                 theme={theme}
@@ -235,6 +241,7 @@ function TakeoverBar({ theme, hub, takeover }: { theme: PluginTheme; hub: Hub; t
           <Button
             theme={theme}
             label={next ? "开启接管" : "关闭接管"}
+            variant={next ? "primary" : "outline"}
             disabled={!takeover.available}
             onPress={() => setConfirming(true)}
           />
@@ -273,36 +280,46 @@ function NumberEdit({
   onCommit: (value: number) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? (value === undefined ? "" : String(value));
-  const parsed = draft === null ? null : parseNumberField(draft, field);
+  const shown = draft ?? (value === undefined ? "" : String(thresholdToDisplay(field, value)));
+  const parsed = draft === null ? null : parseThresholdInput(draft, field);
   const invalid = draft !== null && draft.trim() !== "" && parsed === null;
+  const range = thresholdDisplayRange(field);
+  const unit = field.unit === "%" ? "%" : field.unit;
   const commit = () => {
     if (parsed !== null && parsed !== value) onCommit(parsed);
     setDraft(null);
   };
   return (
     <View style={{ gap: 2 }}>
-      <TextInput
-        value={shown}
-        onChangeText={setDraft}
-        onBlur={commit}
-        onSubmitEditing={commit}
-        keyboardType="decimal-pad"
-        accessibilityLabel={`${field.label}阈值`}
-        style={{
-          color: theme.colors.foreground,
-          backgroundColor: theme.colors.surface1,
-          borderColor: invalid ? theme.colors.statusDanger : theme.colors.border,
-          borderWidth: 1,
-          borderRadius: 6,
-          paddingHorizontal: 8,
-          paddingVertical: 4,
-          fontSize: 13,
-        }}
-      />
-      <Text style={{ color: invalid ? theme.colors.statusDanger : theme.colors.foregroundMuted, fontSize: 11 }}>
-        {invalid ? `需在 ${field.min} 到 ${field.max} 之间${field.int ? "的整数" : ""}` : `阈值${field.unit ? `（${field.unit}）` : ""}`}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, width: 32 }}>阈值</Text>
+        <TextInput
+          value={shown}
+          onChangeText={setDraft}
+          onBlur={commit}
+          onSubmitEditing={commit}
+          keyboardType="decimal-pad"
+          accessibilityLabel={`${field.label}阈值`}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            color: theme.colors.foreground,
+            backgroundColor: theme.colors.surface1,
+            borderColor: invalid ? theme.colors.statusDanger : theme.colors.border,
+            borderWidth: 1,
+            borderRadius: 6,
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            fontSize: 13,
+          }}
+        />
+        {unit ? <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{unit}</Text> : null}
+      </View>
+      {invalid ? (
+        <Text style={{ color: theme.colors.statusDanger, fontSize: 11 }}>
+          {`需在 ${range.min} 到 ${range.max}${unit} 之间${field.int ? "的整数" : ""}`}
+        </Text>
+      ) : null}
     </View>
   );
 }

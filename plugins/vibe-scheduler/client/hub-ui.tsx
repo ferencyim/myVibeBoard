@@ -56,29 +56,43 @@ export function Button({
   onPress,
   active,
   disabled,
+  variant,
 }: {
   theme: PluginTheme;
   label: string;
   onPress: () => void;
   active?: boolean;
   disabled?: boolean;
+  /** "primary" is a filled action button, "outline" a bordered one; omitted keeps the compact chip. */
+  variant?: "primary" | "outline";
 }) {
+  const filled = active || variant === "primary";
+  const formal = variant !== undefined;
   return (
     <Pressable
+      accessibilityRole="button"
       disabled={disabled}
       onPress={onPress}
       style={{
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 999,
-        backgroundColor: active ? theme.colors.accent : theme.colors.surface2,
+        paddingHorizontal: formal ? 14 : 10,
+        paddingVertical: formal ? 0 : 5,
+        height: formal ? 32 : undefined,
+        justifyContent: "center",
+        borderRadius: formal ? 8 : 999,
+        borderWidth: variant === "outline" ? 1 : 0,
+        borderColor: theme.colors.border,
+        backgroundColor: filled
+          ? theme.colors.accent
+          : variant === "outline"
+            ? "transparent"
+            : theme.colors.surface2,
         opacity: disabled ? 0.5 : 1,
       }}
     >
       <Text
         style={{
-          color: active ? theme.colors.accentForeground : theme.colors.foreground,
-          fontSize: 12,
+          color: filled ? theme.colors.accentForeground : theme.colors.foreground,
+          fontSize: formal ? 13 : 12,
         }}
       >
         {label}

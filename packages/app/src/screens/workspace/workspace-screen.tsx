@@ -8,6 +8,7 @@ import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
 import { revealWorkspaceTab } from "@/workspace-tabs/navigation";
 import type { LayoutChangeEvent } from "react-native";
 import { ExplorerSidebarDock } from "@/screens/workspace/explorer-sidebar";
+import { deriveWorkspacePaneState } from "@/screens/workspace/workspace-pane-state";
 import { ExplorerFrame } from "./explorer-sidebar/frame";
 import { WorkspaceTabDragScope } from "@/components/workspace-tab-drag-scope";
 import {
@@ -179,7 +180,6 @@ import {
   createWorkspaceAgentVisibilitySelector,
   workspaceAgentVisibilityEqual,
 } from "@/workspace-tabs/agent-visibility";
-import { deriveWorkspacePaneState } from "@/screens/workspace/workspace-pane-state";
 import {
   buildWorkspacePaneContentModel,
   WorkspacePaneContent,
@@ -818,15 +818,6 @@ function isFixedFlowTab(tab: { target: WorkspaceTabTarget }): boolean {
   return (
     (tab.target.kind === "agent" && !!tab.target.flowTab) ||
     (tab.target.kind === "draft" && tab.target.placeholder?.providerId === "task-flow")
-  );
-}
-
-function isBotProfileTarget(target: WorkspaceTabTarget | undefined): boolean {
-  return (
-    target?.kind === "plugin" &&
-    target.pluginId === "vibe-bots" &&
-    target.panelId === "profile" &&
-    target.context === "agent"
   );
 }
 
@@ -3915,15 +3906,6 @@ function WorkspaceScreenContent({
     if (!workspaceLayout || !explorerSidebarPaneId || !persistenceKey) return null;
     const explorerPane = findPaneById(workspaceLayout.root, explorerSidebarPaneId);
     if (!explorerPane) return null;
-    const explorerState = deriveWorkspacePaneState({ pane: explorerPane, tabs: uiTabs });
-    const activeTarget = explorerState.tabs.find(
-      (tab) => tab.descriptor.tabId === explorerState.activeTabId,
-    )?.descriptor.target;
-    const profileOpen = isBotProfileTarget(activeTarget);
-    const flowPanelOpen =
-      activeTarget?.kind === "plugin" &&
-      activeTarget.pluginId === "vibe-board" &&
-      activeTarget.panelId === "task-flow";
     const dock = (
       <ExplorerSidebarDock
         pane={explorerPane}
@@ -3958,7 +3940,6 @@ function WorkspaceScreenContent({
         isWorkspaceActive={isRouteFocused}
         persistenceKey={persistenceKey}
         containerWidth={workspaceViewportWidth}
-        fixedWidth={!isMobile && (profileOpen || flowPanelOpen) ? 360 : undefined}
         isOpen={isExplorerSidebarShowing && !desktopFocusModeEnabled}
       >
         {dock}

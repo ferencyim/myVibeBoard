@@ -1,3 +1,5 @@
+const MIN_READABLE_LABEL_WIDTH = 48;
+
 export type WorkspaceTabCloseButtonPolicy = "all" | "none";
 
 export interface WorkspaceTabLayoutMetrics {
@@ -112,9 +114,14 @@ export function computeWorkspaceTabLayout(
   );
 
   return {
-    items: roundedWidths.map((width) => ({
+    items: roundedWidths.map((width, index) => ({
       width,
-      showLabel: width > tabChromeWidth,
+      // Never show a label squeezed to a character plus an ellipsis: when the space left for the
+      // text cannot hold the whole label (or at least a readable stretch of a long one), the tab
+      // shows its icon only and the tooltip carries the full title.
+      showLabel:
+        width - tabChromeWidth >=
+        Math.min(input.tabLabelWidths[index] ?? 0, MIN_READABLE_LABEL_WIDTH),
     })),
     closeButtonPolicy,
     requiresHorizontalScrollFallback,

@@ -173,12 +173,12 @@ export interface ThresholdField {
 export const THRESHOLD_FIELDS: ThresholdField[] = [
   { key: "minAvailableMemGb", label: "可用内存下限", unit: "GB", min: 0, max: 1024, int: false, metric: "availableMemGb" },
   { key: "deployMinAvailableMemGb", label: "部署可用内存下限", unit: "GB", min: 0, max: 1024, int: false },
-  { key: "maxCommitRatio", label: "已承诺内存上限", unit: "比例", min: 0.1, max: 1, int: false, metric: "commitRatio" },
-  { key: "maxCpu", label: "CPU 上限", unit: "比例", min: 0.1, max: 1, int: false, metric: "cpu" },
+  { key: "maxCommitRatio", label: "已承诺内存上限", unit: "%", min: 0.1, max: 1, int: false, metric: "commitRatio" },
+  { key: "maxCpu", label: "CPU 上限", unit: "%", min: 0.1, max: 1, int: false, metric: "cpu" },
   { key: "cpuWindowSeconds", label: "CPU 统计窗口", unit: "秒", min: 1, max: 600, int: true },
   { key: "maxProcesses", label: "进程数上限", unit: "个", min: 10, max: 100000, int: true, metric: "processes" },
   { key: "maxHandles", label: "句柄数上限", unit: "个", min: 1000, max: 10000000, int: true, metric: "handles" },
-  { key: "maxDiskQueue", label: "磁盘队列上限", unit: "", min: 0.1, max: 1000, int: false, metric: "diskQueue" },
+  { key: "maxDiskQueue", label: "磁盘队列上限", unit: "队列长度", min: 0.1, max: 1000, int: false, metric: "diskQueue" },
   { key: "minStartIntervalSec", label: "两次启动最小间隔", unit: "秒", min: 0, max: 3600, int: true },
   { key: "heavyHardLimit", label: "重任务硬上限", unit: "个", min: 1, max: 64, int: true },
 ];
@@ -193,6 +193,26 @@ export function parseThresholds(raw: unknown): Thresholds {
     if (v !== null) out[f.key] = v;
   }
   return out;
+}
+
+/** Ratio thresholds are stored as 0–1 and shown/typed as percentages. */
+export const isPercentField = (f: Pick<ThresholdField, "unit">) => f.unit === "%";
+
+/** Stored value -> the number the user sees and edits (80 for 0.8 on a percent field). */
+export function thresholdToDisplay(f: Pick<ThresholdField, "unit">, value: number): number {
+  return isPercentField(f) ? Math.round(value * 10000) / 100 : value;
+}
+
+/** Display range of a field (10–100 for a 0.1–1 ratio). */
+export function thresholdDisplayRange(f: Pick<ThresholdField, "unit" | "min" | "max">) {
+  return { min: thresholdToDisplay(f, f.min), max: thresholdToDisplay(f, f.max) };
+}
+
+/** Parses what the user typed (percent for ratio fields) back into the stored value, or null when invalid. */
+export function parseThresholdInput(text: string, f: ThresholdField): number | null {
+  const n = parseNumberField(text.replace(/%\s*$/, ""), { ...thresholdDisplayRange(f), int: f.int });
+  if (n === null) return null;
+  return isPercentField(f) ? Math.round(n * 100) / 10000 : n;
 }
 
 /** Returns the number, or null when the text is not a valid value for the field. */
@@ -222,7 +242,7 @@ export function metricExceeds(
 
 export function formatMetric(field: ThresholdField, value: number | null): string {
   if (value === null) return "—";
-  if (field.unit === "比例") return `${Math.round(value * 100)}%`;
+  if (isPercentField(field)) return `${Math.round(value * 100)}%`;
   if (field.unit === "GB") return `${value.toFixed(1)} GB`;
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }

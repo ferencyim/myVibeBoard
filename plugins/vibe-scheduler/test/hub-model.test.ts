@@ -13,6 +13,9 @@ import {
   parseDirectives,
   parseHubStatus,
   parseNumberField,
+  parseThresholdInput,
+  thresholdToDisplay,
+  formatMetric,
   parseThresholds,
   queueOrderIds,
   setQueuePriority,
@@ -103,6 +106,20 @@ describe("form validation", () => {
     expect(parseNumberField("9", { min: 1, max: 4, int: true })).toBeNull();
     expect(parseNumberField("  ", { min: 1, max: 4, int: true })).toBeNull();
     expect(parseNumberField("abc", { min: 1, max: 4, int: true })).toBeNull();
+  });
+
+  it("shows and accepts ratio thresholds as percentages while storing 0-1", () => {
+    const commit = THRESHOLD_FIELDS.find((f) => f.key === "maxCommitRatio")!;
+    const procs = THRESHOLD_FIELDS.find((f) => f.key === "maxProcesses")!;
+    expect(thresholdToDisplay(commit, 0.8)).toBe(80);
+    expect(thresholdToDisplay(procs, 200)).toBe(200);
+    expect(parseThresholdInput("80", commit)).toBe(0.8);
+    expect(parseThresholdInput("70%", commit)).toBe(0.7);
+    expect(parseThresholdInput("5", commit)).toBeNull();
+    expect(parseThresholdInput("0.8", commit)).toBeNull();
+    expect(parseThresholdInput("120", commit)).toBeNull();
+    expect(parseThresholdInput("500", procs)).toBe(500);
+    expect(THRESHOLD_FIELDS.every((f) => f.unit !== "")).toBe(true);
   });
 
   it("builds a pause with an absolute end time and rejects bad input", () => {
