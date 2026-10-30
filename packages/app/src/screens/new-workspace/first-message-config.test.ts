@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFirstMessageModel } from "./first-message-config";
+import { buildFirstMessageModel, resolveUseDefaultModel } from "./first-message-config";
 import { FirstMessageOutboxInputSchema } from "@/composer/outbox/model";
 describe("new task first message model", () => {
   it("offline with no provider catalog or preferences builds a valid default-model message", () => {
@@ -40,5 +40,29 @@ describe("new task first message model", () => {
     expect(buildFirstMessageModel({ ...input, useDefaultModel: false })).toMatchObject({
       config: { provider: "codex", model: "cached-model", thinkingOptionId: "high" },
     });
+  });
+});
+
+describe("resolveUseDefaultModel", () => {
+  it("shows the default when nothing concrete is selected", () => {
+    expect(
+      resolveUseDefaultModel({ intent: null, isConnected: true, hasSelectedModel: false }),
+    ).toBe(true);
+    expect(
+      resolveUseDefaultModel({ intent: null, isConnected: false, hasSelectedModel: true }),
+    ).toBe(true);
+  });
+  it("shows the saved model when connected with one selected", () => {
+    expect(
+      resolveUseDefaultModel({ intent: null, isConnected: true, hasSelectedModel: true }),
+    ).toBe(false);
+  });
+  it("lets an explicit pick win", () => {
+    expect(
+      resolveUseDefaultModel({ intent: false, isConnected: false, hasSelectedModel: false }),
+    ).toBe(false);
+    expect(
+      resolveUseDefaultModel({ intent: true, isConnected: true, hasSelectedModel: true }),
+    ).toBe(true);
   });
 });
