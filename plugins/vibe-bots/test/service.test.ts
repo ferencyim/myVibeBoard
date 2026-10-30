@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaseoAgentCreateOptions, PaseoAgentSendOptions, PaseoProviderSnapshotResult } from "@getpaseo/client";
 import { createBotService, type BotService } from "../server/service";
+import { createBotMessaging } from "../server/messages";
+import { appendTurnContext } from "../server/memory";
 import { createVibeStore } from "../server/vibe/db/commands";
 import { migrateOwner } from "../server/vibe/db/migrate";
 import { openVibeDb, type VibeDb } from "../server/vibe/db/sqlite";
@@ -354,12 +356,12 @@ it("真实旧总 agent 与项目 agent 无损迁移，重启不重复建 bot 且
   await f.service.ready();
   const master = f.service.bots.list({ kind: "independent" })[0]!;
   const project = f.service.bots.list({ projectId: "p" })[0]!;
-  expect(master).toMatchObject({ kind: "independent", name: "助手", mainAgentId: "legacy-master", thinking: "high" });
-  expect(master.instructions).toBe("");
+  expect(master).toMatchObject({ kind: "independent", name: "总协调", mainAgentId: "legacy-master", thinking: "high" });
+  expect(master.instructions).toContain("vibe_hub_status");
   expect(f.service.prompt(master)).toContain("你不自动派发");
   expect(f.service.prompt(master)).toContain("按需使用");
   expect(project).toMatchObject({ name: "项目 bot", mainAgentId: "legacy-project" });
-  expect(f.setTitle).toHaveBeenCalledWith("legacy-master", "助手");
+  expect(f.setTitle).toHaveBeenCalledWith("legacy-master", "总协调");
   expect(f.setTitle).toHaveBeenCalledWith("legacy-project", "项目 bot");
   expect(await f.service.defaultBot("p")).toEqual({ botId: project.id, mainAgentId: "legacy-project" });
   expect(await f.service.waitOpen(master.id)).toEqual({ agentId: "legacy-master", workspaceId: "project-root" });
@@ -389,7 +391,7 @@ it("归档的权威旧总 agent 在重启后补迁，打开时交接到新主对
   writeFileSync(join(masterDir, "state.json"), JSON.stringify({ agent: { agentId: "archived-master" } }));
   await f.service.ready();
   const bot = f.service.bots.list({ kind: "independent" })[0]!;
-  expect(bot).toMatchObject({ name: "助手", mainAgentId: "archived-master" });
+  expect(bot).toMatchObject({ name: "总协调", mainAgentId: "archived-master" });
   expect(f.setLabels).not.toHaveBeenCalledWith("archived-master", expect.anything());
   expect(f.db.prepare("SELECT bot_id FROM bot_legacy_migration WHERE source='master'").get()).toEqual({ bot_id: bot.id });
   await f.service.update(bot.id, { name: "新助手" });
@@ -472,8 +474,8 @@ it("旧调度提示词不迁入独立 bot，模型通知权限仍迁移", async 
   await f.service.ready();
   await Promise.resolve();
   const bot = f.service.bots.list({ kind: "independent" })[0]!;
-  expect(bot.name).toBe("助手");
-  expect(bot.instructions).toBe("");
+  expect(bot.name).toBe("总协调");
+  expect(bot.instructions).toContain("vibe_hub_status");
   expect(bot).toMatchObject({
     provider: "codex", model: "initial", thinking: "high", permissionMode: "full",
     notifications: { enabled: false, completed: false, failed: true },
@@ -561,5 +563,111 @@ describe("旁线程", () => {
       expect(f.service.threads.require(bot.id, thread.id).agentId).toBeTruthy();
       expect(f.send).not.toHaveBeenCalled();
     } finally { release(); }
+  });
+});
+
+describe("总协调与 bot 消息", () => {
+  const independent = (f: ReturnType<typeof fixture>, name: string) => f.service.create({ kind: "independent", name, provider: "codex", model: "initial" });
+
+  it("助手迁移为总协调，重启幂等；用户改过的名字保留", async () => {
+    const f = fixture();
+    f.seedLegacy("master-1", { role: "master" });
+    await f.service.ready();
+    const coordinator = f.service.bots.coordinator()!;
+    expect(coordinator).toMatchObject({ name: "总协调", title: "资源中枢与项目协调", role: "coordinator", mainAgentId: "master-1" });
+    expect(coordinator.instructions).toContain("vibe_hub_status");
+    const restarted = f.start();
+    await restarted.ready();
+    expect(restarted.bots.list({ kind: "independent" }).filter((bot) => bot.role === "coordinator")).toHaveLength(1);
+
+    const g = fixture();
+    const legacy = g.service.bots.legacy("master", { kind: "independent", name: "小明", instructions: "" }, null);
+    expect(g.service.bots.ensureCoordinator(legacy.id, { name: "总协调", title: "t", instructions: "i" }))
+      .toMatchObject({ name: "小明", role: "coordinator", title: "t" });
+  });
+
+  it("角色全局唯一、可转移，总协调不可归档", async () => {
+    const f = fixture();
+    const one = await independent(f, "甲");
+    const two = await independent(f, "乙");
+    f.service.bots.transferCoordinator(one.id);
+    expect(() => f.service.bots.archive(one.id)).toThrow("总协调不能归档");
+    expect(() => f.service.bots.transferCoordinator(one.id)).toThrow("已经是总协调");
+    f.service.bots.transferCoordinator(two.id);
+    expect(f.service.bots.coordinator()!.id).toBe(two.id);
+    expect(f.service.bots.require(one.id).role).toBeNull();
+    f.service.bots.archive(one.id);
+    const project = await f.createProjectBot();
+    expect(() => f.service.bots.transferCoordinator(project.id)).toThrow("独立 bot");
+  });
+
+  it("消息权限：项目 bot 只能发给总协调和同项目 bot", async () => {
+    const f = fixture();
+    const coordinator = await independent(f, "总");
+    f.service.bots.transferCoordinator(coordinator.id);
+    const other = await independent(f, "其它");
+    const a = await f.createProjectBot();
+    const b = await f.createProjectBot();
+    const messaging = createBotMessaging(f.db, f.service, f.api);
+    await expect(messaging.send(a, "coordinator", "hi")).resolves.toMatchObject({ status: "queued" });
+    await expect(messaging.send(a, b.id, "hi")).resolves.toMatchObject({ status: "queued" });
+    await expect(messaging.send(a, other.id, "hi")).rejects.toThrow("只能给总协调和本项目");
+    await expect(messaging.send(a, { projectId: "p" }, "hi")).resolves.toMatchObject({ to: { botId: a.id === f.service.bots.defaultGet("p") ? a.id : f.service.bots.defaultGet("p") } }).catch(() => {});
+    await expect(messaging.send(coordinator, other.id, "hi")).resolves.toMatchObject({ status: "queued" });
+    await expect(messaging.send(a, a.id, "x")).rejects.toThrow("自己");
+  });
+
+  it("目标忙时排队，空闲后送达并标明发送方；系统消息经 notify", async () => {
+    const f = fixture();
+    const coordinator = await independent(f, "总");
+    f.service.bots.transferCoordinator(coordinator.id);
+    const a = await f.createProjectBot();
+    const opened = await f.service.waitOpen(coordinator.id);
+    f.agents.get(opened.agentId)!.status = "running";
+    const messaging = createBotMessaging(f.db, f.service, f.api);
+    await messaging.send(a, "coordinator", "磁盘快满了");
+    await messaging.notify("coordinator", "中枢", "重任务排队超过 15 分钟");
+    await messaging.flush(coordinator.id);
+    expect(f.send).not.toHaveBeenCalled();
+    f.agents.get(opened.agentId)!.status = "idle";
+    await messaging.flush(coordinator.id);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    const text = f.send.mock.calls[0][1];
+    expect(text).toContain(`「${a.name}」(${a.id})`);
+    expect(text).toContain("磁盘快满了");
+    expect(text).toContain("[中枢] 重任务排队超过 15 分钟");
+    await messaging.flush(coordinator.id);
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("同一对 bot 10 分钟内超过 6 条即暂停投递并通知总协调", async () => {
+    const f = fixture();
+    const coordinator = await independent(f, "总");
+    f.service.bots.transferCoordinator(coordinator.id);
+    const a = await f.createProjectBot();
+    const b = await f.createProjectBot();
+    const messaging = createBotMessaging(f.db, f.service, f.api);
+    for (let i = 0; i < 6; i++) await messaging.send(i % 2 ? a : b, i % 2 ? b.id : a.id, "来" + i);
+    const held = await messaging.send(a, b.id, "第七条");
+    expect(held.status).toBe("held");
+    expect(f.db.prepare("SELECT COUNT(*) AS n FROM bot_message WHERE status='held'").get()).toMatchObject({ n: 1 });
+    expect(f.db.prepare<{ text: string }>("SELECT text FROM bot_message WHERE to_bot_id=? AND from_bot_id IS NULL").get(coordinator.id)!.text).toContain("防循环");
+    await messaging.send(b, a.id, "第八条");
+    expect(f.db.prepare("SELECT COUNT(*) AS n FROM bot_message WHERE from_bot_id IS NULL").get()).toMatchObject({ n: 1 });
+  });
+
+  it("别的插件已写入 turn context 时追加而不覆盖，并沿用其送达 id", async () => {
+    const f = fixture();
+    const bot = await f.createProjectBot();
+    const opened = await f.service.waitOpen(bot.id);
+    f.service.bots.memoryAdd(bot.id, "新记忆");
+    const instructions = [f.service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n");
+    const delivery = f.service.memoryDelivery.prepare(bot.id, opened.agentId, f.service.bots.memories(bot.id), instructions, "other-delivery")!;
+    const merged = appendTurnContext({ agentId: opened.agentId, context: "全局指令块", deliveryId: "other-delivery" }, delivery);
+    expect(merged.context!.startsWith("全局指令块\n\n")).toBe(true);
+    expect(merged.context).toContain("新记忆");
+    expect(merged.deliveryId).toBe("other-delivery");
+    f.service.memoryDelivery.delivered(opened.agentId, "other-delivery");
+    expect(f.service.memoryDelivery.prepare(bot.id, opened.agentId, f.service.bots.memories(bot.id), instructions)).toBeUndefined();
   });
 });

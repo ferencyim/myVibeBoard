@@ -136,12 +136,46 @@ export function createBotStore(db: VibeDb, now = () => new Date().toISOString())
   function archive(id: string) {
     db.immediate(() => {
       const bot = requireBot(id);
+      if (bot.role === "coordinator") throw new Error("总协调不能归档；请先把总协调角色转给另一个独立 bot");
       if (bot.projectId && defaultGet(bot.projectId) === id) {
         const next = list({ projectId: bot.projectId }).find((item) => item.id !== id);
         if (!next) throw new Error("请先创建另一个项目 bot，再归档默认 bot");
         defaultSet(bot.projectId, next.id);
       }
       db.prepare("UPDATE bot SET archived_at=?,updated_at=? WHERE id=?").run(now(), now(), id);
+    });
+  }
+
+  function coordinator(): Bot | null {
+    const row = db.prepare<{ id: string }>("SELECT id FROM bot WHERE role='coordinator'").get();
+    return row ? requireBot(row.id) : null;
+  }
+
+  /** Moves the unique coordinator role; the previous holder keeps its name and settings. */
+  function transferCoordinator(toId: string): Bot {
+    return db.immediate(() => {
+      const target = requireBot(toId);
+      if (target.kind !== "independent" || target.archivedAt) throw new Error("总协调只能转给未归档的独立 bot");
+      if (target.role === "coordinator") throw new Error("该 bot 已经是总协调");
+      db.prepare("UPDATE bot SET role=NULL,updated_at=? WHERE role='coordinator'").run(now());
+      db.prepare("UPDATE bot SET role='coordinator',updated_at=? WHERE id=?").run(now(), toId);
+      return requireBot(toId);
+    });
+  }
+
+  /** Migration helper: promotes `id` only while no coordinator exists, so reruns and transfers are respected. */
+  function ensureCoordinator(id: string, defaults: { name: string; title: string; instructions: string }): Bot {
+    return db.immediate(() => {
+      const bot = requireBot(id);
+      if (coordinator()) return bot;
+      // updated_at stays untouched: the legacy settings snapshot only applies to bots never edited.
+      db.prepare("UPDATE bot SET role='coordinator',name=?,title=?,instructions=? WHERE id=?").run(
+        bot.name === "助手" ? defaults.name : bot.name,
+        bot.title || defaults.title,
+        bot.instructions || defaults.instructions,
+        id,
+      );
+      return requireBot(id);
     });
   }
 
@@ -224,6 +258,9 @@ export function createBotStore(db: VibeDb, now = () => new Date().toISOString())
     setMain,
     pending,
     archive,
+    coordinator,
+    transferCoordinator,
+    ensureCoordinator,
     legacy,
     defaultGet,
     defaultSet,

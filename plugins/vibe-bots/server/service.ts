@@ -19,6 +19,7 @@ import { createTaskRuntimeCommands } from "./vibe/db/task-runtime";
 import { resolveVibeHome, type VibeDb } from "./vibe/db/sqlite";
 
 import { createMemoryDelivery, memoryContext } from "./memory";
+import { COORDINATOR_DEFAULTS, COORDINATOR_PROMPT } from "./coordinator-defaults";
 export { memoryContext } from "./memory";
 
 export interface BotOpenState {
@@ -191,10 +192,10 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         entries.filter((entry) => entry.labels.role === "master" && !entry.labels["vibe.bot"])
           .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
     if (legacyMaster) {
-      const bot = bots.legacy("master", {
+      const bot = bots.ensureCoordinator(bots.legacy("master", {
         kind: "independent", name: "助手", instructions: "", provider: legacyMaster.provider, model: legacyMaster.model,
         thinking: legacyMaster.thinkingOptionId ?? "", permissionMode: legacyPermission(legacyMaster),
-      }, legacyMaster.id);
+      }, legacyMaster.id).id, COORDINATOR_DEFAULTS);
       if (bot.mainAgentId && !legacyMaster.archivedAt) {
         await paseo.agents.ref(bot.mainAgentId).setLabels({ "vibe.bot": bot.id, "vibe.bot-thread": "main" });
         await paseo.agents.ref(bot.mainAgentId).setTitle(bot.name);
@@ -495,7 +496,7 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     }
     if (value.projectId) await project(value.projectId);
     await validate({
-      ...value, id: "bot_validation", mainAgentId: null, pendingModel: false,
+      ...value, id: "bot_validation", role: null, mainAgentId: null, pendingModel: false,
       createdAt: "", updatedAt: "", archivedAt: null,
     }, true, false, true);
     const bot = db.immediate(() => {
@@ -532,7 +533,9 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
     if (bot.kind === "project") {
       return store.prompts.resolve("project.agent.role", { projectId: bot.projectId! });
     }
-    return `你是独立 bot「${bot.name}」${bot.title ? `，头衔是「${bot.title}」` : ""}。遵循用户填写的角色说明。当前提供的工具均可按需使用。不得写入密钥等敏感信息。派发只由调度器规则执行，你不自动派发。`;
+    const base = `你是独立 bot「${bot.name}」${bot.title ? `，头衔是「${bot.title}」` : ""}。遵循用户填写的角色说明。当前提供的工具均可按需使用。不得写入密钥等敏感信息。派发只由中枢规则执行，你不自动派发。`;
+    return bot.role === "coordinator" ? `${base}
+${COORDINATOR_PROMPT}` : base;
   }
 
   async function mode(provider: string, permission: Bot["permissionMode"], cachedOnly = false, cwd?: string) {

@@ -116,3 +116,19 @@ export const modelsListRpc = defineRpc({
     presets: z.array(z.object({ id: z.string(), name: z.string() })),
   }),
 });
+export const botsCoordinatorTransferRpc = defineRpc({
+  name: "bots.coordinator.transfer",
+  input: z.object({ toBotId: z.string().min(1) }),
+  output: z.object({ bots: z.array(BotViewSchema) }),
+});
+/** For other plugins (resource hub, task board): queue a system message for a bot's main conversation. */
+export const botsNotifyRpc = defineRpc({
+  name: "bots.notify",
+  input: z.object({
+    target: z.union([z.literal("coordinator"), z.object({ projectId: z.string().min(1) }).strict()]),
+    text: z.string().trim().min(1).max(8000),
+    /** Short sender label such as "中枢" or "任务看板". */
+    source: z.string().trim().min(1).max(40).default("系统"),
+  }),
+  output: z.object({ accepted: z.boolean(), reason: z.string().optional() }),
+});

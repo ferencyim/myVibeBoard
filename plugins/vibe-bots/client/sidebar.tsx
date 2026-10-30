@@ -26,7 +26,7 @@ export function IndependentBotsSidebar(props: PluginSidebarGroupProps) {
   const { onItemsChange, agents } = props;
   const activityKey = JSON.stringify(agents);
   const stableAgents = useMemo(() => JSON.parse(activityKey) as typeof agents, [activityKey]);
-  const rows = useMemo(() => (query.data?.bots ?? []).map((bot) => {
+  const rows = useMemo(() => (query.data?.bots ?? []).toSorted((a, b) => Number(b.role === "coordinator") - Number(a.role === "coordinator")).map((bot) => {
     const activity = stableAgents.find((agent) => agent.agentId === bot.mainAgentId);
     let status: "needs_attention" | "running" | "idle" = "idle";
     if (activity?.status === "waiting") status = "needs_attention";
@@ -41,7 +41,7 @@ export function IndependentBotsSidebar(props: PluginSidebarGroupProps) {
   }), [query.data, stableAgents, props.theme, props.host, props.navigation, props.sidebarCompact, props.Avatar, props.StatusIndicator, props.requestAgentPreview]);
   useEffect(() => { onItemsChange?.(rows); }, [onItemsChange, rows]);
   const retry = useCallback(() => { void query.refetch(); }, [query]);
-  return <View>{creating ? <BotCreateForm theme={props.theme} busy={busy} error={error} onCancel={cancel} onSubmit={submit} /> : null}{!onItemsChange && query.data?.bots.map((bot) => <BotRow key={bot.id} {...props} bot={bot} />)}
+  return <View>{creating ? <BotCreateForm theme={props.theme} busy={busy} error={error} onCancel={cancel} onSubmit={submit} /> : null}{!onItemsChange && (query.data?.bots ?? []).toSorted((a, b) => Number(b.role === "coordinator") - Number(a.role === "coordinator")).map((bot) => <BotRow key={bot.id} {...props} bot={bot} />)}
     {query.isLoading ? <Text style={styles.muted}>正在加载…</Text> : null}
     {query.error ? <Pressable onPress={retry}><Text style={styles.danger}>加载失败，点击重试</Text></Pressable> : null}
   </View>;
@@ -112,6 +112,6 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
 function BotDetails({ bot, activity, loading, theme, projectName }: { projectName?: string; bot: import("../shared/vibe/contract/bots").Bot; activity?: import("@getpaseo/plugin/client").PluginSidebarAgentActivity; loading: boolean; theme: PluginSidebarGroupProps["theme"] }) {
   const styles = useMemo(() => ({ names: { flex: 1 }, head: { flexDirection: "row" as const, alignItems: "center" as const, gap: (theme.spacing?.[2] ?? 8) }, name: { flex: 1, color: theme.colors.foreground }, text: { color: theme.colors.foreground }, muted: { color: theme.colors.foregroundMuted } }), [theme]);
   const time = formatRelativeTime(activity?.lastMessage?.timestamp ?? bot.updatedAt);
-  const sub = loading ? "正在创建…" : projectName;
+  const sub = loading ? "正在创建…" : projectName ?? (bot.role === "coordinator" ? "总协调" : undefined);
   return <View style={styles.names}><View style={styles.head}><Text numberOfLines={1} style={styles.name}>{bot.name}</Text>{time ? <Text style={styles.muted}>{time}</Text> : null}</View>{sub ? <Text numberOfLines={1} style={styles.muted}>{sub}</Text> : null}</View>;
 }
