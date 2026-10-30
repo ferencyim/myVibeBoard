@@ -1,4 +1,5 @@
 import { BotCreateForm } from "./create-form";
+import { formatRelativeTime } from "./relative-time";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRpc, type PluginClientContext, type PluginProjectSidebarGroupProps } from "@getpaseo/plugin/client";
@@ -10,9 +11,11 @@ type BotRowProps = Pick<PluginProjectSidebarGroupProps, "theme" | "host" | "navi
 
 function useBotStyles(theme: PluginProjectSidebarGroupProps["theme"]) {
   return useMemo(() => StyleSheet.create({
-    row: { padding: (theme.spacing?.[2] ?? 8), borderRadius: (theme.borderRadius?.md ?? 8), flexDirection: "row", alignItems: "center", gap: (theme.spacing?.[2] ?? 8) },
+    row: { minHeight: 36, paddingVertical: 4, paddingHorizontal: (theme.spacing?.[2] ?? 8), borderRadius: (theme.borderRadius?.md ?? 8), flexDirection: "row", alignItems: "center", gap: (theme.spacing?.[2] ?? 8) },
     badge: { color: theme.colors.foregroundMuted, backgroundColor: theme.colors.surface2, borderRadius: (theme.borderRadius?.md ?? 8), overflow: "hidden" },
     names: { flex: 1 },
+    head: { flexDirection: "row", alignItems: "center", gap: (theme.spacing?.[2] ?? 8) },
+    name: { flex: 1, color: theme.colors.foreground },
     muted: { color: theme.colors.foregroundMuted },
     text: { color: theme.colors.foreground },
     loading: { color: theme.colors.foreground, paddingHorizontal: 24 },
@@ -24,7 +27,7 @@ function ProjectBotRow({ bot, theme, navigation, host, sidebarCompact, Avatar, S
   const openAgent = useCallback((agentId: string) => navigation?.openAgent({ agentId, serverId: host.id }), [navigation, host.id]);
   useEffect(() => { if (bot.mainAgentId) requestAgentPreview(bot.mainAgentId); }, [bot.mainAgentId, requestAgentPreview]);
   const activity = agents.find((agent) => agent.agentId === bot.mainAgentId);
-  const lastMessageTime = activity?.lastMessage ? new Date(activity.lastMessage.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+  const lastMessageTime = formatRelativeTime(activity?.lastMessage?.timestamp ?? bot.updatedAt);
   const archive = useRpc(projectBotsArchiveRpc);
   const [menu, setMenu] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -67,8 +70,8 @@ function ProjectBotRow({ bot, theme, navigation, host, sidebarCompact, Avatar, S
   const status = error ? "failed" : activity?.status;
   return <View>
     <Pressable {...contextMenu} accessibilityRole="button" accessibilityLabel={`${bot.name}：${label}`} disabled={disabled} style={rowStyle} onPress={run} onLongPress={showMenu} onHoverIn={hoverIn} onHoverOut={hoverOut}>
-      <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={28} />
-      {!sidebarCompact ? <View style={styles.names}><Text style={styles.text}>{bot.name}{bot.isDefault ? <Text style={styles.badge}> 默认 </Text> : null}{lastMessageTime ? ` · ${lastMessageTime}` : ""}</Text><Text numberOfLines={1} style={styles.muted}>{projectName || (label !== bot.name ? label : [bot.title, activity?.lastMessage?.text].filter(Boolean).join(" · "))}</Text></View> : null}
+      <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={24} />
+      {!sidebarCompact ? <View style={styles.names}><View style={styles.head}><Text numberOfLines={1} style={styles.name}>{bot.name}{bot.isDefault ? <Text style={styles.badge}> 默认 </Text> : null}</Text>{lastMessageTime ? <Text style={styles.muted}>{lastMessageTime}</Text> : null}</View>{projectName || (label !== bot.name && label) ? <Text numberOfLines={1} style={styles.muted}>{projectName || label}</Text> : null}</View> : null}
       {status ? <StatusIndicator status={status} count={activity?.count} /> : null}
       {Platform.OS !== "web" || hovered ? <Pressable accessibilityRole="button" accessibilityLabel={`${bot.name}菜单`} onPress={showMenu}><Text style={styles.muted}>…</Text></Pressable> : null}
     </Pressable>

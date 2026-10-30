@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { SidebarWorkspacePlacement } from "@/hooks/use-sidebar-workspaces-list";
+import type {
+  SidebarProjectEntry,
+  SidebarWorkspacePlacement,
+} from "@/hooks/use-sidebar-workspaces-list";
 import {
   classifySidebarWorkspaces,
+  hideIndependentBotWorkspaces,
   sidebarTaskStatus,
   sidebarTreeGroupMode,
 } from "./sidebar-workspace-classification";
@@ -57,5 +61,27 @@ describe("sidebar workspace classification", () => {
     expect(sidebarTaskStatus("failed")).toBe("failed");
     expect(sidebarTaskStatus("attention")).toBe("responded");
     expect(sidebarTaskStatus("done")).toBeNull();
+  });
+});
+
+describe("hideIndependentBotWorkspaces", () => {
+  const place = (id: string, dir: string) =>
+    ({ ...workspace("a", id), workspaceDirectory: dir }) as SidebarWorkspacePlacement;
+  const project = (key: string, workspaces: SidebarWorkspacePlacement[]) =>
+    ({ viewKey: key, workspaces }) as SidebarProjectEntry;
+
+  it("removes bot directories and projects left empty, keeps ordinary ones", () => {
+    const bot = place("b1", "C:\\Users\\x\\.vibe\\bots\\bot_19d74bca-1");
+    const botPosix = place("b2", "/home/x/.vibe/bots/bot_abc/sub");
+    const task = place("t", "D:\\repo\\app");
+    const botsLikeName = place("n", "D:\\repo\\bots\\mybot");
+    const result = hideIndependentBotWorkspaces([
+      project("botOnly", [bot, botPosix]),
+      project("mixed", [task, bot]),
+      project("plain", [botsLikeName]),
+    ]);
+    expect(result.map((item) => item.viewKey)).toEqual(["mixed", "plain"]);
+    expect(result[0]?.workspaces).toEqual([task]);
+    expect(result[1]?.workspaces).toEqual([botsLikeName]);
   });
 });

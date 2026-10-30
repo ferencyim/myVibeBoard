@@ -8,7 +8,10 @@ import {
 import { PluginProjectSidebarItems } from "@/plugins/project-sidebar-items";
 import { PluginSidebarGroups } from "@/components/sidebar/plugin-sidebar-groups";
 
-import { useSidebarWorkspaceClassification } from "@/components/sidebar/sidebar-workspace-classification";
+import {
+  hideIndependentBotWorkspaces,
+  useSidebarWorkspaceClassification,
+} from "@/components/sidebar/sidebar-workspace-classification";
 import {
   View,
   Text,
@@ -997,7 +1000,7 @@ function ProjectCollector({
   return null;
 }
 function SimpleSidebarList({
-  projects,
+  projects: allProjects,
   workspaceEntriesByKey,
   collapsedProjectKeys,
   onToggleProjectCollapsed,
@@ -1018,6 +1021,7 @@ function SimpleSidebarList({
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
   const { mode } = useSidebarGroupingPreference();
+  const projects = useMemo(() => hideIndependentBotWorkspaces(allProjects), [allProjects]);
   const [workspaceSources, setWorkspaceSources] = useState<Record<string, SimpleItem[]>>({});
   const [botSources, setBotSources] = useState<Record<string, readonly PluginSidebarListItem[]>>(
     {},
@@ -1134,12 +1138,16 @@ function SimpleSidebarList({
                 {project && host ? (
                   <DropdownMenu compactMode="sheet">
                     <DropdownMenuTrigger
-                      accessibilityLabel="新建"
+                      accessibilityLabel={`在 ${project.projectName} 新建`}
                       style={styles.projectKebabButton}
                     >
                       <ThemedPlus size={14} uniProps={foregroundMutedColorMapping} />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" width={180} sheetTitle="新建">
+                    <DropdownMenuContent
+                      align="end"
+                      width={180}
+                      sheetTitle={`在 ${project.projectName} 新建`}
+                    >
                       <DropdownMenuItem
                         onSelect={() => {
                           onWorkspacePress?.();
