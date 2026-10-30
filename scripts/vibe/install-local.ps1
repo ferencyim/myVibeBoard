@@ -17,6 +17,11 @@ param(
   [string]$RelayEndpoint = "",
   [string]$PushGateway = "",
   [string]$PushTokenFile = "",
+  # The daily daemon sets VIBE_HOME, which the resource hub treats as a dev daemon and keeps
+  # private. Point it at the machine-wide guard lock dir and admission file so takeover reaches
+  # every win-heavy-guard client. Skipped when the paths do not exist on this machine.
+  [string]$HubDir = "D:\devRepoCaches\validation\locks\win-heavy",
+  [string]$HubAdmissionFile = "D:\devRepo\ci-dashboard\queue\win-heavy-guard.admission.json",
   [string[]]$Plugins = @(
     "vibe-board", "vibe-bots", "vibe-context", "vibe-master", "vibe-scheduler",
     "vibe-maintain", "vibe-stats", "vibe-git", "vibe-verify", "switch-provider"
@@ -112,10 +117,13 @@ if ($PushGateway) { $config["daemon"]["push"] = @{ gateway = $PushGateway } }
 $config | ConvertTo-Json -Depth 20 | Set-Content -Path $configPath -Encoding utf8
 
 # Launchers. The desktop package ships its own CLI (resources\bin\paseo.cmd runs it on the bundled runtime).
+$hubEnv = ""
+if ($HubDir -and (Test-Path $HubDir)) { $hubEnv += "`$env:VIBE_HUB_DIR = '$HubDir'`n" }
+if ($HubAdmissionFile -and (Test-Path $HubAdmissionFile)) { $hubEnv += "`$env:VIBE_HUB_ADMISSION_FILE = '$HubAdmissionFile'`n" }
 $envBlock = @"
 `$env:PASEO_HOME = '$paseoHome'
 `$env:VIBE_HOME = '$vibeHome'
-`$tokenFile = '$tokenTarget'
+$hubEnv`$tokenFile = '$tokenTarget'
 if (Test-Path `$tokenFile) { `$env:PASEO_PUSH_GATEWAY_TOKEN = (Get-Content `$tokenFile -Raw).Trim() }
 "@
 Set-Content -Encoding utf8 (Join-Path $InstallDir "start-daemon.ps1") @"
