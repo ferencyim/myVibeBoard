@@ -15,6 +15,10 @@ describe("resolveAgentTarget", () => {
     expect(resolveAgentTarget({ labels: { "vibe.tab.role": "main" } })).toBe("#1 主会话");
     expect(resolveAgentTarget({ labels: { "vibe.tab.role": "verifier" } })).toBe("#6 验证");
   });
+  it("treats tab-order 1 without a role as the main session of an older task", () => {
+    expect(resolveAgentTarget({ labels: { "paseo.tab-order": "1" } })).toBe("#1 主会话");
+    expect(resolveAgentTarget({ labels: { "paseo.tab-order": "2" } })).toBeNull();
+  });
   it("returns null for ordinary sessions and unknown roles", () => {
     expect(resolveAgentTarget({ labels: {} })).toBeNull();
     expect(resolveAgentTarget({ labels: { "vibe.tab.role": "session" } })).toBeNull();

@@ -15,7 +15,9 @@ export function resolveAgentTarget(input: {
   labels?: Record<string, string> | null;
 }): string | null {
   if (input.botName) return input.botName;
-  const role = input.labels?.["vibe.tab.role"];
+  // Tasks created before role labels existed only carry tab-order "1" on their main session.
+  const role =
+    input.labels?.["vibe.tab.role"] ?? (input.labels?.["paseo.tab-order"] === "1" ? "main" : null);
   return (role && TASK_TAB_TARGETS[role]) || null;
 }
 

@@ -439,6 +439,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
     desktopSidebarRendered: desktopSidebarVisible,
     hasTopLeftWindowControls,
     sidebarControlsEnabled: chromeEnabled && !isWorkspaceFocusModeEnabled,
+    titlebarVisible: isDesktopPageRailVisible(chromeEnabled, isCompactLayout),
   });
   const sidebarChrome = (
     <SidebarChrome

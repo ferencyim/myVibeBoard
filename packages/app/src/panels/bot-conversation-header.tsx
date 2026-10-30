@@ -173,7 +173,7 @@ export function BotConversationHeader({
       <View style={styles.header} testID="conversation-header" onLayout={onHeaderLayout}>
         {isPaneFocused ? slots.left : null}
         <PressHighlight
-          style={isBot ? styles.botIdentity : styles.identity}
+          style={isBot ? styles.botIdentity : [styles.identity, styles.ordinaryIdentity]}
           onPress={identityAction ?? compactIdentityAction}
           accessibilityRole={compact || isBot ? "button" : undefined}
         >
@@ -283,6 +283,8 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
   },
+  // 任务头部的右侧控件很宽，身份区不设下限会被挤到只剩项目名。
+  ordinaryIdentity: { minWidth: 240 },
   botIdentity: {
     maxWidth: "30%",
     minWidth: 0,

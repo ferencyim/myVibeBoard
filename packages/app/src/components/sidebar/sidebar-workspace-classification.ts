@@ -2,7 +2,13 @@ import type {
   SidebarProjectEntry,
   SidebarWorkspacePlacement,
 } from "@/hooks/use-sidebar-workspaces-list";
+import { useEffect } from "react";
 import { useFetchQueries } from "@/data/query";
+import {
+  classificationCacheKey,
+  rememberClassification,
+  useClassificationCache,
+} from "@/components/sidebar/sidebar-classification-cache";
 import { useInstalledPlugins } from "@/plugins/registry";
 import type { SidebarStateBucket } from "@/utils/sidebar-agent-state";
 import type { StatusIndicatorStatus } from "@/ui/status-indicator";
@@ -94,13 +100,29 @@ export function useSidebarWorkspaceClassification(project: SidebarProjectEntry) 
       };
     }),
   );
-  return {
-    ...classifySidebarWorkspaces(
-      project.workspaces,
-      requests.map(({ host }, index) => ({ serverId: host.serverId, data: queries[index]?.data })),
-    ),
-    loading: queries.some((query) => query.isPending),
-  };
+  const cache = useClassificationCache();
+  let loading = false;
+  const results: { serverId: string; data?: readonly SidebarWorkspaceClassification[] }[] = [];
+  const fresh: { key: string; data: readonly SidebarWorkspaceClassification[] }[] = [];
+  for (const host of project.hosts) {
+    const key = classificationCacheKey(host.serverId, host.projectId);
+    const own = requests
+      .map((request, index) => ({ request, query: queries[index] }))
+      .filter(({ request }) => request.host === host);
+    const answered = own.length > 0 && own.every(({ query }) => query?.data !== undefined);
+    const data = answered ? own.flatMap(({ query }) => query?.data ?? []) : cache[key];
+    if (answered) fresh.push({ key, data });
+    else if (own.length > 0 && data === undefined)
+      loading ||= own.some(({ query }) => query?.isPending);
+    if (own.length > 0 || data !== undefined) results.push({ serverId: host.serverId, data });
+  }
+  // Content signature: the arrays above are rebuilt on every render.
+  const freshSignature = JSON.stringify(fresh);
+  useEffect(() => {
+    for (const { key, data } of fresh) rememberClassification(key, data);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [freshSignature]);
+  return { ...classifySidebarWorkspaces(project.workspaces, results), loading };
 }
 
 // An independent bot's main agent runs in `$VIBE_HOME/bots/<botId>`; the bot row stands for it.

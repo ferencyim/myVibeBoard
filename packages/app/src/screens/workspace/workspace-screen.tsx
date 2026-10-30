@@ -4143,7 +4143,7 @@ const styles = StyleSheet.create((theme) => ({
   conversationWorkspaceBranch: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
-    flexShrink: 1,
+    flexShrink: 3,
   },
   // The project short name keeps its width (up to a cap); the task title truncates first.
   conversationWorkspaceProject: {

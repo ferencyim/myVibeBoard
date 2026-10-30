@@ -71,6 +71,17 @@ describe("desktop sidebar layout", () => {
     });
   });
 
+  it("leaves window-control padding to the titlebar when it sits above the content", () => {
+    expect(
+      resolveDesktopAppChromeLayout({
+        desktopSidebarRendered: true,
+        hasTopLeftWindowControls: false,
+        sidebarControlsEnabled: true,
+        titlebarVisible: true,
+      }),
+    ).toEqual({ sidebarCorners: "none", contentCorners: "none", sidebarToggleOwner: "content" });
+  });
+
   it("hides the window-owned sidebar toggle when app chrome is suppressed", () => {
     expect(
       resolveDesktopAppChromeLayout({

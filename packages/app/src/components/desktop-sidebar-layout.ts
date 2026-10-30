@@ -25,11 +25,16 @@ export function resolveDesktopAppChromeLayout(input: {
   desktopSidebarRendered: boolean;
   hasTopLeftWindowControls: boolean;
   sidebarControlsEnabled: boolean;
+  /** The page-rail titlebar sits above the content and already hosts the window controls. */
+  titlebarVisible?: boolean;
 }) {
   const sidebarOwnsTopLeft = input.desktopSidebarRendered && input.hasTopLeftWindowControls;
   let sidebarToggleOwner: "none" | "window" | "content" = "none";
   if (input.sidebarControlsEnabled) {
     sidebarToggleOwner = input.hasTopLeftWindowControls ? "window" : "content";
+  }
+  if (input.titlebarVisible) {
+    return { sidebarCorners: "none" as const, contentCorners: "none" as const, sidebarToggleOwner };
   }
   return {
     sidebarCorners: sidebarOwnsTopLeft ? ("top-left" as const) : ("none" as const),
