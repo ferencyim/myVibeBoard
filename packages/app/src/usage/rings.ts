@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import { i18n } from "@/i18n/i18next";
 import { formatProviderUsageLabel } from "./format";
 import { usedPercent } from "./model";
-import type { UsageReportEntry, UsageWindow } from "./types";
+import type { AvailableUsageReport, UsageReportEntry, UsageWindow } from "./types";
 
 /** The colour of a remaining share: healthy green, low orange, nearly out red. */
 export type RingLevel = "success" | "warning" | "danger";
@@ -36,7 +36,28 @@ export interface RingAccount {
   rings: RingWindow[];
   /** The account's aria label: its name and each drawn window's share. */
   accessibleLabel: string;
+  /** Set when the ring shows the last successful read because the source is unavailable now. */
+  stale: RingStale | null;
 }
+
+/** The last good read an unavailable account still shows, greyed out. */
+export interface RingStale {
+  /** When the shown numbers were read (ISO). */
+  at: string;
+  /** Why the account cannot be read now, in words. */
+  reason: string;
+  /** "Last updated HH:mm; waiting to re-read (reason)". */
+  summary: string;
+}
+
+/** The last successful read of one account, kept across restarts. */
+export interface RememberedUsage {
+  fetchedAt: string;
+  report: AvailableUsageReport;
+}
+
+/** A remembered read older than this is too old to draw. */
+export const STALE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const MAX_RINGS = 2;
 
@@ -76,10 +97,58 @@ function accountName(entry: UsageReportEntry): string {
   return entry.account.label ? `${entry.sourceLabel} · ${entry.account.label}` : entry.sourceLabel;
 }
 
-function resolveAccount(entry: UsageReportEntry, t: TFunction): RingAccount | null {
-  if (entry.report.status !== "available") return null;
+function staleReason(entry: UsageReportEntry, t: TFunction): string {
+  const source = entry.sourceLabel;
+  const report = entry.report;
+  if (report.status === "unavailable") {
+    const kind = report.problem.kind;
+    if (kind === "expired") return t("providerUsage.staleReasonExpired", { source });
+    if (kind === "rejected") return t("providerUsage.staleReasonRejected", { source });
+    return t("providerUsage.staleReasonNoQuota", { source });
+  }
+  return t("providerUsage.staleReasonError", { source });
+}
+
+function formatClock(iso: string): string {
+  const date = new Date(iso);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** The newest successful read of an entry: the daemon's, or the one this device remembered. */
+function lastGood(entry: UsageReportEntry, remembered?: RememberedUsage): RememberedUsage | null {
+  const fromDaemon = entry.lastSuccessful ?? null;
+  if (!fromDaemon) return remembered ?? null;
+  if (!remembered) return fromDaemon;
+  return Date.parse(remembered.fetchedAt) > Date.parse(fromDaemon.fetchedAt)
+    ? remembered
+    : fromDaemon;
+}
+
+function resolveAccount(
+  entry: UsageReportEntry,
+  t: TFunction,
+  remembered: RememberedUsage | undefined,
+  now: number,
+): RingAccount | null {
+  let source: AvailableUsageReport;
+  let stale: RingStale | null = null;
+  if (entry.report.status === "available") {
+    source = entry.report;
+  } else {
+    const good = lastGood(entry, remembered);
+    const age = good ? now - Date.parse(good.fetchedAt) : Number.NaN;
+    if (!good || !(age <= STALE_MAX_AGE_MS)) return null;
+    source = good.report;
+    const reason = staleReason(entry, t);
+    stale = {
+      at: good.fetchedAt,
+      reason,
+      summary: t("providerUsage.staleSummary", { time: formatClock(good.fetchedAt), reason }),
+    };
+  }
   const windows: RingWindow[] = [];
-  for (const window of entry.report.windows) {
+  for (const window of source.windows) {
     const remaining = remainingPercent(window);
     if (remaining === null) continue;
     windows.push({
@@ -110,23 +179,27 @@ function resolveAccount(entry: UsageReportEntry, t: TFunction): RingAccount | nu
     level: ringLevel(remaining),
     windows: ordered,
     rings: ordered.slice(0, MAX_RINGS),
-    accessibleLabel: `${name} usage: ${parts.join(", ")}. ${t("providerUsage.openUsage")}`,
+    accessibleLabel: `${name} usage: ${parts.join(", ")}.${stale ? ` ${stale.summary}` : ""} ${t("providerUsage.openUsage")}`,
+    stale,
   };
 }
 
 /**
  * The provider accounts that get a ring, in report order with each source's accounts together.
- * A report with no windowed limit (no usage, or only balances) gets none.
+ * A report with no windowed limit (no usage, or only balances) gets none. An account that cannot
+ * be read now keeps its ring, marked `stale`, while its last good read is under 24 hours old.
  */
 export function resolveUsageRings(
   reports: readonly UsageReportEntry[],
   t: TFunction = i18n.t,
+  remembered: Readonly<Record<string, RememberedUsage>> = {},
+  now: number = Date.now(),
 ): RingAccount[] {
   const sourceIds = [...new Set(reports.map((entry) => entry.sourceId))];
   return sourceIds
     .flatMap((sourceId) => reports.filter((entry) => entry.sourceId === sourceId))
     .flatMap((entry) => {
-      const account = resolveAccount(entry, t);
+      const account = resolveAccount(entry, t, remembered[entry.id], now);
       return account ? [account] : [];
     });
 }

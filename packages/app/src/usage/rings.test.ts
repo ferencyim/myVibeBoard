@@ -141,3 +141,50 @@ describe("sortByRemaining", () => {
     expect(sortByRemaining(accounts).map((account) => account.reportId)).toEqual(["b", "a"]);
   });
 });
+
+describe("resolveUsageRings with unavailable accounts", () => {
+  const now = Date.parse("2026-10-29T12:00:00.000Z");
+  const available = entry("claude", [{ id: "five_hour", usedPct: 40, durationMins: 300 }]);
+  const expired = {
+    ...entry("claude", []),
+    fetchedAt: "2026-10-29T11:00:00.000Z",
+    report: {
+      status: "unavailable",
+      problem: { kind: "expired", expiresAt: "2026-10-29T10:00:00.000Z" },
+    },
+  } as UsageReportEntry;
+  const remembered = (fetchedAt: string) => ({
+    claude: {
+      fetchedAt,
+      report: available.report as Extract<UsageReportEntry["report"], { status: "available" }>,
+    },
+  });
+
+  it("greys the last read of an account that turned unavailable, then recovers", () => {
+    const [stale] = resolveUsageRings([expired], t, remembered("2026-10-29T09:00:00.000Z"), now);
+    expect(stale?.stale).not.toBeNull();
+    expect(stale?.remaining).toBe(60);
+    expect(stale?.stale?.reason).toContain("staleReasonExpired");
+    expect(stale?.accessibleLabel).toContain("providerUsage.staleSummary");
+    const [fresh] = resolveUsageRings([available], t, remembered("2026-10-29T09:00:00.000Z"), now);
+    expect(fresh?.stale).toBeNull();
+  });
+
+  it("hides a last read older than 24 hours", () => {
+    expect(resolveUsageRings([expired], t, remembered("2026-10-28T11:00:00.000Z"), now)).toEqual(
+      [],
+    );
+  });
+
+  it("draws nothing for an account that was never read", () => {
+    expect(resolveUsageRings([expired], t, {}, now)).toEqual([]);
+  });
+
+  it("falls back to the daemon's last successful read", () => {
+    const withDaemon = {
+      ...expired,
+      lastSuccessful: remembered("2026-10-29T10:00:00.000Z").claude,
+    } as UsageReportEntry;
+    expect(resolveUsageRings([withDaemon], t, {}, now)[0]?.stale).not.toBeNull();
+  });
+});

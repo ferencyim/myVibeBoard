@@ -8,6 +8,7 @@ import { PressHighlight } from "@/components/ui/press-highlight";
 import type { Theme } from "@/styles/theme";
 import { formatPct, formatResetLabel } from "./format";
 import { useUsageHostId } from "./hosts";
+import { useRememberedUsage } from "./last-good";
 import { useUsageHostReports, useUsageReportsAutoRefresh } from "./queries";
 import {
   resolveUsageRings,
@@ -29,6 +30,8 @@ const RING_GAP = 4.5;
 const OUTER_RADIUS = (SVG_SIZE - STROKE_WIDTH) / 2;
 const INNER_RADIUS = OUTER_RADIUS - RING_GAP;
 const TRACK_OPACITY = 0.15;
+/** A ring showing the last read of an unavailable account fades to this. */
+const STALE_OPACITY = 0.45;
 const LOGO_SIZE = 12;
 const CARD_MAX_WIDTH = 300;
 /** Narrow rails overlap their two rings by this much. */
@@ -66,7 +69,8 @@ const RingGraphicBase = function RingGraphic({
   successColor,
   warningColor,
   dangerColor,
-}: RingColors & { rings: readonly RingWindow[] }) {
+  stale,
+}: RingColors & { rings: readonly RingWindow[]; stale: boolean }) {
   const colors = { trackColor, successColor, warningColor, dangerColor };
   return (
     <Svg
@@ -99,7 +103,7 @@ const RingGraphicBase = function RingGraphic({
                 cy={CENTER}
                 r={radius}
                 fill="none"
-                stroke={levelColor(ring.level, colors)}
+                stroke={stale ? trackColor : levelColor(ring.level, colors)}
                 strokeWidth={STROKE_WIDTH}
                 strokeLinecap="round"
                 strokeDasharray={arcDash(ring.remaining, circumference)}
@@ -136,9 +140,13 @@ function UsageRingButton({
           accessibilityRole="button"
           accessibilityLabel={account.accessibleLabel}
           testID={`usage-ring-${account.reportId}`}
-          style={styles.button}
+          style={account.stale ? [styles.button, styles.staleButton] : styles.button}
         >
-          <ThemedRingGraphic rings={account.rings} uniProps={ringColorProps} />
+          <ThemedRingGraphic
+            rings={account.rings}
+            stale={account.stale !== null}
+            uniProps={ringColorProps}
+          />
           <View style={styles.logo} pointerEvents="none">
             <UsageSourceIcon svg={account.icon} size={LOGO_SIZE} />
           </View>
@@ -166,8 +174,19 @@ function UsageRingCard({ account }: { account: RingAccount }) {
     <View style={styles.cardBody}>
       <Text style={styles.cardTitle}>{t("providerUsage.title")}</Text>
       <Text style={styles.accountName}>{account.name}</Text>
+      {account.stale ? (
+        <Text style={styles.staleNote} testID={`usage-ring-stale-${account.reportId}`}>
+          {account.stale.summary}
+        </Text>
+      ) : null}
       {account.windows.map((window) => (
-        <ThemedWindowRow key={window.id} window={window} now={now} uniProps={ringColorProps} />
+        <ThemedWindowRow
+          key={window.id}
+          window={window}
+          now={now}
+          stale={account.stale !== null}
+          uniProps={ringColorProps}
+        />
       ))}
     </View>
   );
@@ -181,10 +200,11 @@ const WindowRowBase = function WindowRow({
   successColor,
   warningColor,
   dangerColor,
-}: RingColors & { window: RingWindow; now: number }) {
+  stale,
+}: RingColors & { window: RingWindow; now: number; stale: boolean }) {
   // Healthy bars stay grey on the card; only low and critical windows take a colour.
   const colors = { trackColor, successColor, warningColor, dangerColor };
-  const fill = window.level === "success" ? trackColor : levelColor(window.level, colors);
+  const fill = stale || window.level === "success" ? trackColor : levelColor(window.level, colors);
   const reset = formatResetLabel(window.resetsAt, false, now);
   return (
     <View style={styles.windowRow}>
@@ -218,7 +238,11 @@ export function UsageRings({
   const serverId = useUsageHostId();
   useUsageReportsAutoRefresh(serverId);
   const reports = useUsageHostReports(serverId);
-  const accounts = useMemo(() => resolveUsageRings(reports, t), [reports, t]);
+  const remembered = useRememberedUsage(serverId, reports);
+  const accounts = useMemo(
+    () => resolveUsageRings(reports, t, remembered),
+    [reports, t, remembered],
+  );
   if (accounts.length === 0) return null;
   if (!horizontal) {
     return accounts.map((account) => (
@@ -247,6 +271,13 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
+  },
+  staleButton: {
+    opacity: STALE_OPACITY,
+  },
+  staleNote: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
   },
   logo: {
     position: "absolute",
