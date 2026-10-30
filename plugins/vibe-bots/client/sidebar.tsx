@@ -1,4 +1,5 @@
 import { useRpc, type PluginSidebarGroupProps } from "@getpaseo/plugin/client";
+import { ActionMenu, type ActionMenuItem } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
@@ -90,18 +91,22 @@ function BotRow({ bot, theme, host, navigation, sidebarCompact, Avatar, StatusIn
   const profile = useCallback(() => navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "profile", params: { botId: bot.id } }), [navigation, bot.id]);
   const showMenu = useCallback(() => setMenu(true), []);
   const contextMenu = useMemo(() => ({ onContextMenu: (event: { preventDefault(): void }) => { event.preventDefault(); showMenu(); } }), [showMenu]);
-  const archiveBot = useCallback(() => { void archive({ id: bot.id }).then(() => client.invalidateQueries({ queryKey: ["vibe-bots", host.id, "independent"] })).catch((reason) => setError(String(reason))); setMenu(false); }, [archive, bot.id, client, host.id]);
-  const openProfile = useCallback(() => { setMenu(false); profile(); }, [profile]);
+  const archiveBot = useCallback(() => { void archive({ id: bot.id }).then(() => client.invalidateQueries({ queryKey: ["vibe-bots", host.id, "independent"] })).catch((reason) => setError(String(reason))); }, [archive, bot.id, client, host.id]);
+  const items = useMemo<ActionMenuItem[]>(() => [
+    { id: "open", label: "打开" },
+    { id: "profile", label: "资料" },
+    { id: "archive", label: "归档", destructive: true, confirm: { title: "归档 bot", message: `确定归档「${bot.name}」吗？`, confirmLabel: "归档" } },
+  ], [bot.name]);
+  const selectItem = useCallback((id: string) => { if (id === "open") void run(); else if (id === "profile") profile(); else if (id === "archive") archiveBot(); }, [run, profile, archiveBot]);
   const onPress = useCallback(() => { setMenu(false); void run(); }, [run]);
-  const closeMenu = useCallback(() => setMenu(false), []);
   const rowStyle = useMemo(() => [styles.row, selected && { backgroundColor: theme.colors.surface2 }], [styles.row, selected, theme.colors.surface2]);
   const status = state.data?.status === "failed" || error ? "failed" : activity?.status;
   return <View><Pressable {...contextMenu} accessibilityRole="button" accessibilityLabel={bot.name} onPress={onPress} onLongPress={showMenu} onHoverIn={hoverIn} onHoverOut={hoverOut} style={rowStyle}>
     <Avatar seed={bot.avatarSeed || bot.id} name={bot.name} hue={bot.avatarHue} size={24} />
     {!sidebarCompact && <BotDetails bot={bot} activity={activity} loading={!bot.mainAgentId && (opening || state.data?.status === "creating")} theme={theme} projectName={projectName} />}
     {status ? <StatusIndicator status={status} count={activity?.count} /> : null}
-    <BotMenuButton name={bot.name} hovered={hovered} onPress={showMenu} color={theme.colors.foregroundMuted} />
-  </Pressable>{menu ? <View><Pressable onPress={onPress}><Text style={styles.text}>打开</Text></Pressable><Pressable onPress={openProfile}><Text style={styles.text}>资料 / 改名</Text></Pressable><Pressable onPress={archiveBot}><Text style={styles.danger}>归档</Text></Pressable><Pressable onPress={closeMenu}><Text style={styles.muted}>取消</Text></Pressable></View> : null}{error || state.data?.error ? <Text style={styles.danger}>{error || state.data?.error}</Text> : null}</View>;
+    <ActionMenu label={`${bot.name}菜单`} items={items} onSelect={selectItem} open={menu} onOpenChange={setMenu} visible={Platform.OS !== "web" || hovered || menu} />
+  </Pressable>{error || state.data?.error ? <Text style={styles.danger}>{error || state.data?.error}</Text> : null}</View>;
 }
 
 function BotDetails({ bot, activity, loading, theme, projectName }: { projectName?: string; bot: import("../shared/vibe/contract/bots").Bot; activity?: import("@getpaseo/plugin/client").PluginSidebarAgentActivity; loading: boolean; theme: PluginSidebarGroupProps["theme"] }) {
@@ -109,10 +114,4 @@ function BotDetails({ bot, activity, loading, theme, projectName }: { projectNam
   const time = formatRelativeTime(activity?.lastMessage?.timestamp ?? bot.updatedAt);
   const sub = loading ? "正在创建…" : projectName;
   return <View style={styles.names}><View style={styles.head}><Text numberOfLines={1} style={styles.name}>{bot.name}</Text>{time ? <Text style={styles.muted}>{time}</Text> : null}</View>{sub ? <Text numberOfLines={1} style={styles.muted}>{sub}</Text> : null}</View>;
-}
-
-function BotMenuButton({ name, hovered, onPress, color }: { name: string; hovered: boolean; onPress(): void; color: string }) {
-  const style = useMemo(() => ({ color }), [color]);
-  if (Platform.OS === "web" && !hovered) return null;
-  return <Pressable accessibilityRole="button" accessibilityLabel={`${name}菜单`} onPress={onPress}><Text style={style}>…</Text></Pressable>;
 }

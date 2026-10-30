@@ -213,3 +213,26 @@ export interface ModelPickerFieldProps {
 }
 /** Host provider / model / effort picker rendered as a full-width form field. */
 export declare const ModelPickerField: ComponentType<ModelPickerFieldProps>;
+
+export interface ActionMenuItem {
+  id: string;
+  label: string;
+  /** Draws the item in the danger color. */
+  destructive?: boolean;
+  /** Asks the host confirmation dialog before `onSelect` fires. */
+  confirm?: { title: string; message: string; confirmLabel?: string; cancelLabel?: string };
+}
+
+export interface ActionMenuProps {
+  /** Accessible label of the kebab trigger and the sheet title. */
+  label: string;
+  items: readonly ActionMenuItem[];
+  onSelect(id: string): void;
+  /** Controlled open state, so a right click or long press on the row can open the same menu. */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
+  /** False hides the kebab (hover-to-show on web) while keeping it mounted as the anchor. Default true. */
+  visible?: boolean;
+}
+/** Host row menu: a kebab trigger that opens the host dropdown (popover on wide, sheet on compact). */
+export declare const ActionMenu: ComponentType<ActionMenuProps>;

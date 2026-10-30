@@ -28,7 +28,10 @@ function activityTime(item: SidebarGroupingItem): number {
   return Number.isFinite(time) ? time : 0;
 }
 
-/** Groups are non-empty and rows are ordered by activity, with a project's default bot first. */
+/**
+ * Groups are non-empty and rows are ordered by activity, with a project's default bot first.
+ * Project and date modes lead with a "需要你" group holding every item that waits on the user.
+ */
 export function groupSidebarItems<T extends SidebarGroupingItem>(
   items: readonly T[],
   mode: SidebarGroupingMode,
@@ -45,7 +48,11 @@ export function groupSidebarItems<T extends SidebarGroupingItem>(
     let key: string;
     let title: string;
     let projectId: string | undefined;
-    if (mode === "project") {
+    if (mode !== "status" && item.status === "needs_attention") {
+      // Pinned above the real groups and removed from them, so a row never shows twice.
+      key = "needs_attention";
+      title = "需要你";
+    } else if (mode === "project") {
       if (item.projectId) {
         projectId = item.projectId;
         key = `project:${projectId}`;
@@ -92,11 +99,12 @@ export function groupSidebarItems<T extends SidebarGroupingItem>(
   if (mode === "project") {
     result.sort(
       (a, b) =>
+        Number(b.key === "needs_attention") - Number(a.key === "needs_attention") ||
         Number(b.key === "independent") - Number(a.key === "independent") ||
         Number(a.key === "other") - Number(b.key === "other"),
     );
   } else {
-    const keys = mode === "date" ? dateKeys : statusKeys;
+    const keys = mode === "date" ? ["needs_attention", ...dateKeys] : statusKeys;
     result.sort((a, b) => keys.indexOf(a.key) - keys.indexOf(b.key));
   }
   return result;
