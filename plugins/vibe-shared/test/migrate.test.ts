@@ -38,6 +38,7 @@ const EXPECTED_TABLES = [
   "bot",
   "bot_memory",
   "bot_memory_delivery",
+  "bot_message",
   "project_default_bot",
   "bot_legacy_migration",
   "bot_model_state",

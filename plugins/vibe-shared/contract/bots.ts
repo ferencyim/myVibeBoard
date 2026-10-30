@@ -58,6 +58,8 @@ export const BotSchema = BotFieldsSchema.extend({
   kind: z.enum(["independent", "project"]),
   projectId: z.string().nullable(),
   mainAgentId: z.string().nullable(),
+  /** "coordinator" is globally unique (resource hub coordinator); null for every other bot. */
+  role: z.literal("coordinator").nullable().default(null),
   pendingModel: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),

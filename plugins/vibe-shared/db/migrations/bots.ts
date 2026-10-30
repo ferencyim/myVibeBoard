@@ -100,5 +100,22 @@ CREATE INDEX idx_bot_routine_run ON bot_routine_run(routine_id,scheduled_at);
 `,
   },
 
+  {
+    version: 4, name: "bot_coordinator_and_messages", sql: `
+ALTER TABLE bot ADD COLUMN role TEXT CHECK(role IS NULL OR role='coordinator');
+CREATE UNIQUE INDEX idx_bot_coordinator ON bot(role) WHERE role='coordinator';
+CREATE TABLE bot_message (
+  id TEXT PRIMARY KEY,
+  from_bot_id TEXT,
+  to_bot_id TEXT NOT NULL REFERENCES bot(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('queued','delivered','held')),
+  created_at TEXT NOT NULL,
+  delivered_at TEXT
+);
+CREATE INDEX idx_bot_message_queue ON bot_message(to_bot_id,status,created_at);
+CREATE INDEX idx_bot_message_pair ON bot_message(from_bot_id,to_bot_id,created_at);
+`,
+  },
 ];
 

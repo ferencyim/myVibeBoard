@@ -19,6 +19,7 @@ import {
   taskPlanStatus,
   planFiles,
   PLAN_STATUS_LABELS,
+  TASK_PHASE_LABELS,
 } from "../vibe/contract";
 import { findProjectConfig } from "../vibe/db/project-config";
 import type { TaskTabs } from "../tabs/service";
@@ -38,6 +39,8 @@ interface ProjectAgentOptions {
   tabs: TaskTabs;
   flow: Pick<TaskFlow, "provisionTabs" | "notifyFlowDecided">;
 }
+/** Phases that wait for the user (plan confirmation, acceptance). */
+export const NEEDS_USER_PHASES: ReadonlySet<string> = new Set(["awaiting_confirmation", "awaiting_acceptance"]);
 type UserInput = PluginLifecycleEvents["agent.user_prompt_received"];
 const highRiskFlow = (text: string) => /迁移|协议|删.{0,12}数据|清空.{0,12}数据|权限|发布|migration|protocol|delet.{0,20}data|permission|release/i.test(text);
 interface Grant {
@@ -312,6 +315,32 @@ export function createProjectAgents(options: ProjectAgentOptions) {
         .map((entry) => ({ messageId: entry.input.messageId, text: entry.input.text })),
     };
   }
+  /** Read-only digest of every project's tasks for any bot main conversation. */
+  async function overviewFor(callerAgentId: string) {
+    if (!(await projectForAgent(callerAgentId)) && !(await independentBot(callerAgentId))) {
+      throw new Error("工具仅供 bot 主对话使用");
+    }
+    const names = new Map((await listHostProjects(paseo())).projects.map((entry) => [entry.projectId, entry.projectDisplayName]));
+    const tasks = await Promise.all(
+      store.tasks.list().map(async (task) => {
+        const workspace = await placement(task.workspaceId);
+        const projectId = typeof task.control?.projectId === "string" ? task.control.projectId : workspace?.projectId ?? null;
+        return {
+          projectId,
+          projectName: projectId ? names.get(projectId) ?? projectId : null,
+          workspaceId: task.workspaceId,
+          name: workspace?.name ?? task.workspaceId,
+          phase: task.phase,
+          phaseLabel: TASK_PHASE_LABELS[task.phase],
+          flowLevel: task.flowLevel,
+          waitingForUser: NEEDS_USER_PHASES.has(task.phase),
+          archived: !!task.control?.archivedAt,
+          lastActivityAt: task.updatedAt,
+        };
+      }),
+    );
+    return { tasks: tasks.filter((task) => !task.archived).map(({ archived: _archived, ...task }) => task) };
+  }
   async function evaluateIncomingTask(input: UserInput): Promise<boolean> {
     if (!input.workspaceId) return false;
     const task = store.tasks.get(input.workspaceId);
@@ -527,6 +556,7 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     projectForAgent,
     callerProject,
     tasksFor,
+    overviewFor,
     projectsFor,
     received,
     route,

@@ -8,6 +8,7 @@ import { registerProjectConfigTool } from "./server/project-agent/config";
 import { createProjectDocuments, registerProjectDocumentRpcs } from "./server/project-documents";
 import { registerEnvironmentMonitor } from "./server/environment";
 import { createProjectCompletion } from "./server/project-agent/completion";
+import { createTaskAttention } from "./server/project-agent/attention";
 import { deferStartup } from "./server/vibe/db/startup";
 import { registerResourceTool } from "./server/resource-tool";
 import type { PaseoApi } from "@getpaseo/client";
@@ -100,6 +101,12 @@ export default function contribute(server: PluginServerContext) {
     sendProject: projects.sendProject,
     ready: startup.ready,
   });
+  const attention = createTaskAttention({
+    db: runtime.db,
+    store: runtime.store,
+    getPaseo: () => paseo,
+    ready: startup.ready,
+  });
   registerBoardRpcs(server, createBoardService(runtime), () => paseo);
   const evidence = createTaskEvidenceReader(runtime.db);
   server.handle(verifyEvidenceRpc, (input) => evidence.evidence(input.evidenceId, input.thumb));
@@ -168,6 +175,7 @@ export default function contribute(server: PluginServerContext) {
     stopSettings();
     stopProjects();
     await completion.close();
+    await attention.close();
     await environment.close();
     await documents.close();
     await startup.close();

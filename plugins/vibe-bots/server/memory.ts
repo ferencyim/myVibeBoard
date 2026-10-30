@@ -20,6 +20,14 @@ export function memoryContext(memories: readonly BotMemory[], budget = 4000): st
     ordered(memories).map(memory => (memory.pinned ? "[置顶] " : "- ") + memory.text).join("\n"), budget);
 }
 
+/** Other plugins (global directives) may already have written context; append and keep their delivery id. */
+export function appendTurnContext<R extends { context?: string; deliveryId?: string }>(
+  request: R, delivery: { context: string; deliveryId: string },
+): R {
+  const context = request.context ? [request.context, delivery.context].join("\n\n") : delivery.context;
+  return { ...request, context, deliveryId: request.deliveryId ?? delivery.deliveryId };
+}
+
 /** A snapshot revision also detects deletes and edits sharing an updated_at timestamp. */
 export function createMemoryDelivery(db: VibeDb) {
   const pending = new Map<string, { deliveryId: string; botId: string; snapshot: string; instructions: string }>();
@@ -31,7 +39,8 @@ export function createMemoryDelivery(db: VibeDb) {
       .run(agentId, botId, snapshot, instructions);
   }
 
-  function prepare(botId: string, agentId: string, memories: readonly BotMemory[], instructions = "") {
+  /** `existingDeliveryId`: another plugin already owns this turn's delivery; ours is acknowledged through it. */
+  function prepare(botId: string, agentId: string, memories: readonly BotMemory[], instructions = "", existingDeliveryId?: string) {
     const row = db.prepare<{ snapshot_json: string; instructions: string }>(
       "SELECT snapshot_json,instructions FROM bot_memory_delivery WHERE agent_id=? AND bot_id=?",
     ).get(agentId, botId);
@@ -53,7 +62,7 @@ export function createMemoryDelivery(db: VibeDb) {
       record(botId, agentId, memories, instructions);
       return undefined;
     }
-    const deliveryId = createHash("sha256").update(JSON.stringify([agentId, snapshot, instructions])).digest("hex");
+    const deliveryId = existingDeliveryId ?? createHash("sha256").update(JSON.stringify([agentId, snapshot, instructions])).digest("hex");
     pending.set(agentId, { deliveryId, botId, snapshot, instructions });
     // JSON strings escape line breaks, so memory text cannot close the fence or forge a user turn.
     const blocks = [];

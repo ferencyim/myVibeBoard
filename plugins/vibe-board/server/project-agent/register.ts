@@ -33,6 +33,14 @@ export function registerProjectAgents(server: PluginServerContext, projects: Pro
       return projects.tasksFor(callerAgentId, tasks.parse(input ?? {}).projectId);
     },
   });
+  server.registerAgentTool({
+    name: "vibe_tasks_overview",
+    description: "只读查看全部项目任务的精简状态（项目、任务名、阶段、流程档位、是否在等用户、最近活动）。所有 bot 可用；修改仍只限本项目。",
+    handler: async (_input, { callerAgentId }) => {
+      if (!callerAgentId) throw new Error("工具仅供 bot 使用");
+      return projects.overviewFor(callerAgentId);
+    },
+  });
   const route = z
     .object({
       workspaceId: z.string().min(1),

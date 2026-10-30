@@ -44,3 +44,11 @@ RPC：`bots.list/create/update/archive/open`、`project.default_bot.get/set`、`
 ## 验证
 
 在仓库根执行 `npm run vibe:sync-shared:check`、`npm run vibe:check-plugins`，在插件目录执行 `npm run typecheck`。插件默认被根 lint 忽略，需用无 ignorePatterns 的临时配置严格扫描新增文件。本包未运行 Vitest 或格式化；定向测试与三端实测清单见 `WP138-REPORT.md`。
+
+## 总协调与 bot 消息（WP-173）
+
+- `bot.role='coordinator'` 全局唯一（迁移 v4）。旧「助手」迁移为「总协调」（用户已改名则保留），不可归档，`bots.coordinator.transfer({toBotId})` 转移。
+- 总协调主对话独有 `vibe_hub_status/queue/pause/resume`、`vibe_directive_issue/list/revoke`，转调 vibe-scheduler 的 `hub.*` RPC，中枢不可用时返回中文错误。
+- 所有 bot：`vibe_bot_message({to, text})`（表 `bot_message`；项目 bot 只可发总协调与同项目 bot；目标忙时回合结束后投递；同一对 bot 10 分钟超过 6 条暂停投递并通知总协调）。
+- 其它插件通过 RPC `bots.notify({target:"coordinator"|{projectId}, text, source})` 投递系统消息（中枢事件用 `target:"coordinator"`）。
+- vibe-board 提供只读 `vibe_tasks_overview`，并在任务进入待确认/待验收/失败时通知项目默认 bot。

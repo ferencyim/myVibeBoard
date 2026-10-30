@@ -11,6 +11,9 @@ import { openVibeDb } from "./server/vibe/db/sqlite";
 import { createBotService } from "./server/service";
 import { registerBotContinuations } from "./server/continuation";
 import { registerVisualReply } from "./server/visual-reply";
+import { createBotMessaging } from "./server/messages";
+import { appendTurnContext } from "./server/memory";
+import { registerHubTools } from "./server/hub-tools";
 
 function userOnly(callerAgentId: string | null | undefined) {
   if (callerAgentId) throw new Error("此操作仅供用户使用，请使用 bot 自配置工具");
@@ -27,6 +30,19 @@ export default function contribute(server: PluginServerContext) {
     return thread ? service.bots.get(thread.bot_id) : null;
   }
   registerVisualReply(server, service.caller);
+  const messaging = createBotMessaging(db, service, server.paseo);
+  registerHubTools(server, service, messaging);
+  void service.ready().then(() => messaging.flushAll()).catch((error) => console.error("[vibe-bots] bot 消息启动重投失败", error));
+  server.handle(rpc.botsNotifyRpc, (input, ctx) => {
+    userOnly(ctx.callerAgentId);
+    return messaging.notify(input.target, input.source, input.text);
+  });
+  server.handle(rpc.botsCoordinatorTransferRpc, async (input, ctx) => {
+    userOnly(ctx.callerAgentId);
+    await service.ready();
+    service.bots.transferCoordinator(input.toBotId);
+    return { bots: service.bots.list({ kind: "independent" }).map(service.view) };
+  });
   const routines = createRoutineStore(db);
   registerRoutineTools(server, service, routines);
   const execution = createRoutineExecution(db, service, server);
@@ -239,8 +255,8 @@ export default function contribute(server: PluginServerContext) {
       await service.ready();
       const bot = botForAgent(request.agentId);
       if (!bot) return;
-      const delivery = service.memoryDelivery.prepare(bot.id, request.agentId, service.bots.memories(bot.id), [service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n"));
-      if (delivery) return { ...request, ...delivery };
+      const delivery = service.memoryDelivery.prepare(bot.id, request.agentId, service.bots.memories(bot.id), [service.prompt(bot), bot.instructions].filter(Boolean).join("\n\n"), request.deliveryId);
+      if (delivery) return appendTurnContext(request, delivery);
     }),
     server.on("agent.turn_context_delivered", ({ agentId, deliveryId }) => {
       service.memoryDelivery.delivered(agentId, deliveryId);
@@ -267,8 +283,12 @@ export default function contribute(server: PluginServerContext) {
           agentAttention: { agentId: agent.id, reason: failed ? "error" : "finished" },
         });
       }
-      if (failed && bot.mainAgentId === agent.id && await service.failover(bot.id, new Error(outcome.error.message))) return;
+      const flushMessages = () => {
+        if (bot.mainAgentId === agent.id) void messaging.flush(bot.id).catch((error) => console.error("[vibe-bots] bot 消息投递失败，稍后重试", error));
+      };
+      if (failed && bot.mainAgentId === agent.id && await service.failover(bot.id, new Error(outcome.error.message))) return flushMessages();
       await service.apply(bot.id);
+      flushMessages();
     }),
   ];
   return async () => {
