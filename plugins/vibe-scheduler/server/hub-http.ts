@@ -78,6 +78,7 @@ function restrictToCurrentUser(file: string) {
 
 export async function startHubHttp(hub: Hub, options: HubHttpOptions) {
   const token = randomBytes(24).toString("hex");
+  const startedAt = new Date().toISOString();
   const expected = Buffer.from("Bearer " + token);
   const file = join(options.dir, "hub.json");
 
@@ -90,6 +91,10 @@ export async function startHubHttp(hub: Hub, options: HubHttpOptions) {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const parts = url.pathname.split("/").filter(Boolean);
     if (parts[0] !== "v1") return send(res, 404, { error: "not found" });
+
+    // Liveness probe for guards: token check only, never touches metrics or the queue.
+    if (req.method === "GET" && parts[1] === "ping" && parts.length === 2)
+      return send(res, 200, { ok: true, pid: process.pid, startedAt });
 
     if (req.method === "GET" && parts[1] === "status" && parts.length === 2)
       return send(res, 200, await hub.status());
@@ -136,7 +141,7 @@ export async function startHubHttp(hub: Hub, options: HubHttpOptions) {
   });
   const port = (server.address() as { port: number }).port;
 
-  const info = { port, token, pid: process.pid, startedAt: new Date().toISOString() };
+  const info = { port, token, pid: process.pid, startedAt };
   mkdirSync(options.dir, { recursive: true });
   const tmp = file + "." + process.pid + ".tmp";
   writeFileSync(tmp, JSON.stringify(info, null, 2) + "\n");

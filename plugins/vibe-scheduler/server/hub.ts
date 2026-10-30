@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHubMetrics, type HubMetrics } from "./hub-metrics";
+import { mirrorJob, readLocalHolders, unmirrorJob } from "./hub-locks";
 import type { CommandRunner } from "./resources";
 import type { HubPause, HubResource, HubStore } from "./hub-store";
 
@@ -134,6 +135,8 @@ export interface HubDeps {
   metrics?: () => Promise<HubMetrics>;
   run?: CommandRunner;
   isPidAlive?: (pid: number) => boolean;
+  /** Lock directory shared with win-heavy-guard's local mode (hub.json lives there); null = no mirroring. */
+  lockDir?: string | null;
   /** win-heavy-guard.admission.json; null disables the sync. */
   admissionFile?: string | null;
   agents?: HubAgents;
@@ -281,10 +284,11 @@ export function createHub(deps: HubDeps) {
     store.writeSettings(settings);
   }
 
-  const readMetrics =
-    deps.metrics ??
-    createHubMetrics({ run: deps.run, now, cpuWindowSeconds: () => settings.cpuWindowSeconds })
-      .read;
+  const lockDir = deps.lockDir ?? null;
+  const sampler = deps.metrics
+    ? null
+    : createHubMetrics({ run: deps.run, now, cpuWindowSeconds: () => settings.cpuWindowSeconds });
+  const readMetrics = deps.metrics ?? (() => sampler!.read());
 
   const jobs = new Map<string, Job>();
   const finished = new Map<string, "released" | "reaped">();
@@ -306,6 +310,9 @@ export function createHub(deps: HubDeps) {
   };
 
   const holders = () => [...jobs.values()].filter((j) => j.state === "admitted");
+  /** Local-mode guards' holders found in the lock directory (the hub's own jobs excluded). */
+  const localHolders = () =>
+    lockDir ? readLocalHolders(lockDir, jobs.keys(), isPidAlive) : { slots: 0, exclusive: false };
   const sortedQueued = () =>
     [...jobs.values()]
       .filter((j) => j.state === "queued")
@@ -367,14 +374,14 @@ export function createHub(deps: HubDeps) {
     return out;
   }
 
-  function machineReasons(job: Job, metrics: HubMetrics): string[] {
+  function machineReasons(job: Job, metrics: HubMetrics, local = localHolders()): string[] {
     const out: string[] = [];
     const held = holders();
-    const used = held.reduce((n, h) => n + h.slots, 0);
+    const used = held.reduce((n, h) => n + h.slots, 0) + local.slots;
     const cap = job.priority === 0 ? settings.hardLimit : Math.max(1, settings.hardLimit - 1);
     if (used + job.slots > cap) out.push("slots_full");
-    if (job.exclusive && held.length > 0) out.push("exclusive_wait");
-    if (held.some((h) => h.exclusive)) out.push("exclusive_running");
+    if (job.exclusive && held.length + local.slots > 0) out.push("exclusive_wait");
+    if (local.exclusive || held.some((h) => h.exclusive)) out.push("exclusive_running");
     if (job.priority > 0 && lastAdmitAt !== null) {
       const wait = settings.admissionIntervalSeconds * 1000 - (now().getTime() - lastAdmitAt);
       if (wait > 0) out.push("interval:" + Math.ceil(wait / 1000));
@@ -390,6 +397,13 @@ export function createHub(deps: HubDeps) {
     durationMs: number | null,
   ) {
     jobs.delete(job.id);
+    if (lockDir && job.state === "admitted") {
+      try {
+        unmirrorJob(lockDir, job.id);
+      } catch (error) {
+        onError(error);
+      }
+    }
     remember(job.id, outcome);
     try {
       store.logJob({
@@ -426,6 +440,7 @@ export function createHub(deps: HubDeps) {
     if (![...jobs.values()].some((j) => j.state === "queued")) return;
     const metrics = await readMetrics();
     const pauses = store.listPauses(true);
+    const local = localHolders();
     const registry = new Map(store.listResources().map((r) => [r.name, r]));
     let machineBlocked = false;
     for (const job of sortedQueued()) {
@@ -437,7 +452,7 @@ export function createHub(deps: HubDeps) {
         continue;
       }
       const reasons = resourceReasons(job, registry);
-      const machine = machineReasons(job, metrics);
+      const machine = machineReasons(job, metrics, local);
       reasons.push(...machine);
       if (machine.length > 0) machineBlocked = true;
       // Do not let later jobs overtake one that waits for the machine.
@@ -445,6 +460,13 @@ export function createHub(deps: HubDeps) {
         reasons.push("behind_higher");
       job.waitReasons = reasons;
       if (reasons.length > 0) continue;
+      if (lockDir) {
+        try {
+          mirrorJob(lockDir, job, now());
+        } catch (error) {
+          onError(error); // admission still stands; only the local mode's view is missing
+        }
+      }
       job.state = "admitted";
       job.admittedAt = now().toISOString();
       job.lastSeen = now().getTime();
@@ -469,6 +491,10 @@ export function createHub(deps: HubDeps) {
 
   return {
     settings: () => ({ ...settings }),
+
+    /** Start / stop the background machine sampling (no-op when metrics are injected). */
+    startSampling: () => sampler?.start(),
+    stopSampling: () => sampler?.stop(),
 
     submit: (request: JobRequest): Promise<JobView> =>
       exclusive(async () => {
@@ -577,6 +603,7 @@ export function createHub(deps: HubDeps) {
           metrics,
           settings: { ...settings },
           blockedBy: metricReasons(settings, metrics, 1),
+          localHolders: localHolders().slots,
         },
         holders: held.map((j) => ({
           jobId: j.id,

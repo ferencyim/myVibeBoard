@@ -1,4 +1,5 @@
-// Machine metrics the hub admits against (the same set win-heavy-guard uses). A field that cannot
+// Machine metrics the hub admits against, sampled in the background (a CIM query takes seconds,
+// so request paths only ever read the cache) (the same set win-heavy-guard uses). A field that cannot
 // be read stays undefined and is treated as "unknown, does not block".
 
 import { cpus, freemem } from "node:os";
@@ -13,6 +14,8 @@ export interface HubMetrics {
   processes?: number;
   handles?: number;
   diskQueue?: number;
+  /** The reading is older than the stale threshold (or none was taken yet). */
+  stale?: boolean;
 }
 
 // CIM perf classes are locale independent (Get-Counter names are not).
@@ -28,17 +31,22 @@ const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : u
 export function createHubMetrics(options: {
   run?: CommandRunner;
   now?: () => Date;
-  cacheMs?: number;
+  /** Background sampling period. */
+  intervalMs?: number;
+  /** A cached reading older than this is flagged stale (still served). */
+  staleMs?: number;
   cpuWindowSeconds: () => number;
   platform?: NodeJS.Platform;
 }) {
   const run = options.run ?? runCommand;
   const now = options.now ?? (() => new Date());
-  const cacheMs = options.cacheMs ?? 5000;
+  const intervalMs = options.intervalMs ?? 5000;
+  const staleMs = options.staleMs ?? 30_000;
   const platform = options.platform ?? process.platform;
   const cpuSamples: Array<{ at: number; idle: number; total: number }> = [];
   let cached: { at: number; value: HubMetrics } | null = null;
-  let inflight: Promise<HubMetrics> | null = null;
+  let inflight: Promise<void> | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
 
   function cpuPercent(at: number): number | undefined {
     let idle = 0;
@@ -79,19 +87,44 @@ export function createHubMetrics(options: {
     return value;
   }
 
+  async function sample(): Promise<void> {
+    cached = { at: now().getTime(), value: await collect() };
+  }
+
+  /** A reading that costs nothing (no CIM): used until the first background sample lands. */
+  function cheap(): HubMetrics {
+    return {
+      ts: now().toISOString(),
+      availableGb: Math.round((freemem() / 1024 ** 3) * 100) / 100,
+    };
+  }
+
   return {
-    /** Cached for cacheMs; concurrent callers share one collection. */
-    async read(force = false): Promise<HubMetrics> {
-      if (!force && cached && now().getTime() - cached.at < cacheMs) return cached.value;
-      inflight ??= collect()
-        .then((value) => {
-          cached = { at: now().getTime(), value };
-          return value;
-        })
+    /** Never waits for a sample: the latest cached reading, `stale` when older than staleMs. */
+    async read(): Promise<HubMetrics> {
+      if (!cached) return { ...cheap(), stale: true };
+      const stale = now().getTime() - cached.at > staleMs;
+      return stale ? { ...cached.value, stale: true } : cached.value;
+    },
+    /** One sample at a time; a sample still running when the timer fires is not doubled. */
+    sampleOnce(): Promise<void> {
+      inflight ??= sample()
+        .catch(() => undefined)
         .finally(() => {
           inflight = null;
         });
       return inflight;
+    },
+    /** Background sampling every intervalMs (first sample immediately). */
+    start() {
+      if (timer) return;
+      void this.sampleOnce();
+      timer = setInterval(() => void this.sampleOnce(), intervalMs);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
     },
   };
 }

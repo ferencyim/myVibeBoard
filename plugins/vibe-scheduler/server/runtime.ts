@@ -156,6 +156,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     store: hubStore,
     now,
     admissionFile: options.hubAdmissionFile ?? null,
+    lockDir: options.hubDir ?? null,
     isPidAlive: options.isPidAlive,
     onError,
     agents: {
@@ -347,6 +348,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     start() {
       stopped = false;
       void applyTakeover();
+      hub.startSampling();
       consumer.start();
       void sampleNow().catch(onError);
       void sampleRemotesNow().catch(onError);
@@ -368,6 +370,7 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     },
     async stop() {
       stopped = true;
+      hub.stopSampling();
       await hubStarting;
       await hubHttp?.stop().catch(onError);
       hubHttp = null;

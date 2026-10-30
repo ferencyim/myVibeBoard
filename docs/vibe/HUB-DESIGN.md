@@ -34,7 +34,12 @@
 | GET  | `/v1/jobs/:id?wait=30`   | 长轮询直到放行或超时，返回同上结构                                                                                                                                                             |
 | POST | `/v1/jobs/:id/heartbeat` | 每 15 秒一次；60 秒无心跳且 pid 已死则回收                                                                                                                                                     |
 | POST | `/v1/jobs/:id/release`   | 结束：`{ exitCode, durationMs }`                                                                                                                                                               |
-| GET  | `/v1/status`             | 机器指标、持有者、排队、等待原因、生效中的暂停与指令                                                                                                                                           |
+| GET  | `/v1/ping`               | 只校验 token，立即返回 `{ ok: true, pid, startedAt }`；guard 用它探测中枢是否可用                                                                                                              |
+| GET  | `/v1/status`             | 机器指标（读缓存，过旧时带 `stale`）、持有者、排队、等待原因、生效中的暂停与指令                                                                                                               |
+
+**机器指标后台采样**：中枢每 5 秒在后台采样一次（CIM 查询最长 8 秒，单飞不重叠），`/v1/status`、`/v1/jobs` 准入、`hub.status` RPC 一律读最近缓存，请求路径上从不等待采样；缓存超过 30 秒或尚无采样时在 `machine.metrics.stale` 标注，仍照常服务（缺失指标视为未知，不阻塞）。
+
+**与本地锁互相可见（混用安全）**：中枢的锁目录就是 `hub.json` 所在目录。中枢放行一个 job 时，在锁目录写与本地模式相同的持有者目录 `slot-<n>-<申请方pid>-<jobId去掉连字符>`，`owner.txt` 字段与 guard 一致并带 `"via": "hub"`、`hub_job_id`（独占 job 写一个目录，其余按 slots 写多个）；release 或回收时删除。中枢准入时读取锁目录里不属于自己的 `slot-*` 目录，进程存活的计入名额，`exclusive` 不为 false 的（含无法读取元数据的）按独占持有者处理；进程已死的忽略，其中 `via=hub` 的残留目录顺手清掉。这样 guard 退回本地锁时，本地模式也能数到中枢放行的任务。已知余量：中枢读写目录不持有 guard 的 `admission.lock`，两边恰好同一毫秒级窗口同时放行时仍可能多放一个，下一轮即互相可见。
 
 排队顺序：先看暂停（被暂停类别的申请一律排队并给出原因），再按 `(priority, 用户手动顺序, queuedAt)`。每次放行重新核对机器指标与资源。
 
@@ -42,7 +47,7 @@
 
 ### 2.3 guard 客户端（ci-dashboard 仓库）
 
-`win-heavy-guard.py run` 先读 `hub.json`，能连上就走中枢接口；连不上（中枢未启动、超时 2 秒）就退回现有的本地锁逻辑，行为与今天一致。新增 `--resource NAME[:exclusive|:shared]`（可多次）。job object 内存上限仍由客户端本地施加。`status` 子命令优先显示中枢的 `/v1/status`。命令行参数保持兼容，现有调用方无需改动。mac-heavy-guard 不变。
+`win-heavy-guard.py run` 先读 `hub.json`，用 `GET /v1/ping`（超时 2 秒）探测，能通就走中枢接口；`hub.json` 不存在或存在 `hub.disabled` 时直接走本地锁。`hub.json` 存在但探测或放行前的申请失败时**不再静默**：stderr 输出 `WIN_HEAVY_HUB_FALLBACK reason=…`，审计日志写 `hub_unreachable` 事件，再退回现有的本地锁逻辑（本地模式能数到中枢放行的任务，见 §2.2）。新增 `--resource NAME[:exclusive|:shared]`（可多次）。job object 内存上限仍由客户端本地施加。`status` 子命令优先显示中枢的 `/v1/status`。命令行参数保持兼容，现有调用方无需改动。mac-heavy-guard 不变。
 
 ### 2.4 暂停与维护窗口
 

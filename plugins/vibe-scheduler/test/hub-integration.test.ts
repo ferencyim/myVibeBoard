@@ -27,7 +27,7 @@ const tempDir = () => {
   return dir;
 };
 
-function setupHub() {
+function setupHub(lockDir: string | null = null) {
   const db = openVibeDb({ path: ":memory:" });
   closers.push(() => db.close());
   migrateOwner(db, "scheduler");
@@ -39,6 +39,7 @@ function setupHub() {
     now,
     metrics: async () => ({ ...metrics }),
     isPidAlive: () => true,
+    lockDir,
   });
   const job = (extra: Partial<JobRequest> = {}): JobRequest => ({
     owner: "s1",
@@ -205,7 +206,9 @@ describe("takeover switch", () => {
 
 // --- end to end with the real python guard ---------------------------------------------------
 
-const GUARD = "D:\\devRepoCaches\\worktrees\\ci-dashboard-hub-client\\queue\\win-heavy-guard.py";
+const GUARD =
+  process.env.WIN_HEAVY_GUARD_PY ??
+  "D:/devRepo/ci-dashboard/queue/win-heavy-guard.py";
 const hasPython = (() => {
   try {
     return spawnSync("python", ["--version"], { timeout: 10_000 }).status === 0;
@@ -215,10 +218,10 @@ const hasPython = (() => {
 })();
 const canRunGuard = process.platform === "win32" && hasPython && existsSync(GUARD);
 
-function runGuard(lockDir: string, command: string[], options: { owner?: string } = {}) {
+function runGuard(lockDir: string, command: string[], options: { owner?: string; extra?: string[] } = {}) {
   const child = spawn(
     "python",
-    [GUARD, "run", "--lock-dir", lockDir, "--owner", options.owner ?? "e2e", "--slots", "2", "--poll-seconds", "0.1", "--", ...command],
+    [GUARD, "run", "--lock-dir", lockDir, "--owner", options.owner ?? "e2e", "--slots", "2", "--poll-seconds", "0.1", ...(options.extra ?? []), "--", ...command],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
   );
   let stdout = "";
@@ -237,6 +240,13 @@ function auditStarts(lockDir: string): Array<{ event: string; admission_path: st
     .map((line) => JSON.parse(line) as { event: string; admission_path: string })
     .filter((e) => e.event === "start");
 }
+function readAudit(lockDir: string): Array<{ event: string; owner: string; wait_reasons: string[] }> {
+  const logs = join(lockDir, "logs");
+  if (!existsSync(logs)) return [];
+  return readdirSync(logs)
+    .flatMap((f) => readFileSync(join(logs, f), "utf8").split("\n").filter(Boolean))
+    .map((line) => JSON.parse(line));
+}
 async function until<T>(read: () => T | Promise<T>, ok: (v: T) => boolean, ms = 30_000): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
@@ -249,7 +259,7 @@ async function until<T>(read: () => T | Promise<T>, ok: (v: T) => boolean, ms = 
 describe.skipIf(!canRunGuard)("win-heavy-guard against the real hub", () => {
   async function start() {
     const lockDir = tempDir();
-    const t = setupHub();
+    const t = setupHub(lockDir);
     await t.hub.updateSettings({ admissionIntervalSeconds: 0 });
     const http = await startHubHttp(t.hub, { dir: lockDir });
     closers.push(() => http.stop());
@@ -291,4 +301,39 @@ describe.skipIf(!canRunGuard)("win-heavy-guard against the real hub", () => {
     expect(await run.done).toBe(0);
     expect(auditStarts(t.lockDir).map((e) => e.admission_path)).toEqual(["hub"]);
   }, 90_000);
+
+  it("counts a hub-admitted job against a local-mode request and queues it at the hard limit", async () => {
+    const t = await start();
+    const gate = join(t.lockDir, "gate");
+    const gatePy = gate.replaceAll("\\", "/");
+    const first = runGuard(
+      t.lockDir,
+      ["python", "-c", `import time,os;exec("while not os.path.exists('${gatePy}'): time.sleep(0.1)")`],
+      { owner: "via-hub" },
+    );
+    await until(
+      async () => (await t.hub.status()).holders,
+      (holders) => holders.length === 1,
+    );
+    // The hub wrote a holder directory the local mode can count.
+    expect(readdirSync(t.lockDir).some((n) => n.startsWith("slot-"))).toBe(true);
+    // One slot machine-wide, and the second request goes through the local queue.
+    writeFileSync(join(t.lockDir, "slots.txt"), "1\n");
+    writeFileSync(join(t.lockDir, "hub.disabled"), "");
+    const second = runGuard(t.lockDir, ["python", "-c", "print(2)"], {
+      owner: "via-local",
+      extra: ["--priority", "0"],
+    });
+    const waited = await until(
+      () => readAudit(t.lockDir).filter((e) => e.event === "admission_wait" && e.owner === "via-local"),
+      (events) => events.length > 0,
+    );
+    expect(waited[0]!.wait_reasons).toContain("hard_limit");
+    expect(second.out()).not.toContain("WIN_HEAVY_ACQUIRED");
+    writeFileSync(gate, "go");
+    expect(await first.done).toBe(0);
+    expect(await second.done).toBe(0);
+    expect(readdirSync(t.lockDir).filter((n) => n.startsWith("slot-"))).toEqual([]);
+    expect(auditStarts(t.lockDir).map((e) => e.admission_path)).toEqual(["hub", "local"]);
+  }, 120_000);
 });
