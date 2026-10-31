@@ -4026,38 +4026,55 @@ export class CodexAppServerAgentSession implements AgentSession {
     }));
     const visitedThreadIds = new Set(this.currentThreadId ? [this.currentThreadId] : []);
     while (queue.length > 0 && visitedThreadIds.size < 100) {
-      const next = queue.shift();
-      if (!next || visitedThreadIds.has(next.route.childThreadId)) {
-        continue;
+      const batch: typeof queue = [];
+      while (queue.length > 0 && batch.length < 4 && visitedThreadIds.size < 100) {
+        const next = queue.shift()!;
+        if (visitedThreadIds.has(next.route.childThreadId)) continue;
+        visitedThreadIds.add(next.route.childThreadId);
+        batch.push(next);
       }
-      visitedThreadIds.add(next.route.childThreadId);
-      this.registerSubAgentToolCall({
-        timelineItem: next.route.toolCall,
-        rawItem: { agentThreadId: next.route.childThreadId },
-        parentCallId: next.parentCallId,
-        parentSubagentId: next.parentSubagentId,
-      });
-      try {
-        const childHistory = await loadCodexThreadHistoryTimeline({
-          threadId: next.route.childThreadId,
-          cwd: this.config.cwd ?? null,
-          requestThread: (childThreadId) => readCodexThread(client, childThreadId),
+      // Read independent siblings concurrently, but apply the results in the
+      // original breadth-first order so the emitted timeline remains stable.
+      const histories = await Promise.allSettled(
+        batch.map((next) =>
+          loadCodexThreadHistoryTimeline({
+            threadId: next.route.childThreadId,
+            cwd: this.config.cwd ?? null,
+            requestThread: (childThreadId) => readCodexThread(client, childThreadId),
+          }),
+        ),
+      );
+      for (let i = 0; i < batch.length; i++) {
+        const next = batch[i];
+        const result = histories[i];
+        this.registerSubAgentToolCall({
+          timelineItem: next.route.toolCall,
+          rawItem: { agentThreadId: next.route.childThreadId },
+          parentCallId: next.parentCallId,
+          parentSubagentId: next.parentSubagentId,
         });
-        for (const entry of childHistory.timeline) {
-          this.emitProviderSubagentTimeline(next.route.childThreadId, entry.item, entry.timestamp);
+        if (result.status === "fulfilled") {
+          const childHistory = result.value;
+          for (const entry of childHistory.timeline) {
+            this.emitProviderSubagentTimeline(
+              next.route.childThreadId,
+              entry.item,
+              entry.timestamp,
+            );
+          }
+          for (const route of childHistory.subAgentRoutes) {
+            queue.push({
+              route,
+              parentCallId: next.route.toolCall.callId,
+              parentSubagentId: next.route.childThreadId,
+            });
+          }
+        } else {
+          this.logger.trace(
+            { err: result.reason, childThreadId: next.route.childThreadId },
+            "Failed to load persisted Codex child history",
+          );
         }
-        for (const route of childHistory.subAgentRoutes) {
-          queue.push({
-            route,
-            parentCallId: next.route.toolCall.callId,
-            parentSubagentId: next.route.childThreadId,
-          });
-        }
-      } catch (error) {
-        this.logger.trace(
-          { err: error, childThreadId: next.route.childThreadId },
-          "Failed to load persisted Codex child history",
-        );
       }
     }
   }

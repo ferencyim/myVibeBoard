@@ -4691,6 +4691,12 @@ describe("Codex app-server provider", () => {
 
   test("loads mixed legacy and MultiAgentV2 sub-agent history", async () => {
     const session = createSession();
+    let releaseFirstChild!: () => void;
+    const firstChildGate = new Promise<void>((resolve) => {
+      releaseFirstChild = resolve;
+    });
+    let firstChildRequested = false;
+    let secondChildRequested = false;
     session.client = {
       request: vi.fn(async (method: string, params: unknown) => {
         if (method !== "thread/read") {
@@ -4698,6 +4704,11 @@ describe("Codex app-server provider", () => {
         }
         const threadId = (params as { threadId?: string }).threadId;
         if (threadId !== "test-thread") {
+          if (threadId === "legacy-child-thread") {
+            firstChildRequested = true;
+            await firstChildGate;
+          }
+          if (threadId === "v2-child-thread") secondChildRequested = true;
           return {
             thread: {
               turns: [
@@ -4750,7 +4761,16 @@ describe("Codex app-server provider", () => {
       }),
     };
 
-    await asInternals(session).loadPersistedHistory(session.client);
+    const loading = asInternals(session).loadPersistedHistory(session.client);
+    try {
+      await vi.waitFor(() => {
+        expect(firstChildRequested).toBe(true);
+        expect(secondChildRequested).toBe(true);
+      });
+    } finally {
+      releaseFirstChild();
+    }
+    await loading;
 
     const history: AgentStreamEvent[] = [];
     for await (const event of session.streamHistory()) {
