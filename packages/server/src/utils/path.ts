@@ -1,5 +1,6 @@
 import os from "node:os";
 import { realpathSync } from "node:fs";
+import { realpath as realpathAsync } from "node:fs/promises";
 import nodePath from "node:path";
 
 /**
@@ -107,7 +108,71 @@ export function isRealpathInsideRoot(root: string, candidate: string): boolean {
   return getRealpathAwareRelativePath(root, candidate) !== null;
 }
 
-function getRelativePathInsideRoot(root: string, candidate: string): string | null {
+export interface AsyncRealpathContainmentMatcher {
+  relative(candidate: string): Promise<string | null>;
+  invalidate(candidate?: string): void;
+}
+
+// Shared across watched roots so one event does not resolve the same directory repeatedly.
+const watcherRealpaths = new Map<string, { expires: number; value: Promise<string | null> }>();
+
+function resolveWatcherRealpath(value: string): Promise<string | null> {
+  const key = normalizePathForComparison(value, looksLikeDefiniteWindowsPath(value));
+  const cached = watcherRealpaths.get(key);
+  if (cached && cached.expires > Date.now()) return cached.value;
+  watcherRealpaths.delete(key);
+  const result = realpathAsync(value).catch(() => null);
+  watcherRealpaths.set(key, { expires: Date.now() + 5_000, value: result });
+  if (watcherRealpaths.size > 512) watcherRealpaths.delete(watcherRealpaths.keys().next().value!);
+  return result;
+}
+
+/** Async, bounded realpath lookup for watcher events. Create once per watched root. */
+export async function createAsyncRealpathContainmentMatcher(
+  root: string,
+): Promise<AsyncRealpathContainmentMatcher> {
+  const rootVariants = new Set([root]);
+  try {
+    rootVariants.add(await realpathAsync(root));
+  } catch {
+    // A removed root can still match events by its original path.
+  }
+  const match = (candidate: string): string | null => {
+    for (const variant of rootVariants) {
+      const relative = getRelativePathInsideRoot(variant, candidate);
+      if (relative !== null) return relative;
+    }
+    return null;
+  };
+  return {
+    async relative(candidate) {
+      const direct = match(candidate);
+      if (direct !== null) return direct;
+      const path = looksLikeDefiniteWindowsPath(candidate) ? nodePath.win32 : nodePath.posix;
+      const parent = path.dirname(candidate);
+      const resolvedParent = await resolveWatcherRealpath(parent);
+      if (resolvedParent !== null) {
+        const relative = match(path.join(resolvedParent, path.basename(candidate)));
+        if (relative !== null) return relative;
+      }
+      // The event itself can be a symlink/junction, including a newly created one.
+      const resolved = await resolveWatcherRealpath(candidate);
+      return resolved === null ? null : match(resolved);
+    },
+    invalidate(candidate) {
+      if (candidate === undefined) {
+        watcherRealpaths.clear();
+        return;
+      }
+      for (const key of watcherRealpaths.keys()) {
+        if (isPathInsideRoot(candidate, key) || isPathInsideRoot(key, candidate))
+          watcherRealpaths.delete(key);
+      }
+    },
+  };
+}
+
+export function getRelativePathInsideRoot(root: string, candidate: string): string | null {
   const compareAsWindows = shouldCompareAsWindows(root, candidate);
   const platformPath = compareAsWindows ? nodePath.win32 : nodePath.posix;
   const normalizedRoot = normalizePathForComparison(root, compareAsWindows);

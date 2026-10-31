@@ -683,7 +683,7 @@ describe("WorkspaceGitServiceImpl", () => {
     const setupGate = createDeferred<void>();
     let activeSetups = 0;
     let maxActiveSetups = 0;
-    const subscribe = vi.fn(async () => {
+    const subscribe = vi.fn(async (_watchPath: string) => {
       activeSetups += 1;
       maxActiveSetups = Math.max(maxActiveSetups, activeSetups);
       await setupGate.promise;
@@ -703,19 +703,22 @@ describe("WorkspaceGitServiceImpl", () => {
     const subscriptions = cwds.map((cwd) => service.registerWorkspace({ cwd }, vi.fn()));
 
     await vi.waitFor(() => {
-      expect(subscribe).toHaveBeenCalledTimes(WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      expect(service.getMetrics()).toMatchObject({
+        workspaceObservationSetupAdmissionActiveCount: WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY,
+        workspaceObservationSetupAdmissionPendingCount: 2,
+      });
     });
-    expect(maxActiveSetups).toBe(WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY);
-    expect(service.getMetrics()).toMatchObject({
-      workspaceObservationSetupAdmissionActiveCount: WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY,
-      workspaceObservationSetupAdmissionPendingCount: 2,
-    });
+    expect(maxActiveSetups).toBe(1);
 
     setupGate.resolve();
     await vi.waitFor(() => {
       expect(service.getMetrics().workspaceObservationSetupInFlightCount).toBe(0);
     });
-    expect(maxActiveSetups).toBe(WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY);
+    expect(maxActiveSetups).toBe(1);
+    expect(subscribe.mock.calls.map(([watchPath]) => watchPath)).toEqual(
+      expect.arrayContaining(cwds.map((cwd) => path.resolve(cwd))),
+    );
 
     for (const subscription of subscriptions) {
       subscription.unsubscribe();
@@ -751,9 +754,13 @@ describe("WorkspaceGitServiceImpl", () => {
     const subscriptions = cwds.map((cwd) => service.registerWorkspace({ cwd }, vi.fn()));
 
     await vi.waitFor(() => {
-      expect(subscribe).toHaveBeenCalledTimes(WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY);
+      expect(subscribe).toHaveBeenCalledTimes(1);
     });
 
+    await vi.advanceTimersByTimeAsync(WORKSPACE_GIT_WATCHER_SUBSCRIBE_TIMEOUT_MS);
+    await vi.waitFor(() => {
+      expect(subscribe).toHaveBeenCalledTimes(2);
+    });
     await vi.advanceTimersByTimeAsync(WORKSPACE_GIT_WATCHER_SUBSCRIBE_TIMEOUT_MS);
     await vi.waitFor(() => {
       expect(subscribedPaths).toEqual(expect.arrayContaining(cwds));
@@ -778,9 +785,7 @@ describe("WorkspaceGitServiceImpl", () => {
       }
       return gate.promise;
     });
-    const watcherGates = Array.from({ length: WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY }, () =>
-      createDeferred<ReturnType<typeof createAsyncSubscription>>(),
-    );
+    const watcherGates = [createDeferred<ReturnType<typeof createAsyncSubscription>>()];
     const lateSubscriptions = watcherGates.map(() => createAsyncSubscription());
     const lateUnsubscribes = lateSubscriptions.map(({ unsubscribe }) => unsubscribe);
     const subscribe = vi.fn(
@@ -804,6 +809,7 @@ describe("WorkspaceGitServiceImpl", () => {
         workspaceObservationSetupAdmissionPendingCount:
           cwds.length - WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY,
       });
+      expect(subscribe).toHaveBeenCalledTimes(1);
     });
     const queuedRefreshSettlement = service.getSnapshot(cwds.at(-1)!).then(
       () => ({ status: "fulfilled" as const, error: null }),
@@ -823,7 +829,7 @@ describe("WorkspaceGitServiceImpl", () => {
         workspaceObservationSetupAdmissionPendingCount: 0,
       });
     });
-    expect(subscribe).toHaveBeenCalledTimes(WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY);
+    expect(subscribe).toHaveBeenCalledTimes(1);
 
     watcherGates.forEach((gate, index) => gate.resolve(lateSubscriptions[index]!));
     refreshGates.forEach((gate, cwd) => gate.resolve(createCheckoutStatus(cwd)));
@@ -1397,10 +1403,16 @@ describe("WorkspaceGitServiceImpl", () => {
     const service = createService({ subscribe });
     const subscription = await service.requestWorkingTreeWatch(REPO_CWD, vi.fn());
 
-    expect(vi.getTimerCount()).toBe(1);
+    // The fallback polls while a separate timer retries the watcher.
+    expect(vi.getTimerCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => {
+      expect(subscribe).toHaveBeenCalledTimes(2);
+    });
 
     subscription.unsubscribe();
     service.dispose();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   test("non-git directories fall back to watching cwd with polling", async () => {

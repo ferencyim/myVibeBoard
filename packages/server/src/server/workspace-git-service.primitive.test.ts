@@ -1016,7 +1016,7 @@ describe("WorkspaceGitServiceImpl primitive refresh entrypoint", () => {
     const getCheckoutStatus = vi.fn(async (cwd: string) =>
       createCheckoutStatus(cwd, { remoteUrl: null }),
     );
-    const subscribe = vi.fn(async () => createAsyncSubscription());
+    const subscribe = vi.fn(async (_directory: string) => createAsyncSubscription());
     const service = createService({
       getCheckoutSnapshotFacts,
       getCheckoutStatus,
@@ -1041,9 +1041,10 @@ describe("WorkspaceGitServiceImpl primitive refresh entrypoint", () => {
 
     nowMs = 60_000;
     await vi.advanceTimersByTimeAsync(60_000);
-    await flushPromises();
-
-    expect(subscribe).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledTimes(2));
+    expect(subscribe.mock.calls.map(([directory]) => directory).sort()).toEqual(
+      [REPO_CWD, join(REPO_CWD, ".git")].sort(),
+    );
     expect(getCheckoutStatus).toHaveBeenCalledTimes(1);
 
     subscription.unsubscribe();

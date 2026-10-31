@@ -1,9 +1,12 @@
 import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import path from "node:path";
+import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import type pino from "pino";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { CheckoutSnapshotFacts, CheckoutStatusGit } from "../utils/checkout-git.js";
+import * as pathUtils from "../utils/path.js";
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import type { FileObserver } from "./file-observer/index.js";
 import { WorkspaceGitServiceImpl } from "./workspace-git-service.js";
@@ -547,6 +550,174 @@ describe("WorkspaceGitService checkout observation", () => {
     expect(changedByMetadata.diff).toBe("uncommitted-3");
     expect(changedBase.diff).toBe("base-2");
 
+    subscription.unsubscribe();
+    service.dispose();
+  });
+
+  test("discards an alias event resolved after its watcher closes", async () => {
+    const watcher = createWatcherHarness();
+    const delayedRelative = createDeferred<string | null>();
+    const aliasEvent = path.resolve("/tmp/paseo-observation-alias/HEAD");
+    const resolveAlias = vi.fn(() => delayedRelative.promise);
+    const createMatcher = pathUtils.createAsyncRealpathContainmentMatcher;
+    const matcherSpy = vi
+      .spyOn(pathUtils, "createAsyncRealpathContainmentMatcher")
+      .mockImplementation(async (root) => {
+        const matcher = await createMatcher(root);
+        return {
+          ...matcher,
+          relative: (candidate) =>
+            candidate === aliasEvent ? resolveAlias() : matcher.relative(candidate),
+        };
+      });
+    const getCheckoutSnapshotFacts = vi.fn(async (cwd: string) => createCheckoutFacts(cwd));
+    const service = createService(watcher, { getCheckoutSnapshotFacts });
+    const route = vi.spyOn(
+      service as unknown as { routeRepoMetadataEvents: () => unknown },
+      "routeRepoMetadataEvents",
+    );
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    try {
+      await vi.waitFor(() => {
+        expect(service.getMetrics().workspaceObservationSetupInFlightCount).toBe(0);
+        expect(service.getMetrics().workspaceRefreshInFlightCount).toBe(0);
+        expect(getWatcherRecordsForDirectory(watcher, GIT_DIR)).toHaveLength(1);
+      });
+      const initialCalls = getCheckoutSnapshotFacts.mock.calls.length;
+      getWatcherRecordsForDirectory(watcher, GIT_DIR)[0]!.callback(null, [
+        { path: aliasEvent, type: "update" },
+      ]);
+      await flushPromises();
+      expect(resolveAlias).toHaveBeenCalledOnce();
+      subscription.unsubscribe();
+      delayedRelative.resolve("HEAD");
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(getCheckoutSnapshotFacts).toHaveBeenCalledTimes(initialCalls);
+      expect(route).not.toHaveBeenCalled();
+    } finally {
+      delayedRelative.resolve(null);
+      subscription.unsubscribe();
+      service.dispose();
+      matcherSpy.mockRestore();
+    }
+  });
+
+  test("routes metadata events while watcher canary verification is pending", async () => {
+    const watcher = createWatcherHarness();
+    const canary = createDeferred<void>();
+    let version = 0;
+    const getCheckoutDiff = vi.fn(async () => ({ diff: String(++version), structured: [] }));
+    const service = createService(watcher, {
+      getCheckoutDiff,
+      createWatcherLivenessCanary: () => ({
+        path: "",
+        filterEvents: (events: WatchEvent[]) => events,
+        verify: () => canary.promise,
+      }),
+    });
+    expect((await service.getCheckoutDiff(REPO_CWD, { mode: "uncommitted" })).diff).toBe("1");
+    const route = vi.spyOn(
+      service as unknown as { routeRepoMetadataEvents: (...args: never[]) => unknown },
+      "routeRepoMetadataEvents",
+    );
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    try {
+      await vi.waitFor(() =>
+        expect(getWatcherRecordsForDirectory(watcher, GIT_DIR)).toHaveLength(1),
+      );
+      getWatcherRecordsForDirectory(watcher, GIT_DIR)[0]!.callback(null, [
+        {
+          path: path.join(GIT_DIR, "HEAD"),
+          type: "update",
+        },
+      ]);
+      expect(route).toHaveBeenCalledOnce();
+      canary.resolve();
+      expect((await service.getCheckoutDiff(REPO_CWD, { mode: "uncommitted" })).diff).toBe("2");
+    } finally {
+      canary.resolve();
+      subscription.unsubscribe();
+      service.dispose();
+    }
+  });
+
+  test("routes private gitdir events when common root uses a junction alias", async () => {
+    const temp = await mkdtemp(path.join(tmpdir(), "paseo-git-alias-"));
+    const realRoot = path.join(temp, "real-git");
+    const aliasRoot = path.join(temp, "alias-git");
+    const privateDir = path.join(realRoot, "worktrees", "linked");
+    await mkdir(privateDir, { recursive: true });
+    await symlink(realRoot, aliasRoot, "junction");
+    const watcher = createWatcherHarness();
+    const getCheckoutSnapshotFacts = vi.fn(
+      async (cwd: string): Promise<CheckoutSnapshotFacts> => ({
+        ...createCheckoutFacts(cwd),
+        absoluteGitDir: privateDir,
+        gitCommonDir: aliasRoot,
+      }),
+    );
+    const service = createService(watcher, { getCheckoutSnapshotFacts });
+    const subscription = service.registerWorkspace({ cwd: WORKTREE_A }, vi.fn());
+    try {
+      await vi.waitFor(() => {
+        expect(service.getMetrics().workspaceObservationSetupInFlightCount).toBe(0);
+        expect(service.getMetrics().workspaceRefreshInFlightCount).toBe(0);
+        expect(getWatcherRecordsForDirectory(watcher, aliasRoot)).toHaveLength(1);
+      });
+      const initialCalls = getCheckoutSnapshotFacts.mock.calls.length;
+      watcher.records
+        .find((record) => record.directory === aliasRoot)!
+        .callback(null, [
+          {
+            path: path.join(aliasRoot, "worktrees", "linked", "HEAD"),
+            type: "update",
+          },
+        ]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() =>
+        expect(getCheckoutSnapshotFacts).toHaveBeenCalledTimes(initialCalls + 1),
+      );
+    } finally {
+      subscription.unsubscribe();
+      service.dispose();
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  test("large duplicate and ignored watcher batches do not trigger extra refreshes", async () => {
+    const watcher = createWatcherHarness();
+    const getCheckoutSnapshotFacts = vi.fn(async (cwd: string) => createCheckoutFacts(cwd));
+    const service = createService(watcher, { getCheckoutSnapshotFacts });
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    await vi.waitFor(() => {
+      expect(service.getMetrics().workspaceObservationSetupInFlightCount).toBe(0);
+      expect(service.getMetrics().workspaceRefreshInFlightCount).toBe(0);
+    });
+    const initialCalls = getCheckoutSnapshotFacts.mock.calls.length;
+    const metadata = watcher.records.find((record) => record.directory === GIT_DIR);
+    expect(metadata).toBeDefined();
+    metadata!.callback(
+      null,
+      Array.from({ length: 3000 }, (_, index) => ({
+        path: path.join(GIT_DIR, "objects", String(index)),
+        type: "create" as const,
+      })),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(getCheckoutSnapshotFacts).toHaveBeenCalledTimes(initialCalls);
+
+    metadata!.callback(
+      null,
+      Array.from({ length: 3000 }, () => ({
+        path: path.join(GIT_DIR, "HEAD"),
+        type: "update" as const,
+      })),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() =>
+      expect(getCheckoutSnapshotFacts).toHaveBeenCalledTimes(initialCalls + 1),
+    );
     subscription.unsubscribe();
     service.dispose();
   });
@@ -2661,13 +2832,25 @@ describe("WorkspaceGitService checkout observation", () => {
     checkoutWatcher?.updateIgnore.mockRejectedValueOnce(new Error("update failed"));
     ignoredDirectories = "node_modules/\nbuild/\n";
     checkoutWatcher?.callback(null, [{ path: path.join(REPO_CWD, ".gitignore"), type: "update" }]);
+    await vi.waitFor(() => expect(checkoutWatcher?.updateIgnore).toHaveBeenCalled());
+    await flushPromises();
 
     // Recovery backs off at WATCH_RECOVERY_BASE_DELAY_MS * 2**(attempt-1) with base 30_000ms,
     // landing at 30s, 60s, 120s, 240s for the first 4 attempts (WATCH_RECOVERY_MAX_BACKOFF_STEPS
     // caps the exponent at 4, and WATCH_RECOVERY_MAX_DELAY_MS's 300s ceiling doesn't bind until
     // the 5th). A 4th recovery attempt needs the first four delays to have elapsed:
-    // 30_000 + 60_000 + 120_000 + 240_000 = 450_000ms. Advance past that with headroom.
-    await vi.advanceTimersByTimeAsync(500_000);
+    // 30_000 + 60_000 + 120_000 + 240_000 = 450_000ms. Wait for each
+    // attempt to reach subscribe before advancing the next delay: root realpath
+    // resolution uses real filesystem I/O, which fake timers cannot accelerate.
+    for (const [index, delay] of [30_000, 60_000, 120_000, 240_000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay);
+      await vi.waitFor(() =>
+        expect(getWatcherSubscribeCallCount(watcher, REPO_CWD)).toBe(
+          subscribeCallsBeforeFailure + index + 1,
+        ),
+      );
+      await flushPromises();
+    }
 
     const subscribeCallsAfterRecoveryWindow = getWatcherSubscribeCallCount(watcher, REPO_CWD);
     // 1 initial success + 3 capped recovery attempts = 4 total. A 5th call would prove recovery

@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import {
   areEquivalentPaths,
   createPathEquivalenceMatcher,
+  createAsyncRealpathContainmentMatcher,
   getRealpathAwareRelativePath,
   isPathInsideRoot,
 } from "./path.js";
@@ -96,4 +97,36 @@ describe("path equivalence", () => {
       }
     },
   );
+});
+
+describe("async watcher containment", () => {
+  test("matches lexical Windows paths with case, separators and directory boundaries", async () => {
+    const matcher = await createAsyncRealpathContainmentMatcher("C:\\Repo\\.git");
+    expect(await matcher.relative("c:/repo/.git/refs/heads/Feature")).toBe("refs\\heads\\Feature");
+    expect(await matcher.relative("C:\\Repo\\.git-other\\HEAD")).toBeNull();
+  });
+
+  test("matches root aliases and candidate junctions and invalidates retargeted directories", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "paseo-async-path-"));
+    try {
+      const root = join(tempDir, "root");
+      const other = join(tempDir, "other");
+      const alias = join(tempDir, "alias");
+      mkdirSync(root);
+      mkdirSync(other);
+      symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+      const matcher = await createAsyncRealpathContainmentMatcher(root);
+      expect(await matcher.relative(join(alias, "deleted-file"))).toBe("deleted-file");
+      expect(await matcher.relative(alias)).toBe("");
+      rmSync(alias, { recursive: process.platform === "win32" });
+      symlinkSync(other, alias, process.platform === "win32" ? "junction" : "dir");
+      matcher.invalidate(alias);
+      expect(await matcher.relative(join(alias, "deleted-file"))).toBeNull();
+      expect(await matcher.relative(alias)).toBeNull();
+      const aliasedRoot = await createAsyncRealpathContainmentMatcher(alias);
+      expect(await aliasedRoot.relative(join(other, "file"))).toBe("file");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
