@@ -34,6 +34,7 @@ import {
   hubThresholdsHistoryRpc,
 } from "./shared/rpc";
 import { createSchedulerRuntime, DEFAULT_SETTINGS, type RuntimeSettings } from "./server/runtime";
+import { createRetryErrorLogger } from "./server/retry-log";
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import { fromThresholds, toPageResource, toPageStatus, toThresholds } from "./server/hub-page";
 import { registerBotTools, requireIndependentBot } from "./server/bot-tools";
@@ -75,7 +76,7 @@ export default function contribute(server: PluginServerContext) {
     db,
     dataDir: join(resolveVibeHome(), "scheduler"),
     ...hubPaths(),
-    onError: (error) => console.error("vibe-scheduler:", error),
+    onError: createRetryErrorLogger((message) => console.error(message)),
     native: async (workspaceId) => {
       if (!paseo) throw new Error("尚未连接原生宿主，暂停派发");
       const workspace = paseo.workspaces.ref(workspaceId);
