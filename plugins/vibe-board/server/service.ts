@@ -23,19 +23,12 @@ export function createBoardService({ store }: BoardRuntime) {
   function project(ref: string): Project {
     const found =
       store.projects.get(ref) ??
-      store.projects.list(true).find((p) => p.prefix === ref.toUpperCase() || p.name === ref);
+      store.projects.list(true).find((p) => p.paseoProjectId === ref || p.prefix === ref.toUpperCase() || p.name === ref);
     if (!found) throw new BoardError("not_found", `找不到项目：${ref}`);
     return found;
   }
   return {
     projects: {
-      list: (includeArchived = false) => ({ projects: store.projects.list(includeArchived) }),
-      create: (input: Parameters<typeof store.projects.create>[0]) => ({
-        project: store.projects.create(input),
-      }),
-      update: (ref: string, patch: Parameters<typeof store.projects.update>[1]) => ({
-        project: store.projects.update(project(ref).id, patch),
-      }),
       resolve: project,
     },
     presets: {

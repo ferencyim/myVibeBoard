@@ -1,5 +1,5 @@
 import { cleanDefaults, resolveTaskRoles } from "../shared/vibe/contract";
-import { getProjectDefaults, setProjectDefaults } from "../server/project-defaults";
+import { ensureProjectExtension, getProjectDefaults, setProjectDefaults } from "../server/project-defaults";
 import {
   openDefaultsForm,
   setModelDefault,
@@ -264,13 +264,13 @@ describe("WP-133 任务角色", () => {
   it("打开原生设置读取按路径关联的旧项目；保存失败不改变关联和其它字段", () => {
     const { board } = setupBoard();
     const p = board.presets.create({ name: "P", provider: "codex", model: "model" }).preset;
-    const legacy = board.projects.create({
+    const legacy = board.store.projects.create({
       name: "Legacy",
       prefix: "LEG",
       repoPath: "/legacy",
       description: "keep",
       defaultPresets: { main: p.id },
-    }).project;
+    });
     expect(getProjectDefaults(board, "native", "/legacy").project).toEqual({ main: p.id });
     expect(() =>
       setProjectDefaults(board, {
@@ -289,9 +289,22 @@ describe("WP-133 任务角色", () => {
     });
     expect(board.store.projects.get(legacy.id)).toMatchObject({
       description: "keep",
-      name: "Legacy",
+      name: "Native",
       paseoProjectId: "native",
       defaultPresets: { project: p.id },
     });
   });
+  it("自动创建或关联原生项目扩展并同步名称和路径", () => {
+    const { board } = setupBoard();
+    const native = { projectId: "native-auto", name: "原生项目", rootPath: "/native" };
+    const created = ensureProjectExtension(board, native);
+    expect(created).toMatchObject({ paseoProjectId: native.projectId, name: native.name, repoPath: native.rootPath });
+    expect(ensureProjectExtension(board, { ...native, name: "新名称", rootPath: "/renamed" }).id).toBe(created.id);
+    expect(board.store.projects.list(true)).toHaveLength(1);
+    expect(board.store.projects.get(created.id)).toMatchObject({ name: "新名称", repoPath: "/renamed" });
+    const legacy = board.store.projects.create({ name: "旧项目", prefix: "OLD", repoPath: "/old", description: "保留" });
+    const adopted = ensureProjectExtension(board, { projectId: "old-native", name: "原生旧项目", rootPath: "/old" });
+    expect(adopted).toMatchObject({ id: legacy.id, paseoProjectId: "old-native", name: "原生旧项目", description: "保留" });
+  });
+
 });

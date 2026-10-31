@@ -516,6 +516,32 @@ describe("任务 tab 编号与标题", () => {
     expect(fake.titles.at(-1)).toEqual({ agentId: "agent-2", title: "#7 会话 · unknown-id" });
   });
 
+  it("流程面板使用实际 agent 的模型和推理强度，并保留未启用角色", async () => {
+    const { store, fake, tabs } = setup();
+    const main = fake.addAgent({ id: "main", thinkingOptionId: "low" });
+    await tabs.ensureTab("main");
+    main.model = "changed";
+    main.thinkingOptionId = "high";
+    store.tasks.setRoleSelections("ws", { scout: { mode: "disabled" } });
+    const roster = await tabs.tabsFor(store.tasks.get("ws")!, true);
+    expect(roster[0]).toMatchObject({ provider: "codex", model: "changed", thinking: "high" });
+    expect(roster[2]).toMatchObject({ role: "scout", status: "未启用" });
+  });
+
+  it("完整流程的方案角色列出所选审阅模型", async () => {
+    const { store, fake, tabs } = setup();
+    fake.addAgent({ id: "main" });
+    await tabs.ensureTab("main");
+    store.presets.create({ id: "writer", name: "写方案", provider: "codex", model: "writer" });
+    store.presets.create({ id: "review", name: "审方案", provider: "claude", model: "reviewer", thinking: "high" });
+    store.modelDefaults.setGlobal({ planners: ["writer", "review"] });
+    const roster = await tabs.tabsFor(store.tasks.get("ws")!, false);
+    expect(roster[1]).toMatchObject({
+      role: "planner", model: "writer",
+      reviewModels: [{ provider: "claude", model: "reviewer", thinking: "high" }],
+    });
+  });
+
   it("快速结束的首回合在 tab 尚未登记时补登记、保存方案并后台补齐流程 tab", async () => {
     const { store, fake, flow } = setup();
     store.tasks.create({ workspaceId: "ws", anchorAgentId: "agent-1" });

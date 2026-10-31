@@ -85,7 +85,8 @@ export function createProjectAgents(options: ProjectAgentOptions) {
   }
   async function project(projectId: string): Promise<PaseoProject> {
     const list = await listHostProjects(paseo());
-    const found = list.projects.find((entry) => entry.projectId === projectId);
+    const found = list.projects.find((entry) => entry.projectId === projectId) ??
+      (await listHostProjects(paseo(), true)).projects.find((entry) => entry.projectId === projectId);
     if (!found) throw new Error("项目不存在或已归档");
     return found;
   }

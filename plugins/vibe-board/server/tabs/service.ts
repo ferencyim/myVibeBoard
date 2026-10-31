@@ -58,6 +58,7 @@ export interface TaskTabView {
   thinking?: string;
   modelId?: string;
   source?: string;
+  reviewModels?: Array<{ provider: string; model: string; thinking?: string }>;
 }
 
 /** The whole message must be one of the two user-native handoff forms. */
@@ -707,7 +708,7 @@ export function createTaskTabs(options: {
           status: agent ? statusOf(agent) : !refresh && task.phase === "queued" && current.role === "worker" ? "排队" : "已关闭",
           title: agent?.title ?? tabTitle(current),
           busy: !!agent?.activeTurn,
-          thinking: current.thinking,
+          thinking: agent ? (agent.thinkingOptionId ?? undefined) : current.thinking,
         };
       }),
     );
@@ -735,6 +736,16 @@ export function createTaskTabs(options: {
         title: `#${FLOW_ROLE_ORDER.indexOf(role) + 2} ${roleLabel} · ${model}`,
         busy: false,
       });
+    }
+    const planner = views.find((view) => view.role === "planner");
+    if (planner && planner.status !== "未启用" && task.flowLevel === "full") {
+      try {
+        planner.reviewModels = resolvePlannerPresets(store, {
+          selections: task.roleSelections, projectId, main: task.tabs.find((tab) => tab.role === "main"),
+        }).slice(1).flatMap((preset) => preset.models[0] ? [preset.models[0]] : []);
+      } catch (error) {
+        log("方案审阅模型解析失败", error);
+      }
     }
     return views.sort((a, b) => a.number - b.number);
   }

@@ -1,5 +1,5 @@
-export function findBotForAgent<T extends { mainAgentId: string | null }>(bots: readonly T[], agentId: string): T | undefined {
-  return bots.find((bot) => bot.mainAgentId === agentId);
+export function findBotForAgent<T extends { id: string; mainAgentId: string | null }>(bots: readonly T[], agentId: string, botId?: string): T | undefined {
+  return bots.find((bot) => bot.mainAgentId === agentId || (!!botId && bot.id === botId));
 }
 
 export const NAME_MAX = 100;

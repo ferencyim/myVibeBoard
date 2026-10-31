@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -71,20 +71,22 @@ export async function captureCheckpoint(worktree: string): Promise<HandoffCheckp
     break;
   }
   // `status --porcelain` only names dirty files; size and mtime catch a second edit of one.
-  const stamps: string[] = [];
+  const stampPaths: string[] = [];
   for (const line of status.split("\n")) {
     // "XY path" or "XY old -> new"
     const path = line.slice(3).split(" -> ").at(-1)?.trim().replace(/^"|"$/g, "");
     if (!path) continue;
     paths.add(path);
-    if (stamps.length >= MAX_STAMPED_FILES) continue;
-    try {
-      const stat = statSync(join(worktree, path));
-      stamps.push(`${path}:${stat.size}:${Math.trunc(stat.mtimeMs)}`);
-    } catch {
-      stamps.push(path + ":gone");
-    }
+    if (stampPaths.length < MAX_STAMPED_FILES) stampPaths.push(path);
   }
+  const stamps = await Promise.all(stampPaths.map(async (path) => {
+    try {
+      const info = await stat(join(worktree, path));
+      return `${path}:${info.size}:${Math.trunc(info.mtimeMs)}`;
+    } catch {
+      return path + ":gone";
+    }
+  }));
   return {
     worktree,
     head,

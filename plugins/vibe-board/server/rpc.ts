@@ -7,40 +7,19 @@ import type { BoardService } from "./service";
 import { createRequirementsService } from "./requirements";
 import { resolveMainConfig } from "./main-model";
 import { providerCatalog } from "./provider-catalog";
-async function listPaseoProjects(paseo: PaseoApi) {
-  try {
-    const result = await listHostProjects(paseo);
-    return {
-      projects: result.projects.map((project) => ({
-        id: project.projectId,
-        name:
-          project.projectCustomName?.trim() ||
-          project.projectDisplayName ||
-          project.projectRootPath,
-        rootPath: project.projectRootPath,
-        kind: project.projectKind,
-      })),
-    };
-  } catch {
-    return { projects: [] };
-  }
-}
-
 export function registerBoardRpcs(
   server: PluginServerContext,
   board: BoardService,
   getPaseo?: () => PaseoApi | null,
 ) {
-  const hostProjects = (api: PaseoApi) => listHostProjects(getPaseo?.() ?? api);
-  server.handle(rpc.projectsListRpc, (input) => board.projects.list(input.includeArchived));
-  server.handle(rpc.projectsCreateRpc, (input) => board.projects.create(input));
-  server.handle(rpc.projectsUpdateRpc, ({ project, ...patch }) =>
-    board.projects.update(project, patch),
-  );
-  server.handle(rpc.paseoProjectsListRpc, (_input, { paseo }) => listPaseoProjects(getPaseo?.() ?? paseo));
+  const hostProject = async (api: PaseoApi, id: string) => {
+    const host = getPaseo?.() ?? api;
+    const current = await listHostProjects(host);
+    return current.projects.find((p) => p.projectId === id) ??
+      (await listHostProjects(host, true)).projects.find((p) => p.projectId === id);
+  };
   server.handle(rpc.resolveMainConfigRpc, async ({ projectId }, { paseo }) => {
-    const { projects } = await hostProjects(paseo);
-    const project = projects.find((candidate) => candidate.projectId === projectId);
+    const project = await hostProject(paseo, projectId);
     if (!project) throw new Error("项目不存在");
     return resolveMainConfig(board.store, projectId, project.projectRootPath);
   });
@@ -52,14 +31,12 @@ export function registerBoardRpcs(
   server.handle(rpc.presetsDeleteRpc, (input) => board.presets.delete(input.presetId));
   server.handle(rpc.providersCatalogRpc, (_input, { paseo }) => providerCatalog(paseo));
   server.handle(rpc.projectDefaultsGetRpc, async ({ projectId }, { paseo }) => {
-    const { projects } = await hostProjects(paseo);
-    const project = projects.find((p) => p.projectId === projectId);
+    const project = await hostProject(paseo, projectId);
     if (!project) throw new Error("项目不存在");
     return getProjectDefaults(board, projectId, project.projectRootPath);
   });
   server.handle(rpc.projectDefaultsSetRpc, async (input, { paseo }) => {
-    const { projects } = await hostProjects(paseo);
-    const project = projects.find((p) => p.projectId === input.projectId);
+    const project = await hostProject(paseo, input.projectId);
     if (!project) throw new Error("项目不存在");
     return setProjectDefaults(board, {
       ...input,

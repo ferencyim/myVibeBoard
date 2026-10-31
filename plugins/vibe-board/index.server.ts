@@ -1,6 +1,6 @@
 import { registerProjectBotRpcs } from "./server/project-agent/bots";
 import { registerBotHandoff } from "./server/project-agent/handoff";
-import { listHostProjects } from "./server/host-data";
+import { associateHostProjects, listHostProjects } from "./server/host-data";
 import { readLegacyMaintenance } from "./server/project-agent/settings-migration";
 import { createProjectAgents } from "./server/project-agent/service";
 import { registerProjectAgents } from "./server/project-agent/register";
@@ -40,6 +40,11 @@ export default function contribute(server: PluginServerContext) {
   };
 
   let paseo: PaseoApi | null = server.paseo ?? null;
+  const board = createBoardService(runtime);
+  const syncProjects = (api: PaseoApi) => {
+    void associateHostProjects(api, board).catch((error) => console.error("[vibe-board] 项目扩展关联失败", error));
+  };
+  if (paseo) syncProjects(paseo);
   // Owner settings, read on every use.
   const settings = server.registerSettings({
     ...boardSettings,
@@ -60,6 +65,7 @@ export default function contribute(server: PluginServerContext) {
     getPaseo: () => paseo,
     onPaseo: (api) => {
       paseo = api;
+      syncProjects(api);
       environment.observe(api);
     },
   });
@@ -107,7 +113,7 @@ export default function contribute(server: PluginServerContext) {
     getPaseo: () => paseo,
     ready: startup.ready,
   });
-  registerBoardRpcs(server, createBoardService(runtime), () => paseo);
+  registerBoardRpcs(server, board, () => paseo);
   const evidence = createTaskEvidenceReader(runtime.db);
   server.handle(verifyEvidenceRpc, (input) => evidence.evidence(input.evidenceId, input.thumb));
   server.registerAgentTool({

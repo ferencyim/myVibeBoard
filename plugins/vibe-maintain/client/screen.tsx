@@ -2,8 +2,6 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import {
   useRpc,
   useSettings,
-  type PluginScreenProps,
-  type PluginSidebarItemProps,
   type PluginSurfaceProps,
 } from "@getpaseo/plugin/client";
 import {
@@ -11,7 +9,6 @@ import {
   SettingsInput,
   SettingsSection,
   SettingsSwitch,
-  SidebarRow,
 } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState, type ReactNode } from "react";
@@ -118,7 +115,7 @@ const SCOPE_CHIP = (theme: PluginTheme, label: string) => (
   </View>
 );
 
-export function MaintainScreen({ theme, params }: PluginScreenProps) {
+export function MaintainScreen({ theme }: Pick<PluginSurfaceProps, "theme">) {
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
   const runCall = useRpc(runRpc);
@@ -126,7 +123,7 @@ export function MaintainScreen({ theme, params }: PluginScreenProps) {
   const rulesState = useSettings(rulesSettings);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [editing, setEditing] = useState<string | null>(params.rule ?? null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [creating, setCreating] = useState<{ name: string } | null>(null);
 
@@ -447,18 +444,8 @@ export function MaintainScreen({ theme, params }: PluginScreenProps) {
           )}
         </Section>
       ) : null}
+      <MaintainSettingsScreen theme={theme} />
     </ScrollView>
-  );
-}
-
-export function MaintainSidebarItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
-  return (
-    <SidebarRow
-      icon="Wrench"
-      label="自动维护"
-      active={currentScreen?.screenId === "main"}
-      onPress={() => openScreen({ screenId: "main" })}
-    />
   );
 }
 
@@ -473,7 +460,7 @@ export const ADVANCED_FIELDS: readonly SettingField[] = [
   },
 ];
 
-export function MaintainSettingsScreen({ theme }: PluginSurfaceProps) {
+function MaintainSettingsScreen({ theme }: Pick<PluginSurfaceProps, "theme">) {
   const settings = useSettings(maintainSettings);
   if (settings.status !== "ready") {
     return (

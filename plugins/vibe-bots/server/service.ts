@@ -437,14 +437,14 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
         if (!preset) throw new Error("备用预设不存在：" + id);
         const choices = presetModels(preset);
         for (const candidate of skipFirst ? choices.slice(1) : choices) {
-          chain.push({ ...candidate, instructions: preset.instructions, runtimeEnv: preset.runtimeEnv });
+          chain.push({ ...candidate, instructions: preset.instructions, runtimeEnv: preset.runtimeEnv, fastMode: !!preset.fastMode });
         }
         for (const fallback of preset.fallbackPresetIds ?? []) append(fallback);
       }
       append(bot.presetId, true);
     }
     for (const candidate of bot.backupModels) {
-      chain.push({ ...candidate, permissionMode: bot.permissionMode, instructions: "", runtimeEnv: null });
+      chain.push({ ...candidate, permissionMode: bot.permissionMode, instructions: "", runtimeEnv: null, fastMode: bot.fastMode });
     }
     return chain;
   }

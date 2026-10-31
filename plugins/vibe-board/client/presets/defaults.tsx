@@ -1,7 +1,7 @@
 import { ModelPickerField, SettingsCard, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { Modal } from "@getpaseo/plugin/client/react-native";
 import React, { useCallback, useMemo, useState, type ComponentProps } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import type {
   ModelDefaults,
   Preset,
@@ -22,6 +22,9 @@ import {
 import { ENVIRONMENT_LABELS, plannersOf, setPlanner } from "./logic";
 import { roleDraftOf, type RoleDraft } from "./role-setting";
 
+import { ReviewTimeoutField } from "./review-timeout";
+import { useHost } from "../common/ctx";
+
 type PickerProviders = ComponentProps<typeof ModelPickerField>["providers"];
 
 /** Stores one role's draft and returns the setting id the defaults point at (see role-setting.ts). */
@@ -39,6 +42,7 @@ interface EditorProps {
   saveRole: SaveRole;
   inherited?: ModelDefaults;
   disabled?: boolean;
+  showReviewTimeout?: boolean;
 }
 
 const ENVIRONMENT_OPTIONS = (Object.keys(ENVIRONMENT_LABELS) as PresetEnvironmentKind[]).map(
@@ -103,6 +107,7 @@ function RoleCard({
   stateText?: string;
   extra?: React.ReactNode;
 }) {
+  const { theme } = useHost();
   const current = settings.find((setting) => setting.id === settingId);
   const draft = useMemo(() => roleDraftOf(current), [current]);
   const [promptOpen, setPromptOpen] = useState(false);
@@ -165,7 +170,7 @@ function RoleCard({
   );
   return (
     <View style={styles.role}>
-      <Muted>{label}</Muted>
+      <Text style={[styles.roleTitle, { color: theme.colors.foreground }]}>{label}</Text>
       <ModelPickerField
         providers={providers}
         provider={draft.provider}
@@ -381,6 +386,7 @@ export function DefaultModelsEditor(props: EditorProps) {
             <Muted>{inherited ? defaultPlannerLabel(inherited, nameOf) : "沿用 #1 模型"}</Muted>
           ) : null}
         </SettingsCard>
+        {props.showReviewTimeout ? <ReviewTimeoutField /> : null}
         {planners.length ? (
           <Btn
             disabled={disabled}
@@ -395,7 +401,8 @@ export function DefaultModelsEditor(props: EditorProps) {
 }
 const styles = StyleSheet.create({
   stack: { gap: 8 },
-  role: { gap: 6, padding: 12 },
+  role: { gap: 8, padding: 12 },
+  roleTitle: { fontSize: 14, fontWeight: "500" },
   backup: { gap: 4, paddingLeft: 8 },
   actions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   prompt: { gap: 12, padding: 16 },

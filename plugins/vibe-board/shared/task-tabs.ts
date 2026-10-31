@@ -40,6 +40,7 @@ export const TaskTabViewSchema = z.object({
   thinking: z.string().optional(),
   modelId: z.string().optional(),
   source: z.string().optional(),
+  reviewModels: z.array(z.object({ provider: z.string(), model: z.string(), thinking: z.string().optional() })).optional(),
 });
 export type TaskTabViewData = z.infer<typeof TaskTabViewSchema>;
 

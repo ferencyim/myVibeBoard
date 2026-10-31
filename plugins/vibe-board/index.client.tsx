@@ -4,8 +4,9 @@ import { resolveMainConfigRpc } from "./shared/rpc";
 import { TaskDefaultsScreen, ProjectTaskDefaultsSection } from "./client/presets/defaults-screen";
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { BehaviourScreen } from "./client/behaviour/BehaviourScreen";
-import { BehaviourSidebarItem, BoardSettingsScreen } from "./client/sidebar";
+import { BehaviourSidebarItem } from "./client/sidebar";
 import { TaskFlowPanel } from "./client/task-panel";
+import { TaskInfoPanel } from "./client/task-info";
 import { TaskStatusItem } from "./client/task-status";
 import { contributeGroupTarget } from "./client/group-target";
 import { contributeWorkspaceTabs } from "./client/workspace-tabs";
@@ -95,6 +96,13 @@ export default function contribute(client: PluginClientContext) {
       locations: ["workspace", "explorer"],
       Component: TaskFlowPanel,
     }),
+    client.addWorkspacePanel({
+      id: "task-info",
+      title: "资料",
+      icon: "FileText",
+      locations: ["explorer"],
+      Component: TaskInfoPanel,
+    }),
     client.addCommandCenterItem({
       id: "open-task-flow",
       title: "任务流程面板",
@@ -130,13 +138,7 @@ export default function contribute(client: PluginClientContext) {
       icon: "Bot",
       Component: TaskDefaultsScreen,
     }),
-    client.addSettingsScreen({
-      order: -40,
-      id: "preferences",
-      title: "任务设置",
-      icon: "Settings",
-      Component: BoardSettingsScreen,
-    }),
+
 
     client.addCommandCenterItem({
       id: "open-behaviour",

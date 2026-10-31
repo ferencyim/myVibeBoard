@@ -161,6 +161,7 @@ function DefaultsForm({
   return (
     <View style={styles.form}>
       <DefaultModelsEditor
+        showReviewTimeout={!projectId}
         disabled={saving}
         value={state.value}
         onChange={model.change}

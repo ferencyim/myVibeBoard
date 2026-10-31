@@ -43,8 +43,8 @@ export const SOURCE_LABELS = { default: "默认", global: "全局覆盖", projec
 export const AUTOMATION_LINKS = [
   {
     pluginId: "vibe-board",
-    screenId: "preferences",
-    label: "任务设置：项目扩展、默认模型与有序预设",
+    screenId: "task-default-models",
+    label: "任务角色：默认模型与方案审阅超时",
   },
   {
     pluginId: "vibe-verify",

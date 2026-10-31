@@ -376,13 +376,15 @@ function TabRow({
 }) {
   const { theme } = useHost();
   const open = useCallback(() => openAgent?.({ agentId: tab.agentId }), [openAgent, tab.agentId]);
+  const status = tab.status === "未启用" ? "本流程未启用" : tab.status;
+  const model = [tab.provider, tab.model, tab.thinking].filter(Boolean).join(" · ");
   let statusColor = theme.colors.statusSuccess;
   if (tab.busy) statusColor = theme.colors.statusWarning;
   if (tab.status === "未启用") statusColor = theme.colors.foregroundMuted;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`#${tab.number} ${tab.roleLabel} ${tab.model} ${tab.status}`}
+      accessibilityLabel={`#${tab.number} ${tab.roleLabel} ${tab.status === "未启用" ? status : `${model} ${status}`}`}
       testID={`task-flow-tab-${tab.number}`}
       disabled={!openAgent || !tab.agentId}
       onPress={open}
@@ -399,12 +401,21 @@ function TabRow({
       }}
     >
       <Dot color={statusColor} size={8} />
-      <Text
-        numberOfLines={1}
-        style={{ flexShrink: 1, color: theme.colors.foreground, fontSize: 13 }}
-      >
-        {`#${tab.number} ${tab.roleLabel}`}
-      </Text>
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
+          {`#${tab.number} ${tab.roleLabel}`}
+        </Text>
+        {tab.status !== "未启用" ? (
+          <>
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{model}</Text>
+            {tab.reviewModels?.map((reviewer, index) => (
+              <Text key={index} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+                {`审阅：${[reviewer.provider, reviewer.model, reviewer.thinking].filter(Boolean).join(" · ")}`}
+              </Text>
+            ))}
+          </>
+        ) : null}
+      </View>
       <Text
         style={{
           marginLeft: "auto",
@@ -412,7 +423,7 @@ function TabRow({
           fontSize: 12,
         }}
       >
-        {tab.status}
+        {status}
       </Text>
     </Pressable>
   );

@@ -1,9 +1,9 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
-import { ModelPickerField, Modal } from "@getpaseo/plugin/client/ui";
+import { ModelPickerField, Modal, SettingsCard, SettingsSection } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Text, TextInput } from "react-native";
+import { Text, TextInput, View } from "react-native";
 import { botModelsListRpc as modelsListRpc } from "../shared/project-bots";
 import { Pressable } from "react-native";
 function Button({ theme, label, onPress, disabled }: { theme: PluginTheme; label: string; onPress(): void; disabled?: boolean }) {
@@ -39,14 +39,12 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
     if (cheap) { setProvider(cheap.provider); setModel(cheap.model); }
     setInitialized(true);
   }, [catalog.data, initialized]);
-  const selectedProvider = catalog.data?.providers.find((item) => item.provider === provider);
-  const selectedModel = selectedProvider?.models.find((item) => item.id === model);
   const styles = useMemo(() => ({
     input: { color: theme.colors.foreground, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 10 },
     description: { color: theme.colors.foreground, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 10, minHeight: 80 },
     content: { padding: 16, gap: 12 },
     muted: { color: theme.colors.foregroundMuted },
-    danger: { color: theme.colors.statusDanger }, fields: { gap: 8 },
+    danger: { color: theme.colors.statusDanger }, fields: { gap: 8, padding: 12 }, label: { color: theme.colors.foregroundMuted, fontSize: 13 },
   }), [theme]);
   const selectModel = useCallback((nextProvider: string, nextModel: string) => { setProvider(nextProvider); setModel(nextModel); setThinking(""); setFastMode(false); }, []);
   const selectThinking = useCallback((id: string) => setThinking(id), []);
@@ -56,14 +54,20 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   const canSubmit = !!provider && !!model;
   return <Modal title={`新建${projectId ? "项目 " : ""}bot`} open onOpenChange={closeModal}>
     <Modal.Content contentContainerStyle={styles.content}>
+      <SettingsSection title="基本资料"><SettingsCard><View style={styles.fields}>
+      <Text style={styles.label}>名字</Text>
       <TextInput accessibilityLabel="名字" placeholder="名字（必填）" placeholderTextColor={theme.colors.foregroundMuted} value={name} onChangeText={setName} maxLength={100} style={styles.input} />
+      <Text style={styles.label}>头衔</Text>
       <TextInput accessibilityLabel="头衔" placeholder="头衔（可选）" placeholderTextColor={theme.colors.foregroundMuted} value={title} onChangeText={setTitle} maxLength={200} style={styles.input} />
+      <Text style={styles.label}>角色说明</Text>
       <TextInput accessibilityLabel="角色说明" placeholder="角色说明（可选，也可稍后编辑）" placeholderTextColor={theme.colors.foregroundMuted} value={instructions} onChangeText={setInstructions} multiline maxLength={30000} style={styles.description} />
+      </View></SettingsCard></SettingsSection>
+      <SettingsSection title="模型"><SettingsCard><View style={styles.fields}>
       <Text style={styles.muted}>{catalog.isLoading ? "正在读取缓存模型…" : "缓存目录没有价格信息，无法确定最低价；请确认或选择合适的模型。"}</Text>
       {catalog.error ? <Text style={styles.danger}>模型目录加载失败：{String(catalog.error)}</Text> : null}
-      <Button theme={theme} label={refreshing ? "正在刷新模型列表…" : "刷新模型列表"} disabled={refreshing} onPress={refreshModels} />
       {refreshError ? <Text style={styles.danger}>刷新模型列表失败：{refreshError}</Text> : null}
-      <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading} onSelect={selectModel} onSelectThinking={selectThinking} fast={fastMode} onFastChange={provider === "claude" || provider === "codex" ? setFastMode : undefined} permission={permissionMode} onPermissionChange={selectPermission} />
+      <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading || refreshing} onRefresh={refreshModels} onSelect={selectModel} onSelectThinking={selectThinking} fast={fastMode} onFastChange={provider === "claude" || provider === "codex" ? setFastMode : undefined} permission={permissionMode} onPermissionChange={selectPermission} />
+      </View></SettingsCard></SettingsSection>
       {error ? <Text accessibilityRole="alert" style={styles.danger}>{error}</Text> : null}
       <Button theme={theme} label={busy ? "正在新建…" : "确认新建"} disabled={busy || !name.trim() || !canSubmit} onPress={submit} />
       <Button theme={theme} label="取消" disabled={busy} onPress={onCancel} />

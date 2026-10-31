@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { modelsListRpc } from "../shared/rpc";
 import { suggestedModel } from "./create-model";
 import { INSTRUCTIONS_MAX, NAME_MAX, TITLE_MAX } from "./profile-mapping";
-import { Caption, ControlRow, ErrorLine, Field, Group, KitProvider, OutlineButton, TextArea } from "./settings-kit";
+import { Caption, ErrorLine, Field, Group, KitProvider, OutlineButton, TextArea } from "./settings-kit";
 
 const contentStyle = { padding: 16, gap: 16 } as const;
 
@@ -47,12 +47,13 @@ export function BotCreateForm({ theme, projectId, busy, error, onCancel, onSubmi
   return <Modal title={`新建${projectId ? "项目 " : ""}bot`} open onOpenChange={closeModal}>
     <Modal.Content contentContainerStyle={contentStyle}>
       <KitProvider theme={theme}>
+        <Group title="基本资料">
         <Field label="名字" value={name} onChangeText={setName} placeholder="必填" maxLength={NAME_MAX} />
         <Field label="头衔" value={title} onChangeText={setTitle} placeholder="这个 bot 负责什么（可选）" maxLength={TITLE_MAX} />
         <TextArea label="角色说明" value={instructions} onChangeText={setInstructions} placeholder="可选，也可稍后编辑" error={instructions.length > INSTRUCTIONS_MAX ? `最多 ${INSTRUCTIONS_MAX} 个字符` : null} />
+        </Group>
         <Group title="模型">
-          <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading} onSelect={selectModel} onSelectThinking={selectThinking} fast={fastMode} onFastChange={provider === "claude" || provider === "codex" ? setFastMode : undefined} permission={permissionMode} onPermissionChange={selectPermission} />
-          <ControlRow label="模型列表"><OutlineButton label={refreshing ? "正在刷新…" : "刷新"} disabled={refreshing} onPress={refreshModels} /></ControlRow>
+          <ModelPickerField providers={catalog.data?.providers ?? []} provider={provider} model={model} thinking={thinking} loading={catalog.isLoading || refreshing} onRefresh={refreshModels} onSelect={selectModel} onSelectThinking={selectThinking} fast={fastMode} onFastChange={provider === "claude" || provider === "codex" ? setFastMode : undefined} permission={permissionMode} onPermissionChange={selectPermission} />
         </Group>
         <Caption>{catalog.isLoading ? "正在读取缓存模型…" : "缓存目录没有价格信息，无法确定最低价；请确认或选择合适的模型。"}</Caption>
         {catalog.error ? <ErrorLine error={`模型目录加载失败：${String(catalog.error)}`} /> : null}

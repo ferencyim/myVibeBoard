@@ -1,24 +1,7 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
-import { MaintainScreen, MaintainSettingsScreen } from "./client/screen";
+import { MaintainPanel, isRequiredForAgent } from "./client/panel";
 
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: "main", title: "自动维护", Component: MaintainScreen });
-  client.addSettingsScreen({
-    order: -10,
-    id: "preferences",
-    title: "自动维护",
-    icon: "Wrench",
-    Component: MaintainSettingsScreen,
-  });
-  client.addCommandCenterItem({
-    id: "open-maintain",
-    title: "自动维护：查看规则与运行记录",
-    icon: "Wrench",
-    keywords: ["maintenance", "maintain", "rules", "cleanup", "维护", "规则", "体检"],
-    context: "global",
-    onSelect({ openScreen }) {
-      openScreen({ screenId: "main" });
-    },
-  });
+  client.addAgentPanel({ id: "maintenance", title: "自动维护", icon: "Wrench", locations: ["explorer"], Component: MaintainPanel, requiredForAgent: isRequiredForAgent });
   return () => {};
 }

@@ -1,16 +1,12 @@
 // Pure preset / usage helpers (WP-14). No React imports.
 
 import {
-  DEFAULT_REQUIREMENTS_PATH,
   presetModels,
-  isSafeRepoRelativePath,
   plannerList,
   type ModelDefaults,
   type Preset,
   type PresetEnvironmentKind,
   type PresetPermissionMode,
-  type Project,
-  type ProjectType,
 } from "../../shared/vibe/contract";
 import { thinkingLabel } from "../../shared/vibe/ui/thinking";
 
@@ -199,64 +195,6 @@ export function thinkingAfterModelChange(
 
 // --- project form ----------------------------------------------------------------------------
 
-export const PROJECT_TYPE_LABELS: Record<ProjectType, string> = {
-  android: "安卓",
-  ios: "iOS",
-  web: "Web",
-  desktop: "桌面",
-  backend: "后端",
-  embedded: "嵌入式",
-  other: "其它",
-};
-
-export interface ProjectDraft {
-  name: string;
-  /** Create only; read-only once the project exists. */
-  prefix: string;
-  repoPath: string;
-  /** Non-empty at save time; the first is the primary type. */
-  projectTypes: ProjectType[];
-  description: string;
-  requirementsPath: string;
-  /** WP-108: default model per job; a missing job follows the global default. */
-  defaultPresets: ModelDefaults;
-  /** "" = unlimited. */
-  concurrencyLimit: string;
-  /** Comma / newline separated device ids. */
-  devices: string;
-  color: string;
-}
-
-export function emptyProjectDraft(color: string): ProjectDraft {
-  return {
-    name: "",
-    prefix: "",
-    repoPath: "",
-    projectTypes: [],
-    description: "",
-    requirementsPath: DEFAULT_REQUIREMENTS_PATH,
-    defaultPresets: {},
-    concurrencyLimit: "",
-    devices: "",
-    color,
-  };
-}
-
-export function projectToDraft(p: Project, fallbackColor: string): ProjectDraft {
-  return {
-    name: p.name,
-    prefix: p.prefix,
-    repoPath: p.repoPath,
-    projectTypes: [...p.projectTypes],
-    description: p.description,
-    requirementsPath: p.requirementsPath,
-    defaultPresets: { ...p.defaultPresets },
-    concurrencyLimit: p.concurrencyLimit === null ? "" : String(p.concurrencyLimit),
-    devices: p.devices.join(", "),
-    color: p.color ?? fallbackColor,
-  };
-}
-
 /** Sets one job of a defaults map; null removes it (follow the next level). */
 export function setDefault(
   d: ModelDefaults,
@@ -286,45 +224,6 @@ export function setPlanner(d: ModelDefaults, index: number, presetId: string | n
   if (list.length) next.planners = list;
   else delete next.planners;
   return next;
-}
-
-/** Toggle a type; selection order is kept (the first one is the primary type). */
-export function toggleProjectType(types: readonly ProjectType[], type: ProjectType): ProjectType[] {
-  return types.includes(type) ? types.filter((t) => t !== type) : [...types, type];
-}
-
-export function parseDevices(text: string): string[] {
-  return [...new Set(text.split(/[,，\n]/).map((d) => d.trim()).filter(Boolean))];
-}
-
-function parseConcurrency(text: string): number | null | undefined {
-  const t = text.trim();
-  if (!t) return null;
-  return /^\d+$/.test(t) && Number(t) >= 1 ? Number(t) : undefined;
-}
-
-export function validateProjectDraft(d: ProjectDraft, mode: "create" | "edit"): string | null {
-  if (!d.name.trim()) return "请填写项目名称";
-  if (mode === "create" && !d.prefix.trim()) return "请填写前缀";
-  if (d.projectTypes.length === 0) return "请至少选择一个项目类型";
-  if (!isSafeRepoRelativePath(d.requirementsPath.trim())) return "需求文档路径必须是仓库内的相对路径（不能含 ..）";
-  if (parseConcurrency(d.concurrencyLimit) === undefined) return "并发上限须为不小于 1 的整数，或留空";
-  return null;
-}
-
-/** Fields shared by projects.create and projects.update (prefix excluded). */
-export function projectDraftToPayload(d: ProjectDraft) {
-  return {
-    name: d.name.trim(),
-    repoPath: d.repoPath.trim(),
-    projectTypes: d.projectTypes,
-    description: d.description,
-    requirementsPath: d.requirementsPath.trim() || DEFAULT_REQUIREMENTS_PATH,
-    defaultPresets: d.defaultPresets,
-    concurrencyLimit: parseConcurrency(d.concurrencyLimit) ?? null,
-    devices: parseDevices(d.devices),
-    color: d.color,
-  };
 }
 
 export function validateDraft(d: PresetDraft): string | null {

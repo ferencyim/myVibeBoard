@@ -9,6 +9,7 @@ describe("bot profile mapping", () => {
     const bots = [{ id: "a", mainAgentId: null }, { id: "b", mainAgentId: "agent-b" }];
     expect(findBotForAgent(bots, "agent-b")).toBe(bots[1]);
     expect(findBotForAgent(bots, "other")).toBeUndefined();
+    expect(findBotForAgent(bots, "thread-agent", bots[0].id)).toBe(bots[0]);
   });
 
   it("asks for confirmation only when a permission widens", () => {

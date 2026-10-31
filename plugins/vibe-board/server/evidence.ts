@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { EvidenceFileSchema, type EvidenceFile } from "./vibe/contract";
 import { decodeRow, type VibeDb } from "./vibe/db";
@@ -27,19 +27,24 @@ export function createTaskEvidenceReader(db: VibeDb) {
     }
   };
   return {
-    evidence(evidenceId: string, thumb?: boolean) {
+    async evidence(evidenceId: string, thumb?: boolean) {
       const evidence = query(() => {
         const row = db.prepare("SELECT * FROM evidence_file WHERE id = ?").get(evidenceId);
         return row ? decodeRow(EvidenceFileSchema, row) : null;
       }, null) as EvidenceFile | null;
       if (!evidence) throw new BoardError("not_found", `找不到证据：${evidenceId}`);
-      const file =
-        thumb && evidence.thumbPath && existsSync(evidence.thumbPath)
-          ? evidence.thumbPath
-          : evidence.path;
+      let file = evidence.path;
+      if (thumb && evidence.thumbPath) {
+        try {
+          await stat(evidence.thumbPath);
+          file = evidence.thumbPath;
+        } catch {
+          // Fall back to the original when a thumbnail is unavailable.
+        }
+      }
       let size: number;
       try {
-        size = statSync(file).size;
+        size = (await stat(file)).size;
       } catch {
         throw new BoardError("not_found", `证据文件已不存在：${path.basename(file)}`);
       }
@@ -52,7 +57,7 @@ export function createTaskEvidenceReader(db: VibeDb) {
       return {
         evidence,
         mimeType: MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream",
-        base64: readFileSync(file).toString("base64"),
+        base64: (await readFile(file)).toString("base64"),
       };
     },
   };

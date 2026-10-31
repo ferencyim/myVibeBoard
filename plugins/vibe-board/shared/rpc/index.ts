@@ -7,38 +7,10 @@ import {
   PresetPermissionModeSchema,
   PresetModelInputSchema,
   PresetSchema,
-  ProjectSchema,
-  ProjectTypeSchema,
   RoleHintSchema,
-  PROJECT_PREFIX_PATTERN,
   ROLE_HINTS,
-  isSafeRepoRelativePath,
 } from "../vibe/contract";
 const nonBlank = z.string().trim().min(1);
-const prefixSchema = z.string().regex(PROJECT_PREFIX_PATTERN);
-const projectFields = {
-  name: nonBlank,
-  repoPath: z.string(),
-  /** Non-empty, no repeats; the first is the primary type. Wins over `projectType`. */
-  projectTypes: z
-    .array(ProjectTypeSchema)
-    .min(1)
-    .refine((types) => new Set(types).size === types.length, "projectTypes must not repeat"),
-  // COMPAT(project-types): added 2026-10-21, remove after 2027-04-01
-  projectType: ProjectTypeSchema,
-  description: z.string(),
-  /** Requirements document, relative to the repository root. */
-  requirementsPath: z
-    .string()
-    .refine(isSafeRepoRelativePath, "must be relative to the repository root"),
-  /** WP-108: default preset per model job; a missing job follows the global default. */
-  defaultPresets: ModelDefaultsSchema,
-  concurrencyLimit: z.number().int().min(1).nullable(),
-  devices: z.array(z.string()),
-  paseoProjectId: z.string().nullable(),
-  color: z.string().nullable(),
-};
-
 export const PRESET_ROLE_HINTS = ROLE_HINTS;
 
 const presetFields = {
@@ -63,68 +35,6 @@ const presetFields = {
   ownerScope: z.string().nullable(),
   ownerRole: z.string().nullable(),
 };
-
-export const projectsListRpc = defineRpc({
-  name: "vibe.projects.list",
-  input: z.object({ includeArchived: z.boolean().optional() }),
-  output: z.object({ projects: z.array(ProjectSchema) }),
-});
-
-export const projectsCreateRpc = defineRpc({
-  name: "vibe.projects.create",
-  input: z.object({
-    name: projectFields.name,
-    prefix: prefixSchema,
-    repoPath: projectFields.repoPath.default(""),
-    projectTypes: projectFields.projectTypes.optional(),
-    projectType: projectFields.projectType.optional(),
-    description: projectFields.description.optional(),
-    requirementsPath: projectFields.requirementsPath.optional(),
-    defaultPresets: projectFields.defaultPresets.optional(),
-    concurrencyLimit: projectFields.concurrencyLimit.optional(),
-    devices: projectFields.devices.optional(),
-    paseoProjectId: projectFields.paseoProjectId.optional(),
-    color: projectFields.color.optional(),
-  }),
-  output: z.object({ project: ProjectSchema }),
-});
-
-export const projectsUpdateRpc = defineRpc({
-  name: "vibe.projects.update",
-  /** `project` is an id or prefix. The prefix itself cannot change. */
-  input: z.object({
-    project: z.string().min(1),
-    name: projectFields.name.optional(),
-    repoPath: projectFields.repoPath.optional(),
-    projectTypes: projectFields.projectTypes.optional(),
-    projectType: projectFields.projectType.optional(),
-    description: projectFields.description.optional(),
-    requirementsPath: projectFields.requirementsPath.optional(),
-    defaultPresets: projectFields.defaultPresets.optional(),
-    concurrencyLimit: projectFields.concurrencyLimit.optional(),
-    devices: projectFields.devices.optional(),
-    paseoProjectId: projectFields.paseoProjectId.optional(),
-    color: projectFields.color.optional(),
-    archived: z.boolean().optional(),
-  }),
-  output: z.object({ project: ProjectSchema }),
-});
-
-/** Paseo's own projects, for linking `paseoProjectId`. */
-export const paseoProjectsListRpc = defineRpc({
-  name: "vibe.paseo_projects.list",
-  input: z.object({}),
-  output: z.object({
-    projects: z.array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        rootPath: z.string().optional(),
-        kind: z.string().optional(),
-      }),
-    ),
-  }),
-});
 
 export const defaultsGetRpc = defineRpc({
   name: "vibe.defaults.get",

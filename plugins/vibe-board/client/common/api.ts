@@ -4,10 +4,6 @@ import { useCallback } from "react";
 import * as rpc from "../../shared/rpc";
 export function useBoardApi() {
   return {
-    projectsList: useRpc(rpc.projectsListRpc),
-    projectsCreate: useRpc(rpc.projectsCreateRpc),
-    projectsUpdate: useRpc(rpc.projectsUpdateRpc),
-    paseoProjectsList: useRpc(rpc.paseoProjectsListRpc),
     projectDefaultsGet: useRpc(rpc.projectDefaultsGetRpc),
     projectDefaultsSet: useRpc(rpc.projectDefaultsSetRpc),
     defaultsGet: useRpc(rpc.defaultsGetRpc),

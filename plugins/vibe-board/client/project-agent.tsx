@@ -6,7 +6,7 @@ import { ActionMenu, type ActionMenuItem } from "@getpaseo/plugin/client/ui";
 import { useRpc, type PluginClientContext, type PluginProjectSidebarGroupProps } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { projectBotsListRpc, projectBotsCreateRpc, projectBotsOpenRpc, projectBotsStateRpc, projectBotsArchiveRpc } from "../shared/project-bots";
-import { createProjectAgentRequest, deactivateProjectAgentRequest, openProjectAgentRequest, projectAgentPollInterval, projectAgentPresentation, receiveProjectAgentState, projectBotWorkspaceProjection } from "./project-agent-sidebar";
+import { createProjectAgentRequest, deactivateProjectAgentRequest, openProjectAgentRequest, projectAgentPollInterval, projectAgentPresentation, projectBotListPollInterval, receiveProjectAgentState, projectBotWorkspaceProjection } from "./project-agent-sidebar";
 
 type BotRowProps = Pick<PluginProjectSidebarGroupProps, "theme" | "host" | "navigation" | "sidebarCompact" | "Avatar" | "StatusIndicator" | "agents" | "requestAgentPreview"> & { bot: import("../shared/vibe/contract/bots").Bot & { isDefault: boolean }; autoOpen: boolean; projectName?: string; selected?: boolean };
 
@@ -47,7 +47,7 @@ function ProjectBotRow({ bot, theme, navigation, host, sidebarCompact, Avatar, S
     request.active = true;
     return () => deactivateProjectAgentRequest(request);
   }, [request]);
-  const state = useQuery({ queryKey, queryFn: () => read({ id: bot.id }), refetchInterval: (query) => projectAgentPollInterval(query.state.data), staleTime: 15_000 });
+  const state = useQuery({ queryKey, queryFn: () => read({ id: bot.id }), refetchInterval: (query) => projectAgentPollInterval(query.state.data), staleTime: 60_000 });
   useEffect(() => { receiveProjectAgentState(request, state.data, openAgent); }, [request, state.data, openAgent]);
   const run = useCallback(() => { void openProjectAgentRequest(request, {
     cancelQueries: () => client.cancelQueries({ queryKey }),
@@ -99,7 +99,8 @@ function ProjectBotList(props: PluginProjectSidebarGroupProps) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<{ projectId: string; botId: string } | null>(null);
-  const bots = useQuery({ queryKey: ["vibe-bots", "project", props.host.id, projectId], queryFn: () => list({ projectId }), refetchInterval: 15000 });
+  const bots = useQuery({ queryKey: ["vibe-bots", "project", props.host.id, projectId], queryFn: () => list({ projectId }), retry: 2, refetchInterval: projectBotListPollInterval, staleTime: projectBotListPollInterval });
+  const listError = bots.isError;
   const add = useCallback(async (value: Parameters<typeof create>[0]) => {
     setBusy(true);
     setError("");
@@ -138,8 +139,8 @@ function ProjectBotList(props: PluginProjectSidebarGroupProps) {
     {!onItemsChange && (bots.data?.bots ?? []).map((bot) => <ProjectBotRow key={`${projectId}:${bot.id}`} {...props} bot={bot} autoOpen={created?.projectId === projectId && created.botId === bot.id} />)}
     {creating ? <BotCreateForm error={error} theme={theme} projectId={projectId} busy={busy} onCancel={hideForm} onSubmit={submitForm} /> : null}
     {bots.isLoading ? <Text style={styles.loading}>正在加载 bot…</Text> : null}
-    {bots.error ? <Pressable accessibilityRole="button" style={styles.row} onPress={retry}><Text style={styles.text}>重新加载项目 bot</Text></Pressable> : null}
-    {error || bots.error ? <Text style={styles.error}>{error || "暂时无法加载项目 bot，请重试。"}</Text> : null}
+    {listError ? <Pressable accessibilityRole="button" style={styles.row} onPress={retry}><Text style={styles.text}>重新加载项目 bot</Text></Pressable> : null}
+    {error || listError ? <Text style={styles.error}>{error || "暂时无法加载项目 bot，请重试。"}</Text> : null}
   </View>;
 }
 

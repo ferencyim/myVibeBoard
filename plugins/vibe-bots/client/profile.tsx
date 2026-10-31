@@ -1,6 +1,6 @@
 /* eslint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-array-as-prop -- Small plugin screen; handlers depend on the current bot. */
 import type { PluginTheme } from "@getpaseo/plugin";
-import { useRpc, type PluginScreenProps, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
+import { useAgent, useRpc, type PluginScreenProps, type PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { Modal, SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -44,7 +44,8 @@ function ProfileLoader({ theme, navigation, tab, pick, missing }: LoaderProps) {
 
 export function BotProfilePanel(props: PluginAgentPanelProps) {
   const agentId = props.params.agentId;
-  const pick = useCallback((bots: readonly BotView[]) => findBotForAgent(bots, agentId), [agentId]);
+  const botId = useAgent(agentId, (agent) => agent.labels["vibe.bot"]);
+  const pick = useCallback((bots: readonly BotView[]) => findBotForAgent(bots, agentId, botId ?? undefined), [agentId, botId]);
   return <ProfileLoader theme={props.theme} navigation={props.navigation} tab={props.tab} pick={pick} missing="此会话没有关联的 bot。" />;
 }
 
@@ -226,7 +227,7 @@ function AdvancedPage({ bot, navigation, onBack }: { bot: BotView; navigation?: 
   }, [client, setDefault, projectId, bot.id]);
   const doArchive = useCallback(() => {
     setBusy(true); setError("");
-    void archive({ id: bot.id }).then(() => { setConfirmArchive(false); void client.invalidateQueries({ queryKey: ["vibe-bots"] }); navigation?.openPluginScreen?.({ pluginId: "vibe-bots", screenId: "main" }); })
+    void archive({ id: bot.id }).then(() => { setConfirmArchive(false); void client.invalidateQueries({ queryKey: ["vibe-bots"] }); })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setBusy(false));
   }, [archive, bot.id, client, navigation]);

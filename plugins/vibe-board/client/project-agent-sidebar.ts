@@ -62,8 +62,10 @@ export async function openProjectAgentRequest(
 }
 
 export function projectAgentPollInterval(state: ProjectAgentState | undefined) {
-  return state?.status === "creating" ? 1_000 : 15_000;
+  return state?.status === "creating" ? 1_000 : 60_000;
 }
+
+export const projectBotListPollInterval = 60_000;
 
 export function projectAgentPresentation(
   state: ProjectAgentState | undefined,

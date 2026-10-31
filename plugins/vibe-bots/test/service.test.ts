@@ -255,6 +255,25 @@ describe("bot 服务主对话与模型变更", () => {
     expect(fastFeatureValues({ provider: "claude", fastMode: false })).toEqual({});
   });
 
+  it("切换备用模型时保留所属 bot 或预设的快速开关", async () => {
+    for (const legacy of [false, true]) {
+      const f = fixture();
+      const preset = legacy ? createVibeStore(f.db).presets.create({
+        name: "快速预设", models: [
+          { provider: "codex", model: "initial", thinking: "high", permissionMode: "accept-edits" },
+          { provider: "codex", model: "replacement", thinking: "high", permissionMode: "accept-edits" },
+        ], fastMode: true,
+      } as never) : null;
+      const bot = await f.service.create({ kind: "independent", name: "备用", provider: "codex", model: "initial", fastMode: true,
+        presetId: preset?.id ?? null, backupModels: legacy ? [] : [{ provider: "codex", model: "replacement", thinking: "high" }],
+      } as never);
+      f.createAgent.mockRejectedValueOnce(new Error("quota exceeded"));
+      await f.service.waitOpen(bot.id);
+      expect(f.createAgent).toHaveBeenCalledTimes(2);
+      expect(f.createAgent.mock.calls[1]![0].config).toMatchObject({ provider: "codex/replacement", featureValues: { service_tier: "fast" } });
+    }
+  });
+
   it("bot 创建 bot 不写权限时沿用创建者的权限，显式更宽仍被拒绝", async () => {
     const f = fixture();
     const creator = f.service.bots.create({ kind: "independent", name: "创建者", permissionMode: "accept-edits" });

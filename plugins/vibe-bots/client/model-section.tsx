@@ -35,7 +35,7 @@ export function ModelSection({ bot, save }: { bot: BotView; save(patch: BotPatch
   const fastProvider = bot.provider === "claude" || bot.provider === "codex";
   return <>
     <Group title="模型">
-      <ModelPickerField providers={models.data?.providers ?? []} provider={bot.provider ?? ""} model={bot.model ?? ""} thinking={bot.thinking} loading={models.isLoading} onSelect={select} onSelectThinking={selectThinking} fast={bot.fastMode} onFastChange={fastProvider ? selectFast : undefined} permission={bot.permissionMode} onPermissionChange={selectPermission} onOpen={refreshInBackground} />
+      <ModelPickerField providers={models.data?.providers ?? []} provider={bot.provider ?? ""} model={bot.model ?? ""} thinking={bot.thinking} loading={models.isLoading} onSelect={select} onSelectThinking={selectThinking} fast={bot.fastMode} onFastChange={fastProvider ? selectFast : undefined} permission={bot.permissionMode} onPermissionChange={selectPermission} onOpen={refreshInBackground} onRefresh={refreshInBackground} />
     </Group>
     {legacyPreset ? <Caption>{`仍沿用角色设置「${legacyPreset.name}」；在上面重新选择模型后将不再使用预设。`}</Caption> : null}
     {bot.pendingModel ? <Caption>模型变更待空闲时应用。</Caption> : null}

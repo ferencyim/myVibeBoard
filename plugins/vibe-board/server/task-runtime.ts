@@ -1,6 +1,7 @@
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
+import { listHostProjects } from "./host-data";
 import { EVENT_PAYLOADS } from "./vibe/contract";
 import {
   createEventConsumer,
@@ -94,6 +95,18 @@ export function registerTaskRuntime(
     }),
     server.before("agent.create", async ({ request }, context) => {
       options.onPaseo(context.paseo);
+      if (request.workspaceId) {
+        try {
+          const placement = await tabs.workspace(request.workspaceId);
+          if (placement.projectId) {
+            const projects = await listHostProjects(context.paseo);
+            if (!projects.projects.some((project) => project.projectId === placement.projectId))
+              await listHostProjects(context.paseo, true);
+          }
+        } catch (error) {
+          log("任务项目扩展关联失败", error);
+        }
+      }
       // A sub-agent of the execution tab must be bound to a claimed board subtask.
       const brief = await board.guardCreate(request);
       const next = await tabs.injectGuide(request);

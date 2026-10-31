@@ -6,6 +6,7 @@ import {
   openProjectAgentRequest,
   projectAgentPollInterval,
   projectAgentPresentation,
+  projectBotListPollInterval,
   projectBotWorkspaceProjection,
   receiveProjectAgentState,
 } from "../client/project-agent-sidebar";
@@ -82,7 +83,7 @@ describe("项目 agent 侧栏创建流程", () => {
   });
   it("立即显示创建中，轮询完成后只打开一次", async () => {
     const view = sidebar();
-    expect(view.interval()).toBe(15_000);
+    expect(view.interval()).toBe(60_000);
     const pending = view.open();
     expect(view.presentation()).toEqual({ label: "正在打开项目 agent…", error: null, disabled: true });
     await view.open();
@@ -97,7 +98,7 @@ describe("项目 agent 侧栏创建流程", () => {
     expect(view.openAgent).not.toHaveBeenCalled();
     view.receive(ready);
     expect(view.openAgent).toHaveBeenCalledExactlyOnceWith("project-agent");
-    expect(view.interval()).toBe(15_000);
+    expect(view.interval()).toBe(60_000);
     view.receive(ready);
     expect(view.openAgent).toHaveBeenCalledOnce();
   });
@@ -109,7 +110,7 @@ describe("项目 agent 侧栏创建流程", () => {
     expect(view.presentation()).toEqual({
       label: "重试打开项目 agent", error: "创建项目 agent 失败，请重试。", disabled: false,
     });
-    expect(view.interval()).toBe(15_000);
+    expect(view.interval()).toBe(60_000);
     view.receive(ready);
     expect(view.openAgent).not.toHaveBeenCalled();
     view.ports.open.mockResolvedValue(ready);
@@ -170,6 +171,10 @@ describe("项目 agent 侧栏创建流程", () => {
     expect(current.ports.open).toHaveBeenCalledExactlyOnceWith("other-project");
     expect(current.openAgent).toHaveBeenCalledExactlyOnceWith("project-agent");
   });
+});
+
+it("列表采用较低的后台刷新频率", () => {
+  expect(projectBotListPollInterval).toBe(60_000);
 });
 
 it("projects only listed bot workspaces and propagates failed lookups", async () => {

@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import type { PluginBeforeRequests, PluginHookAgent } from "@getpaseo/plugin/server";
@@ -61,10 +61,10 @@ export interface SubtaskResult {
   outOfScope: string[];
 }
 
-function stamp(worktree: string, path: string): string {
+async function stamp(worktree: string, path: string): Promise<string> {
   try {
-    const stat = statSync(join(worktree, path));
-    return `${stat.size}:${Math.trunc(stat.mtimeMs)}`;
+    const info = await stat(join(worktree, path));
+    return `${info.size}:${Math.trunc(info.mtimeMs)}`;
   } catch {
     return "gone";
   }
@@ -98,7 +98,12 @@ export async function scopeSnapshot(
   if (status === undefined) return null;
   const head = (await git(worktree, [...GIT, "rev-parse", "HEAD"], timeout))?.trim() || null;
   const dirty: Record<string, string> = {};
-  for (const path of porcelainPaths(status)) dirty[path] = stamp(worktree, path);
+  const paths = porcelainPaths(status);
+  for (let i = 0; i < paths.length; i += 32) {
+    const batch = paths.slice(i, i + 32);
+    const stamps = await Promise.all(batch.map((path) => stamp(worktree, path)));
+    batch.forEach((path, index) => { dirty[path] = stamps[index]!; });
+  }
   return { head, dirty };
 }
 
@@ -123,9 +128,18 @@ export async function changedSince(
     if (diff === undefined) return null;
     for (const path of diff.split("\0")) if (path) paths.add(path);
   }
-  return [...paths]
-    .filter((path) => snapshot.dirty[path] === undefined || snapshot.dirty[path] !== stamp(worktree, path))
-    .sort();
+  const changed: string[] = [];
+  const candidates = [...paths];
+  for (let i = 0; i < candidates.length; i += 32) {
+    const batch = candidates.slice(i, i + 32);
+    const stamps = await Promise.all(batch.map((path) =>
+      snapshot.dirty[path] === undefined ? null : stamp(worktree, path),
+    ));
+    batch.forEach((path, index) => {
+      if (snapshot.dirty[path] === undefined || snapshot.dirty[path] !== stamps[index]) changed.push(path);
+    });
+  }
+  return changed.sort();
 }
 
 function describe(row: BoardSubtask) {
