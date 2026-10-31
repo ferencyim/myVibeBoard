@@ -35,6 +35,22 @@ async function fixture(root: string, id: string, client = false): Promise<string
   return directory;
 }
 
+test("starts built-in plugins concurrently", async () => {
+  const loader = new BuiltinPluginLoader("/plugins", ["first", "second"]);
+  let releaseFirst = () => {};
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const started: string[] = [];
+  const loading = loader.load(async ({ id }) => {
+    started.push(id);
+    if (id === "first") await firstGate;
+  });
+  expect(started).toEqual(["first", "second"]);
+  releaseFirst();
+  await loading;
+});
+
 test("listed built-ins resolve to matching manifests and compile", async () => {
   const root = resolveBuiltinPluginsRoot();
   for (const id of builtinPlugins) {

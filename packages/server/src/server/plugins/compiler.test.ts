@@ -138,6 +138,49 @@ async function createRootAlias(directory: string): Promise<string> {
 }
 
 describe("plugin runtime entries", () => {
+  it("reuses a checked bundle and invalidates it for type-only and resolution changes", async () => {
+    const entries = await createSplitPlugin();
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-cache-"));
+    temporaryDirectories.push(home);
+    const declaration = path.join(entries.directory, "server", "types.d.ts");
+    await writeFile(declaration, "export interface Item { value: string }");
+    await writeFile(
+      entries.server,
+      'import type { Item } from "./server/types"; export default (item: Item) => item;',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const timings: Array<{ files: number }> = [];
+    const compile = () =>
+      compilePlugin(
+        { client: null, server: entries.server },
+        (timing) => timings.push(timing),
+        home,
+      );
+    const first = await compile();
+    expect(timings.at(-1)!.files).toBeGreaterThan(0);
+    // Unrelated activity in the shared temporary directory must not invalidate
+    // a bundle whose resolution inputs are unchanged.
+    temporaryDirectories.push(await mkdtemp(path.join(tmpdir(), "paseo-unrelated-")));
+    expect(await compile()).toEqual(first);
+    expect(timings.at(-1)!.files).toBe(0);
+
+    await writeFile(declaration, 'export type Item = import("../client/surface").Surface;');
+    await expect(compile()).rejects.toThrow("client-only module");
+
+    await writeFile(declaration, "export interface Item { value: number }");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await compile();
+    expect(timings.at(-1)!.files).toBeGreaterThan(0);
+    await compile();
+    expect(timings.at(-1)!.files).toBe(0);
+    // A new higher-priority .ts file changes the same specifier's resolution.
+    await writeFile(
+      path.join(entries.directory, "server", "types.ts"),
+      'export { Surface } from "../client/surface";',
+    );
+    await expect(compile()).rejects.toThrow("client-only module");
+  });
+
   it.each([
     'import type { AgentTimelineItem, ToolCallDetail } from "@getpaseo/protocol/agent-types"; export type Detail = ToolCallDetail; export type Item = AgentTimelineItem;',
     'import { type AgentTimelineItem } from "@getpaseo/protocol/agent-types"; export type Item = AgentTimelineItem;',

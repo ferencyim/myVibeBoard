@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { LRUCache } from "lru-cache";
 import { CheckoutDiffCache } from "./checkout-diff-cache.js";
 import pLimit from "p-limit";
+import { createBackgroundWorkQueue } from "../utils/background-work.js";
 import type pino from "pino";
 import type { ProjectCheckoutLitePayload } from "@getpaseo/protocol/messages";
 import { parseGitRemoteLocation } from "@getpaseo/protocol/git-remote";
@@ -459,6 +460,7 @@ interface WorkspaceGitServiceOptions {
   paseoHome: string;
   worktreesRoot?: string;
   fileObserver?: FileObserver;
+  backgroundForgePollingReady?: Promise<boolean>;
   deps?: Partial<WorkspaceGitServiceDependencies>;
 }
 
@@ -649,6 +651,8 @@ function resolveWorkspaceGitServiceDeps(
 }
 
 export class WorkspaceGitServiceImpl implements WorkspaceGitService {
+  private backgroundForgePollingEnabled = true;
+  private readonly runBackgroundForgePoll = createBackgroundWorkQueue(2);
   private readonly logger: pino.Logger;
   private readonly paseoHome: string;
   private readonly worktreesRoot: string | undefined;
@@ -715,6 +719,17 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     this.forgeResolver = createForgeResolver({
       createService: (forge) => this.deps.forgeOverrides?.[forge] ?? createForgeService(forge),
     });
+    if (options.backgroundForgePollingReady) {
+      this.backgroundForgePollingEnabled = false;
+      void options.backgroundForgePollingReady.then((allowed) => {
+        if (allowed && !this.disposed) {
+          this.backgroundForgePollingEnabled = true;
+          for (const target of this.workspaceTargets.values())
+            this.updateForgePrStatusPollForTarget(target);
+        }
+        return undefined;
+      });
+    }
   }
 
   resolveForge(cwd: string): Promise<ForgeResolution | null> {
@@ -2990,6 +3005,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   }
 
   private updateForgePrStatusPollForTarget(target: WorkspaceGitTarget): void {
+    if (!this.backgroundForgePollingEnabled) return;
     if (target.listeners.size === 0) {
       this.stopForgePrStatusPollForTarget(target);
       return;
@@ -3103,14 +3119,17 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
         return;
       }
       try {
-        const status = await service.getCurrentPullRequestStatus({
-          cwd: target.cwd,
-          headRef: pollTarget.headRef,
-          ...(pollTarget.headSha ? { headSha: pollTarget.headSha } : {}),
-          ...(pollTarget.headRepositoryOwner
-            ? { headRepositoryOwner: pollTarget.headRepositoryOwner }
-            : {}),
-          reason: "self-heal-forge-pr-status",
+        const status = await this.runBackgroundForgePoll(() => {
+          if (closed || !this.isActiveObservedWorkspaceTarget(target)) return Promise.resolve(null);
+          return service.getCurrentPullRequestStatus({
+            cwd: target.cwd,
+            headRef: pollTarget.headRef,
+            ...(pollTarget.headSha ? { headSha: pollTarget.headSha } : {}),
+            ...(pollTarget.headRepositoryOwner
+              ? { headRepositoryOwner: pollTarget.headRepositoryOwner }
+              : {}),
+            reason: "self-heal-forge-pr-status",
+          });
         });
         if (!closed && this.isActiveObservedWorkspaceTarget(target)) {
           latestStatus = status;

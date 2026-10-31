@@ -180,36 +180,93 @@ function createPluginSelectivePausedRuntime(pausedPluginId: string) {
 }
 
 describe("PluginService", () => {
-  it("starts plugins while import prewarming is still in progress", async () => {
+  it("waits for initial starts and removes late built-ins and their provider registrations before stopping", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
     roots.push(home);
-    const paused = createPausedRuntime();
-    let releaseWarm = () => {};
-    const warmGate = new Promise<void>((resolve) => {
-      releaseWarm = resolve;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    let markWarming = () => {};
-    const warming = new Promise<void>((resolve) => {
-      markWarming = resolve;
+    const running = new Set<string>();
+    const starts: string[] = [];
+    const runtime: TestPluginRuntime = {
+      ...emptyUsageRuntime,
+      catalog: () => [...running].map((id) => ({ id, clientBundle: "bundle" })),
+      invoke: async () => undefined,
+      getLogs: () => [],
+      clearLogs: () => undefined,
+      getProviderRegistrations: (id) => [{ id: `${id}-provider`, label: id }],
+      startPlugin: async (id, _path, canPublish) => {
+        starts.push(id);
+        await gate;
+        if (!canPublish()) throw new Error(`Plugin start cancelled: ${id}`);
+        running.add(id);
+      },
+      startBuiltinPlugin: async ({ id }) => {
+        starts.push(id);
+        await gate;
+        running.add(id);
+      },
+      stopPluginById: async (id) => running.delete(id),
+      stopAll: async () => {
+        running.clear();
+      },
+      subscribe: () => () => undefined,
+      bindPaseoSessionHost: () => undefined,
+    };
+    const service = createService(
+      home,
+      { configured: { source: "directory", path: "/plugins/configured" } },
+      { runtime, builtinPlugins: new BuiltinPluginLoader("/plugins", ["builtin-late"]) },
+    );
+    const starting = service.start();
+    expect(starts).toEqual(["builtin-late", "configured"]);
+    let stopped = false;
+    const stopping = service.stopAllPlugins().then(() => {
+      stopped = true;
+      return undefined;
     });
-    paused.runtime.warmPluginImports = async () => {
-      markWarming();
-      await warmGate;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(false);
+    release();
+    await stopping;
+    await starting;
+    expect(service.catalog()).toEqual([]);
+    expect(service.getProviderRegistrations()).toEqual([]);
+  });
+
+  it("starts independent plugins concurrently and registers the full batch first", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
+    roots.push(home);
+    const paused = createPluginSelectivePausedRuntime("first");
+    const loading = new Set<string>();
+    paused.runtime.markPluginLoading = (id) => {
+      loading.add(id);
+      return () => loading.delete(id);
+    };
+    const startPlugin = paused.runtime.startPlugin;
+    paused.runtime.startPlugin = async (...args) => {
+      if (args[0] === "first") expect([...loading]).toEqual(["first", "second"]);
+      return startPlugin(...args);
     };
     const service = createService(
       home,
       {
         first: { source: "directory", path: "/plugins/first" },
+        second: { source: "directory", path: "/plugins/second" },
+        disabled: { source: "directory", path: "/plugins/disabled", enabled: false },
       },
       { runtime: paused.runtime },
     );
     const start = service.start();
-    await warming;
     await paused.started;
+    expect(paused.starts).toEqual(["first", "second"]);
+    expect(service.catalog()).toMatchObject([{ id: "second" }]);
+    expect(loading.has("first")).toBe(true);
     paused.releaseStart();
     await start;
-    expect(service.catalog()).toMatchObject([{ id: "first" }]);
-    releaseWarm();
+    expect(catalogIds(service)).toEqual(["first", "second"]);
+    expect(loading.size).toBe(0);
     await service.stopAllPlugins();
   });
   it.each([
@@ -1149,6 +1206,55 @@ export default function contribute(plugin: unknown) {
     expect(await service.listPlugins()).toMatchObject([
       { id: "slow", path: "/plugins/slow", enabled: true, status: "disabled" },
     ]);
+  });
+
+  it("stops configured plugins immediately when globally disabled during initial startup", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
+    roots.push(home);
+    const store = createStore(home, {
+      slow: { source: "directory", path: "/plugins/slow", enabled: true },
+    });
+    const paused = createPausedRuntime();
+    const stopped: string[] = [];
+    const stopPluginById = paused.runtime.stopPluginById;
+    paused.runtime.stopPluginById = async (id) => {
+      stopped.push(id);
+      return stopPluginById(id);
+    };
+    const service = new PluginService(pino({ level: "silent" }), store, "0.4.0", {
+      runtime: paused.runtime,
+    });
+    const starting = service.start();
+    await paused.started;
+    store.patch({ pluginsEnabled: false });
+    expect(stopped).toEqual(["slow"]);
+    paused.releaseStart();
+    await starting;
+    expect(service.catalog()).toEqual([]);
+    expect(await service.listPlugins()).toMatchObject([{ id: "slow", status: "disabled" }]);
+    await service.stopAllPlugins();
+  });
+
+  it("restarts once after disabling and re-enabling during initial startup", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
+    roots.push(home);
+    const store = createStore(home, {
+      slow: { source: "directory", path: "/plugins/slow", enabled: true },
+    });
+    const paused = createPluginSelectivePausedRuntime("slow");
+    const service = new PluginService(pino({ level: "silent" }), store, "0.4.0", {
+      runtime: paused.runtime,
+    });
+    const starting = service.start();
+    await paused.started;
+    store.patch({ pluginsEnabled: false });
+    store.patch({ pluginsEnabled: true });
+    paused.releaseStart();
+    await starting;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(paused.starts).toEqual(["slow", "slow"]);
+    expect(catalogIds(service)).toEqual(["slow"]);
+    await service.stopAllPlugins();
   });
 
   it("does not publish an in-flight enable after a later plugin disable", async () => {

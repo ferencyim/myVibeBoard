@@ -27,7 +27,6 @@ import {
 } from "@getpaseo/plugin/server/provider";
 import type { PluginLogEntry } from "@getpaseo/protocol/messages";
 import { compilePlugin } from "./compiler.js";
-import { warmPluginImports } from "./compiler-imports.js";
 import { readPluginManifest } from "./manifest.js";
 import type { PluginRequirements } from "@getpaseo/protocol/messages";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
@@ -309,6 +308,10 @@ async function resolveEntryPaths(directory: string): Promise<{
 
 export class PluginRuntime {
   private readonly plugins = new Map<string, LoadedPlugin>();
+  private readonly loading = new Map<
+    string,
+    { count: number; done: Promise<void>; finish: () => void }
+  >();
   private readonly pendingEvents = new Set<Promise<void>>();
   private readonly logTails = new Map<string, PluginLogTail>();
   private readonly logger: pino.Logger;
@@ -332,22 +335,32 @@ export class PluginRuntime {
     this.sessionHost = sessionHost;
   }
 
-  async warmPluginImports(pluginId: string, directory: string): Promise<void> {
-    const started = performance.now();
-    try {
-      await warmPluginImports(path.resolve(directory), this.dependencies.paseoHome);
-      this.logger.info(
-        { pluginId, durationMs: Math.round(performance.now() - started) },
-        "Plugin import cache warmed",
-      );
-    } catch (err) {
-      this.logger.warn({ pluginId, err }, "Plugin import cache warmup failed");
-    }
-  }
-
   subscribe(listener: (pluginId: string, error?: string) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Register before scheduling startup, so calls can wait even while a plugin is queued. */
+  markPluginLoading(pluginId: string): () => void {
+    let entry = this.loading.get(pluginId);
+    if (!entry) {
+      let finish!: () => void;
+      const done = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      entry = { count: 0, done, finish };
+      this.loading.set(pluginId, entry);
+    }
+    entry.count++;
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      if (--entry.count === 0) {
+        if (this.loading.get(pluginId) === entry) this.loading.delete(pluginId);
+        entry.finish();
+      }
+    };
   }
 
   async startPlugin(
@@ -356,6 +369,7 @@ export class PluginRuntime {
     canPublish: () => boolean = () => true,
   ): Promise<void> {
     if (this.plugins.has(pluginId)) throw new Error(`Plugin is already running: ${pluginId}`);
+    const finishLoading = this.markPluginLoading(pluginId);
     const started = performance.now();
     try {
       this.appendLog(pluginId, "stdout", "[paseo] Loading plugin");
@@ -383,11 +397,14 @@ export class PluginRuntime {
         "Plugin load failed",
       );
       throw err;
+    } finally {
+      finishLoading();
     }
   }
 
   async startBuiltinPlugin(input: { id: string; directory: string }): Promise<void> {
     if (this.plugins.has(input.id)) throw new Error(`Plugin is already running: ${input.id}`);
+    const finishLoading = this.markPluginLoading(input.id);
     const started = performance.now();
     try {
       this.appendLog(input.id, "stdout", "[paseo] Loading plugin");
@@ -429,6 +446,8 @@ export class PluginRuntime {
         "Plugin load failed",
       );
       throw err;
+    } finally {
+      finishLoading();
     }
   }
 
@@ -441,6 +460,11 @@ export class PluginRuntime {
   }
 
   async stopPluginById(pluginId: string): Promise<boolean> {
+    const loading = this.loading.get(pluginId);
+    if (loading) {
+      this.loading.delete(pluginId);
+      loading.finish();
+    }
     const loaded = this.plugins.get(pluginId);
     if (!loaded) return false;
     this.plugins.delete(pluginId);
@@ -578,7 +602,26 @@ export class PluginRuntime {
     input: unknown,
     callerAgentId?: string,
   ): Promise<unknown> {
-    const loaded = this.plugins.get(pluginId);
+    let loaded = this.plugins.get(pluginId);
+    const loading = this.loading.get(pluginId);
+    if (!loaded && loading) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          loading.done,
+          new Promise<never>((_, reject) => {
+            // The caller's session deadline is 60s and dispatch itself can take 30s.
+            timer = setTimeout(
+              () => reject(new Error(`Plugin loading timed out: ${pluginId}`)),
+              25_000,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      loaded = this.plugins.get(pluginId);
+    }
     if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
     if (!loaded.methods.has(method))
       throw new Error(`Plugin ${pluginId} does not contribute RPC ${method}`);
@@ -711,6 +754,9 @@ export class PluginRuntime {
   }
 
   async stopAll(): Promise<void> {
+    const loading = [...this.loading.values()];
+    this.loading.clear();
+    for (const entry of loading) entry.finish();
     const loaded = [...this.plugins.values()];
     this.plugins.clear();
     for (const plugin of loaded) {

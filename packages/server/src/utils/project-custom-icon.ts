@@ -7,6 +7,7 @@ import type { ProjectIconSource } from "@getpaseo/protocol/messages";
 import { writeFileAtomic } from "../server/atomic-file.js";
 import type { PersistedProjectRecord, ProjectRegistry } from "../server/workspace-registry.js";
 import { getImageDimensions, getProjectIcon, type ProjectIcon } from "./project-icon.js";
+import { createBackgroundWorkQueue } from "./background-work.js";
 
 const MAX_ICON_BYTES = 512 * 1024;
 const ICON_TOO_LARGE_ERROR = "Icon must be 512 KB or smaller";
@@ -14,6 +15,13 @@ const ICON_SNAPSHOT_TTL_MS = 30_000;
 const MAX_CACHED_ICON_SNAPSHOTS = 512;
 const iconSnapshots = new Map<string, { snapshot: ProjectIconSnapshot; expiresAt: number }>();
 const inFlightSnapshots = new Map<string, Promise<ProjectIconSnapshot>>();
+const refreshIconInBackground = createBackgroundWorkQueue(2);
+let backgroundIconGate: Promise<boolean> | null = null;
+
+/** Delay stale scans during startup; resolving false cancels pending refreshes. */
+export function setProjectIconBackgroundGate(gate: Promise<boolean> | null): void {
+  backgroundIconGate = gate;
+}
 
 // A save validates, writes bytes, and updates the registry. Two concurrent
 // saves for one project would interleave those steps.
@@ -92,7 +100,18 @@ export class ProjectIconReader {
     if (!cached || cached.expiresAt <= Date.now()) {
       let pending = inFlightSnapshots.get(key);
       if (!pending) {
-        pending = readProjectIconSnapshot({ paseoHome: this.paseoHome, project });
+        // A cache miss is a foreground request. An expired snapshot is still
+        // usable, so bound its background scan independently of foreground work.
+        const gate = backgroundIconGate;
+        pending = cached
+          ? (gate ?? Promise.resolve(true)).then((allowed) =>
+              allowed
+                ? refreshIconInBackground(() =>
+                    readProjectIconSnapshot({ paseoHome: this.paseoHome, project }),
+                  )
+                : cached.snapshot,
+            )
+          : readProjectIconSnapshot({ paseoHome: this.paseoHome, project });
         inFlightSnapshots.set(key, pending);
         void pending.then(
           (result) => {

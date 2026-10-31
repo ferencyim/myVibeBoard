@@ -834,6 +834,35 @@ describe("ForgeService", () => {
     });
   });
 
+  it("defers background PR poll warmup until startup is ready", async () => {
+    let ready!: (allowed: boolean) => void;
+    const backgroundPollReady = new Promise<boolean>((resolve) => {
+      ready = resolve;
+    });
+    const resolveRepoHost = vi.fn(async () => null);
+    const resolveRepoSlug = vi.fn(async () => null);
+    const service = createGitHubService({
+      backgroundPollReady,
+      resolveRepoHost,
+      resolveRepoSlug,
+      runner: createRunner([]).runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+    });
+    const subscription = service.retainCurrentPullRequestStatusPoll?.({
+      cwd: "/repo",
+      headRef: "feature",
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(resolveRepoHost).not.toHaveBeenCalled();
+    expect(resolveRepoSlug).not.toHaveBeenCalled();
+    ready(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolveRepoHost).toHaveBeenCalledOnce();
+    expect(resolveRepoSlug).toHaveBeenCalledOnce();
+    subscription?.unsubscribe();
+    service.dispose?.();
+  });
+
   it("polls PR status at fast cadence while checks are pending", async () => {
     let now = 0;
     const runner = createRunner([
@@ -921,6 +950,8 @@ describe("ForgeService", () => {
       ttlMs: 0,
       runner: runner.runner,
       resolveGhPath: async () => "/usr/bin/gh",
+      resolveRepoHost: async () => null,
+      resolveRepoSlug: async () => null,
       now: () => now,
     });
     const reads = recordCurrentPullRequestStatusReads(service);
@@ -1264,8 +1295,9 @@ describe("ForgeService", () => {
       ttlMs: 0,
       runner: runner.runner,
       resolveGhPath: async () => "/usr/bin/gh",
-      resolveRepoHost: async (cwd) => (cwd === "/ws-blocked" ? neverResolves : null),
-      resolveRepoSlug: async (cwd) => (cwd === "/ws-blocked" ? neverResolves : "acme/widgets"),
+      resolveRepoHost: async (cwd) => (cwd.startsWith("/ws-blocked") ? neverResolves : null),
+      resolveRepoSlug: async (cwd) =>
+        cwd.startsWith("/ws-blocked") ? neverResolves : "acme/widgets",
       now: () => now,
     });
     const readyStatuses: Array<CurrentPullRequestStatus | null> = [];
@@ -1273,6 +1305,10 @@ describe("ForgeService", () => {
     const blockedSubscription = service.retainCurrentPullRequestStatusPoll?.({
       cwd: "/ws-blocked",
       headRef: "feat-blocked",
+    });
+    const secondBlockedSubscription = service.retainCurrentPullRequestStatusPoll?.({
+      cwd: "/ws-blocked-2",
+      headRef: "feat-blocked-2",
     });
     const readySubscription = service.retainCurrentPullRequestStatusPoll?.({
       cwd: "/ws-ready",
@@ -1292,6 +1328,7 @@ describe("ForgeService", () => {
     expect(readyStatuses).toEqual([expect.objectContaining({ number: 41 })]);
 
     blockedSubscription?.unsubscribe();
+    secondBlockedSubscription?.unsubscribe();
     readySubscription?.unsubscribe();
     service.dispose?.();
   });

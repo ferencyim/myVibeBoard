@@ -19,6 +19,7 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
 import { scheduleStartupReconciliation } from "./startup-reconciliation.js";
+import { setProjectIconBackgroundGate } from "../utils/project-custom-icon.js";
 
 export type ListenTarget =
   | { type: "tcp"; host: string; port: number }
@@ -940,11 +941,17 @@ export async function createPaseoDaemon(
     workspaceRegistry,
   });
   const promptLibraryService = createPromptLibraryService({ paseoHome: config.paseoHome, logger });
-  const github = createGitHubService();
+  let resolveBackgroundStartup!: (allowed: boolean) => void;
+  const backgroundForgePollingReady = new Promise<boolean>((resolve) => {
+    resolveBackgroundStartup = resolve;
+  });
+  setProjectIconBackgroundGate(backgroundForgePollingReady);
+  const github = createGitHubService({ backgroundPollReady: backgroundForgePollingReady });
   const workspaceGitService = new WorkspaceGitServiceImpl({
     logger,
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
+    backgroundForgePollingReady,
     deps: {
       forgeOverrides: { github },
     },
@@ -1925,11 +1932,14 @@ export async function createPaseoDaemon(
       // avoid competing with startup provider and plugin initialization.
       cancelInitialReconciliation = scheduleStartupReconciliation(() => {
         cancelInitialReconciliation = null;
+        resolveBackgroundStartup(true);
         void workspaceReconciliation.reconcileNow().catch((error) => {
           logger.warn({ err: error }, "Initial workspace reconciliation failed");
         });
       });
     } catch (error) {
+      resolveBackgroundStartup(false);
+      setProjectIconBackgroundGate(null);
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
       unsubscribePluginProviders();
@@ -1947,6 +1957,8 @@ export async function createPaseoDaemon(
   const stop = async () => {
     cancelInitialReconciliation?.();
     cancelInitialReconciliation = null;
+    resolveBackgroundStartup(false);
+    setProjectIconBackgroundGate(null);
     localCredential = null;
     await deleteLocalCredential(config.paseoHome);
     // Stop tracking plugin provider registrations before anything tears plugins

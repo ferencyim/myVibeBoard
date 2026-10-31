@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
@@ -11,43 +11,7 @@ import type { Node, NamedImportBindings, NamedExportBindings } from "typescript"
 
 const nodeRequire = createRequire(import.meta.url);
 const limitImportReads = pLimit(4);
-const limitWarmDirectories = pLimit(4);
 const pendingImports = new Map<string, Promise<ModuleImport[]>>();
-
-// Warm only authored plugin roots. Symlinks and node_modules are left to normal
-// dependency resolution, avoiding a recursive scan of external packages.
-export async function warmPluginImports(directory: string, paseoHome?: string): Promise<void> {
-  const reader = createPluginImportReader(directory, paseoHome);
-  const files: string[] = [];
-  async function collect(root: string): Promise<void> {
-    const entries = await limitWarmDirectories(() => readdir(root, { withFileTypes: true })).catch(
-      () => [],
-    );
-    await Promise.all(
-      entries.map(async (entry) => {
-        if (entry.name === "node_modules") return;
-        const file = path.join(root, entry.name);
-        if (entry.isDirectory()) await collect(file);
-        else if (entry.isFile() && /\.[cm]?[jt]sx?$/.test(file)) files.push(file);
-      }),
-    );
-  }
-  await Promise.all(
-    ["client", "server", "shared"].map((name) => collect(path.join(directory, name))),
-  );
-  for (const name of [
-    "index.client.ts",
-    "index.client.tsx",
-    "index.server.ts",
-    "index.server.tsx",
-  ]) {
-    const file = path.join(directory, name);
-    if ((await stat(file).catch(() => null))?.isFile()) files.push(file);
-  }
-  // At most one queued read per warming plugin: the fourth global slot remains
-  // available to actual compilation when three plugins warm concurrently.
-  for (const file of files) await reader.read(file).catch(() => undefined);
-}
 
 export type PluginImportKind = ImportKind | "type-reference";
 
@@ -59,15 +23,32 @@ interface ModuleImport {
 
 // Keep the TypeScript compiler off daemon startup. esbuild erases these edges, so
 // ownership validation needs the original syntax and declaration-aware resolution.
-export function createPluginImportReader(directory: string, paseoHome = resolvePaseoHome()) {
+export function createPluginImportReader(
+  directory: string,
+  paseoHome = resolvePaseoHome(),
+  dependencies?: Set<string>,
+) {
   const ts = nodeRequire("typescript") as typeof import("typescript");
-  const configFile = ts.findConfigFile(directory, ts.sys.fileExists);
+  const track = (file: string) => {
+    dependencies?.add(path.resolve(file));
+    return file;
+  };
+  const system: typeof ts.sys = {
+    ...ts.sys,
+    fileExists: (file) => ts.sys.fileExists(track(file)),
+    readFile: (file, encoding) => ts.sys.readFile(track(file), encoding),
+    directoryExists: (file) => ts.sys.directoryExists(track(file)),
+    getDirectories: (file) => ts.sys.getDirectories(track(file)),
+    readDirectory: (file, ...args) => ts.sys.readDirectory(track(file), ...args),
+    realpath: (file) => ts.sys.realpath!(track(file)),
+  };
+  const configFile = ts.findConfigFile(directory, system.fileExists);
   const config = configFile
     ? ts.getParsedCommandLineOfConfigFile(
         configFile,
         {},
         {
-          ...ts.sys,
+          ...system,
           onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
             throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
           },
@@ -85,13 +66,13 @@ export function createPluginImportReader(directory: string, paseoHome = resolveP
     resolve(specifier: string, importer: string, kind: PluginImportKind): string | undefined {
       const resolved =
         kind === "type-reference"
-          ? ts.resolveTypeReferenceDirective(specifier, importer, options, ts.sys)
+          ? ts.resolveTypeReferenceDirective(specifier, importer, options, system)
               .resolvedTypeReferenceDirective?.resolvedFileName
           : ts.resolveModuleName(
               specifier,
               importer,
               options,
-              ts.sys,
+              system,
               cache,
               undefined,
               kind === "require-call" ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext,
@@ -99,8 +80,15 @@ export function createPluginImportReader(directory: string, paseoHome = resolveP
       return resolved ? realpathSync.native(resolved) : undefined;
     },
     async read(file: string): Promise<ModuleImport[]> {
+      track(file);
       const metadata = await stat(file);
-      const key = JSON.stringify([paseoHome, file, metadata.size, metadata.mtimeMs]);
+      const key = JSON.stringify([
+        paseoHome,
+        file,
+        metadata.size,
+        metadata.mtimeMs,
+        metadata.ctimeMs,
+      ]);
       const pending = pendingImports.get(key);
       if (pending) return pending;
       const operation = limitImportReads(() => read(file, metadata));
@@ -119,7 +107,7 @@ export function createPluginImportReader(directory: string, paseoHome = resolveP
     const cacheFile = path.join(cacheDir, `${cacheKey}.json`);
     try {
       const cached: unknown = JSON.parse(await readFile(cacheFile, "utf8"));
-      if (isCachedImports(cached, metadata.size, metadata.mtimeMs, ts.version)) {
+      if (isCachedImports(cached, metadata.size, metadata.mtimeMs, metadata.ctimeMs, ts.version)) {
         return cached.imports;
       }
     } catch {
@@ -192,6 +180,7 @@ export function createPluginImportReader(directory: string, paseoHome = resolveP
         JSON.stringify({
           size: metadata.size,
           mtimeMs: metadata.mtimeMs,
+          ctimeMs: metadata.ctimeMs,
           version: ts.version,
           imports,
         }),
@@ -207,6 +196,7 @@ function isCachedImports(
   value: unknown,
   size: number,
   mtimeMs: number,
+  ctimeMs: number,
   version: string,
 ): value is {
   imports: ModuleImport[];
@@ -215,12 +205,14 @@ function isCachedImports(
   const cached = value as {
     size?: unknown;
     mtimeMs?: unknown;
+    ctimeMs?: unknown;
     version?: unknown;
     imports?: unknown;
   };
   return (
     cached.size === size &&
     cached.mtimeMs === mtimeMs &&
+    cached.ctimeMs === ctimeMs &&
     cached.version === version &&
     Array.isArray(cached.imports) &&
     cached.imports.every((item: unknown) => {

@@ -1,6 +1,5 @@
 import type { PluginLifecycle } from "./lifecycle/index.js";
 import path from "node:path";
-import pLimit from "p-limit";
 import { stat, rm } from "node:fs/promises";
 import type pino from "pino";
 import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
@@ -63,7 +62,7 @@ interface PluginRuntimePort {
   getProviderCatalogCacheKey?: PluginRuntime["getProviderCatalogCacheKey"];
   getProviderStatus?: PluginRuntime["getProviderStatus"];
   validatePlugin?(path: string): Promise<void>;
-  warmPluginImports?(pluginId: string, path: string): Promise<void>;
+  markPluginLoading?(pluginId: string): () => void;
   startPlugin(pluginId: string, path: string, canPublish: () => boolean): Promise<void>;
   startBuiltinPlugin?(plugin: BuiltinPlugin): Promise<void>;
   stopPluginById(pluginId: string): Promise<boolean>;
@@ -104,7 +103,10 @@ export class PluginService {
   private readonly providerIdsByPlugin = new Map<string, readonly string[]>();
   private readonly providerListeners = new Set<() => void>();
   private lifecycle = Promise.resolve();
+  private initialStartup: Promise<void> | undefined;
   private globalStartsBlocked = true;
+  private globalDisableGeneration = 0;
+  private stopping = false;
   private started = false;
   private readonly settingsListeners = new Set<(pluginId: string, settingsId: string) => void>();
 
@@ -193,9 +195,18 @@ export class PluginService {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.configStore.onFieldChange("pluginsEnabled", (value) => {
+      this.handleGlobalSwitch(value === true);
+    });
+    this.initialStartup = this.startInitialPlugins();
+    await this.initialStartup;
+  }
+
+  private async startInitialPlugins(): Promise<void> {
     const config = this.configStore.get();
     this.globalStartsBlocked = config.pluginsEnabled !== true;
-    await this.builtinPlugins.load(async (plugin) => {
+    const startConfigured = config.pluginsEnabled === true ? this.prepareConfiguredPlugins() : null;
+    const startBuiltin = this.builtinPlugins.load(async (plugin) => {
       try {
         await this.runtime.startBuiltinPlugin?.(plugin);
         await this.publishProviderRegistrations(plugin.id, plugin.directory);
@@ -204,26 +215,7 @@ export class PluginService {
         this.logger.error({ err: error, pluginId: plugin.id }, "Failed to start built-in plugin");
       }
     });
-    if (config.pluginsEnabled === true) {
-      if (this.runtime.warmPluginImports) {
-        const limit = pLimit(3);
-        void Promise.allSettled(
-          Object.entries(config.plugins ?? {})
-            .filter(([, source]) => source.enabled !== false)
-            .map(([pluginId, source]) =>
-              limit(() => this.runtime.warmPluginImports!(pluginId, source.path)),
-            ),
-        );
-      }
-      for (const [pluginId, source] of Object.entries(config.plugins ?? {})) {
-        if (source.enabled === false) continue;
-        await this.startConfigured(pluginId);
-        this.notify(pluginId);
-      }
-    }
-    this.configStore.onFieldChange("pluginsEnabled", (value) => {
-      this.handleGlobalSwitch(value === true);
-    });
+    await Promise.all([startBuiltin, startConfigured?.()]);
   }
 
   async listPlugins(): Promise<PluginListItem[]> {
@@ -458,14 +450,21 @@ export class PluginService {
     const source = this.requireSource(pluginId);
     this.patchSource(pluginId, { ...source, enabled: true });
     this.errors.delete(pluginId);
-    return this.enqueue(async () => {
-      const current = this.requireSource(pluginId);
-      if (current.enabled !== false && this.configStore.get().pluginsEnabled === true) {
-        await this.startExplicit(pluginId, current.path);
-      }
-      this.notify(pluginId);
-      return this.requireItem(pluginId);
-    });
+    const finish = this.canPublish(pluginId)
+      ? this.runtime.markPluginLoading?.(pluginId)
+      : undefined;
+    try {
+      return await this.enqueue(async () => {
+        const current = this.requireSource(pluginId);
+        if (current.enabled !== false && this.configStore.get().pluginsEnabled === true) {
+          await this.startExplicit(pluginId, current.path);
+        }
+        this.notify(pluginId);
+        return this.requireItem(pluginId);
+      });
+    } finally {
+      finish?.();
+    }
   }
 
   async disablePlugin(pluginId: string): Promise<PluginListItem> {
@@ -514,17 +513,21 @@ export class PluginService {
   }
 
   async stopAllPlugins(): Promise<void> {
+    this.stopping = true;
     this.globalStartsBlocked = true;
     const stopping = this.stopAll();
     await this.enqueue(async () => {
       await stopping;
+      await this.initialStartup?.catch(() => undefined);
       await this.stopAll();
     });
   }
 
   private handleGlobalSwitch(enabled: boolean): void {
+    if (this.stopping) return;
     if (!enabled) {
       this.globalStartsBlocked = true;
+      this.globalDisableGeneration++;
       const stopping = this.stopConfiguredPlugins();
       for (const id of Object.keys(this.configStore.get().plugins ?? {})) this.notify(id);
       void this.enqueue(async () => {
@@ -532,21 +535,46 @@ export class PluginService {
       }).catch((error) => this.logger.error({ err: error }, "Failed to disable plugins"));
       return;
     }
+    const startConfigured = this.prepareConfiguredPlugins();
     void this.enqueue(async () => {
-      this.globalStartsBlocked = false;
-      for (const [pluginId, source] of Object.entries(this.configStore.get().plugins ?? {})) {
-        if (source.enabled !== false) await this.startConfigured(pluginId);
-        this.notify(pluginId);
-      }
+      await this.initialStartup?.catch(() => undefined);
+      this.globalStartsBlocked = this.stopping || this.configStore.get().pluginsEnabled !== true;
+      await startConfigured();
     }).catch((error) => this.logger.error({ err: error }, "Failed to enable plugins"));
+  }
+
+  private prepareConfiguredPlugins(): () => Promise<void> {
+    const ids = Object.entries(this.configStore.get().plugins ?? {})
+      .filter(([, source]) => source.enabled !== false)
+      .map(([pluginId]) => pluginId);
+    // Register the entire batch before starting any plugin: an initializer can
+    // call another configured plugin that has not yet reached its own startup.
+    const finish = ids.map((id) => this.runtime.markPluginLoading?.(id));
+    return async () => {
+      await Promise.all(
+        ids.map(async (pluginId, index) => {
+          try {
+            await this.startConfigured(pluginId);
+          } finally {
+            finish[index]?.();
+            this.notify(pluginId);
+          }
+        }),
+      );
+    };
   }
 
   private async startConfigured(pluginId: string): Promise<void> {
     const source = this.configStore.get().plugins?.[pluginId];
     if (!source || source.enabled === false || !this.canPublish(pluginId)) return;
+    const generation = this.globalDisableGeneration;
     this.errors.delete(pluginId);
     try {
-      await this.startPlugin(pluginId, source.path);
+      await this.startPlugin(
+        pluginId,
+        source.path,
+        () => generation === this.globalDisableGeneration && this.canPublish(pluginId),
+      );
     } catch (error) {
       if (this.canPublish(pluginId)) this.recordFailure(pluginId, error);
     }
@@ -574,10 +602,16 @@ export class PluginService {
     );
   }
 
-  private async startPlugin(pluginId: string, sourcePath: string): Promise<void> {
-    await this.runtime.startPlugin(pluginId, sourcePath, () => this.canPublish(pluginId));
+  private async startPlugin(
+    pluginId: string,
+    sourcePath: string,
+    canPublish: () => boolean = () => this.canPublish(pluginId),
+  ): Promise<void> {
+    await this.runtime.startPlugin(pluginId, sourcePath, canPublish);
     try {
+      if (!canPublish()) throw new Error(`Plugin start cancelled: ${pluginId}`);
       await this.publishProviderRegistrations(pluginId, sourcePath);
+      if (!canPublish()) throw new Error(`Plugin start cancelled: ${pluginId}`);
       this.publishUsageSources(pluginId);
     } catch (error) {
       try {

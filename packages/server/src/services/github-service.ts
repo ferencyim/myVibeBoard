@@ -11,6 +11,7 @@ import {
   buildPullHeadCheckoutRefs,
 } from "../utils/change-request-checkout.js";
 import { execCommand } from "../utils/spawn.js";
+import { createBackgroundWorkQueue } from "../utils/background-work.js";
 import { resolveSshHostname } from "../utils/ssh-hostname.js";
 import {
   CLI_AUTH_PROBE_TIMEOUT_MS,
@@ -1047,6 +1048,8 @@ interface CreateGitHubServiceOptions {
   now?: () => number;
   resolveRepoHost?: (cwd: string) => Promise<string | null>;
   resolveRepoSlug?: (cwd: string) => Promise<string | null>;
+  /** Resolves after startup's foreground work has had a chance to finish. */
+  backgroundPollReady?: Promise<boolean>;
 }
 
 type PullRequestCheckRunNode = z.infer<typeof PullRequestCheckRunNodeSchema>;
@@ -1121,6 +1124,14 @@ interface ResolvedPullRequestCandidate {
 }
 
 export function createGitHubService(options: CreateGitHubServiceOptions = {}): GitHubService {
+  const runBackground = createBackgroundWorkQueue(2);
+  let backgroundPollEnabled = !options.backgroundPollReady;
+  if (options.backgroundPollReady) {
+    void options.backgroundPollReady.then((allowed) => {
+      backgroundPollEnabled = allowed;
+      return undefined;
+    });
+  }
   const ttlMs = options.ttlMs ?? DEFAULT_GITHUB_CACHE_TTL_MS;
   const deps: GitHubServiceDependencies = {
     runner: options.runner ?? runGhCommand,
@@ -1404,7 +1415,7 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
   }
 
   function scheduleGitHubPollAfter(target: GitHubPollTarget, delayMs: number): void {
-    if (target.retainCount <= 0) {
+    if (target.retainCount <= 0 || !backgroundPollEnabled) {
       return;
     }
     const now = deps.now();
@@ -1497,6 +1508,9 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
       const slug = peekRepoSlug(target.cwd);
       if (!host.settled || !slug.settled) {
         target.pollCycleStartedAt = null;
+        // The cached identity promises may take a long time to settle. Merely
+        // waiting for them must not occupy a poll slot, or one unresolved
+        // repository can block all the repositories that are ready to poll.
         void Promise.all([
           resolveRepoHostCached(target.cwd).catch(() => null),
           resolveRepoSlugCached(target.cwd),
@@ -1530,8 +1544,10 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
     }
 
     await Promise.all([
-      ...legacyTargets.map((target) => runGitHubPoll(target)),
-      ...[...batchGroups.values()].map((group) => runGitHubPollGroup(group, now)),
+      ...legacyTargets.map((target) => runBackground(() => runGitHubPoll(target))),
+      ...[...batchGroups.values()].map((group) =>
+        runBackground(() => runGitHubPollGroup(group, now)),
+      ),
     ]);
   }
 
@@ -2580,10 +2596,6 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
           errorCallbacks: new Set(),
         };
         pollTargets.set(key, target);
-        // Warm the host and slug caches so the first poll flush can already
-        // batch this target instead of taking the legacy per-target path.
-        void resolveRepoHostCached(input.cwd).catch(() => {});
-        void resolveRepoSlugCached(input.cwd);
       }
 
       const isNewlyRetained = target.retainCount === 0;
@@ -2595,7 +2607,26 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
         target.errorCallbacks.add(input.onError);
       }
       if (isNewlyRetained) {
-        scheduleImmediateGitHubPoll(target);
+        const retainedTarget = target;
+        const startPoll = () => {
+          if (pollTargets.get(key) !== retainedTarget || retainedTarget.retainCount <= 0) return;
+          // Defer the cache warm-up too; otherwise it can launch git/gh before
+          // the first poll's startup delay has elapsed.
+          // Identity reads are cached per cwd and their git operations already
+          // use the git scheduler. Do not hold a PR polling slot while waiting
+          // for them: another repository may already be ready to poll.
+          void Promise.all([
+            resolveRepoHostCached(input.cwd).catch(() => null),
+            resolveRepoSlugCached(input.cwd),
+          ]);
+          scheduleImmediateGitHubPoll(retainedTarget);
+        };
+        if (options.backgroundPollReady)
+          void options.backgroundPollReady.then((allowed) => {
+            if (allowed) startPoll();
+            return undefined;
+          });
+        else startPoll();
       } else {
         scheduleGitHubPoll(target);
       }

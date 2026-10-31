@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
+import pLimit from "p-limit";
 import { createPluginImportReader, type PluginImportKind } from "./compiler-imports.js";
+import { prepareBundleCache, readCachedBundle, writeCachedBundle } from "./compiler-cache.js";
 import type { Metafile, OnResolveResult, Plugin } from "esbuild";
 import {
   isPluginClientOnlySdkSpecifier,
@@ -71,6 +73,7 @@ function loadEsbuild(): typeof import("esbuild") {
 }
 
 type PluginBuildTarget = "client" | "server";
+const limitCompilation = pLimit(4);
 interface CompileTiming {
   target: PluginBuildTarget;
   durationMs: number;
@@ -178,6 +181,7 @@ function createRuntimeBoundaryPlugin(
   pluginDirectory: string,
   metrics: { importReadMs: number; files: number },
   paseoHome?: string,
+  dependencies?: Set<string>,
 ): Plugin {
   const boundaryResolution = {};
   const linkedDependencyRoots = new Set<string>();
@@ -185,7 +189,7 @@ function createRuntimeBoundaryPlugin(
     name: `paseo-plugin-${target}-runtime-boundary`,
     setup(buildContext) {
       const checked = new Set<string>();
-      const imports = createPluginImportReader(pluginDirectory, paseoHome);
+      const imports = createPluginImportReader(pluginDirectory, paseoHome, dependencies);
       function resolvedBoundaryError(
         resolvedFile: string,
         specifier: string,
@@ -412,6 +416,14 @@ async function compileTarget(
   const started = performance.now();
   const metrics = { importReadMs: 0, files: 0 };
   try {
+    const cached = await readCachedBundle(entryPath, target, paseoHome);
+    if (cached !== null) {
+      onTiming?.({ target, durationMs: performance.now() - started, ...metrics });
+      return cached;
+    }
+    await prepareBundleCache(paseoHome);
+    const dependencies = new Set<string>();
+    const buildStartedAt = Date.now();
     const { build } = loadEsbuild();
     // Use native canonical paths throughout: TypeScript expands Windows short names
     // when resolving type references, while the JS realpath implementation retains them.
@@ -443,7 +455,9 @@ async function compileTarget(
               "zod",
             ]
           : SERVER_HOST_MODULES,
-      plugins: [createRuntimeBoundaryPlugin(target, pluginDirectory, metrics, paseoHome)],
+      plugins: [
+        createRuntimeBoundaryPlugin(target, pluginDirectory, metrics, paseoHome, dependencies),
+      ],
       metafile: true,
       logLevel: "silent",
       treeShaking: true,
@@ -452,8 +466,11 @@ async function compileTarget(
     checkSharedDependencies(result.metafile.inputs, pluginDirectory);
     const output = result.outputFiles[0]?.text;
     if (!output) throw new Error(`Plugin ${target} compilation produced no output`);
+    for (const file of Object.keys(result.metafile.inputs)) dependencies.add(path.resolve(file));
+    const bundle = wrapCommonJsBundle(makeHermesInteropEager(output));
+    await writeCachedBundle(entryPath, target, paseoHome, bundle, dependencies, buildStartedAt);
     onTiming?.({ target, durationMs: performance.now() - started, ...metrics });
-    return wrapCommonJsBundle(makeHermesInteropEager(output));
+    return bundle;
   } catch (error) {
     onTiming?.({
       target,
@@ -477,8 +494,12 @@ export async function compilePlugin(
   serverBundle: string | null;
 }> {
   const [clientBundle, serverBundle] = await Promise.all([
-    entryPaths.client ? compileTarget(entryPaths.client, "client", onTiming, paseoHome) : null,
-    entryPaths.server ? compileTarget(entryPaths.server, "server", onTiming, paseoHome) : null,
+    entryPaths.client
+      ? limitCompilation(() => compileTarget(entryPaths.client!, "client", onTiming, paseoHome))
+      : null,
+    entryPaths.server
+      ? limitCompilation(() => compileTarget(entryPaths.server!, "server", onTiming, paseoHome))
+      : null,
   ]);
   return { clientBundle, serverBundle };
 }

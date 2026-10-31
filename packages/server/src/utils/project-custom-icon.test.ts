@@ -14,6 +14,7 @@ import {
   readProjectIcon,
   readProjectIconSnapshot,
   removeProjectCustomIcon,
+  setProjectIconBackgroundGate,
   setProjectCustomIcon,
 } from "./project-custom-icon.js";
 
@@ -26,6 +27,7 @@ const PNG_1X1_ICON = { data: PNG_1X1.toString("base64"), mimeType: "image/png" }
 const cleanup: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  setProjectIconBackgroundGate(null);
   vi.restoreAllMocks();
   await Promise.all(cleanup.splice(0).map((fn) => fn()));
 });
@@ -153,6 +155,34 @@ describe("project custom icon", () => {
     expect((await second.snapshot(record)).icon).toBeNull();
     await vi.waitFor(async () => {
       expect((await second.snapshot(record)).icon).toEqual(PNG_1X1_ICON);
+    });
+  });
+
+  it("defers stale scans until startup permits background work, while cache misses remain foreground", async () => {
+    const target = await project();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    expect((await target.advertisedSnapshot()).icon).toBeNull();
+    await mkdir(join(target.rootPath, "public"));
+    await writeFile(join(target.rootPath, "public", "favicon.png"), PNG_1X1);
+    let release!: (allowed: boolean) => void;
+    setProjectIconBackgroundGate(
+      new Promise<boolean>((resolve) => {
+        release = resolve;
+      }),
+    );
+    now.mockReturnValue(31_001);
+    expect((await target.advertisedSnapshot()).icon).toBeNull();
+    await Promise.resolve();
+    expect((await target.advertisedSnapshot()).icon).toBeNull();
+
+    const anotherProject = await project();
+    await mkdir(join(anotherProject.rootPath, "public"));
+    await writeFile(join(anotherProject.rootPath, "public", "favicon.png"), PNG_1X1);
+    expect((await anotherProject.advertisedSnapshot()).icon).toEqual(PNG_1X1_ICON);
+
+    release(true);
+    await vi.waitFor(async () => {
+      expect((await target.advertisedSnapshot()).icon).toEqual(PNG_1X1_ICON);
     });
   });
 
