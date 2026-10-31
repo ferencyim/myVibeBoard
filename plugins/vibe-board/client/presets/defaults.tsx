@@ -35,6 +35,7 @@ export type SaveRole = (
 ) => Promise<string>;
 
 interface EditorProps {
+  projectId?: string;
   value: ModelDefaults;
   onChange: (next: ModelDefaults) => void;
   settings: readonly Preset[];
@@ -55,6 +56,7 @@ function BackupRow({
   index,
   backup,
   providers,
+  projectId,
   disabled,
   onChange,
   onRemove,
@@ -62,6 +64,7 @@ function BackupRow({
   index: number;
   backup: RoleDraft["backups"][number];
   providers: PickerProviders;
+  projectId?: string;
   disabled?: boolean;
   onChange: (index: number, provider: string, model: string) => void;
   onRemove: (index: number) => void;
@@ -75,6 +78,7 @@ function BackupRow({
     <View style={styles.backup}>
       <Muted>{`备用模型 ${index + 1}`}</Muted>
       <ModelPickerField
+        projectId={projectId}
         providers={providers}
         provider={backup.provider}
         model={backup.model}
@@ -93,6 +97,7 @@ function RoleCard({
   settingId,
   settings,
   providers,
+  projectId,
   disabled,
   onSave,
   stateText,
@@ -102,6 +107,7 @@ function RoleCard({
   settingId: string | null | undefined;
   settings: readonly Preset[];
   providers: PickerProviders;
+  projectId?: string;
   disabled?: boolean;
   onSave: (current: Preset | undefined, draft: RoleDraft) => void;
   stateText?: string;
@@ -169,9 +175,10 @@ function RoleCard({
     [apply],
   );
   return (
-    <View style={styles.role}>
+    <View style={styles.role} testID={`role-card-${label}`}>
       <Text style={[styles.roleTitle, { color: theme.colors.foreground }]}>{label}</Text>
       <ModelPickerField
+        projectId={projectId}
         providers={providers}
         provider={draft.provider}
         model={draft.model}
@@ -199,6 +206,7 @@ function RoleCard({
               index={index}
               backup={backup}
               providers={providers}
+              projectId={projectId}
               disabled={disabled}
               onChange={changeBackup}
               onRemove={removeBackup}
@@ -207,6 +215,7 @@ function RoleCard({
           <View style={styles.backup}>
             <Muted>添加备用模型</Muted>
             <ModelPickerField
+              projectId={projectId}
               providers={providers}
               provider=""
               model=""
@@ -265,6 +274,7 @@ function RoleField({
   onChange,
   settings,
   providers,
+  projectId,
   saveRole,
   inherited,
   disabled,
@@ -296,6 +306,7 @@ function RoleField({
       settingId={value[role] ?? undefined}
       settings={settings}
       providers={providers}
+      projectId={projectId}
       disabled={disabled}
       onSave={onSave}
       stateText={error ?? state}
@@ -305,11 +316,20 @@ function RoleField({
             <Btn disabled={disabled} small label="沿用默认" onPress={inherit} />
           ) : null}
           {(role === "scout" || role === "reviewer") && value[role] !== null ? (
-            <Btn disabled={disabled} small label="不启用" onPress={disable} />
+            <SecondaryRoleButton disabled={disabled} label="不启用" onPress={disable} />
           ) : null}
         </View>
       }
     />
+  );
+}
+
+function SecondaryRoleButton({ disabled, label, onPress }: { disabled?: boolean; label: string; onPress: () => void }) {
+  const { theme } = useHost();
+  return (
+    <View style={[styles.secondaryButton, { borderColor: theme.colors.border }]}>
+      <Btn disabled={disabled} small label={label} onPress={onPress} />
+    </View>
   );
 }
 
@@ -318,11 +338,13 @@ function PlannerField({
   onChange,
   settings,
   providers,
+  projectId,
   saveRole,
   disabled,
   index,
   id,
-}: EditorProps & { index: number; id: string | null }) {
+  emptyStateText,
+}: EditorProps & { index: number; id: string | null; emptyStateText?: string }) {
   const { error, run } = useBackgroundSave();
   const onSave = useCallback(
     (current: Preset | undefined, draft: RoleDraft) =>
@@ -343,9 +365,10 @@ function PlannerField({
       settingId={id}
       settings={settings}
       providers={providers}
+      projectId={projectId}
       disabled={disabled}
       onSave={onSave}
-      stateText={error ?? undefined}
+      stateText={error ?? emptyStateText}
       extra={id ? <Btn disabled={disabled} small label="移除" onPress={remove} /> : null}
     />
   );
@@ -381,10 +404,13 @@ export function DefaultModelsEditor(props: EditorProps) {
           {plannerRows.map((row) => (
             <PlannerField key={row.key} {...props} id={row.id} index={row.index} />
           ))}
-          <PlannerField key={`new:${planners.length}`} {...props} id={null} index={planners.length} />
-          {!planners.length ? (
-            <Muted>{inherited ? defaultPlannerLabel(inherited, nameOf) : "沿用 #1 模型"}</Muted>
-          ) : null}
+          <PlannerField
+            key={`new:${planners.length}`}
+            {...props}
+            id={null}
+            index={planners.length}
+            emptyStateText={!planners.length ? (inherited ? defaultPlannerLabel(inherited, nameOf) : "沿用 #1 模型") : undefined}
+          />
         </SettingsCard>
         {props.showReviewTimeout ? <ReviewTimeoutField /> : null}
         {planners.length ? (
@@ -405,5 +431,6 @@ const styles = StyleSheet.create({
   roleTitle: { fontSize: 14, fontWeight: "500" },
   backup: { gap: 4, paddingLeft: 8 },
   actions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  secondaryButton: { borderWidth: 1, borderRadius: 8 },
   prompt: { gap: 12, padding: 16 },
 });

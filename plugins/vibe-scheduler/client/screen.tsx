@@ -60,7 +60,7 @@ const levelColor = (theme: PluginTheme, level: string) => {
   return theme.colors.foregroundMuted;
 };
 
-export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
+export function SchedulerScreen({ theme }: PluginScreenProps) {
   const queryClient = useQueryClient();
   const statusCall = useRpc(statusRpc);
   const devicesCall = useRpc(devicesRpc);
@@ -117,18 +117,9 @@ export function SchedulerScreen({ theme, navigation }: PluginScreenProps) {
         <Muted theme={theme}>全机任务队列、共用资源、暂停窗口和全局指令。</Muted>
       </View>
       <HubSections theme={theme} />
-      {navigation?.openPluginScreen ? (
-        <Section theme={theme} title="运行记录与维护规则">
-          <Muted theme={theme}>查看各项目的维护状态，编辑规则或手动运行。</Muted>
-          <View style={{ alignSelf: "flex-start" }}>
-            <Button
-              theme={theme}
-              label="打开维护规则"
-              onPress={() => navigation.openPluginScreen?.({ pluginId: "vibe-maintain", screenId: "main" })}
-            />
-          </View>
-        </Section>
-      ) : null}
+      <Section theme={theme} title="运行记录与维护规则">
+        <Muted theme={theme}>在总协调 bot 右侧「自动维护」面板中设置和查看维护规则。</Muted>
+      </Section>
       <View style={{ flexDirection: "row" }}>
         <Button
           theme={theme}

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AUTOMATION_LINKS,
@@ -70,14 +72,17 @@ describe("agent behaviour page logic", () => {
       "vibe-verify",
       "vibe-context",
       "switch-provider",
-      "vibe-maintain",
       "vibe-scheduler",
     ]) {
       expect(ids).toContain(id);
     }
     expect(ids).not.toContain("vibe-master");
-    expect(AUTOMATION_LINKS.every((l) => l.label.length > 0 && l.screenId === "preferences")).toBe(
-      true,
-    );
+    expect(ids).not.toContain("vibe-maintain");
+    for (const link of AUTOMATION_LINKS) {
+      expect(link.label.length).toBeGreaterThan(0);
+      const entry = readFileSync(resolve(__dirname, "../..", link.pluginId, "index.client.tsx"), "utf8");
+      const registrations = [...entry.matchAll(/addSettingsScreen\(\{([\s\S]*?)\}\)/g)];
+      expect(registrations.some((match) => match[1]!.match(/\bid:\s*["']([^"']+)["']/)?.[1] === link.screenId), `${link.pluginId}/${link.screenId}`).toBe(true);
+    }
   });
 });

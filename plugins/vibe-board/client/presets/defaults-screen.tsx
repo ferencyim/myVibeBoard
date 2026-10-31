@@ -64,8 +64,8 @@ function DefaultsContent({ serverId, projectId }: { serverId: string; projectId?
   });
   const listModels = useRpc(botModelsListRpc);
   const catalog = useQuery({
-    queryKey: ["vibe-board", "task-defaults-models", serverId],
-    queryFn: () => listModels({}),
+    queryKey: ["vibe-board", "task-defaults-models", serverId, projectId ?? null],
+    queryFn: () => listModels({ projectId }),
     staleTime: 60_000,
   });
   const refetchDefaults = defaults.refetch;
@@ -165,6 +165,7 @@ function DefaultsForm({
   return (
     <View style={styles.form}>
       <DefaultModelsEditor
+        projectId={projectId}
         showReviewTimeout={!projectId}
         disabled={saving}
         value={state.value}

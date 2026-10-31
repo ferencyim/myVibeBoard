@@ -61,17 +61,10 @@ export const AUTOMATION_LINKS = [
     screenId: "preferences",
     label: "切换 provider：压缩历史的上限与摘要文字（该插件独立安装，文字在它自己的设置页里编辑）",
   },
-  {
-    pluginId: "vibe-maintain",
-    screenId: "preferences",
-    label: "自动维护：触发间隔、超时、权限模式",
-  },
   { pluginId: "vibe-scheduler", screenId: "preferences", label: "调度器：并发、资源与派发超时" },
-  { pluginId: "vibe-stats", screenId: "preferences", label: "统计" },
 ] as const;
 
-/** Maintenance rule prompts are configured per rule on the maintenance page, not in the registry. */
-export const MAINTAIN_LINK = { pluginId: "vibe-maintain", screenId: "main" } as const;
+export const MAINTENANCE_HINT = "在总协调 bot 右侧『自动维护』面板中设置";
 
 export interface RoleGroup {
   role: string;
