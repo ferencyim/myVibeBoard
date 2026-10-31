@@ -906,6 +906,22 @@ export default function contribute(server: any) { server.registerProvider(provid
     await runtime.stopAll();
   });
 
+  it("logs the process ID when a plugin child starts", async () => {
+    const directory = await createPlugin("pid-test", "export default function contribute() {}");
+    const child = { ...createReloadChild("pid-test", []), pid: 12345 };
+    const records: Array<Record<string, unknown>> = [];
+    const logger = pino(
+      { level: "info" },
+      { write: (line: string) => records.push(JSON.parse(line) as Record<string, unknown>) },
+    );
+    const runtime = createTestRuntime({ spawnChild: () => child }, logger);
+    await runtime.startPlugin("pid-test", directory);
+    expect(records).toContainEqual(
+      expect.objectContaining({ msg: "Plugin process started", pluginId: "pid-test", pid: 12345 }),
+    );
+    await runtime.stopAll();
+  });
+
   it("bounds retained output by entry count, total bytes, and individual line bytes", async () => {
     const directory = await createPlugin(
       "noisy",

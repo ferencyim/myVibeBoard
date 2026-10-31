@@ -57,6 +57,7 @@ interface PluginOutputStream {
 }
 
 interface PluginChild {
+  pid?: number;
   connected: boolean;
   killed: boolean;
   stdout?: PluginOutputStream | null;
@@ -692,11 +693,13 @@ export class PluginRuntime {
         sessionClosed: null,
       };
     }
+    const child = this.spawnChild();
+    this.logger.info({ pluginId, pid: child.pid }, "Plugin process started");
     return this.launchPlugin({
       pluginId,
       pluginDirectory: directory,
       requirements: manifest.requirements,
-      child: this.spawnChild(),
+      child,
       bundle: serverBundle,
       clientBundle: bundles.clientBundle ?? "",
     });

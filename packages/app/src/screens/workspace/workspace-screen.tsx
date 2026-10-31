@@ -1,5 +1,7 @@
+import { WorkspaceTabPresentationResolver } from "@/screens/workspace/workspace-tab-presentation";
 import {
   useWorkspaceTitleStore,
+  resolveWorkspaceTitle,
   workspaceTitleSuffix,
 } from "@/screens/workspace/workspace-title-store";
 import {
@@ -305,19 +307,34 @@ function useSyncWorkspaceActiveBrowser(input: {
 function WorkspaceDocumentTitleEffect({
   serverId,
   agentId,
-  project,
+  projectId,
   workspace,
+  sessionName,
   hasTaskFlow,
 }: {
   serverId: string;
   agentId: string;
-  project: string;
+  projectId: string | null;
   workspace: string;
+  sessionName: string | null;
   hasTaskFlow: boolean;
 }) {
   const bot = useConversationBot(serverId, agentId);
+  const botProjectId = bot?.kind === "project" ? bot.projectId : null;
+  const nativeProjectId = hasTaskFlow ? projectId : botProjectId;
+  const projectName = useSessionStore((state) =>
+    nativeProjectId
+      ? (state.sessions[serverId]?.projects.get(nativeProjectId)?.projectDisplayName ?? null)
+      : null,
+  );
+  const { project, name } = resolveWorkspaceTitle({
+    isTask: hasTaskFlow,
+    taskName: workspace,
+    bot,
+    sessionName,
+    projectName,
+  });
   useEffect(() => {
-    const name = hasTaskFlow ? workspace : (bot?.name ?? "");
     const owner = Symbol("workspace-title");
     useWorkspaceTitleStore.getState().setTitle(owner, workspaceTitleSuffix(project, name));
     if (!isNative && typeof document !== "undefined") {
@@ -327,7 +344,7 @@ function WorkspaceDocumentTitleEffect({
       useWorkspaceTitleStore.getState().clearTitle(owner);
       if (!isNative && typeof document !== "undefined") document.title = "myVibeBoard";
     };
-  }, [bot?.name, hasTaskFlow, project, workspace]);
+  }, [name, project]);
   return null;
 }
 
@@ -3914,12 +3931,31 @@ function WorkspaceScreenContent({
   const renderedWorkspaceScreen = (
     <RenderProfile id="WorkspaceScreenContent">
       <View style={containerStyle}>
-        {isRouteFocused ? (
+        {isRouteFocused && activeTabDescriptor ? (
+          <WorkspaceTabPresentationResolver
+            tab={activeTabDescriptor}
+            serverId={normalizedServerId}
+            workspaceId={normalizedWorkspaceId}
+          >
+            {(presentation) => (
+              <WorkspaceDocumentTitleEffect
+                serverId={normalizedServerId}
+                agentId={botAgentId ?? ""}
+                projectId={workspaceDescriptor?.projectId ?? null}
+                workspace={workspaceHeaderTitle}
+                sessionName={presentation.titleState === "ready" ? presentation.label : null}
+                hasTaskFlow={hasTaskFlow}
+              />
+            )}
+          </WorkspaceTabPresentationResolver>
+        ) : null}
+        {isRouteFocused && !activeTabDescriptor ? (
           <WorkspaceDocumentTitleEffect
             serverId={normalizedServerId}
             agentId={botAgentId ?? ""}
-            project={workspaceHeaderSubtitle}
+            projectId={workspaceDescriptor?.projectId ?? null}
             workspace={workspaceHeaderTitle}
+            sessionName={null}
             hasTaskFlow={hasTaskFlow}
           />
         ) : null}

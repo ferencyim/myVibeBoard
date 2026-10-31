@@ -2,6 +2,21 @@ import type { InstalledPlugin } from "../types";
 
 type SettingsPlugin = Pick<InstalledPlugin, "id" | "serverId" | "settingsScreens">;
 
+export function pluginSettingsFromPath(pathname: string) {
+  const match = /^\/settings\/hosts\/([^/]+)\/plugins\/([^/]+)\/([^/]+)\/?$/.exec(pathname);
+  if (!match) return null;
+  try {
+    const [, serverId, pluginId, screenId] = match;
+    return {
+      serverId: decodeURIComponent(serverId),
+      pluginId: decodeURIComponent(pluginId),
+      screenId: decodeURIComponent(screenId),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function collectSettingsSidebarScreens<Plugin extends SettingsPlugin>(
   plugins: readonly Plugin[],
   serverId: string | null,

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Alert, Pressable, Text, View, type PressableStateCallbackType } from "react-native";
-import { useRouter } from "expo-router";
-import { useFocusEffect } from "expo-router/react-navigation";
+import { usePathname, useRouter } from "expo-router";
+import { useFocusEffect, useIsFocused } from "expo-router/react-navigation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -114,6 +114,7 @@ import { useInstalledPlugins } from "@/plugins/registry";
 import { PluginIconView } from "@/plugins/icons";
 import {
   collectSettingsSidebarScreens,
+  pluginSettingsFromPath,
   settingsPluginCategory,
   settingsSearchMatches,
 } from "@/plugins/settings/sidebar-model";
@@ -988,6 +989,7 @@ interface SettingsSidebarProps {
   onBackToWorkspace: () => void;
   activeHostServerId: string | null;
   layout: "desktop" | "mobile";
+  focused: boolean;
 }
 
 function SettingsSidebar({
@@ -999,8 +1001,14 @@ function SettingsSidebar({
   onBackToWorkspace,
   activeHostServerId,
   layout,
+  focused,
 }: SettingsSidebarProps) {
   const { theme, rt } = useUnistyles();
+  const pathname = usePathname();
+  const sidebarView = useMemo<SettingsView>(() => {
+    const pluginRoute = pluginSettingsFromPath(pathname);
+    return pluginRoute ? { kind: "plugin", ...pluginRoute } : view;
+  }, [pathname, view]);
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const matches = (label: string) => settingsSearchMatches(label, query);
@@ -1021,10 +1029,11 @@ function SettingsSidebar({
     () => [{ flex: 1 }, isDesktop ? { paddingTop: insets.top } : null],
     [insets.top, isDesktop],
   );
-  const selectedSectionId = view.kind === "section" ? view.section : null;
+  const selectedSectionId = sidebarView.kind === "section" ? sidebarView.section : null;
   let selectedHostSection: HostSectionSlug | null = null;
-  if (view.kind === "host") selectedHostSection = view.section;
-  if (view.kind === "project" || view.kind === "document") selectedHostSection = "projects";
+  if (sidebarView.kind === "host") selectedHostSection = sidebarView.section;
+  if (sidebarView.kind === "project" || sidebarView.kind === "document")
+    selectedHostSection = "projects";
   const installedPlugins = useInstalledPlugins();
   const pluginSettingsScreens = collectSettingsSidebarScreens(installedPlugins, activeHostServerId);
 
@@ -1085,7 +1094,7 @@ function SettingsSidebar({
                   key={`${plugin.id}:${screen.id}`}
                   plugin={plugin}
                   screen={screen}
-                  view={view}
+                  view={sidebarView}
                   layout={layout}
                 />
               ))}
@@ -1162,6 +1171,7 @@ function SettingsSidebar({
             testID="settings-search"
           />
           <SettingsNavigationScrollView
+            focused={focused}
             style={sidebarStyles.scrollBody}
             showsVerticalScrollIndicator={false}
             testID="settings-sidebar-scroll-body"
@@ -1187,6 +1197,7 @@ export interface SettingsScreenProps {
 
 export default function SettingsScreen({ view, openAddHostIntent = null }: SettingsScreenProps) {
   const router = useRouter();
+  const focused = useIsFocused();
   const { t } = useTranslation();
   const voiceAudioEngine = useVoiceAudioEngineOptional();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
@@ -1556,6 +1567,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
       <View style={styles.container}>
         <BackHeader title={t("settings.title")} onBack={handleBackToWorkspace} />
         <SettingsNavigationScrollView
+          focused={focused}
           style={styles.scrollView}
           contentContainerStyle={insetBottomStyle}
         >
@@ -1568,6 +1580,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             onBackToWorkspace={handleBackToWorkspace}
             activeHostServerId={activeHostServerId}
             layout="mobile"
+            focused={focused}
           />
         </SettingsNavigationScrollView>
         {addHostModals}
@@ -1609,6 +1622,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             onBackToWorkspace={handleBackToWorkspace}
             activeHostServerId={activeHostServerId}
             layout="desktop"
+            focused={focused}
           />
         </WindowChromeRegion>
         <WindowChromeRegion corners="top-right">

@@ -33,6 +33,8 @@ const botListSchema = z.object({
   bots: z.array(
     z.object({
       id: z.string(),
+      kind: z.enum(["independent", "project"]).optional(),
+      projectId: z.string().nullable().optional(),
       mainAgentId: z.string().nullable(),
       name: z.string(),
       title: z.string(),

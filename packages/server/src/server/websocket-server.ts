@@ -2666,6 +2666,9 @@ export class VoiceAssistantWebSocketServer {
       activeConnection.connectionLogger.warn(
         {
           requestType: message.message.type,
+          ...(message.message.type === "plugin.rpc.invoke.request"
+            ? { pluginId: message.message.pluginId, method: message.message.method }
+            : {}),
           durationMs: Math.round(durationMs),
           inflightRequests: activeConnection.session.getRuntimeMetrics().inflightRequests,
         },

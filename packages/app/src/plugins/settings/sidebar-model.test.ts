@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectSettingsSidebarScreens,
+  pluginSettingsFromPath,
   settingsPluginCategory,
   settingsSearchMatches,
 } from "./sidebar-model";
@@ -49,6 +50,12 @@ describe("settings sidebar plugin screens", () => {
 });
 
 describe("settings categories and search", () => {
+  it("identifies the active plugin screen from its route", () => {
+    expect(
+      pluginSettingsFromPath("/settings/hosts/host/plugins/vibe-board/task-default-models"),
+    ).toEqual({ serverId: "host", pluginId: "vibe-board", screenId: "task-default-models" });
+    expect(pluginSettingsFromPath("/settings/hosts/host/connections")).toBeNull();
+  });
   it("places task and automation plugins in their categories", () => {
     expect(settingsPluginCategory("vibe-board")).toBe("task");
     expect(settingsPluginCategory("vibe-bots")).toBe("task");

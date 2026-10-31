@@ -916,6 +916,47 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 
+  test("logs the plugin and method for a slow plugin RPC without its input", async () => {
+    const logger = createLogger();
+    const server = createServer({ logger });
+    const socket = new MockSocket();
+    await attachRelayAndHello({ server, socket, clientId: "cid-slow-plugin" });
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    sessionMock.instances[0].handleMessage.mockImplementationOnce(async () => {
+      clock.mockReturnValue(5000);
+    });
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "session",
+        message: {
+          type: "plugin.rpc.invoke.request",
+          requestId: "rpc-1",
+          pluginId: "vibe-board",
+          method: "tabs.list",
+          input: { secret: "private" },
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestType: "plugin.rpc.invoke.request",
+          pluginId: "vibe-board",
+          method: "tabs.list",
+          durationMs: 5000,
+        }),
+        "ws_slow_request",
+      ),
+    );
+    const record = vi
+      .mocked(logger.warn)
+      .mock.calls.find((call) => call[1] === "ws_slow_request")?.[0];
+    expect(record).not.toHaveProperty("input");
+    clock.mockRestore();
+    await server.close();
+  });
+
   test("responds to top-level ping while provider diagnostic is still running", async () => {
     const server = createServer();
     const socket = new MockSocket();
