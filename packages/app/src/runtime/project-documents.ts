@@ -4,11 +4,23 @@ import { botSnapshotCache, pluginRegistry } from "@/plugins/registry";
 import { ProjectDocumentCache, projectDocumentCacheSchema } from "@/projects/document-cache";
 const caches = new Map<string, ProjectDocumentCache>();
 const loads = new WeakMap<ProjectDocumentCache, Promise<unknown>>();
+const outboxIds = new WeakMap<ProjectDocumentCache, Set<string>>();
+const outboxListeners = new Set<() => void>();
 export function getProjectDocumentCache(serverId: string, projectId: string) {
   const key = JSON.stringify([serverId, projectId]);
   let cache = caches.get(key);
   if (!cache) {
     cache = new ProjectDocumentCache(AsyncStorage, serverId, projectId);
+    const created = cache;
+    outboxIds.set(created, new Set());
+    created.subscribe(() => {
+      const previous = outboxIds.get(created)!;
+      const next = new Set(created.snapshot().outbox.map((change) => change.id));
+      outboxIds.set(created, next);
+      if ([...next].some((id) => !previous.has(id))) {
+        for (const listener of outboxListeners) listener();
+      }
+    });
     caches.set(key, cache);
   }
   return cache;
@@ -20,6 +32,7 @@ export async function loadProjectDocumentCache(cache: ProjectDocumentCache) {
     loads.set(cache, promise);
   }
   await promise;
+  outboxIds.set(cache, new Set(cache.snapshot().outbox.map((change) => change.id)));
   return cache.snapshot();
 }
 let flushing: Promise<void> | null = null;
@@ -92,6 +105,8 @@ async function flush() {
 }
 export function startProjectDocumentSync() {
   const store = getHostRuntimeStore();
+  let stopped = false;
+  let outboxPending = false;
   const refresh = () => {
     void flushProjectDocuments().catch(() => {});
   };
@@ -112,9 +127,27 @@ export function startProjectDocumentSync() {
   const stopRuntime = store.subscribeAll(onConnection);
   const stopHosts = store.subscribeHostList(refresh);
   const stopPlugins = pluginRegistry.subscribe(onConnection);
-  const timer = setInterval(refresh, 15000);
+  const onOutbox = () => {
+    if (flushing) {
+      if (!outboxPending) {
+        outboxPending = true;
+        void flushing
+          .finally(() => {
+            outboxPending = false;
+            if (!stopped) refresh();
+          })
+          .catch(() => {});
+      }
+    } else {
+      refresh();
+    }
+  };
+  outboxListeners.add(onOutbox);
+  const timer = setInterval(refresh, 60000);
   onConnection();
   return () => {
+    stopped = true;
+    outboxListeners.delete(onOutbox);
     stopRuntime();
     stopHosts();
     stopPlugins();

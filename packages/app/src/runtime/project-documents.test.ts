@@ -48,7 +48,67 @@ describe("project document background reconnect", () => {
     mocks.online = false;
     mocks.plugins = ["vibe-board"];
     mocks.client.invokePluginRpc.mockReset();
+    mocks.client.listProjects.mockReset();
     mocks.receivedBots.mockReset();
+  });
+  it("polls every 60 seconds", async () => {
+    vi.useFakeTimers();
+    mocks.online = true;
+    mocks.client.listProjects.mockResolvedValue({ projects: [] });
+    const runtime = await import("./project-documents");
+    const stop = runtime.startProjectDocumentSync();
+    try {
+      await runtime.flushProjectDocuments();
+      expect(mocks.client.listProjects).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(59999);
+      expect(mocks.client.listProjects).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.client.listProjects).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+  it("flushes a newly queued outbox change immediately, even during a flush", async () => {
+    mocks.online = true;
+    let release!: (value: { projects: never[] }) => void;
+    mocks.client.listProjects
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValue({ projects: [] });
+    mocks.client.invokePluginRpc.mockResolvedValue({ documents: [], pending: [] });
+    const runtime = await import("./project-documents");
+    const stop = runtime.startProjectDocumentSync();
+    try {
+      await vi.waitFor(() => expect(release).toBeDefined());
+      const cache = runtime.getProjectDocumentCache("host", "project");
+      await runtime.loadProjectDocumentCache(cache);
+      const change = {
+        id: "queued",
+        documents: [{ path: "AGENTS.md" as const, content: "edit", baseRevision: "old" }],
+        createdAt: "2026-10-28T00:00:00Z",
+      };
+      await cache.queue(change);
+      release({ projects: [] });
+      await vi.waitFor(() =>
+        expect(mocks.client.invokePluginRpc).toHaveBeenCalledWith(
+          "vibe-board",
+          "vibe.project.brief.submit",
+          { projectId: "project", id: change.id, documents: change.documents },
+        ),
+      );
+      await vi.waitFor(() => expect(cache.snapshot().outbox).toEqual([]));
+      await runtime.flushProjectDocuments();
+      const calls = mocks.client.listProjects.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(mocks.client.listProjects).toHaveBeenCalledTimes(calls);
+    } finally {
+      stop();
+    }
   });
   it("delivers persisted offline edits after reconnect without opening project settings", async () => {
     const key = "project-documents:v1:host:project";
