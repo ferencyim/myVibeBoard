@@ -13,6 +13,8 @@ import {
   type PickerThinking,
 } from "@/components/provider-model-picker/picker-panel";
 import { useOptimisticSelection } from "@/components/provider-model-picker/use-optimistic-selection";
+import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
+import { refreshModelCatalog } from "./refresh-model-catalog";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
@@ -58,8 +60,10 @@ export interface ProviderModelPickerProps {
   isRetryingProvider?: boolean;
   disabled?: boolean;
   serverId?: string | null;
+  cwd?: string | null;
+  refreshDisabled?: boolean;
   onOpen?: () => void;
-  onRefresh?: () => void;
+  onRefreshComplete?: () => Promise<unknown>;
   onClose?: () => void;
   renderTrigger?: (state: ProviderModelPickerTriggerState) => ReactNode;
   /** Full-width form-field trigger: the popover is as wide as the trigger. */
@@ -70,6 +74,28 @@ export interface ProviderModelPickerProps {
 function shortModelLabel(label: string): string {
   const separator = label.lastIndexOf("/");
   return separator === -1 ? label : label.slice(separator + 1);
+}
+
+function useModelRefresh(
+  serverId: string | null,
+  cwd: string | null | undefined,
+  refreshDisabled: boolean | undefined,
+  onComplete?: () => Promise<unknown>,
+) {
+  const toast = useToast();
+  const { refresh, isRefreshing } = useProvidersSnapshot(serverId, { cwd });
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    void refreshModelCatalog(refresh, onComplete)
+      .catch(() => toast.error("刷新模型列表失败"))
+      .finally(() => setRefreshing(false));
+  }, [refresh, onComplete, toast]);
+  return {
+    handleRefresh,
+    refreshing: refreshing || isRefreshing,
+    refreshDisabled: Boolean(refreshDisabled || !serverId),
+  };
 }
 
 export function ProviderModelPicker(props: ProviderModelPickerProps) {
@@ -83,13 +109,21 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
     isRetryingProvider,
     disabled = false,
     serverId = null,
+    cwd,
+    refreshDisabled,
     onOpen,
     onClose,
+    onRefreshComplete,
     renderTrigger,
     triggerFill = false,
     glyphSize = ICON_SIZE.md,
   } = props;
   const toast = useToast();
+  const {
+    handleRefresh,
+    refreshing,
+    refreshDisabled: cannotRefresh,
+  } = useModelRefresh(serverId, cwd, refreshDisabled, onRefreshComplete);
   const compact = useIsCompactFormFactor();
   const anchorRef = useRef<View>(null);
   const keyHandlerRef = useRef<PickerKeyHandler | null>(null);
@@ -153,7 +187,9 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
       permission={permission}
       onPick={handlePick}
       onRetryProvider={onRetryProvider}
-      onRefresh={props.onRefresh}
+      onRefresh={handleRefresh}
+      isRefreshing={refreshing}
+      refreshDisabled={cannotRefresh}
       isRetryingProvider={isRetryingProvider}
       serverId={serverId}
       autoFocusSearch={isWeb && !compact}

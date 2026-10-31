@@ -3,6 +3,7 @@ import type { ModalComponent, ModalContentProps, ModalProps } from "@getpaseo/pl
 import { usePluginRuntimeContextBridge } from "@getpaseo/plugin/client/host";
 import { createContext, useCallback, useContext, useMemo, useRef, type ReactNode } from "react";
 import { ToastApiProvider, useToast as useAppToast } from "@/contexts/toast-api-context";
+import { PluginHostIdContext, usePluginHostId } from "../host-id-context";
 
 interface ModalContextValue {
   open: boolean;
@@ -37,16 +38,19 @@ function ModalContent({
   scrollable = true,
 }: ModalContentProps) {
   const modal = useModalContext();
+  const hostId = usePluginHostId();
   const queryClient = useQueryClient();
   const toast = useAppToast();
   const bridgePluginRuntime = usePluginRuntimeContextBridge();
   const contextBridge = useCallback(
     (content: ReactNode) => (
-      <QueryClientProvider client={queryClient}>
-        <ToastApiProvider api={toast}>{bridgePluginRuntime(content)}</ToastApiProvider>
-      </QueryClientProvider>
+      <PluginHostIdContext.Provider value={hostId}>
+        <QueryClientProvider client={queryClient}>
+          <ToastApiProvider api={toast}>{bridgePluginRuntime(content)}</ToastApiProvider>
+        </QueryClientProvider>
+      </PluginHostIdContext.Provider>
     ),
-    [bridgePluginRuntime, queryClient, toast],
+    [bridgePluginRuntime, hostId, queryClient, toast],
   );
   const { AdaptiveModalSheet } =
     require("../../components/adaptive-modal-sheet") as typeof import("../../components/adaptive-modal-sheet");

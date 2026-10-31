@@ -130,6 +130,7 @@ interface ControlledAgentControlsProps {
   isRetryingModelProvider?: boolean;
   modeControl?: AgentModeControlValue | null;
   modelSelectorServerId?: string | null;
+  modelSelectorCwd?: string | null;
   nextTurnNotice?: NextTurnNotice | null;
   isCompactLayout?: boolean;
 }
@@ -158,6 +159,7 @@ export interface DraftAgentControlsProps {
   isRetryingModelProvider?: boolean;
   disabled?: boolean;
   modelSelectorServerId?: string | null;
+  modelSelectorCwd?: string | null;
   nextTurnNotice?: NextTurnNotice | null;
   isCompactLayout?: boolean;
 }
@@ -437,6 +439,7 @@ function ControlledAgentControls({
   isRetryingModelProvider = false,
   modeControl,
   modelSelectorServerId = null,
+  modelSelectorCwd = null,
   nextTurnNotice = null,
   isCompactLayout,
 }: ControlledAgentControlsProps) {
@@ -721,6 +724,7 @@ function ControlledAgentControls({
           handleOpenSheet={handleOpenSheet}
           handleCloseSheet={handleCloseSheet}
           modelSelectorServerId={modelSelectorServerId}
+          modelSelectorCwd={modelSelectorCwd}
           nextTurnNotice={nextTurnNotice}
           fast={fast}
           permission={permission}
@@ -780,6 +784,7 @@ interface DesktopAgentControlsContentProps {
   handleOpenSheet: (sheet: Exclude<ActiveSheet, null>) => void;
   handleCloseSheet: () => void;
   modelSelectorServerId: string | null;
+  modelSelectorCwd: string | null;
   nextTurnNotice: NextTurnNotice | null;
   fast: PickerFast | null;
   permission: PickerPermission | null;
@@ -834,6 +839,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     handleOpenSheet,
     handleCloseSheet,
     modelSelectorServerId,
+    modelSelectorCwd,
     nextTurnNotice,
     fast,
     permission,
@@ -896,6 +902,7 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
                 onRetryProvider={onRetryModelProvider}
                 isRetryingProvider={isRetryingModelProvider}
                 serverId={modelSelectorServerId}
+                cwd={modelSelectorCwd}
                 fast={fast}
                 permission={permission}
                 thinkingOptions={thinkingOptions}
@@ -1596,6 +1603,7 @@ export const AgentControls = memo(function AgentControls({
         disabled={!client}
         modeControl={modeControl}
         modelSelectorServerId={serverId}
+        modelSelectorCwd={agent.cwd}
         nextTurnNotice={nextTurnNotice}
         isCompactLayout={isCompactLayout}
       />
@@ -1642,6 +1650,7 @@ export function DraftAgentControls({
   isRetryingModelProvider = false,
   disabled = false,
   modelSelectorServerId = null,
+  modelSelectorCwd = null,
   isCompactLayout,
 }: DraftAgentControlsProps) {
   const mappedThinkingOptions = useMemo<AgentControlOption[]>(() => {
@@ -1696,6 +1705,7 @@ export function DraftAgentControls({
       disabled={disabled}
       modeControl={modeControl}
       modelSelectorServerId={modelSelectorServerId}
+      modelSelectorCwd={modelSelectorCwd}
       isCompactLayout={isCompactLayout}
     />
   );

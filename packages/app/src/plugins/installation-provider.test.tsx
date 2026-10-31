@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { z } from "zod";
 import { PluginInstallationProvider } from "./installation-provider";
+import { usePluginHostId } from "./host-id-context";
 import type { InstalledPlugin } from "./types";
 
 const status = defineRpc({
@@ -52,9 +53,11 @@ it("gives every surface the installation's client and RPCs on its first frame", 
   const invoked: string[] = [];
   const plugin = installation(invoked);
   const received: PaseoApi[] = [];
+  const hostIds: (string | null)[] = [];
   let rpc: ((input: Record<string, never>) => Promise<unknown>) | null = null;
   function Surface({ name }: { name: string }) {
     received.push(usePaseo());
+    hostIds.push(usePluginHostId());
     rpc = useRpc(status);
     return <span>{name}</span>;
   }
@@ -72,6 +75,7 @@ it("gives every surface the installation's client and RPCs on its first frame", 
   expect(markup).toBe("<span>Screen</span><span>Sidebar item</span><span>Popover</span>");
   expect(received).toEqual([plugin.paseo, plugin.paseo, plugin.paseo]);
   expect(received.every((paseo) => paseo === plugin.paseo)).toBe(true);
+  expect(hostIds).toEqual(["host", "host", "host"]);
   await expect(rpc!({})).resolves.toEqual({ state: "green" });
   expect(invoked).toEqual(["deploys.status"]);
 });

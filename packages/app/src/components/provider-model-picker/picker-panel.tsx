@@ -77,7 +77,9 @@ export interface PickerPanelProps {
   permission?: PickerPermission | null;
   onPick: (provider: string, modelId: string) => void;
   onRetryProvider?: (provider: string) => void;
-  onRefresh?: () => void;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+  refreshDisabled: boolean;
   isRetryingProvider?: boolean;
   serverId: string | null;
   autoFocusSearch?: boolean;
@@ -149,6 +151,8 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
     onPick,
     onRetryProvider,
     onRefresh,
+    isRefreshing,
+    refreshDisabled,
     isRetryingProvider = false,
     isLoading,
     autoFocusSearch = false,
@@ -240,7 +244,11 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
           {panelSubtitle(provider, rows.length, isLoading)}
         </Text>
       </View>
-      <RefreshModelsButton onRefresh={onRefresh} isLoading={isLoading} />
+      <RefreshModelsButton
+        onRefresh={onRefresh}
+        isLoading={isRefreshing}
+        disabled={isLoading || refreshDisabled}
+      />
       {provider?.modelSelection.kind === "error" ? (
         <View style={styles.statusBlock} accessibilityRole="alert">
           <Text style={styles.statusText}>{provider.modelSelection.message}</Text>

@@ -1,4 +1,8 @@
 import { useCallback, useMemo, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { usePluginHostId } from "../host-id-context";
+import { isPluginModelCatalogQuery } from "./model-catalog-queries";
+import { useSessionStore } from "@/stores/session-store";
 import type { ModelPickerFieldProps as PluginModelPickerFieldProps } from "@getpaseo/plugin/client/ui";
 import { ProviderModelPicker } from "@/components/provider-model-picker/provider-model-picker";
 import { ModelProviderGlyph } from "@/components/model-provider-glyph";
@@ -8,7 +12,7 @@ import type {
   ProviderSelectionModelRow,
 } from "@/provider-selection/provider-selection";
 
-type ModelPickerFieldProps = PluginModelPickerFieldProps & { onRefresh?(): void };
+type ModelPickerFieldProps = PluginModelPickerFieldProps & { projectId?: string | null };
 
 const PERMISSION_TIERS = ["accept-edits", "auto", "full"] as const;
 
@@ -20,6 +24,18 @@ function permissionTierLabel(tier: (typeof PERMISSION_TIERS)[number], provider: 
 
 /** Full-width provider / model / effort field for plugin settings screens. */
 export function ModelPickerField(props: ModelPickerFieldProps) {
+  const serverId = usePluginHostId();
+  const cwd = useSessionStore((state) =>
+    serverId && props.projectId
+      ? (state.sessions[serverId]?.projects.get(props.projectId)?.projectRootPath ?? null)
+      : null,
+  );
+  const queryClient = useQueryClient();
+  const refreshPluginQueries = useCallback(async () => {
+    await queryClient.invalidateQueries({
+      predicate: (query) => isPluginModelCatalogQuery(query.queryKey),
+    });
+  }, [queryClient]);
   const {
     providers,
     provider,
@@ -90,8 +106,9 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
   );
   const effortLabel = efforts.find((item) => item.id === thinking)?.name;
   const leading = useMemo(
-    () => (provider ? <ModelProviderGlyph provider={provider} serverId={null} size={16} /> : null),
-    [provider],
+    () =>
+      provider ? <ModelProviderGlyph provider={provider} serverId={serverId} size={16} /> : null,
+    [provider, serverId],
   );
   const renderTrigger = useCallback(
     (state: {
@@ -131,7 +148,10 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
       permission={pickerPermission}
       disabled={disabled}
       onOpen={onOpen}
-      onRefresh={props.onRefresh}
+      serverId={serverId}
+      cwd={cwd}
+      refreshDisabled={Boolean(props.projectId && !cwd)}
+      onRefreshComplete={refreshPluginQueries}
       renderTrigger={renderTrigger}
       triggerFill
     />

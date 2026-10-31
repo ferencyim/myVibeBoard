@@ -31,11 +31,14 @@ describe("plugin host navigation", () => {
       openPluginScreen: (input) => calls.push(["screen", input]),
       openPluginSettings: (input) => calls.push(["settings", input]),
     });
-    navigation.openPluginScreen!({ pluginId: "vibe-maintain", screenId: "main" });
-    navigation.openPluginSettings!({ pluginId: "vibe-master", screenId: "preferences" });
+    navigation.openPluginScreen!({ pluginId: "vibe-bots", screenId: "routines" });
+    navigation.openPluginSettings!({ pluginId: "vibe-board", screenId: "task-default-models" });
     expect(calls).toEqual([
-      ["screen", { serverId: "selected", pluginId: "vibe-maintain", screenId: "main" }],
-      ["settings", { serverId: "selected", pluginId: "vibe-master", screenId: "preferences" }],
+      ["screen", { serverId: "selected", pluginId: "vibe-bots", screenId: "routines" }],
+      [
+        "settings",
+        { serverId: "selected", pluginId: "vibe-board", screenId: "task-default-models" },
+      ],
     ]);
     expect(setup().navigation.openPluginScreen).toBeUndefined();
   });

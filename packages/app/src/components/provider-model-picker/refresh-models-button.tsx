@@ -3,13 +3,15 @@ import { Button } from "@/components/ui/button";
 export function RefreshModelsButton({
   onRefresh,
   isLoading,
+  disabled = false,
 }: {
-  onRefresh?: () => void;
+  onRefresh: () => void;
   isLoading: boolean;
+  disabled?: boolean;
 }) {
-  return onRefresh ? (
-    <Button variant="ghost" size="xs" onPress={onRefresh} disabled={isLoading}>
-      刷新模型列表
+  return (
+    <Button variant="ghost" size="xs" onPress={onRefresh} disabled={isLoading || disabled}>
+      {isLoading ? "正在刷新模型…" : "刷新模型列表"}
     </Button>
-  ) : null;
+  );
 }

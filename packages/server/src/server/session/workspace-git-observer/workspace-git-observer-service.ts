@@ -157,16 +157,19 @@ export function createWorkspaceGitObserverService(deps: {
 
     let subscription: ReturnType<WorkspaceGitService["registerWorkspace"]>;
     try {
-      subscription = workspaceGitService.registerWorkspace({ cwd: normalizedCwd }, (snapshot) => {
-        handleBranchSnapshot(normalizedCwd, snapshot.git.currentBranch ?? null);
-        void emitWorkspaceUpdateForCwd(normalizedCwd).catch((error) => {
-          logger.warn(
-            { err: error, cwd: normalizedCwd },
-            "Failed to emit workspace update after git branch snapshot",
-          );
-        });
-        emitStatusUpdate(normalizedCwd, snapshot);
-      });
+      subscription = workspaceGitService.registerWorkspace(
+        { cwd: normalizedCwd, background: true },
+        (snapshot) => {
+          handleBranchSnapshot(normalizedCwd, snapshot.git.currentBranch ?? null);
+          void emitWorkspaceUpdateForCwd(normalizedCwd).catch((error) => {
+            logger.warn(
+              { err: error, cwd: normalizedCwd },
+              "Failed to emit workspace update after git branch snapshot",
+            );
+          });
+          emitStatusUpdate(normalizedCwd, snapshot);
+        },
+      );
     } catch (error) {
       removeForWorkspaceId(options.workspaceId);
       throw error;

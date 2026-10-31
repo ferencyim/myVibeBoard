@@ -23,6 +23,7 @@ interface CombinedModelSelectorProps {
   isRetryingProvider?: boolean;
   disabled?: boolean;
   serverId?: string | null;
+  cwd?: string | null;
   /** Full-width form-field trigger (schedule form, settings). */
   triggerFill?: boolean;
   /** Effort options of the current model; when present the picker also edits the effort. */
@@ -65,6 +66,7 @@ export function CombinedModelSelector({
       isRetryingProvider={rest.isRetryingProvider}
       disabled={rest.disabled}
       serverId={rest.serverId}
+      cwd={rest.cwd}
       onOpen={rest.onOpen}
       onClose={rest.onClose}
       renderTrigger={rest.renderTrigger}

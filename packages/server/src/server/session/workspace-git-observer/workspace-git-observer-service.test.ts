@@ -52,6 +52,7 @@ function flushMicrotasks(): Promise<void> {
 function buildHarness(opts: { emitCwdRejects?: boolean } = {}) {
   const listeners = new Map<string, WorkspaceGitListener>();
   const registerCalls: string[] = [];
+  const backgroundCalls: Array<boolean | undefined> = [];
   const unsubscribeCalls: string[] = [];
   const emitCwdCalls: string[] = [];
   const statusCalls: Array<{ cwd: string; branch: string | null }> = [];
@@ -59,8 +60,9 @@ function buildHarness(opts: { emitCwdRejects?: boolean } = {}) {
   const warnCalls: unknown[][] = [];
 
   const workspaceGitService: Pick<WorkspaceGitService, "registerWorkspace"> = {
-    registerWorkspace({ cwd }, listener) {
+    registerWorkspace({ cwd, background }, listener) {
       registerCalls.push(cwd);
+      backgroundCalls.push(background);
       listeners.set(cwd, listener);
       return {
         unsubscribe() {
@@ -100,6 +102,7 @@ function buildHarness(opts: { emitCwdRejects?: boolean } = {}) {
     service,
     emitSnapshot,
     registerCalls,
+    backgroundCalls,
     unsubscribeCalls,
     emitCwdCalls,
     statusCalls,
@@ -113,6 +116,7 @@ describe("syncObservers", () => {
     const h = buildHarness();
     h.service.syncObservers([makeDescriptor({ id: "ws1", workspaceDirectory: WS1 })]);
     expect(h.registerCalls).toEqual([WS1]);
+    expect(h.backgroundCalls).toEqual([true]);
   });
 
   test("does not register a non-git workspace", () => {

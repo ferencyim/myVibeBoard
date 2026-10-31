@@ -213,6 +213,17 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+vi.mock("./run-git-command-worker.js", () => ({
+  prepareGitWorker: async () => false,
+  spawnGitInWorker: () => {
+    const behavior = fakeSpawnController.queue.shift() ?? {};
+    if (behavior.spawnError) throw behavior.spawnError;
+    const child = new FakeChildProcess(behavior);
+    fakeSpawnController.processes.push(child);
+    return child;
+  },
+}));
+
 function enqueueSpawnBehaviors(...behaviors: FakeSpawnBehavior[]): void {
   fakeSpawnController.queue.push(...behaviors);
 }
@@ -523,7 +534,6 @@ describe("runGitCommand", () => {
         command: "git",
         args: ["status", "--short"],
         cwd: process.cwd(),
-        cwdExists: true,
         timeout: 30_000,
         maxOutputBytes: 20 * 1024 * 1024,
         acceptExitCodes: [0, 1],
@@ -536,7 +546,6 @@ describe("runGitCommand", () => {
         command: "git",
         args: ["status", "--short"],
         cwd: process.cwd(),
-        cwdExists: true,
         durationMs: expect.any(Number),
         exitCode: 0,
         signal: null,

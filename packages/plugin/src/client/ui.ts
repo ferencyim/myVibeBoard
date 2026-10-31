@@ -201,6 +201,8 @@ export interface ModelPickerFieldProps {
   }[];
   provider: string;
   model: string;
+  /** Project context used to refresh its provider models. */
+  projectId?: string | null;
   /** Selected thinking option id; empty means the default. */
   thinking: string;
   loading?: boolean;
@@ -216,7 +218,8 @@ export interface ModelPickerFieldProps {
   onPermissionChange?(value: string): void | Promise<unknown>;
   /** Called when the picker opens; use it to refresh the catalog in the background. */
   onOpen?(): void;
-  /** Refresh the model catalog from the picker. */
+  // COMPAT(modelPickerRefresh): added in v0.13.2, remove after 2027-04-30 once older plugin bundles are retired.
+  /** @deprecated The host refreshes the model catalog directly; this callback is ignored. */
   onRefresh?(): void;
 }
 /** Host provider / model / effort picker rendered as a full-width form field. */

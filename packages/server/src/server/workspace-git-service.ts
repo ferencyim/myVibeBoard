@@ -205,7 +205,7 @@ export interface WorkspaceGitRuntimeSnapshot {
 
 export interface WorkspaceGitService {
   registerWorkspace(
-    params: { cwd: string },
+    params: { cwd: string; background?: boolean },
     listener: WorkspaceGitListener,
   ): WorkspaceGitSubscription;
 
@@ -420,6 +420,7 @@ class WorkspaceGitWatcherSubscriptionTimeoutError extends Error {
 interface WorkspaceGitTarget {
   cwd: string;
   listeners: Set<WorkspaceGitListener>;
+  backgroundListeners: Set<WorkspaceGitListener>;
   workingTreeWatchTarget: WorkingTreeWatchTarget | null;
   debounceTimer: NodeJS.Timeout | null;
   pendingDebounceRequest: WorkspaceGitRefreshRequest | null;
@@ -599,6 +600,9 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     concurrency: WORKSPACE_GIT_OBSERVATION_SETUP_CONCURRENCY,
     rejectOnClear: true,
   });
+  // Subscription setup can itself be expensive on large trees. Serialize it across
+  // workspace setup, direct watch requests and recovery, including metadata watches.
+  private readonly watcherSubscribeLimit = pLimit({ concurrency: 1, rejectOnClear: true });
   private readonly disposeController = new AbortController();
   private disposed = false;
   private disposePromise: Promise<void> | null = null;
@@ -656,13 +660,14 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   }
 
   registerWorkspace(
-    params: { cwd: string },
+    params: { cwd: string; background?: boolean },
     listener: WorkspaceGitListener,
   ): WorkspaceGitSubscription {
     this.assertNotDisposed();
     const cwd = resolve(params.cwd);
     const target = this.ensureWorkspaceTarget(cwd);
     target.listeners.add(listener);
+    if (params.background) target.backgroundListeners.add(listener);
     if (target.listeners.size === 1) {
       this.startWorkspaceSubscriptionTimers(target);
     }
@@ -1071,6 +1076,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     this.disposeController.abort(new WorkspaceGitServiceDisposedError());
     this.workspaceRefreshLimit.clearQueue();
     this.workspaceObservationSetupLimit.clearQueue();
+    this.watcherSubscribeLimit.clearQueue();
 
     for (const target of this.workspaceTargets.values()) {
       this.closeWorkspaceTarget(target);
@@ -1234,6 +1240,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     const target: WorkspaceGitTarget = {
       cwd,
       listeners: new Set(),
+      backgroundListeners: new Set(),
       workingTreeWatchTarget: null,
       debounceTimer: null,
       pendingDebounceRequest: null,
@@ -1436,6 +1443,17 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     options: FileObserverOptions,
     onSubscribeSettled: () => void,
   ): Promise<FileObserverSubscription> {
+    return this.watcherSubscribeLimit(() =>
+      this.subscribeWithDeadlineAdmitted(watchPath, callback, options, onSubscribeSettled),
+    );
+  }
+
+  private async subscribeWithDeadlineAdmitted(
+    watchPath: string,
+    callback: FileObserverCallback,
+    options: FileObserverOptions,
+    onSubscribeSettled: () => void,
+  ): Promise<FileObserverSubscription> {
     this.assertNotDisposed();
     const signal = this.disposeController.signal;
     let outcome: "pending" | "accepted" | "expired" = "pending";
@@ -1603,6 +1621,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       return true;
     } catch (error) {
       if (watcherErrored) {
+        if (!this.disposed && !target.closed) this.scheduleWorkingTreeWatchRecovery(target);
         return false;
       }
       if (this.disposed || target.closed) {
@@ -1615,6 +1634,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       if (!options?.replaceFallback) {
         this.startWorkingTreeWatchFallback(target, "watcher_setup_failed");
       }
+      this.scheduleWorkingTreeWatchRecovery(target);
       return false;
     }
   }
@@ -1648,6 +1668,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     target.fallbackPolling = true;
     target.fallbackPollQuietTickCount = 0;
     const { cwd } = target;
+    const lastBackgroundPoll = new Map<string, number>();
     const poll = async () => {
       target.fallbackPollTimer = null;
       if (target.closed || this.workingTreeWatchTargets.get(target.cwd) !== target) {
@@ -1658,6 +1679,15 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           const workspaceTarget = this.workspaceTargets.get(workspaceKey);
           if (!workspaceTarget) {
             return false;
+          }
+          if (workspaceTarget.listeners.size === workspaceTarget.backgroundListeners.size) {
+            const last = lastBackgroundPoll.get(workspaceKey);
+            if (last !== undefined && Date.now() - last < DEGRADED_GIT_POLL_MAX_INTERVAL_MS) {
+              return false;
+            }
+            lastBackgroundPoll.set(workspaceKey, Date.now());
+          } else {
+            lastBackgroundPoll.delete(workspaceKey);
           }
           const changed = await this.refreshDegradedPollTarget(workspaceTarget, {
             force: false,
@@ -2344,6 +2374,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
         await this.unsubscribeWatcherSubscription(openedSubscription, target.repoGitRoot);
       }
       if (watcherErrored) {
+        if (!this.disposed && !target.closed) this.scheduleRepoMetadataWatchRecovery(target);
         return false;
       }
       if (this.disposed || target.closed) {
@@ -2356,6 +2387,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       if (!options?.replaceFallback) {
         this.startRepoMetadataFallback(target);
       }
+      this.scheduleRepoMetadataWatchRecovery(target);
       return false;
     }
   }
@@ -2697,6 +2729,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     }
     target.fallbackPolling = true;
     target.fallbackPollQuietTickCount = 0;
+    const lastBackgroundPoll = new Map<string, number>();
     const poll = async () => {
       target.fallbackPollTimer = null;
       if (target.closed || this.repoTargets.get(target.repoGitRoot) !== target) {
@@ -2708,6 +2741,15 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
           const workspaceTarget = this.workspaceTargets.get(workspaceKey);
           if (!workspaceTarget) {
             return false;
+          }
+          if (workspaceTarget.listeners.size === workspaceTarget.backgroundListeners.size) {
+            const last = lastBackgroundPoll.get(workspaceKey);
+            if (last !== undefined && Date.now() - last < DEGRADED_GIT_POLL_MAX_INTERVAL_MS) {
+              return false;
+            }
+            lastBackgroundPoll.set(workspaceKey, Date.now());
+          } else {
+            lastBackgroundPoll.delete(workspaceKey);
           }
           this.invalidateCheckoutDiffCache(workspaceTarget.cwd, "base");
           if (workspaceTarget.latestFacts?.isGit) {
@@ -3681,6 +3723,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     }
 
     target.listeners.delete(listener);
+    target.backgroundListeners.delete(listener);
     if (target.listeners.size > 0) {
       return;
     }
