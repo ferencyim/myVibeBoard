@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 import compareVersions from "semver/functions/rcompare.js";
 import validVersion from "semver/functions/valid.js";
@@ -6,7 +6,7 @@ import validVersion from "semver/functions/valid.js";
 interface WindowsFindExecutableOptions {
   enumeratePathCandidates: (name: string) => Promise<string[]>;
   probeExecutable: (executablePath: string, timeoutMs: number) => Promise<boolean>;
-  exists: (path: string) => boolean;
+  exists: (path: string) => boolean | Promise<boolean>;
   localAppData?: string;
   roamingAppData?: string;
   arch?: string;
@@ -28,10 +28,10 @@ function enumerateLiteralPathCandidates(executablePath: string): string[] {
   return [executablePath, `${executablePath}.exe`, `${executablePath}.cmd`];
 }
 
-function enumerateWingetPackageCandidates(
+async function enumerateWingetPackageCandidates(
   name: string,
   localAppData: string | undefined,
-): string[] {
+): Promise<string[]> {
   if (!localAppData) {
     return [];
   }
@@ -39,7 +39,7 @@ function enumerateWingetPackageCandidates(
   const wingetPackages = join(localAppData, "Microsoft", "WinGet", "Packages");
   let packageDirs: string[];
   try {
-    packageDirs = readdirSync(wingetPackages, { withFileTypes: true })
+    packageDirs = (await readdir(wingetPackages, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
   } catch {
@@ -56,14 +56,14 @@ async function find(input: string, options: WindowsFindExecutableOptions): Promi
   }
 
   const pathCandidates = await options.enumeratePathCandidates(input);
-  const wingetCandidates = enumerateWingetPackageCandidates(
+  const wingetCandidates = await enumerateWingetPackageCandidates(
     input,
     options.localAppData ?? process.env.LOCALAPPDATA,
-  ).filter(options.exists);
+  );
 
   const desktopCandidates =
     input.toLowerCase() === "opencode"
-      ? enumerateOpenCodeDesktopCandidates(
+      ? await enumerateOpenCodeDesktopCandidates(
           options.roamingAppData ?? process.env.APPDATA,
           options.arch ?? process.arch,
         )
@@ -74,12 +74,15 @@ async function find(input: string, options: WindowsFindExecutableOptions): Promi
   );
 }
 
-function enumerateOpenCodeDesktopCandidates(appData: string | undefined, arch: string): string[] {
+async function enumerateOpenCodeDesktopCandidates(
+  appData: string | undefined,
+  arch: string,
+): Promise<string[]> {
   if (!appData) return [];
   // The desktop app keeps its CLI outside PATH in versioned architecture directories.
   const cliRoot = join(appData, "ai.opencode.desktop", "cli");
   try {
-    return readdirSync(cliRoot, { withFileTypes: true })
+    return (await readdir(cliRoot, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && entry.name.endsWith(`-${arch}`))
       .map((entry) => ({
         name: entry.name,
@@ -103,7 +106,7 @@ async function findFirstProbeable(
       continue;
     }
     seen.add(candidate);
-    if (!options.exists(candidate)) {
+    if (!(await options.exists(candidate))) {
       continue;
     }
     if (await options.probeExecutable(candidate, options.probeTimeoutMs)) {

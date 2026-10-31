@@ -18,6 +18,7 @@ import { rejectUnsupportedMcpProtocolVersion } from "./agent/mcp-protocol-versio
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
+import { scheduleStartupReconciliation } from "./startup-reconciliation.js";
 
 export type ListenTarget =
   | { type: "tcp"; host: string; port: number }
@@ -661,6 +662,7 @@ export async function createPaseoDaemon(
   const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({});
   const pluginRuntime: PluginService = new PluginService(logger, daemonConfigStore, daemonVersion, {
+    paseoHome: config.paseoHome,
     usageAgents: {
       hasAgent: (id) => agentManager.getAgent(id) !== null,
       usageSession: (id) => agentManager.usageSession(id),
@@ -1062,9 +1064,7 @@ export async function createPaseoDaemon(
     },
   });
   await workspaceReconciliation.start();
-  void workspaceReconciliation.reconcileNow().catch((error) => {
-    logger.warn({ err: error }, "Initial workspace reconciliation failed");
-  });
+  let cancelInitialReconciliation: (() => void) | null = null;
   const checkoutDiffManager = new CheckoutDiffManager({
     logger,
     paseoHome: config.paseoHome,
@@ -1921,6 +1921,14 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      // Convergence is background work; let the daemon accept requests first and
+      // avoid competing with startup provider and plugin initialization.
+      cancelInitialReconciliation = scheduleStartupReconciliation(() => {
+        cancelInitialReconciliation = null;
+        void workspaceReconciliation.reconcileNow().catch((error) => {
+          logger.warn({ err: error }, "Initial workspace reconciliation failed");
+        });
+      });
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
@@ -1937,6 +1945,8 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    cancelInitialReconciliation?.();
+    cancelInitialReconciliation = null;
     localCredential = null;
     await deleteLocalCredential(config.paseoHome);
     // Stop tracking plugin provider registrations before anything tears plugins

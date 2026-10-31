@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
+import { open, stat } from "node:fs/promises";
+import { extname } from "node:path";
 import { delimiter, resolve } from "node:path";
 import type { ProcessEnvRecord } from "../server/paseo-env.js";
 import { execCommand } from "../utils/spawn.js";
@@ -13,6 +15,40 @@ type Which = (
 const require = createRequire(import.meta.url);
 const which = require("which") as Which;
 const PROBE_TIMEOUT_MS = 2000;
+const FAILED_LOOKUP_TTL_MS = 5_000;
+const lookupCache = new Map<string, { result: Promise<string | null>; expiresAt: number }>();
+
+// Reject incomplete PE files without launching every PATH candidate. This checks
+// structural bounds, not whether Windows can actually run a particular binary.
+async function isWindowsExecutable(filePath: string): Promise<boolean> {
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) return false;
+    if (extname(filePath).toLowerCase() !== ".exe") return true;
+    const file = await open(filePath, "r");
+    try {
+      const dosHeader = Buffer.alloc(64);
+      const { bytesRead } = await file.read(dosHeader, 0, dosHeader.length, 0);
+      if (bytesRead !== dosHeader.length || dosHeader.readUInt16LE(0) !== 0x5a4d) return false;
+      const peOffset = dosHeader.readUInt32LE(0x3c);
+      if (peOffset < dosHeader.length || peOffset + 24 > info.size) return false;
+      const peHeader = Buffer.alloc(24);
+      const peRead = await file.read(peHeader, 0, peHeader.length, peOffset);
+      if (peRead.bytesRead !== peHeader.length || peHeader.readUInt32LE(0) !== 0x00004550)
+        return false;
+      const sectionCount = peHeader.readUInt16LE(6);
+      const optionalHeaderSize = peHeader.readUInt16LE(20);
+      return (
+        optionalHeaderSize >= 2 &&
+        peOffset + 24 + optionalHeaderSize + sectionCount * 40 <= info.size
+      );
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 function hasPathSeparator(value: string): boolean {
   return value.includes("/") || value.includes("\\");
@@ -160,12 +196,51 @@ export async function findExecutable(
     return null;
   }
 
+  const key = JSON.stringify([
+    process.platform,
+    trimmed,
+    env?.PATH ?? process.env.PATH,
+    env?.PATHEXT ?? process.env.PATHEXT,
+    env?.LOCALAPPDATA ?? process.env.LOCALAPPDATA,
+    env?.APPDATA ?? process.env.APPDATA,
+    process.cwd(),
+    probeTimeoutMs,
+  ]);
+  const cached = lookupCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.result;
+  const result = resolveExecutable(trimmed, probeTimeoutMs, env);
+  const entry = { result, expiresAt: Infinity };
+  if (lookupCache.size >= 512) {
+    const oldest = lookupCache.keys().next().value;
+    if (oldest !== undefined) lookupCache.delete(oldest);
+  }
+  lookupCache.set(key, entry);
+  try {
+    if ((await result) === null) entry.expiresAt = Date.now() + FAILED_LOOKUP_TTL_MS;
+  } catch (error) {
+    if (lookupCache.get(key) === entry) lookupCache.delete(key);
+    throw error;
+  }
+  return result;
+}
+
+async function resolveExecutable(
+  trimmed: string,
+  probeTimeoutMs: number,
+  env?: ProcessEnvRecord,
+): Promise<string | null> {
   if (process.platform === "win32") {
     return windowsExecutableResolution.find(trimmed, {
       enumeratePathCandidates: (command) => enumerateCandidates(command, env),
-      probeExecutable: (command, timeout) =>
-        probeExecutable(command, { probeTimeoutMs: timeout, env }),
-      exists: existsSync,
+      probeExecutable: isWindowsExecutable,
+      exists: async (candidate) => {
+        try {
+          return (await stat(candidate)).isFile();
+        } catch {
+          return false;
+        }
+      },
+      localAppData: env?.LOCALAPPDATA,
       roamingAppData: env?.APPDATA,
       probeTimeoutMs,
     });

@@ -180,6 +180,38 @@ function createPluginSelectivePausedRuntime(pausedPluginId: string) {
 }
 
 describe("PluginService", () => {
+  it("starts plugins while import prewarming is still in progress", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
+    roots.push(home);
+    const paused = createPausedRuntime();
+    let releaseWarm = () => {};
+    const warmGate = new Promise<void>((resolve) => {
+      releaseWarm = resolve;
+    });
+    let markWarming = () => {};
+    const warming = new Promise<void>((resolve) => {
+      markWarming = resolve;
+    });
+    paused.runtime.warmPluginImports = async () => {
+      markWarming();
+      await warmGate;
+    };
+    const service = createService(
+      home,
+      {
+        first: { source: "directory", path: "/plugins/first" },
+      },
+      { runtime: paused.runtime },
+    );
+    const start = service.start();
+    await warming;
+    await paused.started;
+    paused.releaseStart();
+    await start;
+    expect(service.catalog()).toMatchObject([{ id: "first" }]);
+    releaseWarm();
+    await service.stopAllPlugins();
+  });
   it.each([
     { shadow: false, runtime: "subprocess" },
     { shadow: true, runtime: "subprocess" },

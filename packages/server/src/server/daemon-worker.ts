@@ -1,3 +1,4 @@
+import { stopDaemonAfterStartup } from "./daemon-startup-lifecycle.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { createPaseoDaemon, formatListenTarget } from "./bootstrap.js";
@@ -131,6 +132,8 @@ function applyCliFlagOverrides(config: ReturnType<typeof loadConfig>): void {
 async function main() {
   const { paseoHome, logger, config } = bootstrapFromEnvironment();
   let daemon: Awaited<ReturnType<typeof createPaseoDaemon>> | null = null;
+  let initialization: ReturnType<typeof createPaseoDaemon> | null = null;
+  let starting: Promise<void> | null = null;
   let shutdownPromise: Promise<number> | null = null;
   let exitHookInstalled = false;
 
@@ -170,12 +173,9 @@ async function main() {
         }, 10000);
 
         try {
-          if (!daemon) {
-            logger.error("Shutdown requested before daemon initialization completed");
-            clearTimeout(forceExit);
-            return 1;
+          if (initialization) {
+            await stopDaemonAfterStartup(initialization, () => starting);
           }
-          await daemon.stop();
           clearTimeout(forceExit);
           logger.info("Server closed");
           return options?.successExitCode ?? 0;
@@ -308,21 +308,33 @@ async function main() {
 
   installSupervisorLivenessGuard();
 
+  const bootstrapStartedAt = Date.now();
   try {
-    daemon = await createPaseoDaemon(
+    initialization = createPaseoDaemon(
       {
         ...config,
         onLifecycleIntent: handleLifecycleIntent,
       },
       logger,
     );
+    daemon = await initialization;
   } catch (err) {
+    if (shutdownPromise) return;
     logger.fatal({ err }, "Daemon bootstrap failed");
     throw err;
   }
 
+  if (shutdownPromise) return;
+  logger.info({ durationMs: Date.now() - bootstrapStartedAt }, "Daemon bootstrap phase complete");
+  const startStartedAt = Date.now();
   try {
-    await daemon.start();
+    starting = daemon.start();
+    await starting;
+    if (shutdownPromise) return;
+    logger.info(
+      { durationMs: Date.now() - startStartedAt, totalDurationMs: Date.now() - bootstrapStartedAt },
+      "Daemon listening phase complete",
+    );
     const listenTarget = daemon.getListenTarget();
     const listen = formatListenTarget(listenTarget);
     if (!listen) {
@@ -334,6 +346,7 @@ async function main() {
       serverId: daemon.getServerId(),
     });
   } catch (err) {
+    if (shutdownPromise) return;
     logger.fatal({ err }, "Daemon failed to start listening");
     throw err;
   }

@@ -27,6 +27,7 @@ import {
 } from "@getpaseo/plugin/server/provider";
 import type { PluginLogEntry } from "@getpaseo/protocol/messages";
 import { compilePlugin } from "./compiler.js";
+import { warmPluginImports } from "./compiler-imports.js";
 import { readPluginManifest } from "./manifest.js";
 import type { PluginRequirements } from "@getpaseo/protocol/messages";
 import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirements";
@@ -131,6 +132,7 @@ interface RemoteProviderConnection {
 }
 
 interface PluginRuntimeDependencies {
+  paseoHome?: string;
   settingsDirectory?: string;
   onSettingsChanged?: (pluginId: string, settingsId: string) => void;
   spawnChild?: () => PluginChild;
@@ -330,6 +332,19 @@ export class PluginRuntime {
     this.sessionHost = sessionHost;
   }
 
+  async warmPluginImports(pluginId: string, directory: string): Promise<void> {
+    const started = performance.now();
+    try {
+      await warmPluginImports(path.resolve(directory), this.dependencies.paseoHome);
+      this.logger.info(
+        { pluginId, durationMs: Math.round(performance.now() - started) },
+        "Plugin import cache warmed",
+      );
+    } catch (err) {
+      this.logger.warn({ pluginId, err }, "Plugin import cache warmup failed");
+    }
+  }
+
   subscribe(listener: (pluginId: string, error?: string) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -341,40 +356,80 @@ export class PluginRuntime {
     canPublish: () => boolean = () => true,
   ): Promise<void> {
     if (this.plugins.has(pluginId)) throw new Error(`Plugin is already running: ${pluginId}`);
-    this.appendLog(pluginId, "stdout", "[paseo] Loading plugin");
-    const loaded = await this.loadDirectoryPlugin(pluginId, configuredPath).catch((error) => {
-      this.appendLog(pluginId, "stderr", `[paseo] Plugin failed to load: ${describeError(error)}`);
-      throw error;
-    });
-    if (!canPublish()) {
-      await this.stopPlugin(loaded);
-      throw new Error(`Plugin start cancelled: ${pluginId}`);
+    const started = performance.now();
+    try {
+      this.appendLog(pluginId, "stdout", "[paseo] Loading plugin");
+      const loaded = await this.loadDirectoryPlugin(pluginId, configuredPath).catch((error) => {
+        this.appendLog(
+          pluginId,
+          "stderr",
+          `[paseo] Plugin failed to load: ${describeError(error)}`,
+        );
+        throw error;
+      });
+      if (!canPublish()) {
+        await this.stopPlugin(loaded);
+        throw new Error(`Plugin start cancelled: ${pluginId}`);
+      }
+      this.plugins.set(pluginId, loaded);
+      this.logger.info(
+        { pluginId, durationMs: Math.round(performance.now() - started) },
+        "Plugin loaded",
+      );
+      this.appendLog(pluginId, "stdout", "[paseo] Plugin ready");
+    } catch (err) {
+      this.logger.warn(
+        { pluginId, err, durationMs: Math.round(performance.now() - started) },
+        "Plugin load failed",
+      );
+      throw err;
     }
-    this.plugins.set(pluginId, loaded);
-    this.appendLog(pluginId, "stdout", "[paseo] Plugin ready");
   }
 
   async startBuiltinPlugin(input: { id: string; directory: string }): Promise<void> {
     if (this.plugins.has(input.id)) throw new Error(`Plugin is already running: ${input.id}`);
-    this.appendLog(input.id, "stdout", "[paseo] Loading plugin");
-    const directory = path.resolve(input.directory);
-    const manifest = await readPluginManifest(directory);
-    if (manifest.id !== input.id) {
-      throw new Error(`Built-in plugin ${input.id} has manifest ID ${manifest.id}`);
+    const started = performance.now();
+    try {
+      this.appendLog(input.id, "stdout", "[paseo] Loading plugin");
+      const directory = path.resolve(input.directory);
+      const manifest = await readPluginManifest(directory);
+      if (manifest.id !== input.id) {
+        throw new Error(`Built-in plugin ${input.id} has manifest ID ${manifest.id}`);
+      }
+      assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
+      const bundles = await compilePlugin(
+        await resolveEntryPaths(directory),
+        (timing) => {
+          this.logger.info(
+            { pluginId: input.id, ...timing },
+            "Plugin import check and compilation finished",
+          );
+        },
+        this.dependencies.paseoHome,
+      );
+      if (!bundles.serverBundle)
+        throw new Error(`Built-in plugin ${input.id} needs a server entry`);
+      const loaded = await this.launchPlugin({
+        pluginId: input.id,
+        pluginDirectory: directory,
+        requirements: manifest.requirements,
+        child: new InternalPluginChild(evaluateBundle(bundles.serverBundle)),
+        bundle: "",
+        clientBundle: bundles.clientBundle ?? "",
+      });
+      this.plugins.set(input.id, loaded);
+      this.logger.info(
+        { pluginId: input.id, durationMs: Math.round(performance.now() - started) },
+        "Plugin loaded",
+      );
+      this.appendLog(input.id, "stdout", "[paseo] Plugin ready");
+    } catch (err) {
+      this.logger.warn(
+        { pluginId: input.id, err, durationMs: Math.round(performance.now() - started) },
+        "Plugin load failed",
+      );
+      throw err;
     }
-    assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
-    const bundles = await compilePlugin(await resolveEntryPaths(directory));
-    if (!bundles.serverBundle) throw new Error(`Built-in plugin ${input.id} needs a server entry`);
-    const loaded = await this.launchPlugin({
-      pluginId: input.id,
-      pluginDirectory: directory,
-      requirements: manifest.requirements,
-      child: new InternalPluginChild(evaluateBundle(bundles.serverBundle)),
-      bundle: "",
-      clientBundle: bundles.clientBundle ?? "",
-    });
-    this.plugins.set(input.id, loaded);
-    this.appendLog(input.id, "stdout", "[paseo] Plugin ready");
   }
 
   async validatePlugin(configuredPath: string): Promise<void> {
@@ -382,7 +437,7 @@ export class PluginRuntime {
     const manifest = await readPluginManifest(directory);
     assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
     const entryPaths = await resolveEntryPaths(directory);
-    await compilePlugin(entryPaths);
+    await compilePlugin(entryPaths, undefined, this.dependencies.paseoHome);
   }
 
   async stopPluginById(pluginId: string): Promise<boolean> {
@@ -672,7 +727,13 @@ export class PluginRuntime {
     const manifest = await readPluginManifest(directory);
     assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
     const entryPaths = await resolveEntryPaths(directory);
-    const bundles = await compilePlugin(entryPaths);
+    const bundles = await compilePlugin(
+      entryPaths,
+      (timing) => {
+        this.logger.info({ pluginId, ...timing }, "Plugin import check and compilation finished");
+      },
+      this.dependencies.paseoHome,
+    );
     const serverBundle = bundles.serverBundle;
     if (!serverBundle) {
       return {

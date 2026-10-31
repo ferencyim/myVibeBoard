@@ -12,6 +12,7 @@ import { resolvePaseoHome } from "../src/server/paseo-home.js";
 import { daemonLogPath } from "../src/server/daemon-instance.js";
 import { PRIVATE_FILE_MODE } from "../src/server/private-files.js";
 import { loadPersistedConfig } from "../src/server/persisted-config.js";
+import { createShutdownChannel } from "../src/server/supervisor-shutdown-channel.js";
 import { runSupervisor } from "./supervisor.js";
 import { resolveSupervisorLogFile } from "./supervisor-log-config.js";
 
@@ -111,11 +112,19 @@ async function main(): Promise<void> {
   const persistedConfig = loadPersistedConfig(paseoHome);
   const supervisorLogFile = resolveSupervisorLogFile(paseoHome, persistedConfig, workerEnv);
 
+  let requestSupervisorShutdown: ((reason: string) => void) | null = null;
+  let pendingShutdown = false;
+  const shutdownChannel = await createShutdownChannel(() => {
+    if (requestSupervisorShutdown) requestSupervisorShutdown("local_shutdown_request");
+    else pendingShutdown = true;
+  });
   try {
     await acquirePidLock(paseoHome, null, {
       ownerPid: process.pid,
+      shutdownChannel: shutdownChannel.address,
     });
   } catch (error) {
+    await shutdownChannel.close();
     if (error instanceof PidLockError) {
       failStartup(error.message, error.message);
     }
@@ -123,7 +132,6 @@ async function main(): Promise<void> {
   }
 
   let lockReleased = false;
-  let requestSupervisorShutdown: ((reason: string) => void) | null = null;
   const stopLockHeartbeat = startPidLockHeartbeat(paseoHome, {
     ownerPid: process.pid,
     onError: (error) => {
@@ -140,6 +148,7 @@ async function main(): Promise<void> {
     }
     lockReleased = true;
     stopLockHeartbeat();
+    await shutdownChannel.close();
     await releasePidLock(paseoHome, {
       ownerPid: process.pid,
     });
@@ -177,6 +186,7 @@ async function main(): Promise<void> {
     onSupervisorExit: releaseLock,
   });
   requestSupervisorShutdown = supervisor.requestShutdown;
+  if (pendingShutdown) requestSupervisorShutdown("local_shutdown_request");
 }
 
 // The supervisor opens its log only after config and the PID lock succeed. A background

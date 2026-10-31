@@ -71,6 +71,13 @@ function loadEsbuild(): typeof import("esbuild") {
 }
 
 type PluginBuildTarget = "client" | "server";
+interface CompileTiming {
+  target: PluginBuildTarget;
+  durationMs: number;
+  importReadMs: number;
+  files: number;
+  error?: string;
+}
 
 type PluginModuleLocation = PluginBuildTarget | "shared" | "invalid";
 
@@ -166,14 +173,19 @@ function lexicalBoundaryError(
   }
 }
 
-function createRuntimeBoundaryPlugin(target: PluginBuildTarget, pluginDirectory: string): Plugin {
+function createRuntimeBoundaryPlugin(
+  target: PluginBuildTarget,
+  pluginDirectory: string,
+  metrics: { importReadMs: number; files: number },
+  paseoHome?: string,
+): Plugin {
   const boundaryResolution = {};
   const linkedDependencyRoots = new Set<string>();
   return {
     name: `paseo-plugin-${target}-runtime-boundary`,
     setup(buildContext) {
       const checked = new Set<string>();
-      const imports = createPluginImportReader(pluginDirectory);
+      const imports = createPluginImportReader(pluginDirectory, paseoHome);
       function resolvedBoundaryError(
         resolvedFile: string,
         specifier: string,
@@ -235,7 +247,15 @@ function createRuntimeBoundaryPlugin(target: PluginBuildTarget, pluginDirectory:
         const key = `${owner}:${file}`;
         if (checked.has(key) || !/\.[cm]?[jt]sx?$/.test(file)) return null;
         checked.add(key);
-        for (const { specifier, kind, typeOnly } of imports.read(file)) {
+        const started = performance.now();
+        let sourceImports: Awaited<ReturnType<typeof imports.read>>;
+        try {
+          sourceImports = await imports.read(file);
+        } finally {
+          metrics.importReadMs += performance.now() - started;
+          metrics.files++;
+        }
+        for (const { specifier, kind, typeOnly } of sourceImports) {
           const packageSpecifier =
             kind === "type-reference"
               ? `@types/${specifier.replace(/^@/, "").replace("/", "__")}`
@@ -383,60 +403,82 @@ function checkSharedDependencies(inputs: Metafile["inputs"], pluginDirectory: st
   }
 }
 
-async function compileTarget(entryPath: string, target: PluginBuildTarget): Promise<string> {
-  const { build } = loadEsbuild();
-  // Use native canonical paths throughout: TypeScript expands Windows short names
-  // when resolving type references, while the JS realpath implementation retains them.
-  const pluginDirectory = realpathSync.native(path.dirname(entryPath));
-  const result = await build({
-    entryPoints: [realpathSync.native(entryPath)],
-    bundle: true,
-    format: "cjs",
-    jsx: "automatic",
-    // `import icon from "./icon.svg"` yields the markup for an inline `{ svg }` icon.
-    loader: { ".svg": "text" },
-    platform: target === "server" ? "node" : "neutral",
-    target: target === "server" ? "node20" : "es2020",
-    // The neutral platform reads no package.json entry fields, so packages without
-    // `exports` would not resolve. Read the same fields as esbuild's browser platform
-    // minus `browser`, since the bundle also runs in React Native.
-    mainFields: target === "client" ? ["module", "main"] : undefined,
-    // Metro lowers async syntax before Hermes sees app code. Plugin client bundles bypass Metro,
-    // so apply the same compatibility transform before the app evaluates them from source.
-    supported: target === "client" ? { "async-await": false } : undefined,
-    external:
-      target === "client"
-        ? [
-            ...PLUGIN_SDK_SPECIFIERS,
-            "@tanstack/react-query",
-            "react",
-            "react/jsx-runtime",
-            "react-native",
-            "zod",
-          ]
-        : SERVER_HOST_MODULES,
-    plugins: [createRuntimeBoundaryPlugin(target, pluginDirectory)],
-    metafile: true,
-    logLevel: "silent",
-    treeShaking: true,
-    write: false,
-  });
-  checkSharedDependencies(result.metafile.inputs, pluginDirectory);
-  const output = result.outputFiles[0]?.text;
-  if (!output) throw new Error(`Plugin ${target} compilation produced no output`);
-  return wrapCommonJsBundle(makeHermesInteropEager(output));
+async function compileTarget(
+  entryPath: string,
+  target: PluginBuildTarget,
+  onTiming?: (timing: CompileTiming) => void,
+  paseoHome?: string,
+): Promise<string> {
+  const started = performance.now();
+  const metrics = { importReadMs: 0, files: 0 };
+  try {
+    const { build } = loadEsbuild();
+    // Use native canonical paths throughout: TypeScript expands Windows short names
+    // when resolving type references, while the JS realpath implementation retains them.
+    const pluginDirectory = realpathSync.native(path.dirname(entryPath));
+    const result = await build({
+      entryPoints: [realpathSync.native(entryPath)],
+      bundle: true,
+      format: "cjs",
+      jsx: "automatic",
+      // `import icon from "./icon.svg"` yields the markup for an inline `{ svg }` icon.
+      loader: { ".svg": "text" },
+      platform: target === "server" ? "node" : "neutral",
+      target: target === "server" ? "node20" : "es2020",
+      // The neutral platform reads no package.json entry fields, so packages without
+      // `exports` would not resolve. Read the same fields as esbuild's browser platform
+      // minus `browser`, since the bundle also runs in React Native.
+      mainFields: target === "client" ? ["module", "main"] : undefined,
+      // Metro lowers async syntax before Hermes sees app code. Plugin client bundles bypass Metro,
+      // so apply the same compatibility transform before the app evaluates them from source.
+      supported: target === "client" ? { "async-await": false } : undefined,
+      external:
+        target === "client"
+          ? [
+              ...PLUGIN_SDK_SPECIFIERS,
+              "@tanstack/react-query",
+              "react",
+              "react/jsx-runtime",
+              "react-native",
+              "zod",
+            ]
+          : SERVER_HOST_MODULES,
+      plugins: [createRuntimeBoundaryPlugin(target, pluginDirectory, metrics, paseoHome)],
+      metafile: true,
+      logLevel: "silent",
+      treeShaking: true,
+      write: false,
+    });
+    checkSharedDependencies(result.metafile.inputs, pluginDirectory);
+    const output = result.outputFiles[0]?.text;
+    if (!output) throw new Error(`Plugin ${target} compilation produced no output`);
+    onTiming?.({ target, durationMs: performance.now() - started, ...metrics });
+    return wrapCommonJsBundle(makeHermesInteropEager(output));
+  } catch (error) {
+    onTiming?.({
+      target,
+      durationMs: performance.now() - started,
+      ...metrics,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
-export async function compilePlugin(entryPaths: {
-  client: string | null;
-  server: string | null;
-}): Promise<{
+export async function compilePlugin(
+  entryPaths: {
+    client: string | null;
+    server: string | null;
+  },
+  onTiming?: (timing: CompileTiming) => void,
+  paseoHome?: string,
+): Promise<{
   clientBundle: string | null;
   serverBundle: string | null;
 }> {
   const [clientBundle, serverBundle] = await Promise.all([
-    entryPaths.client ? compileTarget(entryPaths.client, "client") : null,
-    entryPaths.server ? compileTarget(entryPaths.server, "server") : null,
+    entryPaths.client ? compileTarget(entryPaths.client, "client", onTiming, paseoHome) : null,
+    entryPaths.server ? compileTarget(entryPaths.server, "server", onTiming, paseoHome) : null,
   ]);
   return { clientBundle, serverBundle };
 }

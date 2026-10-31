@@ -20,6 +20,7 @@ import {
   WorkspaceReconciliationService,
 } from "./workspace-reconciliation-service.js";
 import { deriveProjectKey } from "./project-key.js";
+import { getGitCommandPriority, runWithGitCommandPriority } from "../utils/run-git-command.js";
 
 function canonicalLocalProjectKey(rootPath: string): string {
   return deriveProjectKey({
@@ -239,6 +240,58 @@ describe("WorkspaceReconciliationService", () => {
       rmSync(dir, { recursive: true, force: true });
     }
     tempDirs.length = 0;
+  });
+
+  test("bounds concurrent background Git reads across projects", async () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "reconcile-limit-")));
+    tempDirs.push(root);
+    const { projects, projectRegistry, workspaceRegistry } = createTestRegistries();
+    for (let i = 0; i < 4; i++) {
+      const rootPath = path.join(root, String(i));
+      mkdirSync(rootPath);
+      projects.set(
+        String(i),
+        createPersistedProjectRecord({
+          projectId: String(i),
+          rootPath,
+          kind: "non_git",
+          displayName: String(i),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }),
+      );
+    }
+    const gate = deferred();
+    const twoStarted = deferred();
+    let active = 0;
+    let maximum = 0;
+    let reads = 0;
+    const priorities: string[] = [];
+    const service = new WorkspaceReconciliationService({
+      projectRegistry,
+      workspaceRegistry,
+      logger: createTestLogger(),
+      workspaceGitService: {
+        getCheckout: async (cwd) => {
+          active++;
+          reads++;
+          priorities.push(getGitCommandPriority());
+          maximum = Math.max(maximum, active);
+          if (reads === 2) twoStarted.resolve();
+          await gate.promise;
+          active--;
+          return createCheckout(cwd);
+        },
+      },
+    });
+    const pending = runWithGitCommandPriority("high", () => service.reconcileGitMetadata());
+    await twoStarted.promise;
+    expect(reads).toBe(2);
+    gate.resolve();
+    await pending;
+    expect(reads).toBe(4);
+    expect(maximum).toBe(2);
+    expect(priorities).toEqual(["normal", "normal", "normal", "normal"]);
   });
 
   test("preserves workspace archival that lands during boot reconciliation", async () => {

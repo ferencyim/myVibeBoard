@@ -282,6 +282,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       return;
     }
 
+    const workerStartedAt = Date.now();
     const spawnSpec = resolveWorkerSpawnSpec?.(workerEntry) ?? null;
     writeLifecycleLog("Spawning worker", { workerEntry });
     if (spawnSpec) {
@@ -338,7 +339,10 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
 
       if (lifecycleMessage.type === "paseo:ready") {
         reachedReady = true;
-        writeLifecycleLog("Worker ready", { listen: lifecycleMessage.listen });
+        writeLifecycleLog("Worker ready", {
+          listen: lifecycleMessage.listen,
+          durationMs: Date.now() - workerStartedAt,
+        });
         publication = publication
           .then(() =>
             options.onWorkerReady?.({

@@ -1,5 +1,6 @@
 import type { PluginLifecycle } from "./lifecycle/index.js";
 import path from "node:path";
+import pLimit from "p-limit";
 import { stat, rm } from "node:fs/promises";
 import type pino from "pino";
 import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
@@ -62,6 +63,7 @@ interface PluginRuntimePort {
   getProviderCatalogCacheKey?: PluginRuntime["getProviderCatalogCacheKey"];
   getProviderStatus?: PluginRuntime["getProviderStatus"];
   validatePlugin?(path: string): Promise<void>;
+  warmPluginImports?(pluginId: string, path: string): Promise<void>;
   startPlugin(pluginId: string, path: string, canPublish: () => boolean): Promise<void>;
   startBuiltinPlugin?(plugin: BuiltinPlugin): Promise<void>;
   stopPluginById(pluginId: string): Promise<boolean>;
@@ -71,6 +73,7 @@ interface PluginRuntimePort {
 }
 
 interface PluginServiceDependencies {
+  paseoHome?: string;
   usageAgents?: AgentUsageLookup;
   settingsDirectory?: string;
   runtime?: PluginRuntimePort;
@@ -121,6 +124,7 @@ export class PluginService {
     this.runtime =
       dependencies.runtime ??
       new PluginRuntime(logger, daemonVersion, {
+        paseoHome: dependencies.paseoHome,
         settingsDirectory: dependencies.settingsDirectory,
         onSettingsChanged: (pluginId, settingsId) => {
           for (const listener of this.settingsListeners) listener(pluginId, settingsId);
@@ -201,6 +205,16 @@ export class PluginService {
       }
     });
     if (config.pluginsEnabled === true) {
+      if (this.runtime.warmPluginImports) {
+        const limit = pLimit(3);
+        void Promise.allSettled(
+          Object.entries(config.plugins ?? {})
+            .filter(([, source]) => source.enabled !== false)
+            .map(([pluginId, source]) =>
+              limit(() => this.runtime.warmPluginImports!(pluginId, source.path)),
+            ),
+        );
+      }
       for (const [pluginId, source] of Object.entries(config.plugins ?? {})) {
         if (source.enabled === false) continue;
         await this.startConfigured(pluginId);

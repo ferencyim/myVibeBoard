@@ -1,4 +1,5 @@
 import { statSync, watch as watchPath } from "node:fs";
+import pLimit from "p-limit";
 import type { ProjectCheckoutLitePayload } from "@getpaseo/protocol/messages";
 import type pino from "pino";
 import type {
@@ -9,6 +10,7 @@ import type {
 } from "./workspace-registry.js";
 import type { WorkspaceGitService } from "./workspace-git-service.js";
 import { areEquivalentPaths } from "../utils/path.js";
+import { runWithGitCommandPriority } from "../utils/run-git-command.js";
 import {
   deriveProjectKind,
   reconcileWorkspacePlacement,
@@ -310,10 +312,16 @@ export class WorkspaceReconciliationService {
     changes: ReconciliationChange[],
   ): Promise<void> {
     const checkoutReads: CachedCheckoutRead[] = [];
+    // Reconciliation is background work. Bound the number of Git reads even
+    // when many projects and worktrees are registered at daemon startup.
+    const limitCheckoutRead = pLimit(2);
     const readCheckout = (cwd: string): Promise<ProjectCheckoutLitePayload> => {
       const existing = checkoutReads.find((read) => areEquivalentPaths(read.cwd, cwd));
       if (existing) return existing.checkout;
-      const checkout = this.readCheckout(cwd);
+      const checkout = limitCheckoutRead(() => {
+        if (this.disposed) throw new Error("Workspace reconciliation disposed");
+        return runWithGitCommandPriority("normal", () => this.readCheckout(cwd));
+      });
       checkoutReads.push({ cwd, checkout });
       return checkout;
     };

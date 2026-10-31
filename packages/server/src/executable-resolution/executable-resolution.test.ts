@@ -96,6 +96,27 @@ describe("findExecutable", () => {
       expectWindowsPathsEqual(await findExecutable("foo"), cmd);
     });
 
+    test.each(["signature", "truncated sections"])(
+      "skips an MZ file with %s and falls back to a cmd",
+      async (damage) => {
+        const dir = makeTempDir();
+        process.env.PATHEXT = [".EXE", ".CMD"].join(path.delimiter);
+        const badHeader = Buffer.alloc(128);
+        badHeader.write("MZ");
+        badHeader.writeUInt32LE(64, 0x3c);
+        if (damage === "truncated sections") {
+          badHeader.write("PE\0\0", 64, "binary");
+          badHeader.writeUInt16LE(1, 70);
+          badHeader.writeUInt16LE(32, 84);
+        }
+        writeFileSync(path.join(dir, "fake-pe.exe"), badHeader);
+        const cmd = writeExecutable(path.join(dir, "fake-pe.cmd"), "@echo off\r\nexit /b 0\r\n");
+        prependPath(dir);
+
+        expectWindowsPathsEqual(await findExecutable("fake-pe"), cmd);
+      },
+    );
+
     test("returns null when the only candidate is a broken .exe", async () => {
       const dir = makeTempDir();
       process.env.PATHEXT = ".EXE";
@@ -182,6 +203,53 @@ describe("findExecutable", () => {
       }),
     ).resolves.toBeNull();
     expect(probeExecutable).not.toHaveBeenCalled();
+  });
+});
+
+describe("executable lookup cache", () => {
+  test("merges concurrent lookups, caches success, and retries a missing command after the TTL", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let release!: (value: string | null) => void;
+    const find = vi
+      .spyOn(windowsExecutableResolution, "find")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("C:\\tools\\new.exe");
+    try {
+      const options = { env: { PATH: "cache-test-path", PATHEXT: ".EXE" } };
+      const first = findExecutable("cache-test-command", options);
+      const second = findExecutable("cache-test-command", options);
+      expect(find).toHaveBeenCalledTimes(1);
+      release("C:\\tools\\cached.exe");
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        "C:\\tools\\cached.exe",
+        "C:\\tools\\cached.exe",
+      ]);
+      await expect(findExecutable("cache-test-command", options)).resolves.toBe(
+        "C:\\tools\\cached.exe",
+      );
+      expect(find).toHaveBeenCalledTimes(1);
+
+      vi.useFakeTimers();
+      await expect(findExecutable("cache-test-missing", options)).resolves.toBeNull();
+      await expect(findExecutable("cache-test-missing", options)).resolves.toBeNull();
+      expect(find).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(5001);
+      await expect(findExecutable("cache-test-missing", options)).resolves.toBe(
+        "C:\\tools\\new.exe",
+      );
+      expect(find).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+      find.mockRestore();
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
   });
 });
 

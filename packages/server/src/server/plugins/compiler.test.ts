@@ -178,9 +178,17 @@ describe("plugin runtime entries", () => {
       'import type { Item } from "missing-types"; export default (item: Item) => item;',
     );
 
-    await expect(compilePlugin(entries)).rejects.toThrow(
-      'Could not resolve type dependency "missing-types"',
-    );
+    const timings: Array<{ target: string; durationMs: number; error?: string }> = [];
+    await expect(
+      compilePlugin({ client: entries.client, server: null }, (timing) => timings.push(timing)),
+    ).rejects.toThrow('Could not resolve type dependency "missing-types"');
+    expect(timings).toEqual([
+      expect.objectContaining({
+        target: "client",
+        durationMs: expect.any(Number),
+        error: expect.stringContaining("missing-types"),
+      }),
+    ]);
   });
 
   it.each([

@@ -9,6 +9,7 @@ import {
   releasePidLock,
   type PidLockInfo,
 } from "./pid-lock.js";
+import { requestSupervisorShutdown } from "./supervisor-shutdown-channel.js";
 import { daemonLaunchEnvironment } from "./config-environment.js";
 import { readPersistedConfig } from "./persisted-config.js";
 import treeKill from "tree-kill";
@@ -103,7 +104,21 @@ async function requestInstanceStop(
   let forced = false;
   let usedLifecycleRpc = false;
   if (process.platform === "win32") {
-    if (instance.listen && options.requestShutdown) {
+    if (instance.shutdownChannel) {
+      try {
+        await requestSupervisorShutdown(instance.shutdownChannel);
+      } catch (error) {
+        if (!options.force) throw error;
+        const current = await getPidLockInfo(home);
+        if (current && !isSamePidLock(instance, current))
+          throw new DaemonInstanceError(
+            "DAEMON_REPLACED",
+            `Supervisor changed for ${home}; refusing forced cleanup.`,
+          );
+        await killTree(instance.pid, "SIGKILL");
+        forced = true;
+      }
+    } else if (instance.listen && options.requestShutdown) {
       try {
         await options.requestShutdown({ ...instance, listen: instance.listen });
         usedLifecycleRpc = true;

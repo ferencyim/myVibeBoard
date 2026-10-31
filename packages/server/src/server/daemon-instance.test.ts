@@ -133,3 +133,52 @@ describe.runIf(process.platform === "linux")("daemon instance identity on Linux"
     expect(await isLocked(paseoHome)).toMatchObject({ locked: false });
   });
 });
+
+describe.runIf(process.platform === "win32")(
+  "stopping a supervisor before worker readiness",
+  () => {
+    test("uses its local shutdown channel without a worker endpoint", async () => {
+      const home = await mkdtemp(join(tmpdir(), "paseo-stop-starting-"));
+      const token = "a".repeat(64);
+      const child = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+      const net = require("node:net");
+      const server = net.createServer(socket => {
+        socket.on("data", data => {
+          if (data.toString() !== ${JSON.stringify(token + "\n")}) return socket.destroy();
+          socket.end("ok\\n", () => server.close(() => process.exit(0)));
+        });
+      });
+      server.listen(0, "127.0.0.1", () => console.log(server.address().port));
+    `,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      try {
+        const port = await new Promise<number>((resolve, reject) => {
+          child.once("error", reject);
+          child.once("exit", (code) => reject(new Error(`Supervisor fixture exited: ${code}`)));
+          child.stdout!.once("data", (chunk) => resolve(Number(String(chunk).trim())));
+        });
+        if (!child.pid) throw new Error("Supervisor fixture failed to start");
+        await writeLock(home, {
+          ...lockFor(child.pid, new Date()),
+          listen: null,
+          shutdownChannel: { port, token },
+        });
+        await expect(stopDaemonInstance(home)).resolves.toMatchObject({
+          action: "stopped",
+          forced: false,
+          usedLifecycleRpc: false,
+        });
+        expect(await getPidLockInfo(home)).toBeNull();
+      } finally {
+        child.kill("SIGKILL");
+        await rm(home, { recursive: true, force: true });
+      }
+    });
+  },
+);

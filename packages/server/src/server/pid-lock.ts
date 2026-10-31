@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { open, readFile, stat, unlink, utimes } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
-import { ensurePrivateDirectory } from "./private-files.js";
+import { ensurePrivateDirectory, PRIVATE_FILE_MODE } from "./private-files.js";
 import { join } from "node:path";
 import { uptime } from "node:os";
 import { getHostName } from "./host-name.js";
@@ -13,6 +13,9 @@ export const pidLockInfoSchema = z.object({
   hostname: z.string(),
   uid: z.number(),
   listen: z.string().nullable(),
+  shutdownChannel: z
+    .object({ port: z.number().int().min(1).max(65535), token: z.string().regex(/^[a-f0-9]{64}$/) })
+    .optional(),
   serverId: z.string().nullable().optional(),
   desktopManaged: z.boolean().optional(),
   heartbeat: z.literal(true).optional(),
@@ -145,6 +148,7 @@ function resolveOwnerPid(ownerPid?: number): number {
 
 interface AcquirePidLockOptions {
   ownerPid?: number;
+  shutdownChannel?: PidLockInfo["shutdownChannel"];
 }
 
 export function isSamePidLock(left: PidLockInfo, right: PidLockInfo): boolean {
@@ -194,7 +198,7 @@ async function removeEmptyPidLock(pidPath: string): Promise<void> {
 async function writeNewPidLock(pidPath: string, lockInfo: PidLockInfo): Promise<void> {
   let fd;
   try {
-    fd = await open(pidPath, "wx");
+    fd = await open(pidPath, "wx", PRIVATE_FILE_MODE);
     await fd.write(JSON.stringify(lockInfo));
   } catch (error) {
     if (!isErrnoException(error) || error.code !== "EEXIST") {
@@ -245,6 +249,7 @@ export async function acquirePidLock(
     hostname: getHostName(),
     uid: process.getuid?.() ?? 0,
     listen,
+    ...(options?.shutdownChannel ? { shutdownChannel: options.shutdownChannel } : {}),
     heartbeat: true,
     ...(bootId ? { bootId } : {}),
     ...(process.env.PASEO_DESKTOP_MANAGED === "1" ? { desktopManaged: true } : {}),
