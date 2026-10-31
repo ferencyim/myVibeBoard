@@ -149,7 +149,10 @@ describe("plugin runtime entries", () => {
       'import type { Item } from "./server/types"; export default (item: Item) => item;',
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const timings: Array<{ files: number }> = [];
+    const timings: Array<{
+      files: number;
+      cache?: { hit: boolean; reason: string; dependencyPath?: string };
+    }> = [];
     const compile = () =>
       compilePlugin(
         { client: null, server: entries.server },
@@ -158,14 +161,20 @@ describe("plugin runtime entries", () => {
       );
     const first = await compile();
     expect(timings.at(-1)!.files).toBeGreaterThan(0);
+    expect(timings.at(-1)!.cache).toMatchObject({ hit: false });
     // Unrelated activity in the shared temporary directory must not invalidate
     // a bundle whose resolution inputs are unchanged.
     temporaryDirectories.push(await mkdtemp(path.join(tmpdir(), "paseo-unrelated-")));
     expect(await compile()).toEqual(first);
     expect(timings.at(-1)!.files).toBe(0);
+    expect(timings.at(-1)!.cache).toMatchObject({ hit: true });
 
     await writeFile(declaration, 'export type Item = import("../client/surface").Surface;');
     await expect(compile()).rejects.toThrow("client-only module");
+    expect(timings.at(-1)!.cache).toMatchObject({
+      hit: false,
+      dependencyPath: realpathSync.native(declaration),
+    });
 
     await writeFile(declaration, "export interface Item { value: number }");
     await new Promise((resolve) => setTimeout(resolve, 20));

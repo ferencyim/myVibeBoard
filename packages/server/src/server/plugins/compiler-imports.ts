@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { Stats } from "node:fs";
+import { cacheMetadata, type CacheMetadata } from "./cache-metadata.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 import pLimit from "p-limit";
@@ -81,13 +81,15 @@ export function createPluginImportReader(
     },
     async read(file: string): Promise<ModuleImport[]> {
       track(file);
-      const metadata = await stat(file);
+      const metadata = await cacheMetadata(file);
+      if (!metadata) throw new Error(`Plugin import source not found: ${file}`);
       const key = JSON.stringify([
         paseoHome,
         file,
         metadata.size,
         metadata.mtimeMs,
         metadata.ctimeMs,
+        metadata.kind,
       ]);
       const pending = pendingImports.get(key);
       if (pending) return pending;
@@ -101,13 +103,22 @@ export function createPluginImportReader(
     },
   };
 
-  async function read(file: string, metadata: Stats): Promise<ModuleImport[]> {
+  async function read(file: string, metadata: NonNullable<CacheMetadata>): Promise<ModuleImport[]> {
     const cacheDir = path.join(paseoHome, "cache", "plugin-imports-v1");
     const cacheKey = createHash("sha256").update(file).digest("hex");
     const cacheFile = path.join(cacheDir, `${cacheKey}.json`);
     try {
       const cached: unknown = JSON.parse(await readFile(cacheFile, "utf8"));
-      if (isCachedImports(cached, metadata.size, metadata.mtimeMs, metadata.ctimeMs, ts.version)) {
+      if (
+        isCachedImports(
+          cached,
+          metadata.size,
+          metadata.mtimeMs,
+          metadata.ctimeMs,
+          metadata.kind,
+          ts.version,
+        )
+      ) {
         return cached.imports;
       }
     } catch {
@@ -181,6 +192,7 @@ export function createPluginImportReader(
           size: metadata.size,
           mtimeMs: metadata.mtimeMs,
           ctimeMs: metadata.ctimeMs,
+          kind: metadata.kind,
           version: ts.version,
           imports,
         }),
@@ -197,6 +209,7 @@ function isCachedImports(
   size: number,
   mtimeMs: number,
   ctimeMs: number,
+  kind: string,
   version: string,
 ): value is {
   imports: ModuleImport[];
@@ -206,6 +219,7 @@ function isCachedImports(
     size?: unknown;
     mtimeMs?: unknown;
     ctimeMs?: unknown;
+    kind?: unknown;
     version?: unknown;
     imports?: unknown;
   };
@@ -213,6 +227,7 @@ function isCachedImports(
     cached.size === size &&
     cached.mtimeMs === mtimeMs &&
     cached.ctimeMs === ctimeMs &&
+    cached.kind === kind &&
     cached.version === version &&
     Array.isArray(cached.imports) &&
     cached.imports.every((item: unknown) => {

@@ -1,46 +1,30 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import pLimit from "p-limit";
+import { cacheMetadata, cacheMetadataPath, type CacheMetadata } from "./cache-metadata.js";
 import { resolvePaseoHome } from "../paseo-home.js";
 
 const require = createRequire(import.meta.url);
-const limit = pLimit(16);
-const CACHE_VERSION = 1;
-type Metadata = {
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  kind: string;
-  link?: string;
-} | null;
+const CACHE_VERSION = 2;
 interface CachedBundle {
   version: number;
   bundle: string;
-  files: Record<string, Metadata>;
+  files: Record<string, CacheMetadata>;
 }
 
-async function metadata(file: string): Promise<Metadata> {
-  try {
-    const s = await limit(() => lstat(file));
-    const target = s.isSymbolicLink() ? await limit(() => stat(file)) : s;
-    return {
-      size: target.size,
-      mtimeMs: target.mtimeMs,
-      ctimeMs: target.ctimeMs,
-      kind: target.isDirectory() ? "d" : "f",
-      ...(s.isSymbolicLink() ? { link: `${s.size}:${s.mtimeMs}:${s.ctimeMs}` } : {}),
-    };
-  } catch (error) {
-    if (
-      (error as NodeJS.ErrnoException).code === "ENOENT" ||
-      (error as NodeJS.ErrnoException).code === "ENOTDIR"
-    )
-      return null;
-    throw error;
-  }
+function createMetadataReader() {
+  const pending = new Map<string, Promise<CacheMetadata>>();
+  return (file: string) => {
+    const key = cacheMetadataPath(file);
+    let value = pending.get(key);
+    if (!value) {
+      value = cacheMetadata(file);
+      pending.set(key, value);
+    }
+    return value;
+  };
 }
 
 function cacheFile(entry: string, target: string, home?: string): string {
@@ -54,6 +38,7 @@ export async function readCachedBundle(
   entry: string,
   target: string,
   home?: string,
+  onCacheResult?: (result: { hit: boolean; reason: string; dependencyPath?: string }) => void,
 ): Promise<string | null> {
   try {
     const cached = JSON.parse(
@@ -64,18 +49,43 @@ export async function readCachedBundle(
       typeof cached.bundle !== "string" ||
       !cached.files ||
       typeof cached.files !== "object"
-    )
+    ) {
+      onCacheResult?.({ hit: false, reason: "invalid cache format or version" });
       return null;
+    }
     const files = Object.entries(cached.files);
-    if (!files.length) return null;
+    if (!files.length) {
+      onCacheResult?.({ hit: false, reason: "empty dependency list" });
+      return null;
+    }
+    const metadata = createMetadataReader();
     const valid = await Promise.all(
-      files.map(
-        async ([file, expected]) =>
-          JSON.stringify(await metadata(file)) === JSON.stringify(expected),
-      ),
+      files.map(async ([file, expected]) => {
+        try {
+          return JSON.stringify(await metadata(file)) === JSON.stringify(expected);
+        } catch {
+          return false;
+        }
+      }),
     );
-    return valid.every(Boolean) ? cached.bundle : null;
-  } catch {
+    const invalid = valid.indexOf(false);
+    if (invalid !== -1) {
+      const [file, expected] = files[invalid];
+      onCacheResult?.({
+        hit: false,
+        reason: "dependency changed or unreadable",
+        dependencyPath: expected?.kind === "asar" ? cacheMetadataPath(file, true) : file,
+      });
+      return null;
+    }
+    onCacheResult?.({ hit: true, reason: "cache hit" });
+    return cached.bundle;
+  } catch (error) {
+    onCacheResult?.({
+      hit: false,
+      reason:
+        (error as NodeJS.ErrnoException).code === "ENOENT" ? "cache missing" : "cache unreadable",
+    });
     return null;
   }
 }
@@ -102,8 +112,14 @@ export async function writeCachedBundle(
   buildStartedAt: number,
 ): Promise<void> {
   try {
+    // The cache may live below a tracked source directory. Create its directories
+    // before taking the dependency snapshot so writing the bundle cannot change
+    // that directory immediately after recording it.
+    await prepareBundleCache(home);
     dependencies.add(path.resolve(entry));
     dependencies.add(fileURLToPath(import.meta.url));
+    dependencies.add(fileURLToPath(new URL("./cache-metadata.js", import.meta.url)));
+    dependencies.add(fileURLToPath(new URL("./cache-metadata.ts", import.meta.url)));
     dependencies.add(fileURLToPath(new URL("./compiler.js", import.meta.url)));
     dependencies.add(fileURLToPath(new URL("./compiler-imports.js", import.meta.url)));
     dependencies.add(fileURLToPath(new URL("./plugin-sdk-specifiers.js", import.meta.url)));
@@ -138,9 +154,12 @@ export async function writeCachedBundle(
         directory = parent;
       }
     }
+    const metadata = createMetadataReader();
     const files = Object.fromEntries(
       await Promise.all(
-        [...dependencies].map(async (file) => [file, await metadata(file)] as const),
+        [...new Set([...dependencies].map((file) => cacheMetadataPath(file)))].map(
+          async (file) => [file, await metadata(file)] as const,
+        ),
       ),
     );
     // A file changed while esbuild or the checker was reading it: never associate

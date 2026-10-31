@@ -79,6 +79,7 @@ interface CompileTiming {
   durationMs: number;
   importReadMs: number;
   files: number;
+  cache?: { hit: boolean; reason: string; dependencyPath?: string };
   error?: string;
 }
 
@@ -414,9 +415,14 @@ async function compileTarget(
   paseoHome?: string,
 ): Promise<string> {
   const started = performance.now();
-  const metrics = { importReadMs: 0, files: 0 };
+  const metrics: Pick<CompileTiming, "importReadMs" | "files" | "cache"> = {
+    importReadMs: 0,
+    files: 0,
+  };
   try {
-    const cached = await readCachedBundle(entryPath, target, paseoHome);
+    const cached = await readCachedBundle(entryPath, target, paseoHome, (cache) => {
+      metrics.cache = cache;
+    });
     if (cached !== null) {
       onTiming?.({ target, durationMs: performance.now() - started, ...metrics });
       return cached;
