@@ -12,6 +12,83 @@ vi.mock("node:timers", async (importOriginal) => ({
   clearInterval: () => { timer.tick = undefined; },
 }));
 describe("project document snapshots", () => {
+  it("serves a persisted snapshot after restart and retries a failed background scan", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
+    const db = openVibeDb({ path: ":memory:" });
+    const listProjects = vi.fn(async () => [{ projectId: "project", projectRootPath: root }]);
+    const options = { db, listProjects, notifyMerge: async () => {} };
+    const first = createProjectDocuments(options);
+    await writeFile(join(root, "AGENTS.md"), "old");
+    await first.sync("project");
+    await first.close();
+    await writeFile(join(root, "AGENTS.md"), "new");
+    let release!: () => void;
+    listProjects.mockImplementationOnce(() => new Promise((_, reject) => { release = () => reject(new Error("offline")); }));
+    const service = createProjectDocuments(options);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await service.get("project")).documents[0].content).toBe("old");
+      release();
+      await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+      expect((await service.get("project")).documents[0].content).toBe("old");
+      await vi.waitFor(() => expect(service.snapshot("project").documents[0].content).toBe("new"));
+    } finally {
+      release();
+      await service.close();
+      warning.mockRestore();
+      db.close();
+      await unlink(join(root, "AGENTS.md"));
+      await rmdir(root);
+    }
+  });
+  it("waits for the first scan, then serves snapshots while coalescing stale refreshes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
+    const db = openVibeDb({ path: ":memory:" });
+    let time = 0;
+    let release!: () => void;
+    let gate = new Promise<void>((resolve) => { release = resolve; });
+    const listProjects = vi.fn(async () => {
+      await gate;
+      return [{ projectId: "project", projectRootPath: root }];
+    });
+    const service = createProjectDocuments({ db, listProjects, notifyMerge: async () => {}, now: () => new Date(time) });
+    const handle = vi.fn();
+    registerProjectDocumentRpcs({ handle, registerAgentTool: vi.fn() } as unknown as PluginServerContext, service, () => "project");
+    const get = handle.mock.calls[0][1] as (input: { projectId: string }) => ReturnType<typeof service.get>;
+    const read = () => get({ projectId: "project" });
+    try {
+      await writeFile(join(root, "AGENTS.md"), "initial");
+      let settled = false;
+      const first = read().then((value) => { settled = true; return value; });
+      const concurrent = read();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(listProjects).toHaveBeenCalledTimes(1);
+      release();
+      expect((await first).documents[0].content).toBe("initial");
+      expect((await concurrent).documents[0].content).toBe("initial");
+
+      await writeFile(join(root, "AGENTS.md"), "changed");
+      time = 60000;
+      expect((await read()).documents[0].content).toBe("initial");
+      expect(listProjects).toHaveBeenCalledTimes(1);
+      gate = new Promise<void>((resolve) => { release = resolve; });
+      time++;
+      const stale = await Promise.all([read(), read()]);
+      expect(stale.map((value) => value.documents[0].content)).toEqual(["initial", "initial"]);
+      expect(listProjects).toHaveBeenCalledTimes(2);
+      release();
+      await vi.waitFor(() => expect(service.snapshot("project").documents[0].content).toBe("changed"));
+      expect((await read()).documents[0].content).toBe("changed");
+      expect(listProjects).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+      await service.close();
+      db.close();
+      await unlink(join(root, "AGENTS.md"));
+      await rmdir(root);
+    }
+  });
   it("retries delivery every tick, scans every fourth tick, and scans when start overlaps delivery", async () => {
     const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
     const db = openVibeDb({ path: ":memory:" });

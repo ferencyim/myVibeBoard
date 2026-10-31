@@ -158,7 +158,7 @@ function GitSections({ theme, git }: { theme: PluginTheme; git?: Status["git"] }
         {!git ? <Line theme={theme}>加载中…</Line> : git.status === "not_git" ? (
           <Line theme={theme}>不是 Git 仓库</Line>
         ) : git.status === "error" ? (
-          <Line theme={theme} danger>Git 状态读取失败</Line>
+          <Line theme={theme} danger>{git.error ?? "Git 状态读取失败"}</Line>
         ) : (
           <>
             <Text style={[styles.heading, { color: theme.colors.foreground }]}>
@@ -181,11 +181,12 @@ function GitSections({ theme, git }: { theme: PluginTheme; git?: Status["git"] }
       </Section>
       <Section theme={theme} title="同仓库 worktree">
         {git?.status === "ok" ? (
-          <Line theme={theme} warning={git.scanning}>
-            {git.scanning ? "正在扫描 worktree 改动" : "worktree 扫描完成"}
-            {git.changesScannedAt ? ` · 上次扫描 ${date(git.changesScannedAt)}` : " · 尚无扫描结果"}
+          <Line theme={theme} warning={git.scanning} danger={Boolean(git.scanError)}>
+            {git.scanning ? "正在扫描 worktree 改动" : git.scanError ? "worktree 扫描失败" : "worktree 扫描完成"}
+            {git.changesScannedAt ? ` · 最近结果 ${date(git.changesScannedAt)}` : " · 尚无扫描结果"}
           </Line>
         ) : null}
+        {git?.scanError ? <Line theme={theme} danger>{`扫描失败原因：${git.scanError}`}</Line> : null}
         {!git ? <Line theme={theme}>加载中…</Line> : git.status !== "ok" ? (
           <Line theme={theme}>暂无 worktree 信息</Line>
         ) : visibleWorktrees.map((worktree) => (
@@ -208,6 +209,9 @@ function GitSections({ theme, git }: { theme: PluginTheme; git?: Status["git"] }
                 <Text style={{ color: theme.colors.statusDanger }}> · 失效</Text>
               ) : null}
             </Line>
+            {worktree.changesScannedAt ? (
+              <Line theme={theme}>{`改动扫描于 ${date(worktree.changesScannedAt)}`}</Line>
+            ) : null}
           </View>
         ))}
         {git?.status === "ok" && (hiddenCount > 0 || expanded && worktrees.length > 12) ? (
@@ -226,7 +230,7 @@ function BuildSection({ theme, build }: { theme: PluginTheme; build?: Status["bu
   return (
     <Section theme={theme} title="构建">
       {!build || build.status !== "ok" ? (
-        <SectionMessage theme={theme} status={build?.status ?? "loading"} />
+        <SectionMessage theme={theme} status={build?.loading ? "loading" : build?.status ?? "loading"} />
       ) : (
         build.pipelines.map((pipeline, i) => (
           <View key={`${pipeline.repo}-${pipeline.project}-${i}`} style={styles.group}>
@@ -267,7 +271,7 @@ function ReleaseSection({ theme, release }: { theme: PluginTheme; release?: Stat
   return (
     <Section theme={theme} title="发布">
       {!release || release.status !== "ok" ? (
-        <SectionMessage theme={theme} status={release?.status ?? "loading"} />
+        <SectionMessage theme={theme} status={release?.loading ? "loading" : release?.status ?? "loading"} />
       ) : (
         release.products.map((product) => (
           <View key={product.id} style={styles.product}>
@@ -330,7 +334,8 @@ export function GitPanel({ theme, workspaceId }: PluginWorkspacePanelProps) {
   const query = useQuery({
     queryKey,
     queryFn: () => call({ workspaceId }),
-    refetchInterval: refresh.isPending ? false : 30_000,
+    refetchInterval: (query) => refresh.isPending ? false :
+      query.state.data?.git.scanning || query.state.data?.git.error === "读取 Git 状态超时，请重试" ? 2_000 : 30_000,
     retry: false,
   });
   const updatedAt = query.dataUpdatedAt

@@ -42,6 +42,7 @@ export function createProjectDocuments(options: {
   migrateOwner(db, "context");
   const now = () => (options.now?.() ?? new Date()).toISOString();
   const active = new Map<string, Promise<void>>();
+  const lastSynced = new Map<string, number>();
   const delivering = new Set<string>();
   async function projectRoot(projectId: string) {
     const project = (await options.listProjects()).find((p) => p.projectId === projectId);
@@ -131,6 +132,7 @@ export function createProjectDocuments(options: {
     active.set(projectId, work);
     try {
       await work;
+      lastSynced.set(projectId, (options.now?.() ?? new Date()).getTime());
     } finally {
       active.delete(projectId);
     }
@@ -163,6 +165,19 @@ export function createProjectDocuments(options: {
         })),
       pending: pendingChanges(projectId),
     };
+  }
+  async function get(projectId: string): Promise<ProjectDocumentSnapshot> {
+    const current = snapshot(projectId);
+    const syncedAt = lastSynced.get(projectId);
+    if (syncedAt !== undefined && (options.now?.() ?? new Date()).getTime() - syncedAt <= 60000)
+      return current;
+    // Persisted document rows are a usable snapshot even before this process has scanned.
+    if (syncedAt !== undefined || current.documents.length > 0) {
+      void sync(projectId).catch((error) => report(errorCode(error) ?? "document_sync_failed"));
+      return current;
+    }
+    await sync(projectId);
+    return snapshot(projectId);
   }
   async function deliver(projectId: string) {
     for (const change of pendingChanges(projectId)) {
@@ -324,6 +339,7 @@ export function createProjectDocuments(options: {
   return {
     sync,
     snapshot,
+    get,
     submit,
     complete,
     writeBrief,
@@ -343,8 +359,7 @@ export function registerProjectDocumentRpcs(
   callerProject: (agentId: string) => Promise<string> | string,
 ) {
   server.handle(projectDocumentsGetRpc, async ({ projectId }) => {
-    await documents.sync(projectId);
-    return documents.snapshot(projectId);
+    return documents.get(projectId);
   });
   server.handle(projectBriefSubmitRpc, ({ projectId, id, documents: edits }, { callerAgentId }) => {
     if (callerAgentId) throw new Error("简介修改只接受用户在项目设置里的输入");

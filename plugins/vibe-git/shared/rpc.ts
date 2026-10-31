@@ -18,6 +18,7 @@ const worktree = z.object({
   prunable: z.boolean(),
   missing: z.boolean(),
   changes: changes.nullable(),
+  changesScannedAt: z.string().nullable().optional(),
 });
 const git = z.object({
   status: z.enum(["ok", "not_git", "error"]),
@@ -38,6 +39,7 @@ const git = z.object({
   worktrees: z.array(worktree),
   changesScannedAt: z.string().nullable().optional(),
   scanning: z.boolean().optional(),
+  scanError: z.string().nullable().optional(),
 });
 const clientStatus = z.object({
   client: z.string(),
@@ -87,8 +89,8 @@ const product = z.object({
 const sectionStatus = z.enum(["ok", "dashboard_down", "not_configured", "error"]);
 export const StatusSchema = z.object({
   git,
-  build: z.object({ status: sectionStatus, pipelines: z.array(pipeline) }),
-  release: z.object({ status: sectionStatus, products: z.array(product) }),
+  build: z.object({ status: sectionStatus, loading: z.boolean().optional(), pipelines: z.array(pipeline) }),
+  release: z.object({ status: sectionStatus, loading: z.boolean().optional(), products: z.array(product) }),
 });
 export type Status = z.infer<typeof StatusSchema>;
 export type Changes = z.infer<typeof changes>;

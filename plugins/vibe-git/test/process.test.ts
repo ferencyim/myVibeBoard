@@ -14,6 +14,28 @@ function isRunning(pid: number): boolean {
 }
 
 describe("子进程生命周期", () => {
+  it("保留输出、退出错误和缓冲限制", async () => {
+    const runner = createProcessRunner();
+    try {
+      await expect(runner.run(process.execPath, ["-e", "process.stdout.write('ok\\n')"])).resolves.toBe("ok");
+      await expect(runner.run(process.execPath, ["-e", "process.stderr.write('reason'); process.exit(7)"]))
+        .rejects.toMatchObject({ message: "Process exited with code 7", stderr: "reason" });
+      await expect(runner.run(process.execPath, ["-e", "process.stdout.write('12345')"], { maxBuffer: 4 }))
+        .rejects.toThrow("Process stdout exceeded maximum buffer");
+    } finally {
+      await runner.cleanup();
+    }
+  });
+
+  it("关闭时终止运行中进程并拒绝新请求", async () => {
+    const runner = createProcessRunner();
+    const pending = runner.run(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    const cleanup = runner.cleanup();
+    await expect(pending).rejects.toThrow("Process terminated");
+    await cleanup;
+    await expect(runner.run(process.execPath, ["-v"])).rejects.toThrow("Process runner has been closed");
+  });
+
   it("超时时终止父进程及其子进程", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "vibe-git-process-"));
     const pidFile = path.join(dir, "pids.json");
@@ -35,7 +57,7 @@ describe("子进程生命周期", () => {
       expect(pids).toHaveLength(2);
       expect(pids.every((pid) => !isRunning(pid))).toBe(true);
     } finally {
-      runner.cleanup();
+      await runner.cleanup();
       await rm(dir, { recursive: true, force: true });
     }
   }, 15000);

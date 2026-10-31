@@ -26,9 +26,19 @@ export function emptyGit(cwd: string, status: "error" | "not_git"): Status["git"
 }
 
 
+export function failedGit(cwd: string, error: unknown): Status["git"] {
+  return { ...emptyGit(cwd, "error"), error: error instanceof Error ? error.message : String(error) };
+}
+
+function parseBranchHeader(header: string): { branch: string | null; upstream: string | null } {
+  const match = header.match(/^## (.*?)(?:\.\.\.([^ ]+))?(?: \[.*\])?$/);
+  const name = match?.[1].replace(/^(?:No commits yet on |Initial commit on )/, "") ?? null;
+  return { branch: name?.startsWith("HEAD ") ? null : name, upstream: match?.[2] ?? null };
+}
+
 export function createScanState() {
   return {
-    scans: new Map<string, { values: Map<string, Changes | null>; scannedAt: string | null; scanning: boolean }>(),
+    scans: new Map<string, { values: Map<string, Changes | null>; times: Map<string, string>; pendingRescan: (() => void) | null; scannedAt: string | null; scanning: boolean; error: string | null; attemptedAt: number }>(),
     closed: false,
   };
 }
@@ -42,7 +52,7 @@ export function createGitService(
   async function git(cwd: string, ...args: string[]): Promise<string> {
     return runner.run("git", args, {
       cwd,
-      timeoutMs: 2500,
+      timeoutMs: args[0] === "worktree" ? 15000 : 2500,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", LANG: "C" },
     });
   }
@@ -68,31 +78,38 @@ export function createGitService(
     return raw === null ? null : parseCounts(raw);
   }
 
-  async function gitStatus(cwd: string): Promise<Status["git"]> {
+  async function gitStatus(cwd: string, force = false): Promise<Status["git"]> {
     if (!(await exists(cwd))) return emptyGit(cwd, "error");
-    let root: string;
+    let paths: string;
     try {
-      root = await git(cwd, "rev-parse", "--show-toplevel");
+      paths = await git(cwd, "rev-parse", "--show-toplevel", "--git-common-dir", "--git-dir");
     } catch (error) {
       const stderr = (error as { stderr?: string }).stderr ?? "";
       return emptyGit(cwd, stderr.includes("not a git repository") ? "not_git" : "error");
     }
-    const common = await git(cwd, "rev-parse", "--git-common-dir");
+    const [root, common, gitDir] = paths.split(/\r?\n/);
     const mainPath = path.dirname(path.resolve(cwd, common));
-    const [branch, headSha, headSubject, upstream, origin, local, rawStatus, rawCommits, rawWorktrees, gitDir] =
+    const [rawStatus, rawCommits, rawBaseRefs, rawWorktrees] =
       await Promise.all([
-        maybe(cwd, "symbolic-ref", "--short", "HEAD"),
-        maybe(cwd, "rev-parse", "--short", "HEAD"),
-        maybe(cwd, "log", "-1", "--format=%s"),
-        maybe(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
-        maybe(cwd, "rev-parse", "--verify", "refs/remotes/origin/main"),
-        maybe(cwd, "rev-parse", "--verify", "refs/heads/main"),
-        maybe(cwd, "status", "--porcelain=v1", "--untracked-files=normal"),
+        maybe(cwd, "status", "--porcelain=v1", "--branch", "--untracked-files=normal"),
         maybe(cwd, "log", "-5", "--format=%h%x00%s%x00%ct"),
+        maybe(cwd, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/main", "refs/heads/main"),
         git(cwd, "worktree", "list", "--porcelain"),
-        git(cwd, "rev-parse", "--git-dir"),
       ]);
-    const base = origin ? "origin/main" : local ? "main" : null;
+    const [header = "", ...statusLines] = (rawStatus ?? "").split("\n");
+    const parsedBranch = parseBranchHeader(header);
+    const [branch, upstream] = rawStatus === null
+      ? await Promise.all([
+        maybe(cwd, "symbolic-ref", "--short", "HEAD"),
+        maybe(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+      ])
+      : [parsedBranch.branch, parsedBranch.upstream];
+    const commits = (rawCommits ?? "").split("\n").filter(Boolean).map((line) => {
+      const [sha, subject, timestamp] = line.split("\0");
+      return { sha, subject, timestamp: Number(timestamp) };
+    });
+    const baseRefs = new Set((rawBaseRefs ?? "").split(/\r?\n/));
+    const base = baseRefs.has("refs/remotes/origin/main") ? "origin/main" : baseRefs.has("refs/heads/main") ? "main" : null;
     const absoluteGitDir = path.resolve(cwd, gitDir);
     let operation: string | null = null;
     for (const [file, name] of [
@@ -107,9 +124,10 @@ export function createGitService(
       }
     }
     const entries = parseWorktrees(rawWorktrees);
-    const refs = base
-      ? await maybe(cwd, "for-each-ref", `--format=%(refname:short)%00%(ahead-behind:${base})`, "refs/heads")
-      : null;
+    const [refs, upstreamCounts] = await Promise.all([
+      base ? maybe(cwd, "for-each-ref", `--format=%(refname:short)%00%(ahead-behind:${base})`, "refs/heads") : null,
+      upstream ? counts(cwd, upstream) : null,
+    ]);
     const refCounts = new Map<string, { ahead: number; behind: number }>();
     for (const line of (refs ?? "").split("\n")) {
       const [name, raw] = line.split("\0");
@@ -126,7 +144,7 @@ export function createGitService(
     const key = normalizePath(mainPath);
     let scan = scans.get(key);
     if (!scan) {
-      scan = { values: new Map(), scannedAt: null, scanning: false };
+      scan = { values: new Map(), times: new Map(), pendingRescan: null, scannedAt: null, scanning: false, error: null, attemptedAt: 0 };
       scans.set(key, scan);
     }
     const state = scan;
@@ -141,44 +159,59 @@ export function createGitService(
         missing,
         counts: comparison,
         merged: comparison ? comparison.ahead === 0 : null,
+        changesScannedAt: current ? null : state.times.get(normalizePath(w.path)) ?? null,
         changes: current
-          ? (rawStatus === null ? null : parseStatus(rawStatus))
+          ? (rawStatus === null ? null : parseStatus(statusLines.join("\n")))
           : state.values.get(normalizePath(w.path)) ?? null,
       };
     }));
-    const upstreamCounts = upstream ? await counts(cwd, upstream) : null;
-    const baseCounts = base ? await counts(cwd, base) : null;
-    if (
-      isActive() && !scanState.closed && !state.scanning &&
-      (!state.scannedAt || Date.now() - Date.parse(state.scannedAt) >= 300000)
-    ) {
+    const baseCounts = base ? (branch && refCounts.get(branch)) || await counts(cwd, base) : null;
+    const startScan = () => {
       state.scanning = true;
+      state.attemptedAt = Date.now();
       void (async () => {
-        const values = new Map<string, Changes | null>();
-        for (const w of worktrees) {
-          if (scanState.closed) return;
-          if (w.current || w.missing || w.prunable) continue;
-          try {
-            const raw = await scanRunner.run(
-              "git", ["status", "--porcelain=v1", "--untracked-files=normal"],
-              {
-                cwd: w.path,
-                timeoutMs: 10000,
-                env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", LANG: "C" },
-              },
-            );
-            values.set(normalizePath(w.path), parseStatus(raw));
-          } catch {
-            values.set(normalizePath(w.path), null);
+        const candidates = worktrees.filter((w) => !w.current && !w.missing && !w.prunable);
+        const failures: string[] = [];
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, async () => {
+          while (!scanState.closed && next < candidates.length) {
+            const w = candidates[next++];
+            try {
+              const raw = await scanRunner.run(
+                "git", ["status", "--porcelain=v1", "--untracked-files=normal"],
+                {
+                  cwd: w.path,
+                  timeoutMs: 10000,
+                  env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", LANG: "C" },
+                },
+              );
+              if (!scanState.closed) {
+                state.values.set(normalizePath(w.path), parseStatus(raw));
+                state.scannedAt = new Date().toISOString();
+                state.times.set(normalizePath(w.path), state.scannedAt);
+              }
+            } catch (error) {
+              failures.push(`${w.path}：${error instanceof Error ? error.message : String(error)}`);
+              if (!scanState.closed) state.error = failures.join("；");
+            }
           }
-        }
+        }));
         if (!scanState.closed) {
-          state.values = values;
-          state.scannedAt = new Date().toISOString();
+          if (failures.length === 0 && candidates.length === 0) state.scannedAt = new Date().toISOString();
+          state.error = failures.length ? failures.join("；") : null;
         }
-      })().finally(() => {
+      })().catch((error: unknown) => {
+        state.error = error instanceof Error ? error.message : String(error);
+      }).finally(() => {
         state.scanning = false;
+        const pending = state.pendingRescan;
+        state.pendingRescan = null;
+        if (pending && isActive() && !scanState.closed) pending();
       });
+    };
+    if (isActive() && !scanState.closed) {
+      if (state.scanning && force) state.pendingRescan = startScan;
+      else if (!state.scanning && (force || Date.now() - state.attemptedAt >= 300000)) startScan();
     }
     return {
       status: "ok",
@@ -186,22 +219,57 @@ export function createGitService(
       workspacePath: cwd,
       mainPath,
       branch,
-      headSha,
-      headSubject,
+      headSha: commits[0]?.sha ?? null,
+      headSubject: commits[0]?.subject ?? null,
       isMain: normalizePath(root) === normalizePath(mainPath),
       upstream,
       upstreamCounts,
       base,
       baseCounts,
-      changes: rawStatus === null ? null : parseStatus(rawStatus),
+      changes: rawStatus === null ? null : parseStatus(statusLines.join("\n")),
       operation,
-      commits: (rawCommits ?? "").split("\n").filter(Boolean).map((line) => {
-        const [sha, subject, timestamp] = line.split("\0");
-        return { sha, subject, timestamp: Number(timestamp) };
-      }),
+      commits,
       worktrees,
       changesScannedAt: state.scannedAt,
       scanning: state.scanning,
+      scanError: state.error,
+    };
+  }
+
+  // Keep the first response independent of worktree enumeration and dashboard I/O.
+  async function fastGitStatus(cwd: string): Promise<Status["git"]> {
+    if (!(await exists(cwd))) return emptyGit(cwd, "error");
+    let paths: string;
+    try {
+      paths = await git(cwd, "rev-parse", "--show-toplevel", "--git-common-dir");
+    } catch (error) {
+      const stderr = (error as { stderr?: string }).stderr ?? "";
+      return emptyGit(cwd, stderr.includes("not a git repository") ? "not_git" : "error");
+    }
+    const [root, common] = paths.split(/\r?\n/);
+    const [statusResult, rawCommits] = await Promise.all([
+      git(cwd, "status", "--porcelain=v1", "--branch", "--untracked-files=normal")
+        .then((value) => ({ value, error: null }), (error: unknown) => ({
+          value: null, error: error instanceof Error ? error.message : String(error),
+        })),
+      maybe(cwd, "log", "-5", "--format=%h%x00%s%x00%ct"),
+    ]);
+    if (statusResult.value === null) return { ...emptyGit(cwd, "error"), error: `读取工作区改动失败：${statusResult.error}` };
+    const rawStatus = statusResult.value;
+    const [header = "", ...lines] = rawStatus.split("\n");
+    const { branch, upstream } = parseBranchHeader(header);
+    const commits = (rawCommits ?? "").split("\n").filter(Boolean).map((line) => {
+      const [sha, subject, timestamp] = line.split("\0");
+      return { sha, subject, timestamp: Number(timestamp) };
+    });
+    const mainPath = path.dirname(path.resolve(cwd, common));
+    return {
+      ...emptyGit(cwd, "error"), status: "ok", mainPath,
+      branch,
+      headSha: commits[0]?.sha ?? null, headSubject: commits[0]?.subject ?? null,
+      upstream, isMain: normalizePath(root) === normalizePath(mainPath),
+      changes: parseStatus(lines.join("\n")), commits,
+      scanning: true,
     };
   }
 
@@ -217,5 +285,5 @@ export function createGitService(
       : { status: "behind", count: comparison.behind };
   }
 
-  return { gitStatus, sourceRelation };
+  return { gitStatus, fastGitStatus, sourceRelation };
 }
