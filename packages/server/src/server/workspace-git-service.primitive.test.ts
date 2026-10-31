@@ -425,13 +425,27 @@ describe("WorkspaceGitServiceImpl primitive refresh entrypoint", () => {
 
   test("getCheckout surfaces an unexpected Git read failure", async () => {
     const service = createService({
-      getCheckoutStatus: vi.fn(async () => {
+      getCheckoutSnapshotFacts: vi.fn(async () => {
         throw new Error("Git read failed");
       }),
     });
 
     await expect(service.getCheckout(REPO_CWD)).rejects.toThrow("Git read failed");
 
+    service.dispose();
+  });
+
+  test("getCheckout shares concurrent identity reads without reading working-tree status", async () => {
+    const gate = createDeferred<ReturnType<typeof createCheckoutFacts>>();
+    const getCheckoutSnapshotFacts = vi.fn(() => gate.promise);
+    const getCheckoutStatus = vi.fn();
+    const service = createService({ getCheckoutSnapshotFacts, getCheckoutStatus });
+    const first = service.getCheckout(REPO_CWD);
+    const second = service.getCheckout(REPO_CWD);
+    expect(getCheckoutSnapshotFacts).toHaveBeenCalledTimes(1);
+    gate.resolve(createCheckoutFacts(REPO_CWD));
+    expect(await first).toEqual(await second);
+    expect(getCheckoutStatus).not.toHaveBeenCalled();
     service.dispose();
   });
 
@@ -449,6 +463,49 @@ describe("WorkspaceGitServiceImpl primitive refresh entrypoint", () => {
 
     expect(getCheckoutStatus).toHaveBeenCalledTimes(1);
 
+    service.dispose();
+  });
+
+  test("returns the last snapshot after a failed refresh and retries in background", async () => {
+    const getCheckoutStatus = vi.fn(async (cwd: string) => createCheckoutStatus(cwd));
+    const service = createService({ getCheckoutStatus });
+    const snapshot = await service.getSnapshot(REPO_CWD);
+    getCheckoutStatus.mockRejectedValueOnce(new Error("Git timed out"));
+    await expect(service.getSnapshot(REPO_CWD, { force: true, reason: "test" })).resolves.toEqual(
+      snapshot,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(getCheckoutStatus).toHaveBeenCalledTimes(3));
+    service.dispose();
+  });
+
+  test("retries a failed initial snapshot read in the background", async () => {
+    const getCheckoutStatus = vi.fn(async (cwd: string) => createCheckoutStatus(cwd));
+    getCheckoutStatus.mockRejectedValueOnce(new Error("Git timed out"));
+    const service = createService({ getCheckoutStatus });
+    await expect(service.getSnapshot(REPO_CWD)).rejects.toThrow("Git timed out");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(getCheckoutStatus).toHaveBeenCalledTimes(2));
+    await expect(service.getSnapshot(REPO_CWD)).resolves.toEqual(createSnapshot(REPO_CWD));
+    service.dispose();
+  });
+
+  test("preserves an explicit request to omit forge on initial retry", async () => {
+    const getCheckoutStatus = vi.fn(async (cwd: string) => createCheckoutStatus(cwd));
+    const getPullRequestStatus = vi.fn(async () => createPullRequestStatusResult());
+    getCheckoutStatus.mockRejectedValueOnce(new Error("Git timed out"));
+    const service = createService({ getCheckoutStatus, getPullRequestStatus });
+    await expect(service.getSnapshot(REPO_CWD, { includeForge: false })).rejects.toThrow(
+      "Git timed out",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(getCheckoutStatus).toHaveBeenCalledTimes(2));
+    await expect(service.getSnapshot(REPO_CWD)).resolves.toEqual(
+      createSnapshot(REPO_CWD, {
+        forge: { featuresEnabled: false, pullRequest: null },
+      }),
+    );
+    expect(getPullRequestStatus).not.toHaveBeenCalled();
     service.dispose();
   });
 

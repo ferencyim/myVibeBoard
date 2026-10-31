@@ -715,7 +715,6 @@ async function createWindow(
       webviewTag: true,
     },
   });
-  mainWindow.on("page-title-updated", (event) => event.preventDefault());
   applyDesktopWindowChromeMode({ win: mainWindow, mode: DESKTOP_WINDOW_CHROME_MODE });
 
   const webContentsId = mainWindow.webContents.id;

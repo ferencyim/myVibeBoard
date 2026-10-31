@@ -35,6 +35,7 @@ interface WorkspaceOpenInEditorButtonProps {
   cwd: string;
   activeFile?: WorkspaceFileLocation | null;
   hideLabels?: boolean;
+  source?: "desktop" | "forge";
 }
 
 interface OpenTarget {
@@ -85,6 +86,7 @@ export function WorkspaceOpenInEditorButton({
   cwd,
   activeFile,
   hideLabels,
+  source,
 }: WorkspaceOpenInEditorButtonProps) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -121,6 +123,7 @@ export function WorkspaceOpenInEditorButton({
   const targets = useMemo<OpenTarget[]>(
     () =>
       planWorkspaceOpenTargets({
+        source,
         workspaceDirectory: cwd,
         activeFile,
         resolvedActiveFile: resolvedFile,
@@ -157,6 +160,7 @@ export function WorkspaceOpenInEditorButton({
       isDesktopOpenAvailable,
       isLocalDaemon,
       resolvedFile,
+      source,
     ],
   );
 
@@ -247,7 +251,9 @@ export function WorkspaceOpenInEditorButton({
             <View style={styles.splitButtonContent}>
               {primaryOption.icon}
               {!hideLabels && (
-                <Text style={styles.splitButtonText}>{t("workspace.git.openInEditor.open")}</Text>
+                <Text style={styles.splitButtonText}>
+                  {source === "forge" ? primaryOption.label : t("workspace.git.openInEditor.open")}
+                </Text>
               )}
             </View>
           )}

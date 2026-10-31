@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
-import {
-  Alert,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-  type PressableStateCallbackType,
-} from "react-native";
+import { Alert, Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "expo-router/react-navigation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -55,6 +48,7 @@ import { OpenLocationSection } from "@/screens/settings/open-location/open-locat
 import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
 import { ChatSection } from "@/screens/settings/chat/chat-section";
 import { SidebarNavSection } from "@/screens/settings/sidebar/sidebar-nav-section";
+import { SettingsNavigationScrollView } from "@/screens/settings/navigation-scroll-view";
 import { SendingSection } from "@/screens/settings/general/sending-section";
 import {
   useAppSettings,
@@ -1167,13 +1161,13 @@ function SettingsSidebar({
             style={sidebarStyles.search}
             testID="settings-search"
           />
-          <ScrollView
+          <SettingsNavigationScrollView
             style={sidebarStyles.scrollBody}
             showsVerticalScrollIndicator={false}
             testID="settings-sidebar-scroll-body"
           >
             {sidebarBody}
-          </ScrollView>
+          </SettingsNavigationScrollView>
         </View>
       ) : (
         sidebarBody
@@ -1561,7 +1555,10 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     return (
       <View style={styles.container}>
         <BackHeader title={t("settings.title")} onBack={handleBackToWorkspace} />
-        <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
+        <SettingsNavigationScrollView
+          style={styles.scrollView}
+          contentContainerStyle={insetBottomStyle}
+        >
           <SettingsSidebar
             view={view}
             onSelectSection={handleSelectSection}
@@ -1572,7 +1569,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             activeHostServerId={activeHostServerId}
             layout="mobile"
           />
-        </ScrollView>
+        </SettingsNavigationScrollView>
         {addHostModals}
       </View>
     );

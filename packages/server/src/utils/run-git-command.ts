@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import type { Logger } from "pino";
 import type { ProcessEnvRecord } from "../server/paseo-env.js";
 import {
@@ -27,6 +28,7 @@ const DEFAULT_STDERR_LIMIT = 2048;
 let gitProcessScheduler = new GitProcessScheduler(resolveGitProcessPolicy({ env: process.env }));
 let gitRuntimeMetrics = createGitCommandRuntimeMetricsWindow(gitProcessScheduler.policy);
 const gitCommandPriority = new AsyncLocalStorage<GitProcessPriority>();
+const untrackedReads = new Map<string, Promise<GitCommandResult>>();
 
 export function getGitCommandPriority(): GitProcessPriority {
   return gitCommandPriority.getStore() ?? "normal";
@@ -268,7 +270,30 @@ function runGitCommandWithProvenance(
   options: GitCommandOptions,
   provenance?: string,
 ): Promise<GitCommandResult> {
-  return executeGitCommand(args, options, (output) => output.toString("utf8"), provenance);
+  if (
+    args.join("\0") !== "ls-files\0-z\0--others\0--exclude-standard" ||
+    options.input !== undefined
+  ) {
+    return executeGitCommand(args, options, (output) => output.toString("utf8"), provenance);
+  }
+  const key = JSON.stringify([
+    resolvePath(options.cwd),
+    options.env,
+    options.envOverlay,
+    options.timeout,
+    options.maxOutputBytes,
+    options.acceptExitCodes,
+  ]);
+  const existing = untrackedReads.get(key);
+  if (existing) return existing;
+  const read = executeGitCommand(args, options, (output) => output.toString("utf8"), provenance);
+  untrackedReads.set(key, read);
+  void read
+    .finally(() => {
+      if (untrackedReads.get(key) === read) untrackedReads.delete(key);
+    })
+    .catch(() => {});
+  return read;
 }
 
 /** Binary stdout preserves cat-file byte framing before text decoding. */
@@ -425,7 +450,7 @@ function executeGitCommand<Output>(
       }
 
       timer = setTimeout(() => {
-        timeoutError = new Error(`Git command timed out after ${timeout}ms: ${command}`);
+        timeoutError = new Error(`Git 操作超时（${timeout} 毫秒），请稍后重试。`);
         child.kill("SIGKILL");
         settle(() => reject(timeoutError));
         if (processExit) {

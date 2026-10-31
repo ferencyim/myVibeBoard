@@ -23,6 +23,22 @@ const checkoutStatus = {
 };
 
 describe("planWorkspaceOpenTargets", () => {
+  it("separates forge and desktop targets for their respective panels", () => {
+    const input = {
+      workspaceDirectory: "/repo",
+      desktopTargets,
+      canUseDesktopBridge: true,
+      isLocalExecution: true,
+      checkoutStatus,
+    };
+    expect(
+      planWorkspaceOpenTargets({ ...input, source: "desktop" }).map((target) => target.id),
+    ).toEqual(["vscode", "finder"]);
+    expect(
+      planWorkspaceOpenTargets({ ...input, source: "forge" }).map((target) => target.id),
+    ).toEqual(["github"]);
+  });
+
   it("plans editor targets with active-file absolute path and cwd", () => {
     const targets = planWorkspaceOpenTargets({
       workspaceDirectory: "/repo",

@@ -216,6 +216,8 @@ export interface ModelPickerFieldProps {
   onPermissionChange?(value: string): void | Promise<unknown>;
   /** Called when the picker opens; use it to refresh the catalog in the background. */
   onOpen?(): void;
+  /** Refresh the model catalog from the picker. */
+  onRefresh?(): void;
 }
 /** Host provider / model / effort picker rendered as a full-width form field. */
 export declare const ModelPickerField: ComponentType<ModelPickerFieldProps>;

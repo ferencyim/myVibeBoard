@@ -204,6 +204,12 @@ interface PluginWorkspacePanelBase<Text extends PluginText = string> {
   title: Text;
   icon: PluginIcon;
   locations?: readonly PluginPanelLocation[];
+  /** Keep this panel in Explorer while the current agent matches. Rechecked periodically. */
+  requiredForAgent?: (input: {
+    agentId: string;
+    botId?: string;
+    paseo: PaseoApi;
+  }) => Promise<boolean>;
 }
 
 export interface PluginTab {

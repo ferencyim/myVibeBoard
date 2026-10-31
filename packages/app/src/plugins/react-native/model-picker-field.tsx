@@ -1,5 +1,5 @@
 import { useCallback, useMemo, type ReactNode } from "react";
-import type { ModelPickerFieldProps } from "@getpaseo/plugin/client/ui";
+import type { ModelPickerFieldProps as PluginModelPickerFieldProps } from "@getpaseo/plugin/client/ui";
 import { ProviderModelPicker } from "@/components/provider-model-picker/provider-model-picker";
 import { ModelProviderGlyph } from "@/components/model-provider-glyph";
 import { SelectFieldTrigger } from "@/components/ui/select-field";
@@ -7,6 +7,8 @@ import type {
   ProviderSelectorProvider,
   ProviderSelectionModelRow,
 } from "@/provider-selection/provider-selection";
+
+type ModelPickerFieldProps = PluginModelPickerFieldProps & { onRefresh?(): void };
 
 const PERMISSION_TIERS = ["accept-edits", "auto", "full"] as const;
 
@@ -129,6 +131,7 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
       permission={pickerPermission}
       disabled={disabled}
       onOpen={onOpen}
+      onRefresh={props.onRefresh}
       renderTrigger={renderTrigger}
       triggerFill
     />

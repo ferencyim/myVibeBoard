@@ -251,6 +251,22 @@ describe("runGitCommand", () => {
     expect(fakeSpawnController.activeCount).toBe(0);
   });
 
+  it("shares only concurrent matching untracked-file reads", async () => {
+    const { runGitCommand } = await loadRunGitCommand(2);
+    const args = ["ls-files", "-z", "--others", "--exclude-standard"];
+    enqueueSpawnBehaviors({ delayMs: 25, stdoutData: "file\0" }, { delayMs: 0 });
+    const options = { cwd: process.cwd() };
+    const [first, second] = await Promise.all([
+      runGitCommand(args, options),
+      runGitCommand(args, options),
+    ]);
+    expect(first.stdout).toBe("file\0");
+    expect(second.stdout).toBe(first.stdout);
+    expect(fakeSpawnController.processes).toHaveLength(1);
+    await runGitCommand(args, options);
+    expect(fakeSpawnController.processes).toHaveLength(2);
+  });
+
   it("kills timed out processes and releases the limiter slot", async () => {
     const { runGitCommand } = await loadRunGitCommand(1);
 
@@ -261,7 +277,7 @@ describe("runGitCommand", () => {
         cwd: process.cwd(),
         timeout: 100,
       }),
-    ).rejects.toThrow("Git command timed out after 100ms: git status");
+    ).rejects.toThrow("Git 操作超时（100 毫秒），请稍后重试。");
 
     expect(fakeSpawnController.processes[0]?.killed).toBe(true);
     expect(fakeSpawnController.processes[0]?.killSignals).toEqual(["SIGKILL"]);
@@ -303,7 +319,7 @@ describe("runGitCommand", () => {
 
     await expect(timedOut).resolves.toEqual(
       expect.objectContaining({
-        message: "Git command timed out after 20ms: git status",
+        message: "Git 操作超时（20 毫秒），请稍后重试。",
       }),
     );
     await vi.waitFor(() => {

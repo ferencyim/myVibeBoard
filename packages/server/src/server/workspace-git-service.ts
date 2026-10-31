@@ -604,6 +604,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   private disposePromise: Promise<void> | null = null;
   private readonly snapshotUpdatedListeners = new Set<WorkspaceGitSnapshotUpdatedListener>();
   private readonly workspaceTargets = new Map<string, WorkspaceGitTarget>();
+  private readonly checkoutReads = new Map<string, Promise<ProjectCheckoutLitePayload>>();
   private readonly repoTargets = new Map<string, RepoGitTarget>();
   private readonly workingTreeWatchTargets = new Map<string, WorkingTreeWatchTarget>();
   private readonly workingTreeWatchSetups = new Map<string, Promise<WorkingTreeWatchTarget>>();
@@ -754,13 +755,39 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       return target.latestSnapshot;
     }
 
-    return this.requestWorkspaceSnapshot(target, request);
+    try {
+      return await this.requestWorkspaceSnapshot(target, request);
+    } catch (error) {
+      this.scheduleWorkspaceRefresh(target, {
+        includeForge: request.includeForge,
+        reason: "retry-after-read-failure",
+      });
+      if (!target.latestSnapshot) throw error;
+      this.logger.warn(
+        { err: error, cwd },
+        "Using previous workspace Git snapshot after refresh failed",
+      );
+      return target.latestSnapshot;
+    }
   }
 
   async getCheckout(cwd: string): Promise<ProjectCheckoutLitePayload> {
     this.assertNotDisposed();
     const normalizedCwd = resolve(cwd);
-    const status = await this.deps.getCheckoutStatus(normalizedCwd, {
+    const existing = this.checkoutReads.get(normalizedCwd);
+    if (existing) return existing;
+    const read = this.readCheckout(normalizedCwd);
+    this.checkoutReads.set(normalizedCwd, read);
+    try {
+      return await read;
+    } finally {
+      if (this.checkoutReads.get(normalizedCwd) === read) this.checkoutReads.delete(normalizedCwd);
+    }
+  }
+
+  private async readCheckout(normalizedCwd: string): Promise<ProjectCheckoutLitePayload> {
+    // Reconciliation only needs identity, not the expensive working-tree status/diff.
+    const status = await this.deps.getCheckoutSnapshotFacts(normalizedCwd, {
       paseoHome: this.paseoHome,
       worktreesRoot: this.worktreesRoot,
       logger: this.logger,
@@ -785,13 +812,19 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
         mainRepoRoot: null,
       });
     }
+    let mainRepoRoot = status.mainRepoRoot;
+    if (status.paseoWorktree.isPaseoOwnedWorktree) {
+      mainRepoRoot ??= status.worktreeRoot;
+    } else if (mainRepoRoot && resolve(mainRepoRoot) === resolve(status.worktreeRoot)) {
+      mainRepoRoot = null;
+    }
     return checkoutLiteFromGitSnapshot(normalizedCwd, {
       isGit: true,
       currentBranch: status.currentBranch,
       remoteUrl: status.remoteUrl,
-      repoRoot: status.repoRoot,
-      isPaseoOwnedWorktree: status.isPaseoOwnedWorktree,
-      mainRepoRoot: status.mainRepoRoot,
+      repoRoot: status.worktreeRoot,
+      isPaseoOwnedWorktree: status.paseoWorktree.isPaseoOwnedWorktree,
+      mainRepoRoot,
     });
   }
 

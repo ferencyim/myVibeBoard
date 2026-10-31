@@ -1,3 +1,12 @@
+import {
+  useWorkspaceTitleStore,
+  workspaceTitleSuffix,
+} from "@/screens/workspace/workspace-title-store";
+import {
+  useConditionalExplorerPanels,
+  useRequiredExplorerPanels,
+} from "@/screens/workspace/required-explorer-panels";
+import { useConversationBot } from "@/panels/bot-conversation-header";
 import { useHostFeature } from "@/runtime/host-features";
 import {
   AssistantFileLinkResolverProvider,
@@ -34,7 +43,6 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useIsFocused } from "expo-router/react-navigation";
 import { BackHandler, Text, View } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
-import { useFetchQuery } from "@/data/query";
 import { useRouter, type Href } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { useTranslation } from "react-i18next";
@@ -42,10 +50,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
 import invariant from "tiny-invariant";
-import { PanelRight } from "lucide-react-native";
-import { IconButton } from "@/ui/icon-button";
-import { createPluginNavigation } from "@/plugins/navigation";
-import { useInstalledPlugin } from "@/plugins/registry";
 import { ConversationHeaderSlotsProvider } from "@/panels/conversation-header-slots";
 import { SidebarMenuToggle } from "@/components/headers/sidebar-menu-toggle";
 import { ScreenHeader } from "@/components/headers/screen-header";
@@ -64,8 +68,6 @@ import {
 } from "@/components/ui/floating-panel-portal";
 import { SplitContainer } from "@/components/split-container";
 import { RetainedPanel } from "@/components/retained-panel";
-import { WorkspaceActions } from "@/git/workspace-actions";
-import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 import { WorkspaceScriptsButton } from "@/screens/workspace/scripts";
 import { ImportSessionSheet } from "@/components/import-session-sheet";
 import { useNavigateToImportedAgent } from "@/hooks/use-import-session";
@@ -145,7 +147,6 @@ import { buildProviderCommand } from "@/utils/provider-command-templates";
 import { generateDraftId } from "@/stores/draft-keys";
 import { resolveWorkspaceRouteId } from "@/utils/workspace-identity";
 import { useOpenAgentTabLabels } from "@/subagents/use-open-agent-tab-labels";
-import { WorkspaceTabPresentationResolver } from "@/screens/workspace/workspace-tab-presentation";
 import {
   useWorkspaceTabRename,
   WorkspaceTabRenameModal,
@@ -159,13 +160,13 @@ import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-
 import {
   resolveWorkspaceExplorerToggleOwner,
   EXPLORER_TOGGLE_KEYS,
-  WorkspaceExplorerSidebarToggle,
   WorkspaceHeaderExplorerToggle,
   WorkspaceExplorerToggle,
 } from "@/screens/workspace/workspace-explorer-toggle";
 import { useHasWindowChromeObstruction } from "@/utils/desktop-window";
 import {
   resolveWorkspaceHeaderRenderState,
+  workspaceWindowTitle,
   type WorkspaceHeaderCheckoutState,
 } from "@/screens/workspace/workspace-header-source";
 import {
@@ -235,36 +236,6 @@ import { useWorkspacePullRequestDiscovery } from "@/panels/pull-request";
 const NO_SHEETS: readonly SheetTab[] = [];
 const WORKSPACE_FLOATING_PANEL_PORTAL_HOST_PREFIX = "workspace-floating-panels";
 
-function TaskFlowLevel({ serverId, workspaceId }: { serverId: string; workspaceId: string }) {
-  const plugin = useInstalledPlugin(serverId, "vibe-board");
-  const query = useFetchQuery(
-    {
-      queryKey: ["vibe-board", "task-panel", workspaceId],
-      enabled: Boolean(plugin),
-      dataShape: "value",
-      staleTimeMs: 3_000,
-      queryFn: () => plugin!.invoke("vibe.task.panel", { workspaceId }),
-      select: (result) => {
-        if (!result || typeof result !== "object" || !("task" in result)) return null;
-        const task = result.task;
-        if (!task || typeof task !== "object" || !("flowLevel" in task)) return null;
-        if (task.flowLevel === "simple") return "简单";
-        if (task.flowLevel === "medium") return "中等";
-        if (task.flowLevel === "full") return "完整";
-        return null;
-      },
-      retry: false,
-    },
-    plugin?.queryClient,
-  );
-  return query.data ? (
-    <View style={styles.conversationFlowBadge}>
-      <Text style={styles.conversationFlowBadgeText} numberOfLines={1}>
-        {query.data}
-      </Text>
-    </View>
-  ) : null;
-}
 const EMPTY_UI_TABS: WorkspaceTab[] = [];
 const EMPTY_WORKSPACE_SCRIPTS: WorkspaceDescriptor["scripts"] = [];
 const EMPTY_PINNED_AGENT_IDS = new Set<string>();
@@ -278,31 +249,6 @@ function getWorkspaceScripts(
   workspaceDescriptor: WorkspaceDescriptor | null | undefined,
 ): WorkspaceDescriptor["scripts"] {
   return workspaceDescriptor?.scripts ?? EMPTY_WORKSPACE_SCRIPTS;
-}
-
-interface WorkspaceFileLocationFields {
-  path: string | null;
-  lineStart?: number;
-  lineEnd?: number;
-}
-
-function getWorkspaceFileLocationFields(
-  tab: WorkspaceTabDescriptor | null,
-): WorkspaceFileLocationFields {
-  const target = tab?.target;
-  if (target?.kind !== "file") {
-    return { path: null };
-  }
-  return { path: target.path, lineStart: target.lineStart, lineEnd: target.lineEnd };
-}
-
-function buildWorkspaceFileLocation(
-  fields: WorkspaceFileLocationFields,
-): WorkspaceFileLocation | null {
-  if (fields.path === null) {
-    return null;
-  }
-  return { path: fields.path, lineStart: fields.lineStart, lineEnd: fields.lineEnd };
 }
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -357,24 +303,31 @@ function useSyncWorkspaceActiveBrowser(input: {
 }
 
 function WorkspaceDocumentTitleEffect({
-  label,
-  titleState,
+  serverId,
+  agentId,
+  project,
+  workspace,
+  hasTaskFlow,
 }: {
-  label: string;
-  titleState: "ready" | "loading";
+  serverId: string;
+  agentId: string;
+  project: string;
+  workspace: string;
+  hasTaskFlow: boolean;
 }) {
-  const { t } = useTranslation();
+  const bot = useConversationBot(serverId, agentId);
   useEffect(() => {
-    if (isNative || typeof document === "undefined") {
-      return;
+    const name = hasTaskFlow ? workspace : (bot?.name ?? "");
+    const owner = Symbol("workspace-title");
+    useWorkspaceTitleStore.getState().setTitle(owner, workspaceTitleSuffix(project, name));
+    if (!isNative && typeof document !== "undefined") {
+      document.title = workspaceWindowTitle(project, name);
     }
-    const resolvedLabel = label.trim();
-    document.title =
-      titleState === "loading"
-        ? t("workspace.tabs.loading")
-        : resolvedLabel || t("workspace.tabs.fallback.workspace");
-  }, [label, titleState, t]);
-
+    return () => {
+      useWorkspaceTitleStore.getState().clearTitle(owner);
+      if (!isNative && typeof document !== "undefined") document.title = "myVibeBoard";
+    };
+  }, [bot?.name, hasTaskFlow, project, workspace]);
   return null;
 }
 
@@ -869,33 +822,6 @@ function renderWorkspaceScreenGateShell(input: {
   );
 }
 
-function WorkspaceDocumentTitleEffectSlot({
-  tab,
-  serverId,
-  workspaceId,
-  isRouteFocused,
-}: {
-  tab: WorkspaceTabDescriptor | null;
-  serverId: string;
-  workspaceId: string;
-  isRouteFocused: boolean;
-}) {
-  if (!isRouteFocused || !isWeb || !tab) {
-    return null;
-  }
-
-  return (
-    <WorkspaceTabPresentationResolver tab={tab} serverId={serverId} workspaceId={workspaceId}>
-      {(presentation) => (
-        <WorkspaceDocumentTitleEffect
-          label={presentation.label}
-          titleState={presentation.titleState}
-        />
-      )}
-    </WorkspaceTabPresentationResolver>
-  );
-}
-
 function isAgentConversation(activeTab: WorkspaceTabDescriptor | null): boolean {
   return activeTab?.kind === "agent";
 }
@@ -1382,57 +1308,60 @@ function WorkspaceScreenContent({
     () => (workspaceLayout ? collectAllTabs(workspaceLayout.root) : EMPTY_UI_TABS),
     [workspaceLayout],
   );
-  const hasTaskFlow = uiTabs.some(
+  const hasResolvedTaskFlow = uiTabs.some(
     (tab) =>
       (tab.target.kind === "agent" && Boolean(tab.target.flowTab)) ||
       (tab.target.kind === "draft" && tab.target.placeholder?.providerId === "task-flow"),
   );
-  const taskFlowExplorerPane =
-    workspaceLayout && explorerSidebarPaneId
-      ? findPaneById(workspaceLayout.root, explorerSidebarPaneId)
-      : null;
-  const explorerTarget = uiTabs.find(
-    (tab) => tab.tabId === taskFlowExplorerPane?.focusedTabId,
-  )?.target;
-  const taskFlowOpen =
-    isExplorerSidebarShowing &&
-    explorerTarget?.kind === "plugin" &&
-    explorerTarget.pluginId === "vibe-board" &&
-    explorerTarget.panelId === "task-flow";
-  const toggleTaskFlow = useCallback(() => {
-    if (taskFlowOpen) {
-      if (isMobile) showMobileAgent();
-      else if (persistenceKey)
-        useWorkspaceLayoutStore.getState().hideExplorerSidebar(persistenceKey);
-    } else {
-      createPluginNavigation({
-        serverId: normalizedServerId,
-        workspaceId: normalizedWorkspaceId,
-      }).openWorkspacePanel("vibe-board", "task-flow", "explorer");
+  const hasTaskAgent = useSessionStore((state) => {
+    const session = state.sessions[normalizedServerId];
+    return uiTabs.some((tab) => {
+      if (tab.target.kind !== "agent") return false;
+      const agent =
+        session?.agents.get(tab.target.agentId) ?? session?.agentDetails.get(tab.target.agentId);
+      return Boolean(agent?.labels?.["vibe.task_id"]);
+    });
+  });
+  const hasTaskFlow = hasResolvedTaskFlow || hasTaskAgent;
+  const botAgentId = useSessionStore((state) => {
+    const session = state.sessions[normalizedServerId];
+    for (const tab of uiTabs) {
+      if (tab.target.kind !== "agent") continue;
+      const agent =
+        session?.agents.get(tab.target.agentId) ?? session?.agentDetails.get(tab.target.agentId);
+      if (agent?.labels?.["vibe.bot"]) return tab.target.agentId;
     }
-  }, [
-    taskFlowOpen,
-    isMobile,
-    showMobileAgent,
-    persistenceKey,
-    normalizedServerId,
-    normalizedWorkspaceId,
-  ]);
-  const taskFlowAccessibilityState = useMemo(() => ({ expanded: taskFlowOpen }), [taskFlowOpen]);
-  const taskFlowButton = useMemo(
-    () =>
-      hasTaskFlow ? (
-        <IconButton
-          label="任务流程面板"
-          icon={PanelRight}
-          size="xs"
-          variant="ghost"
-          accessibilityState={taskFlowAccessibilityState}
-          onPress={toggleTaskFlow}
-        />
-      ) : null,
-    [hasTaskFlow, taskFlowAccessibilityState, toggleTaskFlow],
+    return null;
+  });
+  useRequiredExplorerPanels({
+    workspaceKey: persistenceKey,
+    enabled: hasHydratedWorkspaceLayoutStore,
+    isTask: hasTaskFlow,
+    botAgentId,
+  });
+  const mainPaneId =
+    workspaceLayout?.focusedPaneId === explorerSidebarPaneId
+      ? (lastMainPaneId ?? unfocusedPaneId)
+      : workspaceLayout?.focusedPaneId;
+  const mainPane =
+    workspaceLayout && mainPaneId ? findPaneById(workspaceLayout.root, mainPaneId) : null;
+  const mainTab = uiTabs.find((tab) => tab.tabId === mainPane?.focusedTabId);
+  const conditionalAgentId = mainTab?.target.kind === "agent" ? mainTab.target.agentId : null;
+  const botId = useSessionStore((state) =>
+    conditionalAgentId
+      ? (
+          state.sessions[normalizedServerId]?.agents.get(conditionalAgentId) ??
+          state.sessions[normalizedServerId]?.agentDetails.get(conditionalAgentId)
+        )?.labels?.["vibe.bot"]
+      : undefined,
   );
+  useConditionalExplorerPanels({
+    serverId: normalizedServerId,
+    workspaceKey: persistenceKey,
+    enabled: hasHydratedWorkspaceLayoutStore,
+    agentId: conditionalAgentId,
+    botId,
+  });
   useOpenAgentTabLabels({
     client,
     serverId: normalizedServerId,
@@ -1468,6 +1397,13 @@ function WorkspaceScreenContent({
   const splitWorkspacePaneEmpty = useWorkspaceLayoutStore((state) => state.splitPaneEmpty);
   const moveWorkspaceTabToPane = useWorkspaceLayoutStore((state) => state.moveTabToPane);
   const closeWorkspacePane = useWorkspaceLayoutStore((state) => state.closePane);
+  const focusedExplorerPane =
+    workspaceLayout && explorerSidebarPaneId
+      ? findPaneById(workspaceLayout.root, explorerSidebarPaneId)
+      : null;
+  const explorerTarget = uiTabs.find(
+    (tab) => tab.tabId === focusedExplorerPane?.focusedTabId,
+  )?.target;
   const handleToggleExplorerSidebar = useCallback(() => {
     const query = { isCompact: isMobile, workspaceKey: persistenceKey };
     const opening = !isExplorerSidebarOpen(query);
@@ -3015,29 +2951,10 @@ function WorkspaceScreenContent({
 
   const activeTabDescriptor = useMemo(() => activeTab?.descriptor ?? null, [activeTab]);
   const showWorkspaceTabRow = useShowWorkspaceTabRow(normalizedServerId, activeTabDescriptor);
-  const activeFileFields = getWorkspaceFileLocationFields(activeTabDescriptor);
-  const activeFilePath = activeFileFields.path;
-  const activeFileLineStart = activeFileFields.lineStart;
-  const activeFileLineEnd = activeFileFields.lineEnd;
-  const activeFileLocation = useMemo<WorkspaceFileLocation | null>(
-    () =>
-      buildWorkspaceFileLocation({
-        path: activeFilePath,
-        lineStart: activeFileLineStart,
-        lineEnd: activeFileLineEnd,
-      }),
-    [activeFileLineEnd, activeFileLineStart, activeFilePath],
-  );
   const shouldRenderDesktopPaneFallback = useMemo(
     () => !isMobile && !canRenderDesktopPaneSplits,
     [isMobile, canRenderDesktopPaneSplits],
   );
-  useEffect(() => {
-    if (!isRouteFocused || isNative || typeof document === "undefined" || activeTabDescriptor) {
-      return;
-    }
-    document.title = "Workspace";
-  }, [activeTabDescriptor, isRouteFocused]);
   const buildPaneContentModel = useCallback(
     (input: {
       tab: WorkspaceTabDescriptor;
@@ -3313,26 +3230,15 @@ function WorkspaceScreenContent({
           />
         ) : null}
         {workspaceDirectory ? (
-          <WorkspaceOpenInEditorButton
-            serverId={normalizedServerId}
-            cwd={workspaceDirectory}
-            activeFile={activeFileLocation}
-            hideLabels
+          <WorkspaceHeaderExplorerToggle
+            owner={explorerToggleOwner}
+            onPress={handleToggleExplorerSidebar}
+            label={explorerSidebarToggleLabel}
+            tooltipLabel={t("workspace.tabs.explorerSidebar.toggle")}
+            tooltipKeys={EXPLORER_TOGGLE_KEYS}
+            style={styles.compactHeaderActionButton}
+            accessibilityState={explorerSidebarToggleAccessibilityState}
           />
-        ) : null}
-        {workspaceDirectory ? (
-          <>
-            <WorkspaceActions serverId={normalizedServerId} cwd={workspaceDirectory} />
-            <WorkspaceHeaderExplorerToggle
-              owner={explorerToggleOwner}
-              onPress={handleToggleExplorerSidebar}
-              label={explorerSidebarToggleLabel}
-              tooltipLabel={t("workspace.tabs.explorerSidebar.toggle")}
-              tooltipKeys={EXPLORER_TOGGLE_KEYS}
-              style={styles.compactHeaderActionButton}
-              accessibilityState={explorerSidebarToggleAccessibilityState}
-            />
-          </>
         ) : null}
       </View>
     ),
@@ -3341,7 +3247,6 @@ function WorkspaceScreenContent({
       normalizedServerId,
       normalizedWorkspaceId,
       workspaceDirectory,
-      activeFileLocation,
       liveTerminalIds,
       handleScriptTerminalStarted,
       handleViewScriptTerminal,
@@ -3357,25 +3262,6 @@ function WorkspaceScreenContent({
   const showScreenHeader = useMemo(
     () => shouldShowWorkspaceScreenHeader({ isFocusModeEnabled, isMobile }),
     [isFocusModeEnabled, isMobile],
-  );
-  const renderExplorerSidebarHeaderAction = useCallback(
-    () => (
-      <WorkspaceExplorerSidebarToggle
-        owner={explorerToggleOwner}
-        onPress={handleToggleExplorerSidebar}
-        label={explorerSidebarToggleLabel}
-        tooltipLabel={t("workspace.tabs.explorerSidebar.toggle")}
-        tooltipKeys={EXPLORER_TOGGLE_KEYS}
-        accessibilityState={explorerSidebarToggleAccessibilityState}
-      />
-    ),
-    [
-      explorerSidebarToggleAccessibilityState,
-      explorerSidebarToggleLabel,
-      explorerToggleOwner,
-      handleToggleExplorerSidebar,
-      t,
-    ],
   );
   const createTerminalDisabled = useMemo(
     () => createTerminalMutation.isPending || pendingTerminalCreateInput !== null,
@@ -3567,6 +3453,12 @@ function WorkspaceScreenContent({
       workspaceHeaderTitle,
     ],
   );
+  const splitRight = useCallback(() => {
+    if (focusedPaneId) handleCreateEmptySplit({ targetPaneId: focusedPaneId, position: "right" });
+  }, [focusedPaneId, handleCreateEmptySplit]);
+  const splitDown = useCallback(() => {
+    if (focusedPaneId) handleCreateEmptySplit({ targetPaneId: focusedPaneId, position: "bottom" });
+  }, [focusedPaneId, handleCreateEmptySplit]);
   const conversationHeaderSlots = useMemo(
     () => ({
       left: <SidebarMenuToggle />,
@@ -3574,18 +3466,15 @@ function WorkspaceScreenContent({
         <View style={styles.headerTitleSkeleton} />
       ) : (
         <View style={styles.conversationWorkspaceIdentity}>
-          {hasTaskFlow && isWorkspaceHeaderSubtitleDistinct ? (
-            <Text style={styles.conversationWorkspaceProject} numberOfLines={1}>
-              {workspaceHeaderSubtitle} /
+          {!hasTaskFlow ? (
+            <Text
+              testID="workspace-header-title"
+              style={styles.conversationWorkspaceTitle}
+              numberOfLines={1}
+            >
+              {workspaceHeaderTitle}
             </Text>
           ) : null}
-          <Text
-            testID="workspace-header-title"
-            style={styles.conversationWorkspaceTitle}
-            numberOfLines={1}
-          >
-            {workspaceHeaderTitle}
-          </Text>
           {!hasTaskFlow ? (
             <WorkspaceHeaderProjectRow
               subtitle={workspaceHeaderSubtitle}
@@ -3593,20 +3482,16 @@ function WorkspaceScreenContent({
               serverId={normalizedServerId}
             />
           ) : null}
-          {currentBranchName ? (
+          {currentBranchName && !hasTaskFlow ? (
             <Text style={styles.conversationWorkspaceBranch} numberOfLines={1}>
               {currentBranchName}
             </Text>
-          ) : null}
-          {hasTaskFlow ? (
-            <TaskFlowLevel serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
           ) : null}
         </View>
       ),
       right: (openMode?: () => void) =>
         isMobile ? (
           <>
-            {taskFlowButton}
             <MobileWorkspaceTabSwitcher
               tabs={tabs}
               activeTabKey={activeTabKey}
@@ -3629,6 +3514,8 @@ function WorkspaceScreenContent({
             />
             <WorkspaceHeaderMenuMobile
               onOpenMode={openMode}
+              onSplitRight={(hasTaskFlow || botAgentId) && focusedPaneId ? splitRight : undefined}
+              onSplitDown={(hasTaskFlow || botAgentId) && focusedPaneId ? splitDown : undefined}
               normalizedServerId={normalizedServerId}
               normalizedWorkspaceId={normalizedWorkspaceId}
               scripts={compactHeaderScripts}
@@ -3656,9 +3543,10 @@ function WorkspaceScreenContent({
           </>
         ) : (
           <>
-            {taskFlowButton}
             <WorkspaceHeaderMenuDesktop
               onOpenMode={openMode}
+              onSplitRight={(hasTaskFlow || botAgentId) && focusedPaneId ? splitRight : undefined}
+              onSplitDown={(hasTaskFlow || botAgentId) && focusedPaneId ? splitDown : undefined}
               currentBranchName={currentBranchName}
               showWorkspaceSetup={showWorkspaceSetup}
               importAgentDisabled={!canOpenImportSheet}
@@ -3674,7 +3562,10 @@ function WorkspaceScreenContent({
     }),
     [
       isMobile,
-      taskFlowButton,
+      botAgentId,
+      focusedPaneId,
+      splitRight,
+      splitDown,
       hasTaskFlow,
       tabs,
       activeTabKey,
@@ -3724,6 +3615,7 @@ function WorkspaceScreenContent({
     }
     return (
       <SplitContainer
+        suppressSplitMenu={Boolean((hasTaskFlow || botAgentId) && focusedPaneId)}
         layout={workspaceLayout}
         renderMainHeader={renderWorkspaceScreenHeader}
         focusModeEnabled={desktopFocusModeEnabled}
@@ -3761,6 +3653,9 @@ function WorkspaceScreenContent({
   }, [
     canRenderDesktopPaneSplits,
     workspaceLayout,
+    hasTaskFlow,
+    botAgentId,
+    focusedPaneId,
     renderWorkspaceScreenHeader,
     persistenceKey,
     desktopFocusModeEnabled,
@@ -3931,7 +3826,6 @@ function WorkspaceScreenContent({
         onExitFocusMode={toggleFocusMode}
         onReorderTabsInPane={handleReorderTabsInPane}
         buildPaneContentModel={buildDesktopPaneContentModel}
-        headerAction={renderExplorerSidebarHeaderAction()}
       />
     );
     return (
@@ -3972,7 +3866,6 @@ function WorkspaceScreenContent({
     toggleFocusMode,
     handleReorderTabsInPane,
     buildDesktopPaneContentModel,
-    renderExplorerSidebarHeaderAction,
     workspaceViewportWidth,
     desktopFocusModeEnabled,
   ]);
@@ -4021,12 +3914,15 @@ function WorkspaceScreenContent({
   const renderedWorkspaceScreen = (
     <RenderProfile id="WorkspaceScreenContent">
       <View style={containerStyle}>
-        <WorkspaceDocumentTitleEffectSlot
-          tab={activeTabDescriptor}
-          serverId={normalizedServerId}
-          workspaceId={normalizedWorkspaceId}
-          isRouteFocused={isRouteFocused}
-        />
+        {isRouteFocused ? (
+          <WorkspaceDocumentTitleEffect
+            serverId={normalizedServerId}
+            agentId={botAgentId ?? ""}
+            project={workspaceHeaderSubtitle}
+            workspace={workspaceHeaderTitle}
+            hasTaskFlow={hasTaskFlow}
+          />
+        ) : null}
         <WorkspacePanelSurface
           onLayout={measureWorkspaceWidth}
           launcher={newTabLauncher}

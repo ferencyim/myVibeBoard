@@ -32,6 +32,7 @@ export interface PlannedForgeOpenTarget {
 export type PlannedWorkspaceOpenTarget = PlannedDesktopOpenTarget | PlannedForgeOpenTarget;
 
 export interface PlanWorkspaceOpenTargetsInput {
+  source?: PlannedWorkspaceOpenTarget["source"];
   workspaceDirectory: string;
   directoryPath?: string | null;
   activeFile?: WorkspaceFileLocation | null;
@@ -182,5 +183,6 @@ export function planWorkspaceOpenTargets(
   const resolvedFile = resolveActiveFileForOpenTargets(input);
   const desktopTargets = planDesktopOpenTargets({ ...input, resolvedFile });
   const forgeTarget = planForgeOpenTarget({ ...input, resolvedFile });
-  return forgeTarget ? [...desktopTargets, forgeTarget] : desktopTargets;
+  const targets = forgeTarget ? [...desktopTargets, forgeTarget] : desktopTargets;
+  return input.source ? targets.filter((target) => target.source === input.source) : targets;
 }

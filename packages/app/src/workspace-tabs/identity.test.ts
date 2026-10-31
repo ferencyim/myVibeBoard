@@ -177,6 +177,26 @@ describe("plugin panel tab identity", () => {
     });
   });
 
+  it("preserves the conditional panel marker across layout restoration", () => {
+    expect(
+      normalizeWorkspaceTabTarget({
+        kind: "plugin",
+        pluginId: "maintain",
+        panelId: "rules",
+        context: "agent",
+        agentId: "a",
+        required: true,
+      }),
+    ).toEqual({
+      kind: "plugin",
+      pluginId: "maintain",
+      panelId: "rules",
+      context: "agent",
+      agentId: "a",
+      required: true,
+    });
+  });
+
   it("gives workspace and agent instances distinct stable ids", () => {
     const workspace = buildDeterministicWorkspaceTabId({
       kind: "plugin",

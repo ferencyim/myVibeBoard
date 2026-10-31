@@ -9,6 +9,7 @@ import { usePaneContext } from "@/panels/pane-context";
 import { definePanel, type PanelPresentation } from "@/panels/panel-registry";
 import { useAddFileToChat } from "@/panels/use-add-file-to-chat";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
+import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 
 const ThemedFiles = withUnistyles(Files);
 const filesPanelPresentation = {
@@ -40,14 +41,19 @@ function FilesPanel() {
     );
   }
   return (
-    <FileExplorerPane
-      serverId={serverId}
-      workspaceId={workspaceId}
-      workspaceRoot={workspaceRoot}
-      onOpenFile={onOpenFile}
-      onOpenFileToSide={openTargetToSide ? onOpenFileToSide : undefined}
-      onAddToChat={canAddToChat ? addFile : undefined}
-    />
+    <View style={styles.root}>
+      <View style={styles.actions}>
+        <WorkspaceOpenInEditorButton serverId={serverId} cwd={workspaceRoot} source="desktop" />
+      </View>
+      <FileExplorerPane
+        serverId={serverId}
+        workspaceId={workspaceId}
+        workspaceRoot={workspaceRoot}
+        onOpenFile={onOpenFile}
+        onOpenFileToSide={openTargetToSide ? onOpenFileToSide : undefined}
+        onAddToChat={canAddToChat ? addFile : undefined}
+      />
+    </View>
   );
 }
 
@@ -57,6 +63,8 @@ export const filesPanelRegistration = definePanel("files", {
 });
 
 const styles = StyleSheet.create((theme) => ({
+  root: { flex: 1 },
+  actions: { paddingHorizontal: theme.spacing[3], paddingTop: theme.spacing[2] },
   centerState: {
     flex: 1,
     alignItems: "center",

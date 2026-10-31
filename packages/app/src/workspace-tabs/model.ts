@@ -39,6 +39,7 @@ export type PluginWorkspaceTabTarget =
       panelId: string;
       context: "agent";
       agentId: string;
+      required?: boolean;
     };
 
 export type WorkspaceTabTarget =

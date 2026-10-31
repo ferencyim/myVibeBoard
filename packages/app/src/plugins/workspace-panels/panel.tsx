@@ -6,7 +6,7 @@ import type {
 } from "@getpaseo/plugin/client";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { PluginClientStateProvider } from "@getpaseo/plugin/client/host";
-import { CircleAlert } from "lucide-react-native";
+import { CircleAlert, GitBranch, Info } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -16,17 +16,19 @@ import { usePaneContext } from "@/panels/pane-context";
 import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
 import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
-import { useWorkspaceExists } from "@/stores/session-store-hooks";
+import { useWorkspaceDirectory, useWorkspaceExists } from "@/stores/session-store-hooks";
+import { WorkspaceActions } from "@/git/workspace-actions";
+import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 import type { Theme } from "@/styles/theme";
 import { normalizeWorkspaceOpaqueId } from "@/utils/workspace-identity";
 import { usePluginHostNavigation } from "../host-navigation";
 import { createPluginClientStateSource } from "../client-state/source";
 import { toPluginTheme } from "../theme";
 import { pluginIconComponent } from "../icons";
-import { useInstalledPlugin } from "../registry";
+import { pluginRegistry, useInstalledPlugin } from "../registry";
 import { PluginInstallationProvider } from "../installation-provider";
 import { SurfaceErrorBoundary } from "../surface-error-boundary";
-import { resolvePluginWorkspacePanel } from "./resolution";
+import { requiredPanelLabel, resolvePluginWorkspacePanel } from "./resolution";
 import { resolvePluginPlatform } from "../platform";
 
 const pluginThemeMapping = (theme: Theme) => ({
@@ -69,12 +71,23 @@ function PluginPanelBody({ theme }: { theme: PluginTheme }) {
   const layout = useMemo(() => ({ compact, platform: resolvePluginPlatform() }), [compact]);
   const stateSource = useMemo(() => createPluginClientStateSource(serverId), [serverId]);
   const navigation = usePluginHostNavigation(serverId);
+  const requiredLabel = requiredPanelLabel(target);
 
   if (!plugin || !contribution || !workspaceExists) {
+    if (requiredLabel) {
+      let message = "面板加载失败，请检查插件状态。";
+      if (!client) message = "主机未连接，请连接后重试。";
+      else if (!pluginRegistry.hasCatalog(serverId) || !workspaceExists) message = "正在加载面板…";
+      return <PluginPanelUnavailable message={message} />;
+    }
     return <PluginPanelUnavailable />;
   }
   if (!client) {
-    return <PluginPanelUnavailable message="Plugin host is offline." />;
+    return (
+      <PluginPanelUnavailable
+        message={requiredLabel ? "主机未连接，请连接后重试。" : "Plugin host is offline."}
+      />
+    );
   }
 
   let panel;
@@ -133,7 +146,24 @@ function PluginPanelBody({ theme }: { theme: PluginTheme }) {
 const ThemedPluginPanelBody = withUnistyles(PluginPanelBody);
 
 function PluginPanel() {
-  return <ThemedPluginPanelBody uniProps={pluginThemeMapping} />;
+  const { serverId, workspaceId, target } = usePaneContext();
+  const cwd = useWorkspaceDirectory(serverId, workspaceId);
+  const isGitPanel =
+    target.kind === "plugin" &&
+    target.pluginId === "vibe-git" &&
+    target.panelId === "git" &&
+    target.context === "workspace";
+  return (
+    <View style={styles.root}>
+      {isGitPanel && cwd ? (
+        <View style={styles.gitActions}>
+          <WorkspaceOpenInEditorButton serverId={serverId} cwd={cwd} source="forge" />
+          <WorkspaceActions serverId={serverId} cwd={cwd} />
+        </View>
+      ) : null}
+      <ThemedPluginPanelBody uniProps={pluginThemeMapping} />
+    </View>
+  );
 }
 
 function PluginPanelUnavailable({
@@ -157,6 +187,17 @@ function usePluginPanelDescriptor(
     (contribution) => contribution.id === target.panelId && contribution.context === target.context,
   );
   if (!panel) {
+    const label = requiredPanelLabel(target);
+    if (label) {
+      return {
+        label,
+        subtitle: target.pluginId,
+        tooltip: label,
+        titleState: "ready",
+        icon: label === "Git/构建" ? GitBranch : Info,
+        statusBucket: null,
+      };
+    }
     return {
       label: "Plugin unavailable",
       subtitle: target.pluginId,
@@ -182,6 +223,16 @@ export const pluginPanelRegistration = definePanel("plugin", {
 });
 
 const styles = StyleSheet.create((theme) => ({
+  root: { flex: 1 },
+  gitActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: theme.spacing[3],
+    backgroundColor: theme.colors.surface0,
+  },
   unavailable: {
     flex: 1,
     alignItems: "center",

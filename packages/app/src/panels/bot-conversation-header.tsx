@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { Ellipsis, PanelRight, Settings2 } from "lucide-react-native";
+import { Ellipsis, Settings2 } from "lucide-react-native";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -165,7 +165,6 @@ export function BotConversationHeader({
         "explorer",
       );
   }, [profileOpen, workspaceKey, serverId, workspaceId, profileAgentId]);
-  const profileAccessibilityState = useMemo(() => ({ expanded: profileOpen }), [profileOpen]);
   const identityAction = isBot ? openProfile : undefined;
   const compactIdentityAction = compact ? openRuntime : undefined;
   return (
@@ -215,16 +214,6 @@ export function BotConversationHeader({
             size="xs"
             variant="ghost"
             onPress={openRuntime}
-          />
-        ) : null}
-        {isBot ? (
-          <IconButton
-            label="bot 资料"
-            icon={PanelRight}
-            size="xs"
-            variant="ghost"
-            accessibilityState={profileAccessibilityState}
-            onPress={openProfile}
           />
         ) : null}
         {isBot && (!isPaneFocused || !slots.right) ? (

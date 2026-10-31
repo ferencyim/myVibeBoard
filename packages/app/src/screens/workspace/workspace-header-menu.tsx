@@ -2,7 +2,15 @@ import React, { useCallback, useMemo } from "react";
 import { View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { useTranslation } from "react-i18next";
-import { Copy, Ellipsis, Globe, Import as ImportIcon, Settings } from "lucide-react-native";
+import {
+  Columns2,
+  Copy,
+  Ellipsis,
+  Globe,
+  Import as ImportIcon,
+  Rows2,
+  Settings,
+} from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { TerminalProfile } from "@getpaseo/protocol/messages";
 import {
@@ -38,6 +46,8 @@ const ThemedCopy = withUnistyles(Copy);
 const ThemedGlobe = withUnistyles(Globe);
 const ThemedImport = withUnistyles(ImportIcon);
 const ThemedSettings = withUnistyles(Settings);
+const ThemedColumns2 = withUnistyles(Columns2);
+const ThemedRows2 = withUnistyles(Rows2);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -45,6 +55,8 @@ const MENU_NEW_BROWSER_ICON = <ThemedGlobe size={16} uniProps={mutedColorMapping
 const MENU_IMPORT_ICON = <ThemedImport size={16} uniProps={mutedColorMapping} />;
 const MENU_COPY_ICON = <ThemedCopy size={16} uniProps={mutedColorMapping} />;
 const MENU_SETTINGS_ICON = <ThemedSettings size={16} uniProps={mutedColorMapping} />;
+const MENU_SPLIT_RIGHT_ICON = <ThemedColumns2 size={16} uniProps={mutedColorMapping} />;
+const MENU_SPLIT_DOWN_ICON = <ThemedRows2 size={16} uniProps={mutedColorMapping} />;
 function WorkspaceHeaderMenuTriggerIcon() {
   return (
     <ThemedEllipsis
@@ -85,6 +97,8 @@ export interface WorkspaceHeaderWorkspaceActions {
   onCopyWorkspacePath: () => void;
   onCopyBranchName: () => void;
   onOpenSetupTab: () => void;
+  onSplitRight?: () => void;
+  onSplitDown?: () => void;
 }
 
 function WorkspaceHeaderWorkspaceActionItems({
@@ -97,10 +111,31 @@ function WorkspaceHeaderWorkspaceActionItems({
   onCopyWorkspacePath,
   onCopyBranchName,
   onOpenSetupTab,
+  onSplitRight,
+  onSplitDown,
 }: WorkspaceHeaderWorkspaceActions) {
   const { t } = useTranslation();
   return (
     <>
+      {onSplitRight && onSplitDown ? (
+        <>
+          <DropdownMenuItem
+            testID="workspace-split-pane-right"
+            leading={MENU_SPLIT_RIGHT_ICON}
+            onSelect={onSplitRight}
+          >
+            {t("workspace.tabs.actions.splitRight")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            testID="workspace-split-pane-down"
+            leading={MENU_SPLIT_DOWN_ICON}
+            onSelect={onSplitDown}
+          >
+            {t("workspace.tabs.actions.splitDown")}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+        </>
+      ) : null}
       {onOpenMode ? (
         <DropdownMenuItem testID="workspace-header-mode" onSelect={onOpenMode}>
           {t("agentControls.mode.title")}

@@ -2,7 +2,7 @@ import { PluginTranslationRuntime } from "@getpaseo/plugin/client/host";
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { InstalledPlugin } from "../types";
-import { resolvePluginWorkspacePanel } from "./resolution";
+import { requiredPanelLabel, resolvePluginWorkspacePanel } from "./resolution";
 
 function installed(): InstalledPlugin {
   return {
@@ -43,6 +43,41 @@ function installed(): InstalledPlugin {
 }
 
 describe("plugin workspace panel resolution", () => {
+  it("keeps required panel labels while plugins are unavailable", () => {
+    expect(
+      requiredPanelLabel({
+        kind: "plugin",
+        pluginId: "vibe-git",
+        panelId: "git",
+        context: "workspace",
+      }),
+    ).toBe("Git/构建");
+    expect(
+      requiredPanelLabel({
+        kind: "plugin",
+        pluginId: "vibe-board",
+        panelId: "task-info",
+        context: "workspace",
+      }),
+    ).toBe("资料");
+    expect(
+      requiredPanelLabel({
+        kind: "plugin",
+        pluginId: "vibe-bots",
+        panelId: "profile",
+        context: "agent",
+        agentId: "a",
+      }),
+    ).toBe("资料");
+    expect(
+      requiredPanelLabel({
+        kind: "plugin",
+        pluginId: "other",
+        panelId: "git",
+        context: "workspace",
+      }),
+    ).toBeNull();
+  });
   it("resolves only the exact plugin, panel, and context", () => {
     const plugin = installed();
     expect(

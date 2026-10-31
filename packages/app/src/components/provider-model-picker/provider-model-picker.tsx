@@ -59,6 +59,7 @@ export interface ProviderModelPickerProps {
   disabled?: boolean;
   serverId?: string | null;
   onOpen?: () => void;
+  onRefresh?: () => void;
   onClose?: () => void;
   renderTrigger?: (state: ProviderModelPickerTriggerState) => ReactNode;
   /** Full-width form-field trigger: the popover is as wide as the trigger. */
@@ -152,6 +153,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
       permission={permission}
       onPick={handlePick}
       onRetryProvider={onRetryProvider}
+      onRefresh={props.onRefresh}
       isRetryingProvider={isRetryingProvider}
       serverId={serverId}
       autoFocusSearch={isWeb && !compact}

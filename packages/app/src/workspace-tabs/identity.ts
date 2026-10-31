@@ -252,7 +252,16 @@ function normalizePluginTabTarget(
     return { kind: "plugin", pluginId, panelId, context: "workspace" };
   }
   const agentId = trimNonEmpty(value.agentId);
-  return agentId ? { kind: "plugin", pluginId, panelId, context: "agent", agentId } : null;
+  return agentId
+    ? {
+        kind: "plugin",
+        pluginId,
+        panelId,
+        context: "agent",
+        agentId,
+        ...(value.required === true ? { required: true } : {}),
+      }
+    : null;
 }
 
 function trimNonEmpty(value: string | null | undefined): string | null {

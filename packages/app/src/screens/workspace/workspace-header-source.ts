@@ -82,3 +82,10 @@ export function shouldRenderMissingWorkspaceDescriptor(input: {
 }): boolean {
   return !input.workspace && input.hasHydratedWorkspaces;
 }
+
+export function workspaceWindowTitle(project: string, name: string | null): string {
+  const label = name?.trim();
+  if (!label) return "myVibeBoard";
+  const projectName = project.trim();
+  return `myVibeBoard - ${projectName ? `${projectName}/` : ""}${label}`;
+}

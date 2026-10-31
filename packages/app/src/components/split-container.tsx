@@ -100,6 +100,7 @@ interface SplitContainerProps {
   onResizeSplit: (groupId: string, sizes: number[]) => void;
   onReorderTabsInPane: (paneId: string, tabIds: string[]) => void;
   focusModeEnabled?: boolean;
+  suppressSplitMenu?: boolean;
   onExitFocusMode: () => void;
 }
 
@@ -173,6 +174,7 @@ export function SplitContainer({
   onResizeSplit,
   onReorderTabsInPane,
   focusModeEnabled,
+  suppressSplitMenu,
   onExitFocusMode,
 }: SplitContainerProps) {
   const inheritedWindowChromeCorners = useWindowChromeCorners();
@@ -278,6 +280,7 @@ export function SplitContainer({
                 workspaceHasMultiplePanes={workspaceHasMultiplePanes}
                 onTogglePaneMaximized={handleTogglePaneMaximized}
                 focusModeEnabled={focusModeEnabled}
+                suppressSplitMenu={suppressSplitMenu}
                 onExitFocusMode={onExitFocusMode}
               />
             ) : null}
@@ -409,6 +412,7 @@ function SplitNodeView({
   workspaceHasMultiplePanes,
   onTogglePaneMaximized,
   focusModeEnabled,
+  suppressSplitMenu,
   onExitFocusMode,
 }: SplitNodeViewProps) {
   const [groupContainerSize, setGroupContainerSize] = useState(0);
@@ -495,6 +499,7 @@ function SplitNodeView({
             workspaceHasMultiplePanes={workspaceHasMultiplePanes}
             onTogglePaneMaximized={onTogglePaneMaximized}
             focusModeEnabled={focusModeEnabled}
+            suppressSplitMenu={suppressSplitMenu}
             onExitFocusMode={onExitFocusMode}
           />
         </WindowChromeRegion>
@@ -549,6 +554,7 @@ function SplitNodeView({
               workspaceHasMultiplePanes={workspaceHasMultiplePanes}
               onTogglePaneMaximized={onTogglePaneMaximized}
               focusModeEnabled={focusModeEnabled}
+              suppressSplitMenu={suppressSplitMenu}
               onExitFocusMode={onExitFocusMode}
             />
           </SplitGroupChild>
@@ -607,6 +613,7 @@ const SplitPaneView = memo(function SplitPaneView({
   workspaceHasMultiplePanes,
   onTogglePaneMaximized,
   focusModeEnabled,
+  suppressSplitMenu,
   onExitFocusMode,
 }: SplitPaneViewProps) {
   recordRenderProfileReasons(`SplitPaneView:${pane.id}`, ["render"]);
@@ -738,7 +745,7 @@ const SplitPaneView = memo(function SplitPaneView({
               tabDropPreviewIndex={
                 tabDropPreview?.paneId === pane.id ? tabDropPreview.indicatorIndex : null
               }
-              showPaneSplitActions={!focusModeEnabled}
+              showPaneSplitActions={!focusModeEnabled && !suppressSplitMenu}
               showPaneMaximizeAction={workspaceHasMultiplePanes && !focusModeEnabled}
               paneMaximized={paneId === maximizedPaneId}
               onTogglePaneMaximized={handleTogglePaneMaximized}

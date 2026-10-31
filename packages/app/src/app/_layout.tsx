@@ -1,3 +1,7 @@
+import {
+  desktopWindowTitle,
+  useWorkspaceTitleStore,
+} from "@/screens/workspace/workspace-title-store";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { PageRail } from "@/shell/page-rail";
 import { UsageSidebarRoot } from "@/usage";
@@ -540,6 +544,7 @@ function DesktopPageRail({ visible }: { visible: boolean }) {
 const DEV_BUILD_LABEL = process.env.EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL?.trim() || null;
 
 function DesktopTitlebar({ visible }: { visible: boolean }) {
+  const suffix = useWorkspaceTitleStore((state) => state.suffix);
   return visible ? (
     <View style={layoutStyles.windowTitlebar}>
       <TitlebarDragRegion />
@@ -548,8 +553,13 @@ function DesktopTitlebar({ visible }: { visible: boolean }) {
         pointerEvents="none"
         style={layoutStyles.windowTitlebarContent}
       >
-        <Text pointerEvents="none" style={layoutStyles.windowTitle}>
-          {getDesktopHost()?.windowProductName ?? "Paseo"}
+        <Text
+          pointerEvents="none"
+          style={layoutStyles.windowTitle}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
+          {desktopWindowTitle(getDesktopHost()?.windowProductName ?? "Paseo", suffix)}
         </Text>
       </WindowChromeSafeArea>
       {DEV_BUILD_LABEL ? (
@@ -988,6 +998,8 @@ const layoutStyles = StyleSheet.create((theme) => ({
     justifyContent: "center",
   },
   windowTitle: {
+    flexShrink: 1,
+    marginRight: theme.spacing[3],
     marginLeft: PAGE_RAIL_WIDTH + theme.spacing[2],
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,

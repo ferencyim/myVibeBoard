@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ProjectIconSource } from "@getpaseo/protocol/messages";
 import {
@@ -26,6 +26,7 @@ const PNG_1X1_ICON = { data: PNG_1X1.toString("base64"), mimeType: "image/png" }
 const cleanup: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(cleanup.splice(0).map((fn) => fn()));
 });
 
@@ -126,6 +127,42 @@ describe("project custom icon", () => {
     );
 
     await expect(target.readAdvertised()).resolves.toEqual(advertised.icon);
+  });
+
+  it("shares concurrent scans between sessions and refreshes automatic icons after expiry", async () => {
+    const target = await project();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const record = createPersistedProjectRecord({
+      projectId: "shared",
+      rootPath: target.rootPath,
+      kind: "git",
+      displayName: "repo",
+      createdAt: "2026-07-22T12:00:00.000Z",
+      updatedAt: "2026-07-22T12:00:00.000Z",
+    });
+    const first = new ProjectIconReader(target.paseoHome);
+    const second = new ProjectIconReader(target.paseoHome);
+    const [a, b] = await Promise.all([first.snapshot(record), second.snapshot(record)]);
+    expect(a).toBe(b);
+    expect(a.icon).toBeNull();
+
+    await mkdir(join(target.rootPath, "public"));
+    await writeFile(join(target.rootPath, "public", "favicon.png"), PNG_1X1);
+    expect((await second.snapshot(record)).icon).toBeNull();
+    now.mockReturnValue(31_001);
+    expect((await second.snapshot(record)).icon).toBeNull();
+    await vi.waitFor(async () => {
+      expect((await second.snapshot(record)).icon).toEqual(PNG_1X1_ICON);
+    });
+  });
+
+  it("invalidates a cached snapshot immediately when the custom icon revision changes", async () => {
+    const target = await project();
+    await target.advertisedSnapshot();
+    await target.set({ type: "upload", data: PNG_1X1.toString("base64") });
+    expect((await target.advertisedSnapshot()).icon).toEqual(PNG_1X1_ICON);
+    await target.set({ type: "automatic" });
+    expect((await target.advertisedSnapshot()).icon).toBeNull();
   });
 
   it("drops the stored image when the project goes back to automatic", async () => {

@@ -10,6 +10,10 @@ import { getImageDimensions, getProjectIcon, type ProjectIcon } from "./project-
 
 const MAX_ICON_BYTES = 512 * 1024;
 const ICON_TOO_LARGE_ERROR = "Icon must be 512 KB or smaller";
+const ICON_SNAPSHOT_TTL_MS = 30_000;
+const MAX_CACHED_ICON_SNAPSHOTS = 512;
+const iconSnapshots = new Map<string, { snapshot: ProjectIconSnapshot; expiresAt: number }>();
+const inFlightSnapshots = new Map<string, Promise<ProjectIconSnapshot>>();
 
 // A save validates, writes bytes, and updates the registry. Two concurrent
 // saves for one project would interleave those steps.
@@ -37,6 +41,8 @@ export async function setProjectCustomIcon(input: {
       await writeFileAtomic(cachePath(input.paseoHome, input.projectId), bytes);
       customIconRevision = randomUUID();
     }
+
+    invalidateIconSnapshots(input.paseoHome, input.projectId);
 
     const updated = await input.projects.update(input.projectId, (current) => ({
       ...current,
@@ -72,7 +78,48 @@ export class ProjectIconReader {
   constructor(private readonly paseoHome: string) {}
 
   async snapshot(project: PersistedProjectRecord): Promise<ProjectIconSnapshot> {
-    const snapshot = await readProjectIconSnapshot({ paseoHome: this.paseoHome, project });
+    // Sessions share the expensive automatic directory scan. A custom revision
+    // changes immediately on save; automatic filesystem changes are picked up
+    // after the short TTL.
+    const key = JSON.stringify([
+      this.paseoHome,
+      project.projectId,
+      project.rootPath,
+      project.customIconRevision,
+    ]);
+    const cached = iconSnapshots.get(key);
+    let snapshot: ProjectIconSnapshot;
+    if (!cached || cached.expiresAt <= Date.now()) {
+      let pending = inFlightSnapshots.get(key);
+      if (!pending) {
+        pending = readProjectIconSnapshot({ paseoHome: this.paseoHome, project });
+        inFlightSnapshots.set(key, pending);
+        void pending.then(
+          (result) => {
+            if (inFlightSnapshots.get(key) !== pending) return result;
+            iconSnapshots.delete(key);
+            iconSnapshots.set(key, {
+              snapshot: result,
+              expiresAt: Date.now() + ICON_SNAPSHOT_TTL_MS,
+            });
+            if (iconSnapshots.size > MAX_CACHED_ICON_SNAPSHOTS) {
+              const oldest = iconSnapshots.keys().next().value;
+              if (oldest !== undefined) iconSnapshots.delete(oldest);
+            }
+            inFlightSnapshots.delete(key);
+            return result;
+          },
+          () => {
+            if (inFlightSnapshots.get(key) === pending) inFlightSnapshots.delete(key);
+          },
+        );
+      }
+      // Serve the previous result while refreshing so one slow disk scan does
+      // not hold up every project.list request after the TTL expires.
+      snapshot = cached?.snapshot ?? (await pending);
+    } else {
+      snapshot = cached.snapshot;
+    }
     this.snapshots.set(project.projectId, snapshot);
     return snapshot;
   }
@@ -80,6 +127,13 @@ export class ProjectIconReader {
   async read(project: PersistedProjectRecord): Promise<ProjectIcon | null> {
     return (this.snapshots.get(project.projectId) ?? (await this.snapshot(project))).icon;
   }
+}
+
+function invalidateIconSnapshots(paseoHome: string, projectId: string): void {
+  const prefix = JSON.stringify([paseoHome, projectId]).slice(0, -1) + ",";
+  for (const key of iconSnapshots.keys()) if (key.startsWith(prefix)) iconSnapshots.delete(key);
+  for (const key of inFlightSnapshots.keys())
+    if (key.startsWith(prefix)) inFlightSnapshots.delete(key);
 }
 
 /** Reads the effective icon and gives that exact result a stable identity. */

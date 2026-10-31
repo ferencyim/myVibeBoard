@@ -26,6 +26,7 @@ import Animated, {
 import { Check, Search } from "lucide-react-native";
 import { AdaptiveTextInput } from "@/components/adaptive-text-input";
 import { Button } from "@/components/ui/button";
+import { RefreshModelsButton } from "./refresh-models-button";
 import { Switch } from "@/components/ui/switch";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { PressHighlight } from "@/components/ui/press-highlight";
@@ -76,6 +77,7 @@ export interface PickerPanelProps {
   permission?: PickerPermission | null;
   onPick: (provider: string, modelId: string) => void;
   onRetryProvider?: (provider: string) => void;
+  onRefresh?: () => void;
   isRetryingProvider?: boolean;
   serverId: string | null;
   autoFocusSearch?: boolean;
@@ -103,6 +105,11 @@ function resolveInitialTab(providers: ProviderSelectorProvider[], selectedProvid
 export function ProviderModelPanel(props: PickerPanelProps) {
   const { providers, selectedProvider, serverId } = props;
   const [activeTab, setActiveTab] = useState(() => resolveInitialTab(providers, selectedProvider));
+  useEffect(() => {
+    if (!providers.some((entry) => entry.id === activeTab)) {
+      setActiveTab(resolveInitialTab(providers, selectedProvider));
+    }
+  }, [activeTab, providers, selectedProvider]);
   const showRail = providers.length > 1;
   const activeProvider = providers.find((entry) => entry.id === activeTab) ?? null;
 
@@ -141,6 +148,7 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
     permission,
     onPick,
     onRetryProvider,
+    onRefresh,
     isRetryingProvider = false,
     isLoading,
     autoFocusSearch = false,
@@ -232,6 +240,7 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
           {panelSubtitle(provider, rows.length, isLoading)}
         </Text>
       </View>
+      <RefreshModelsButton onRefresh={onRefresh} isLoading={isLoading} />
       {provider?.modelSelection.kind === "error" ? (
         <View style={styles.statusBlock} accessibilityRole="alert">
           <Text style={styles.statusText}>{provider.modelSelection.message}</Text>

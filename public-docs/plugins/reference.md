@@ -1922,6 +1922,11 @@ export default function contribute(client: PluginClientContext) {
 | `locations` | No       | `workspace` and/or `explorer`. Defaults to `workspace`.       |
 | `Component` | Yes      | React Native component matching the selected context's props. |
 
+Agent panels can also supply `requiredForAgent({ agentId, botId, paseo })`, an async predicate
+for an Explorer panel. The host keeps matching panels present without selecting them and rechecks
+the predicate periodically. Return false when the panel does not apply; transient failures retain an
+already matched panel. Set `locations` to include `explorer`.
+
 Every panel receives `PluginPanelProps<Params>` with `theme`, `host`, `layout`, `navigation`,
 `workspaceId`, read-only `params`, `revision`, and `tab`. Workspace panels have empty
 `PluginWorkspacePanelParams`; agent panels have `PluginAgentPanelParams` containing `agentId`.
