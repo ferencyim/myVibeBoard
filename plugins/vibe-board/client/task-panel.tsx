@@ -15,6 +15,7 @@ import {
 import { withAlpha } from "./common/colors";
 import { HostProvider, useHost } from "./common/ctx";
 import { Btn, Dot, Muted } from "./common/ui";
+import { taskPanelQueryKey, taskPanelRefreshInterval } from "./task-panel-query";
 
 let requestCounter = 0;
 const nextRequestId = () => `task-panel-${Date.now()}-${++requestCounter}`;
@@ -45,9 +46,10 @@ function TaskFlowPanelBody({
   const setFlow = useRpc(taskFlowSetRpc);
   const startPlan = useRpc(taskPlanStartRpc);
   const query = useQuery({
-    queryKey: ["vibe-board", "task-panel", workspaceId],
+    queryKey: taskPanelQueryKey(workspaceId),
     queryFn: () => panel({ workspaceId }),
-    refetchInterval: 3_000,
+    refetchInterval: taskPanelRefreshInterval,
+    staleTime: taskPanelRefreshInterval,
     retry: false,
   });
   const [pending, setPending] = useState<TaskTabCommand["action"] | "refresh" | "flow" | null>(null);

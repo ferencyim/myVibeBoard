@@ -120,7 +120,7 @@ export function createProjectDocuments(options: {
           );
       for (const r of records)
         db.prepare(
-          `INSERT INTO project_document(project_id,path,content,total_bytes,truncated,revision,synced_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(project_id,path) DO UPDATE SET content=excluded.content,total_bytes=excluded.total_bytes,truncated=excluded.truncated,revision=excluded.revision,synced_at=CASE WHEN project_document.revision=excluded.revision THEN project_document.synced_at ELSE excluded.synced_at END`,
+          `INSERT INTO project_document(project_id,path,content,total_bytes,truncated,revision,synced_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(project_id,path) DO UPDATE SET content=excluded.content,total_bytes=excluded.total_bytes,truncated=excluded.truncated,revision=excluded.revision,synced_at=excluded.synced_at WHERE project_document.revision<>excluded.revision`,
         ).run(projectId, r.path, r.content, r.total_bytes, r.truncated, r.revision, r.synced_at);
     });
   }
@@ -135,6 +135,19 @@ export function createProjectDocuments(options: {
       active.delete(projectId);
     }
   }
+  function pendingChanges(projectId: string): ProjectDocumentSnapshot["pending"] {
+    return db
+      .prepare<ChangeRow>(
+        "SELECT * FROM project_brief_change WHERE project_id=? AND merged_at IS NULL ORDER BY created_at",
+      )
+      .all(projectId)
+      .map((r) => ({
+        id: r.id,
+        documents: z.array(briefEditSchema).parse(JSON.parse(r.documents_json)),
+        createdAt: r.created_at,
+        deliveredAt: r.delivered_at,
+      }));
+  }
   function snapshot(projectId: string): ProjectDocumentSnapshot {
     return {
       documents: db
@@ -148,21 +161,11 @@ export function createProjectDocuments(options: {
           revision: r.revision,
           syncedAt: r.synced_at,
         })),
-      pending: db
-        .prepare<ChangeRow>(
-          "SELECT * FROM project_brief_change WHERE project_id=? AND merged_at IS NULL ORDER BY created_at",
-        )
-        .all(projectId)
-        .map((r) => ({
-          id: r.id,
-          documents: z.array(briefEditSchema).parse(JSON.parse(r.documents_json)),
-          createdAt: r.created_at,
-          deliveredAt: r.delivered_at,
-        })),
+      pending: pendingChanges(projectId),
     };
   }
   async function deliver(projectId: string) {
-    for (const change of snapshot(projectId).pending) {
+    for (const change of pendingChanges(projectId)) {
       if (change.deliveredAt || delivering.has(change.id)) continue;
       delivering.add(change.id);
       try {
@@ -286,28 +289,37 @@ export function createProjectDocuments(options: {
     console.warn("[vibe-board] 项目文档同步暂未完成，将重试", key);
   }
   let reconciling: Promise<void> | null = null;
-  async function reconcile() {
+  let scanning = false;
+  async function reconcile(scanDocuments: boolean) {
     for (const project of await options.listProjects()) {
       if (stopped) return;
       try {
-        await sync(project.projectId, project);
+        if (scanDocuments) await sync(project.projectId, project);
         await deliver(project.projectId);
       } catch (error) {
         report(errorCode(error) ?? "document_sync_failed");
       }
     }
   }
-  const refresh = () => {
-    if (reconciling) return reconciling;
-    reconciling = reconcile()
+  const refresh = (scanDocuments: boolean): Promise<void> => {
+    if (stopped) return Promise.resolve();
+    if (reconciling) {
+      if (scanDocuments && !scanning) return reconciling.then(() => refresh(true));
+      return reconciling;
+    }
+    scanning = scanDocuments;
+    reconciling = reconcile(scanDocuments)
       .catch((error) => report(errorCode(error) ?? "project_list_failed"))
       .finally(() => {
         reconciling = null;
+        scanning = false;
       });
     return reconciling;
   };
+  let ticks = 0;
   const timer = setInterval(() => {
-    void refresh();
+    // Delivery still retries every 15 seconds; the expensive full-tree scan runs once a minute.
+    void refresh(++ticks % 4 === 0);
   }, 15000);
   return {
     sync,
@@ -315,7 +327,7 @@ export function createProjectDocuments(options: {
     submit,
     complete,
     writeBrief,
-    start: () => refresh(),
+    start: () => refresh(true),
     close: async () => {
       stopped = true;
       clearInterval(timer);

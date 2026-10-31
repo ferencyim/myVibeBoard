@@ -3,14 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { taskPanelRpc } from "../shared/task-tabs";
+import { taskPanelQueryKey, taskPanelRefreshInterval } from "./task-panel-query";
 
 /** Read the same task snapshot as the flow panel, including cached data during refresh. */
 export function TaskInfoPanel({ workspaceId, theme }: PluginWorkspacePanelProps) {
   const panel = useRpc(taskPanelRpc);
   const query = useQuery({
-    queryKey: ["vibe-board", "task-panel", workspaceId],
+    queryKey: taskPanelQueryKey(workspaceId),
     queryFn: () => panel({ workspaceId }),
-    refetchInterval: 3_000,
+    refetchInterval: taskPanelRefreshInterval,
+    staleTime: taskPanelRefreshInterval,
     retry: false,
   });
   const task = query.data?.task;

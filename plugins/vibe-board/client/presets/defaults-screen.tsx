@@ -18,6 +18,7 @@ import { saveRoleSetting, scopeKey } from "./role-setting";
 import { DefaultModelsEditor } from "./defaults";
 import type { RoleDraft } from "./role-setting";
 import { openDefaultsForm } from "./defaults-model";
+import { defaultsLoadingState, withDefaultsTimeout } from "./defaults-loading";
 
 export function TaskDefaultsScreen(props: PluginSurfaceProps) {
   const host = useMemo(
@@ -51,13 +52,15 @@ function DefaultsContent({ serverId, projectId }: { serverId: string; projectId?
   const api = useBoardApi();
   const defaults = useQuery({
     queryKey: ["vibe-board", "task-defaults", serverId, projectId ?? null],
-    queryFn: () => (projectId ? api.projectDefaultsGet({ projectId }) : api.defaultsGet({})),
+    queryFn: () => withDefaultsTimeout(() => projectId ? api.projectDefaultsGet({ projectId }) : api.defaultsGet({})),
     retry: false,
+    networkMode: "always",
   });
   const presets = useQuery({
     queryKey: ["vibe-board", "presets", serverId],
-    queryFn: () => api.presetsList({}),
+    queryFn: () => withDefaultsTimeout(() => api.presetsList({})),
     retry: false,
+    networkMode: "always",
   });
   const listModels = useRpc(botModelsListRpc);
   const catalog = useQuery({
@@ -74,14 +77,15 @@ function DefaultsContent({ serverId, projectId }: { serverId: string; projectId?
   const onSaved = useCallback(async () => {
     await refetchDefaults();
   }, [refetchDefaults]);
-  if (defaults.isPending || presets.isPending) return <Muted>正在加载任务角色…</Muted>;
-  if (defaults.error || presets.error)
+  const loadState = defaultsLoadingState(defaults, presets);
+  if (loadState.status === "error")
     return (
       <View style={styles.stack}>
-        <Muted>{errorMessage(defaults.error ?? presets.error)}</Muted>
+        <Muted>{errorMessage(loadState.error)}</Muted>
         <Btn label="重试" onPress={retry} />
       </View>
     );
+  if (loadState.status === "loading") return <Muted>正在加载任务角色…</Muted>;
   if (!defaults.data || !presets.data) return null;
   const project = "project" in defaults.data ? (defaults.data.project as ModelDefaults) : undefined;
   return (

@@ -5,7 +5,80 @@ import { join } from "node:path";
 import { openVibeDb, migrateOwner } from "../server/vibe/db";
 import { createProjectDocuments, registerProjectDocumentRpcs } from "../server/project-documents";
 import type { PluginServerContext, PluginAgentTool } from "@getpaseo/plugin/server";
+const timer = vi.hoisted(() => ({ tick: undefined as (() => void) | undefined }));
+vi.mock("node:timers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers")>()),
+  setInterval: (callback: () => void) => { timer.tick = callback; return 1; },
+  clearInterval: () => { timer.tick = undefined; },
+}));
 describe("project document snapshots", () => {
+  it("retries delivery every tick, scans every fourth tick, and scans when start overlaps delivery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
+    const db = openVibeDb({ path: ":memory:" });
+    const prepare = vi.spyOn(db, "prepare");
+    let release!: () => void;
+    const notify = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const service = createProjectDocuments({
+      db,
+      listProjects: async () => [{ projectId: "project", projectRootPath: root }],
+      notifyMerge: notify,
+    });
+    try {
+      await writeFile(join(root, "AGENTS.md"), "initial");
+      await service.start();
+      await writeFile(join(root, "AGENTS.md"), "changed");
+      db.prepare("INSERT INTO project_brief_change(id,project_id,documents_json,created_at) VALUES(?,?,?,?)")
+        .run("change", "project", "[]", new Date().toISOString());
+      timer.tick!();
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+      const start = service.start();
+      release();
+      await start;
+      expect(service.snapshot("project").documents[0].content).toBe("changed");
+      await writeFile(join(root, "AGENTS.md"), "third version");
+      const deliveryReads = () => prepare.mock.calls.filter(([sql]) => sql.includes("SELECT * FROM project_brief_change WHERE project_id=")).length;
+      for (let i = 0; i < 2; i++) {
+        const before = deliveryReads();
+        timer.tick!();
+        await vi.waitFor(() => expect(deliveryReads()).toBeGreaterThan(before));
+      }
+      expect(service.snapshot("project").documents[0].content).toBe("changed");
+      timer.tick!();
+      await vi.waitFor(() => expect(service.snapshot("project").documents[0].content).toBe("third version"));
+    } finally {
+      await service.close();
+      db.close();
+      await unlink(join(root, "AGENTS.md"));
+      await rmdir(root);
+    }
+  });
+  it("avoids reading document bodies for delivery and rewriting unchanged snapshots", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
+    const db = openVibeDb({ path: ":memory:" });
+    const prepare = vi.spyOn(db, "prepare");
+    const service = createProjectDocuments({
+      db,
+      listProjects: async () => [{ projectId: "project", projectRootPath: root }],
+      notifyMerge: async () => {},
+    });
+    try {
+      await writeFile(join(root, "AGENTS.md"), "original");
+      await service.start();
+      expect(prepare.mock.calls.some(([sql]) => sql.includes("SELECT * FROM project_document"))).toBe(false);
+      db.exec("CREATE TABLE document_updates (n INTEGER); CREATE TRIGGER count_document_updates AFTER UPDATE ON project_document BEGIN INSERT INTO document_updates VALUES (1); END");
+      await service.start();
+      expect(db.prepare<{ n: number }>("SELECT count(*) AS n FROM document_updates").get()?.n).toBe(0);
+      await writeFile(join(root, "AGENTS.md"), "changed document");
+      await service.start();
+      expect(db.prepare<{ n: number }>("SELECT count(*) AS n FROM document_updates").get()?.n).toBe(1);
+      expect(service.snapshot("project").documents[0].content).toBe("changed document");
+    } finally {
+      await service.close();
+      db.close();
+      await unlink(join(root, "AGENTS.md"));
+      await rmdir(root);
+    }
+  });
   it("uses one host project list for an entire reconciliation", async () => {
     const root = await mkdtemp(join(tmpdir(), "vibe-docs-"));
     const db = openVibeDb({ path: ":memory:" });

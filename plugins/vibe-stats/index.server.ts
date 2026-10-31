@@ -15,6 +15,7 @@ import { createIndexer } from "./server/indexer";
 import { resolveRoots } from "./server/paths";
 import { parseLiteLlmPrices, type PriceOverrides } from "./server/pricing";
 import { buildSessionMap } from "./server/session-map";
+import { ensureUsageSessionIndex } from "./server/usage-index";
 import { createVibeStore, migrateOwner, openVibeDb } from "./server/vibe/db";
 
 export default function contribute(server: PluginServerContext) {
@@ -47,9 +48,18 @@ export default function contribute(server: PluginServerContext) {
   const stopSettings = settings.subscribe(applySettings);
 
   const indexer = createIndexer({ db, roots: () => resolveRoots(overrides), prices: () => prices });
+  let usageIndexReady = false;
 
   async function runScan() {
     await settingsReady;
+    if (!usageIndexReady) {
+      try {
+        ensureUsageSessionIndex(db);
+        usageIndexReady = true;
+      } catch (error) {
+        console.error("[vibe-stats] 创建用量会话索引失败，将在下次扫描时重试", error);
+      }
+    }
     const result = await indexer.scan();
     fileCount = result.files;
     lastScanAt = new Date().toISOString();
