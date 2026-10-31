@@ -14,6 +14,7 @@ import { registerVisualReply } from "./server/visual-reply";
 import { createBotMessaging } from "./server/messages";
 import { appendTurnContext } from "./server/memory";
 import { registerHubTools } from "./server/hub-tools";
+import { stopHubTurnWatchdogs } from "./server/hub-turn-watchdog";
 
 function userOnly(callerAgentId: string | null | undefined) {
   if (callerAgentId) throw new Error("此操作仅供用户使用，请使用 bot 自配置工具");
@@ -293,6 +294,7 @@ export default function contribute(server: PluginServerContext) {
   ];
   return async () => {
     for (const cleanup of stop) cleanup();
+    stopHubTurnWatchdogs();
     await stopContinuations();
     await service.close();
     db.close();

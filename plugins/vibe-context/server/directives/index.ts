@@ -88,7 +88,9 @@ export function registerDirectiveInjection(
     server.on("agent.turn_context_delivered", ({ agentId, deliveryId }) =>
       injector.commit(agentId, deliveryId),
     ),
-    server.on("agent.closed", ({ agent }) => injector.forget(agent.id)),
+    server.on("agent.closed", ({ agent }) => {
+      injector.forget(agent.id);
+    }),
   ];
   return () => {
     for (const stop of stops) stop();

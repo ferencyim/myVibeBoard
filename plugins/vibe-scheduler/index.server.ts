@@ -38,7 +38,7 @@ import { createRetryErrorLogger } from "./server/retry-log";
 import { migrateOwner, openVibeDb, resolveVibeHome } from "./server/vibe/db";
 import { fromThresholds, toPageResource, toPageStatus, toThresholds } from "./server/hub-page";
 import { registerBotTools, requireIndependentBot } from "./server/bot-tools";
-import { createCoordinatorNotifier, createHubWatcher } from "./server/hub-events";
+import { createCoordinatorNotifier, createHubWatcher, hasQueuedMetricAlert } from "./server/hub-events";
 import { createHubHistory, createHubTuning } from "./server/hub-tuning";
 import { registerDirectives } from "./server/directive-register";
 
@@ -118,6 +118,7 @@ export default function contribute(server: PluginServerContext) {
 
   registerBotTools(server, runtime, () => paseo);
   const notifyCoordinator = createCoordinatorNotifier({
+    hasPending: (key) => hasQueuedMetricAlert(db, key),
     send: async (text) => {
       if (!paseo) return { accepted: false };
       return paseo.plugins.invoke("vibe-bots", "bots.notify", {

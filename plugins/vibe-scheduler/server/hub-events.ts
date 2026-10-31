@@ -2,36 +2,56 @@
 // needs to hear about it; here we only detect the event and send each one at most once an hour.
 
 import { describeWaitReason, type Hub } from "./hub";
+import type { VibeDb } from "./vibe/db/sqlite";
 
 export const NOTIFY_DEDUPE_MS = 60 * 60_000;
+export const NOTIFY_RETRY_MS = 5 * 60_000;
 export const QUEUE_WARN_MS = 15 * 60_000;
 export const METRIC_WARN_MS = 5 * 60_000;
 
-/** Fire-and-forget sender with a per-key cooldown. A failed send does not start the cooldown. */
+/** A previous alert can remain queued across scheduler restarts while the bot is busy. */
+export function hasQueuedMetricAlert(db: VibeDb, key: string): boolean {
+  if (!key.startsWith("metric:")) return false;
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_message'").get()) return false;
+  const suffix = `超过阈值：${describeWaitReason(key.slice("metric:".length))}。`;
+  return !!db.prepare(
+    `SELECT 1 FROM bot_message m JOIN bot b ON b.id=m.to_bot_id
+     WHERE b.role='coordinator' AND b.archived_at IS NULL AND m.status='queued'
+       AND m.from_bot_id IS NULL AND m.text LIKE '[中枢] 机器指标已连续 %'
+       AND substr(m.text, -length(?))=? LIMIT 1`,
+  ).get(suffix, suffix);
+}
+
+/** Fire-and-forget sender with a per-key cooldown, including a shorter cooldown on failure. */
 export function createCoordinatorNotifier(options: {
   send: (text: string) => Promise<unknown>;
   now?: () => number;
   dedupeMs?: number;
   onError?: (error: unknown) => void;
+  hasPending?: (key: string) => boolean;
 }) {
   const now = options.now ?? Date.now;
   const dedupeMs = options.dedupeMs ?? NOTIFY_DEDUPE_MS;
-  const sent = new Map<string, number>();
+  const retryAt = new Map<string, number>();
+  const pending = new Set<string>();
   return function notify(key: string, text: string): void {
     const t = now();
-    for (const [k, at] of sent) if (t - at >= dedupeMs) sent.delete(k);
-    if (sent.has(key)) return;
-    sent.set(key, t);
-    options.send(text).then(
+    for (const [k, at] of retryAt) if (t >= at) retryAt.delete(k);
+    if (pending.has(key) || retryAt.has(key)) return;
+    if (options.hasPending?.(key)) return;
+    pending.add(key);
+    Promise.resolve().then(() => options.send(text)).then(
       (result) => {
-        if (result && typeof result === "object" && (result as { accepted?: boolean }).accepted === false)
-          sent.delete(key); // no coordinator yet: try again at the next event
+        const accepted = !(result && typeof result === "object" && (result as { accepted?: boolean }).accepted === false);
+        retryAt.set(key, now() + (accepted ? dedupeMs : NOTIFY_RETRY_MS));
+        return undefined;
       },
       (error) => {
-        sent.delete(key);
+        retryAt.set(key, now() + NOTIFY_RETRY_MS);
         options.onError?.(error);
+        return undefined;
       },
-    );
+    ).finally(() => pending.delete(key));
   };
 }
 

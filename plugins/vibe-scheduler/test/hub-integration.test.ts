@@ -7,7 +7,9 @@ import { createHub, pauseMatches, validatePauseScope, type JobRequest } from "..
 import {
   createCoordinatorNotifier,
   createHubWatcher,
+  hasQueuedMetricAlert,
   METRIC_WARN_MS,
+  NOTIFY_RETRY_MS,
   QUEUE_WARN_MS,
 } from "../server/hub-events";
 import { startHubHttp } from "../server/hub-http";
@@ -104,7 +106,23 @@ describe("agent gate", () => {
 });
 
 describe("coordinator notifications", () => {
-  it("sends each key once an hour and retries after a failure", async () => {
+  it("suppresses only matching undelivered metric alerts for the current coordinator", () => {
+    const db = openVibeDb({ path: ":memory:" });
+    closers.push(() => db.close());
+    expect(hasQueuedMetricAlert(db, "metric:handles_high")).toBe(false);
+    migrateOwner(db, "vibe-bots");
+    db.prepare(`INSERT INTO bot(id,kind,name,role,created_at,updated_at)
+      VALUES('bot_coordinator','independent','协调','coordinator','2026-01-01','2026-01-01')`).run();
+    db.prepare(`INSERT INTO bot_message(id,to_bot_id,text,status,created_at)
+      VALUES('msg_1','bot_coordinator','[中枢] 机器指标已连续 5 分钟超过阈值：句柄数过多。','queued','2026-01-01')`).run();
+    expect(hasQueuedMetricAlert(db, "metric:handles_high")).toBe(true);
+    expect(hasQueuedMetricAlert(db, "metric:memory_low")).toBe(false);
+    expect(hasQueuedMetricAlert(db, "queue:123")).toBe(false);
+    db.prepare("UPDATE bot_message SET status='delivered' WHERE id='msg_1'").run();
+    expect(hasQueuedMetricAlert(db, "metric:handles_high")).toBe(false);
+  });
+
+  it("sends each key once an hour and backs off after a failure", async () => {
     let time = 0;
     const sent: string[] = [];
     let fail = true;
@@ -121,15 +139,46 @@ describe("coordinator notifications", () => {
     await new Promise((r) => setTimeout(r, 5));
     fail = false;
     notify("k", "b");
+    expect(sent).toEqual([]);
+    time = NOTIFY_RETRY_MS;
+    notify("k", "b");
     notify("k", "c");
     await new Promise((r) => setTimeout(r, 5));
     expect(sent).toEqual(["b"]);
-    time = 59 * 60_000;
+    time = NOTIFY_RETRY_MS + 59 * 60_000;
     notify("k", "d");
-    time = 61 * 60_000;
+    time = NOTIFY_RETRY_MS + 61 * 60_000;
     notify("k", "e");
     await new Promise((r) => setTimeout(r, 5));
     expect(sent).toEqual(["b", "e"]);
+  });
+
+  it("coalesces pending sends and backs off when the coordinator is unavailable", async () => {
+    let time = 0;
+    let resolve!: (value: { accepted: boolean }) => void;
+    let calls = 0;
+    const notify = createCoordinatorNotifier({
+      now: () => time,
+      send: () => {
+        calls++;
+        return new Promise((r) => { resolve = r; });
+      },
+    });
+    notify("metric:handles_high", "告警");
+    await Promise.resolve();
+    time = 2 * 60 * 60_000;
+    notify("metric:handles_high", "告警");
+    expect(calls).toBe(1);
+    resolve({ accepted: false });
+    await new Promise((r) => setTimeout(r, 5));
+    time += NOTIFY_RETRY_MS - 1;
+    notify("metric:handles_high", "告警");
+    expect(calls).toBe(1);
+    time++;
+    notify("metric:handles_high", "告警");
+    await Promise.resolve();
+    expect(calls).toBe(2);
+    resolve({ accepted: true });
   });
 
   it("watcher: long queue wait, sustained metric pressure, expired pause", async () => {

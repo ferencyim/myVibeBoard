@@ -2,6 +2,7 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import type { BotService } from "./service";
 import type { BotMessaging } from "./messages";
+import { armHubTurnWatchdog } from "./hub-turn-watchdog";
 
 const HUB_PLUGIN = "vibe-scheduler";
 const scope = z.union([
@@ -34,7 +35,7 @@ export function registerHubTools(server: PluginServerContext, service: BotServic
     try {
       return await server.paseo.plugins.invoke(HUB_PLUGIN, method, input);
     } catch (error) {
-      throw new Error(`中枢暂不可用或不支持 ${method}：${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`中枢暂不可用或不支持 ${method}：${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   }
   function tool<S extends z.ZodType>(name: string, description: string, method: string, input?: S) {
@@ -46,7 +47,32 @@ export function registerHubTools(server: PluginServerContext, service: BotServic
       },
     });
   }
-  tool("vibe_hub_status", "读取中枢状态：机器指标、排队、持有者、等待原因、生效中的暂停与指令。", "hub.status");
+  server.registerAgentTool({
+    name: "vibe_hub_status",
+    description: "读取中枢状态：机器指标、排队、持有者、等待原因、生效中的暂停与指令。",
+    handler: async (_value, ctx) => {
+      await coordinator(ctx.callerAgentId);
+      try {
+        const status = await hub("hub.status", {});
+        const parsed = z.object({ machine: z.object({ handles: z.number().nullable(), blockedBy: z.array(z.string()) }).passthrough(), queue: z.array(z.unknown()), resources: z.array(z.unknown()) }).passthrough().safeParse(status);
+        if (!parsed.success) throw new Error("中枢返回了无效状态，请检查中枢插件是否正常运行");
+        const takeover = await hub("hub.takeover.get", {}).then((value) => {
+          const result = z.object({ enabled: z.boolean(), active: z.boolean(), available: z.boolean(), disabledFile: z.boolean() }).safeParse(value);
+          return result.success ? result.data : { error: "中枢返回了无效的接管状态" };
+        }).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
+        return { ...parsed.data, takeover };
+      } finally {
+        if (ctx.callerAgentId) {
+          const agentId = ctx.callerAgentId;
+          armHubTurnWatchdog(server.paseo.agents.ref(agentId), () => server.notify({
+            title: "总协调 bot",
+            body: "中枢状态调用后 15 分钟没有进展，已请求取消该轮，请打开对话检查。",
+            data: { agentId },
+          }));
+        }
+      }
+    },
+  });
   tool("vibe_hub_queue", "调整中枢统一队列的顺序（order 为排队条目 id：重任务 jobId 与 agent 任务 workspaceId，按期望顺序），可用 priorities（jobId -> 0-9，越小越优先）改重任务优先级，必须写明理由；不会绕过资源准入。", "hub.queue.reorder",
     z.object({
       order: z.array(z.string().min(1)).max(1000),

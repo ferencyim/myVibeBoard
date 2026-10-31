@@ -580,7 +580,7 @@ describe("watchdog startup throttling", () => {
     });
     const watchdog = createTaskWatchdog({
       store: s.store,
-      config: () => ({ enabled: true, minutes: 100000, providerMinutes: {} }),
+      config: () => ({ enabled: true, minutes: 1, providerMinutes: {} }),
       activity,
       report: vi.fn(),
       now: () => nowMs,
@@ -595,6 +595,42 @@ describe("watchdog startup throttling", () => {
     nowMs += 5 * 60_000;
     await watchdog.tick();
     expect(activity).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses persisted activity to skip recent sessions and rotates bounded stale reads", async () => {
+    const s = setup("scout");
+    const nowMs = Date.now();
+    const recent = { ...s.session, lastActivityAt: new Date(nowMs).toISOString() };
+    const stale = { ...recent, lastActivityAt: new Date(nowMs - 120_000).toISOString() };
+    const sessions = [stale, { ...stale, id: "second", agentId: "second" }, recent];
+    const activity = vi.fn(async (_session: typeof stale) => nowMs);
+    const store = {
+      sessions: {
+        list: () => sessions,
+        get: (id: string) => sessions.find((session) => session.id === id),
+        touchActivity: (id: string) => {
+          const session = sessions.find((item) => item.id === id)!;
+          session.lastActivityAt = new Date(nowMs).toISOString();
+          return session;
+        },
+        markStalled: vi.fn(),
+      },
+    };
+    // Give the recent session its own identity; only the stale pair need history reads.
+    sessions[2] = { ...recent, id: "recent", agentId: "recent" };
+    const watchdog = createTaskWatchdog({
+      store: store as never,
+      config: () => ({ enabled: true, minutes: 1, providerMinutes: {} }),
+      activity,
+      report: vi.fn(),
+      now: () => nowMs,
+      maxActivityReadsPerTick: 1,
+    });
+    await watchdog.tick();
+    expect(activity.mock.calls.map(([session]) => session.agentId)).toEqual(["agent"]);
+    await watchdog.tick();
+    expect(activity.mock.calls.map(([session]) => session.agentId)).toEqual(["agent", "second"]);
+    expect(store.sessions.markStalled).not.toHaveBeenCalled();
   });
 });
 
