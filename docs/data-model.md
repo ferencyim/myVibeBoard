@@ -30,7 +30,7 @@ Workspace archive runs lifecycle teardown from the exact `cwd` but removes only 
 `worktreeRoot` after its last active reference disappears. Worktree recovery recreates that backing
 checkout from `mainRepoRoot`, then restores the relative path from `worktreeRoot` to `cwd`.
 
-Paseo uses **file-based JSON persistence** instead of a traditional database. All data is validated at runtime with Zod schemas. Most stores write atomically (write to temp file, then rename); a few still use plain `writeFile` — see each section. There is no schema-versioning/migration framework — schemas rely on optional fields with defaults for forward compatibility, with a small amount of inline normalization in `persisted-config.ts` for legacy provider/speech entries.
+Paseo primarily uses **file-based JSON persistence**. Most JSON stores write atomically (write to temp file, then rename); a few still use plain `writeFile` — see each section. Schemas rely on optional fields with defaults for forward compatibility, with a small amount of inline normalization in `persisted-config.ts` for legacy provider/speech entries. Agent timeline rows use SQLite separately because indexed, incremental writes and paged history avoid replaying entire provider sessions for ordinary reads.
 
 All server-side stores live under `$PASEO_HOME` (defaults to `~/.paseo`).
 
@@ -53,6 +53,7 @@ $PASEO_HOME/
 ├── agents/
 │   └── {sanitized-cwd}/
 │       └── {agentId}.json               # One file per agent
+├── agent-timelines.sqlite                # Committed agent timeline rows and epochs
 ├── schedules/
 │   └── {scheduleId}.json                # One file per schedule
 ├── projects/
@@ -76,6 +77,16 @@ The `agents/{sanitized-cwd}/` directory name is derived from the agent's `cwd` b
 ---
 
 ## 1. Agent Record
+
+Committed timeline rows are stored in `agent-timelines.sqlite`, keyed by agent ID and sequence,
+with a per-timeline epoch for cursor validation. SQLite work runs off the daemon's main thread;
+WAL and transactional writes make committed batches recoverable after a crash. The JSON agent
+record remains the source of agent metadata and archive state. Existing sessions are populated
+on their first provider replay; subsequent history reads can use the persisted timeline without
+starting a provider. Deleting an agent removes its timeline, while archiving retains it.
+An active provider marks its cache dirty before it starts; after the provider closes and queued
+writes succeed, the cache is marked clean. A dirty cache after an interruption is rebuilt from
+provider history instead of being treated as complete.
 
 **Path:** `$PASEO_HOME/agents/{project-dir}/{agentId}.json`
 
