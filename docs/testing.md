@@ -178,6 +178,7 @@ Codex MultiAgentV2 real tests use local Codex authentication rather than the Ope
 
 - Server: `packages/server/src/test-utils/vitest-setup.ts` loads `.env.test`, sets `PASEO_SUPERVISED=0`, and disables Git/SSH prompts. Add new global env shims here, not in individual tests.
 - App: `packages/app/vitest.setup.ts` provides `expo`/`__DEV__` shims and stubs a few native-only modules (`react-native-unistyles`, `react-native-svg`, `expo-linking`, `@xterm/addon-ligatures`). Stubbing here is for modules that have no meaningful Node behavior — not a license to mock app code.
+- Node 24 can strip types when `fallbackCJS` loads Expo's winter runtime outside Vite, leaving its extensionless registry `require` unresolved; app setup replaces that Node module and initializes the test registry before imports.
 
 ## Running tests locally
 

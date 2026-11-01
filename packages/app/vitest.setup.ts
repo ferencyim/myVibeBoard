@@ -1,10 +1,28 @@
 // @ts-nocheck
 import { vi } from "vitest";
 import React from "react";
+import { createRequire, Module } from "node:module";
 
 const globalWithTestShims = globalThis as typeof globalThis & Record<string, unknown>;
 
 globalWithTestShims.__DEV__ = false;
+
+// Expo Router's CJS dependencies can load Expo's web runtime outside Vite.
+// Replace that Node require before it reaches runtime.ts's extensionless require.
+const nodeRequire = createRequire(import.meta.url);
+const winterRuntimePath = nodeRequire.resolve("expo/src/winter/runtime.ts");
+const winterRuntime = new Module(winterRuntimePath);
+winterRuntime.loaded = true;
+nodeRequire.cache[winterRuntimePath] = winterRuntime;
+Object.defineProperty(globalThis, "__ExpoImportMetaRegistry", {
+  value: {
+    get url() {
+      return null;
+    },
+  },
+  enumerable: false,
+  writable: true,
+});
 
 // JSDOM has no CSS media-query engine. Give native-web libraries the browser API
 // with no active preferences; responsive behavior is exercised in Chromium.
