@@ -14,6 +14,8 @@ export type PaseoNodeEnv = "development" | "production" | "test";
 export type ProcessEnvRecord = Record<string, string | undefined>;
 export type ExternalProcessEnv = NodeJS.ProcessEnv & Record<string, string>;
 
+let cachedProcessEnv: { snapshot: ProcessEnvRecord; sanitized: ExternalProcessEnv } | undefined;
+
 function buildInternalProcessEnv<T extends ProcessEnvRecord>(baseEnv: T): T {
   return { ...baseEnv };
 }
@@ -22,7 +24,32 @@ function buildExternalProcessEnv(
   baseEnv: ProcessEnvRecord,
   overlays: ProcessEnvRecord[],
 ): ExternalProcessEnv {
+  // process.env is mutable, so validate its complete snapshot before reusing the
+  // sanitized base. Return a fresh object: callers are allowed to modify it.
+  if (baseEnv === process.env) {
+    const keys = Object.keys(baseEnv);
+    if (
+      !cachedProcessEnv ||
+      keys.length !== Object.keys(cachedProcessEnv.snapshot).length ||
+      keys.some((key) => cachedProcessEnv?.snapshot[key] !== baseEnv[key])
+    ) {
+      const snapshot = Object.assign({}, baseEnv);
+      cachedProcessEnv = { snapshot, sanitized: sanitizeExternalEnv(Object.assign({}, snapshot)) };
+    }
+    const sanitized = Object.assign({}, cachedProcessEnv.sanitized, ...overlays);
+    for (const key of RUNTIME_CONTROL_ENV_KEYS) delete sanitized[key];
+    for (const overlay of overlays) {
+      for (const key of Object.keys(overlay)) {
+        if (sanitized[key] === undefined) delete sanitized[key];
+      }
+    }
+    return sanitized;
+  }
   const sanitized = Object.assign({}, baseEnv, ...overlays);
+  return sanitizeExternalEnv(sanitized);
+}
+
+function sanitizeExternalEnv(sanitized: ProcessEnvRecord): ExternalProcessEnv {
   for (const key of RUNTIME_CONTROL_ENV_KEYS) {
     delete sanitized[key];
   }

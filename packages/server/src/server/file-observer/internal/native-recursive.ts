@@ -1,6 +1,6 @@
 import { type Dirent, watch } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import type { BackendDiagnostics, ObservationBackend, ObservationHost } from "./contracts.js";
 import type { ObserverPaths } from "./paths.js";
 import { isMissingPathError, toError } from "./paths.js";
@@ -288,9 +288,11 @@ class NativeRecursiveBackend implements ObservationBackend {
       directories.add(directory);
       this.assertWithinLimit(files.size + directories.size);
       const entry: DirectoryEntry = { directories: new Set(), files: new Set() };
+      const prefix = directory + (directory.endsWith(sep) ? "" : sep);
+      const ignored = this.host.ignoredChildren?.(directory);
       for (const child of children) {
-        const path = join(directory, child.name);
-        if (this.host.isIgnored(path)) continue;
+        const path = prefix + child.name;
+        if (ignored ? ignored(child.name) : this.host.isIgnored(path)) continue;
         if (child.isDirectory()) {
           entry.directories.add(path);
           pending.push(path);
@@ -406,9 +408,11 @@ class NativeRecursiveBackend implements ObservationBackend {
       return null;
     }
     const entry: DirectoryEntry = { directories: new Set(), files: new Set() };
+    const prefix = directory + (directory.endsWith(sep) ? "" : sep);
+    const ignored = this.host.ignoredChildren?.(directory);
     for (const child of children) {
-      const path = join(directory, child.name);
-      if (this.host.isIgnored(path)) continue;
+      const path = prefix + child.name;
+      if (ignored ? ignored(child.name) : this.host.isIgnored(path)) continue;
       if (child.isDirectory()) entry.directories.add(path);
       else entry.files.add(path);
     }

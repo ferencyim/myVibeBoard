@@ -72,6 +72,52 @@ describe("paseo env contract", () => {
     expect(env.PATH).toBe("/custom/bin");
   });
 
+  test("refreshes the process env cache after mutations and keeps results independent", () => {
+    const firstKey = "PASEO_TEST_ENV_CACHE_FIRST";
+    const secondKey = "PASEO_TEST_ENV_CACHE_SECOND";
+    const oldFirst = process.env[firstKey];
+    const oldSecond = process.env[secondKey];
+    const restore = (key: string, value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    try {
+      delete process.env[firstKey];
+      delete process.env[secondKey];
+      const overlay: Record<string, string | undefined> = {
+        OVERLAY_VALUE: "one",
+        PASEO_SUPERVISED: "1",
+      };
+      const first = createExternalProcessEnv(process.env, overlay);
+      first.OVERLAY_VALUE = "modified by caller";
+      expect(createExternalProcessEnv(process.env, overlay).OVERLAY_VALUE).toBe("one");
+
+      process.env[firstKey] = "";
+      overlay.OVERLAY_VALUE = "two";
+      expect(createExternalProcessEnv(process.env, overlay)).toMatchObject({
+        [firstKey]: "",
+        OVERLAY_VALUE: "two",
+      });
+      process.env[firstKey] = "changed";
+      process.env[secondKey] = "added";
+      overlay.OVERLAY_VALUE = undefined;
+      let result = createExternalProcessEnv(process.env, overlay);
+      expect(result[firstKey]).toBe("changed");
+      expect(result[secondKey]).toBe("added");
+      expect(result).not.toHaveProperty("OVERLAY_VALUE");
+      expect(result).not.toHaveProperty("PASEO_SUPERVISED");
+
+      delete process.env[firstKey];
+      delete overlay.OVERLAY_VALUE;
+      result = createExternalProcessEnv(process.env, overlay);
+      expect(result).not.toHaveProperty(firstKey);
+      expect(result[secondKey]).toBe("added");
+    } finally {
+      restore(firstKey, oldFirst);
+      restore(secondKey, oldSecond);
+    }
+  });
+
   test("builds external command env without process.execPath special-casing", () => {
     const env = createExternalCommandProcessEnv(process.execPath, baseEnv, {
       ELECTRON_RUN_AS_NODE: "0",

@@ -1,6 +1,44 @@
-import { win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import { describe, expect, test } from "vitest";
 import { createObserverPaths } from "./paths.js";
+
+describe("precomputed ignore matcher", () => {
+  test.each([
+    {
+      platform: "linux" as const,
+      pathApi: posix,
+      roots: ["/repo/ignored", "/other"],
+      directories: ["/", "/repo", "/repo/ignored", "/repo/ignored-more"],
+    },
+    {
+      platform: "win32" as const,
+      pathApi: win32,
+      roots: ["C:\\Repo\\Ignored", "\\\\server\\share\\blocked"],
+      directories: [
+        "C:\\",
+        "c:\\REPO",
+        "C:\\repo\\IGNORED",
+        "C:\\repo\\ignored-more",
+        "\\\\server\\share\\",
+      ],
+    },
+  ])(
+    "matches the original path comparison on $platform",
+    ({ platform, pathApi, roots, directories }) => {
+      const paths = createObserverPaths(platform);
+      const matcher = paths.createIgnoreMatcher(roots);
+      for (const directory of directories) {
+        const children = matcher.children(directory);
+        for (const name of ["ignored", "Ignored-more", "blocked", "file.txt", "ΣΟΣ"]) {
+          const path = pathApi.join(directory, name);
+          const expected = roots.some((root) => paths.isInside(root, path));
+          expect(matcher.isIgnored(path)).toBe(expected);
+          expect(children(name)).toBe(expected);
+        }
+      }
+    },
+  );
+});
 
 // m3 regression: plain lexicographic sort does not put a parent immediately
 // before its descendants. A sibling whose name extends the parent's with a

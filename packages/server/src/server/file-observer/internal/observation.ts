@@ -41,6 +41,7 @@ class Observation implements ManagedObservation, ObservationHost {
   readonly root: string;
   readonly metrics: ObserverMetrics;
   private ignoredRoots: string[];
+  private ignoreMatcher: ReturnType<ObserverPaths["createIgnoreMatcher"]>;
   private status: "open" | "failed" | "closed" = "open";
   private readonly backend: ObservationBackend;
   private readonly pendingEvents = new Map<string, FileChange>();
@@ -61,6 +62,7 @@ class Observation implements ManagedObservation, ObservationHost {
     this.root = input.root;
     this.metrics = input.metrics;
     this.ignoredRoots = input.paths.normalizeIgnoredRoots(input.root, input.options.ignore ?? []);
+    this.ignoreMatcher = input.paths.createIgnoreMatcher(this.ignoredRoots);
     this.backend = input.createBackend(this);
   }
 
@@ -89,6 +91,7 @@ class Observation implements ManagedObservation, ObservationHost {
     const next = this.input.paths.normalizeIgnoredRoots(this.root, paths);
     if (samePaths(this.ignoredRoots, next)) return;
     this.ignoredRoots = next;
+    this.ignoreMatcher = this.input.paths.createIgnoreMatcher(next);
     for (const path of this.pendingEvents.keys()) {
       if (this.isIgnored(path)) this.pendingEvents.delete(path);
     }
@@ -120,7 +123,11 @@ class Observation implements ManagedObservation, ObservationHost {
   }
 
   isIgnored(path: string): boolean {
-    return this.ignoredRoots.some((root) => this.input.paths.isInside(root, path));
+    return this.ignoreMatcher.isIgnored(path);
+  }
+
+  ignoredChildren(directory: string): (name: string) => boolean {
+    return this.ignoreMatcher.children(directory);
   }
 
   isPathInside(root: string, path: string): boolean {

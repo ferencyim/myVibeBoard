@@ -2,6 +2,10 @@ import { posix, win32 } from "node:path";
 
 export interface ObserverPaths {
   isInside(root: string, path: string): boolean;
+  createIgnoreMatcher(roots: string[]): {
+    isIgnored(path: string): boolean;
+    children(directory: string): (name: string) => boolean;
+  };
   normalizeIgnoredRoots(root: string, paths: string[]): string[];
   collapse(paths: string[]): string[];
   isExpectedWatchDisappearance(error: unknown): boolean;
@@ -49,6 +53,27 @@ export function createObserverPaths(platform: NodeJS.Platform): ObserverPaths {
 
   return {
     isInside,
+    createIgnoreMatcher(roots) {
+      if (roots.length === 0) {
+        const neverIgnored = () => false;
+        return { isIgnored: neverIgnored, children: () => neverIgnored };
+      }
+      const comparedRoots = roots.map((root) => {
+        const path = comparable(root);
+        return { path, prefix: `${path}${pathApi.sep}` };
+      });
+      function matches(path: string): boolean {
+        return comparedRoots.some((root) => path === root.path || path.startsWith(root.prefix));
+      }
+      return {
+        isIgnored: (path) => matches(comparable(path)),
+        children(directory) {
+          const prefix =
+            comparable(directory) + (directory.endsWith(pathApi.sep) ? "" : pathApi.sep);
+          return (name) => matches(prefix + comparable(name));
+        },
+      };
+    },
     collapse,
     normalizeIgnoredRoots(root, paths) {
       const inside = paths
