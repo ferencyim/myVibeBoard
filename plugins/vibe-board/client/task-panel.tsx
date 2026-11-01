@@ -349,7 +349,7 @@ function TabRow({ tab, openAgent, current, phaseLabel, disabled, nextStep, onSta
       backgroundColor: theme.colors.surface1, borderRadius: 8, padding: 10,
     }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        {tab.role === "main" || tab.role === "worker" || !role ? (
+        {role === "main" || role === "worker" || !role ? (
           <Dot color={current ? theme.colors.accent : theme.colors.foregroundMuted} size={8} />
         ) : (
           <Pressable accessibilityRole="checkbox" accessibilityLabel={`启用 ${tab.roleLabel}`} accessibilityState={{ checked: enabled, disabled }} disabled={disabled}

@@ -49,7 +49,7 @@ function OtherAgentPrompts(props: PluginSurfaceProps & { labels?: Record<string,
 
 export function FlowConversationControls(props: PluginConversationHeaderAccessoryProps) {
   const workspaceId = useAgent(props.agentId, (agent) => agent.workspaceId);
-  const labels = useAgent(props.agentId, (agent) => agent.labels);
+  const labels = useAgent(props.agentId, (agent) => agent.labels) ?? undefined;
   if (workspaceId) return <FlowTabControls {...props} workspaceId={workspaceId} agentId={props.agentId} labels={labels} />;
   return <OtherAgentPrompts {...props} labels={labels} />;
 }
