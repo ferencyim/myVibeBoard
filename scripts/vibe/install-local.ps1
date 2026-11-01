@@ -145,7 +145,20 @@ $envBlock
 Start-Process -FilePath '$exe'
 "@
 
-$pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+$installedPwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+$storePwsh = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
+$pwsh = if (Test-Path -LiteralPath $installedPwsh -PathType Leaf) {
+  $installedPwsh
+} elseif (Test-Path -LiteralPath $storePwsh -PathType Leaf) {
+  $storePwsh
+} else {
+  $command = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+  if ($command -and $command.StartsWith("$env:ProgramFiles\WindowsApps\", [StringComparison]::OrdinalIgnoreCase)) {
+    $storePwsh
+  } else {
+    $command
+  }
+}
 if (-not $pwsh) { $pwsh = (Get-Command powershell).Source }
 
 # Per-user logon task (no admin rights needed): start the daemon hidden.
