@@ -205,7 +205,7 @@ function GitSections({ theme, git }: { theme: PluginTheme; git?: Status["git"] }
                 <Text style={{ color: theme.colors.statusWarning }}>
                   {` · 有改动 ${worktree.changes.total}`}
                 </Text>
-              ) : worktree.changes ? null : " · 改动未知"}
+              ) : worktree.changes ? null : git.scanning ? " · 改动扫描中" : " · 改动未知"}
               {worktree.prunable || worktree.missing ? (
                 <Text style={{ color: theme.colors.statusDanger }}> · 失效</Text>
               ) : null}

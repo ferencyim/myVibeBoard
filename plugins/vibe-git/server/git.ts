@@ -52,7 +52,7 @@ export function createGitService(
   async function git(cwd: string, ...args: string[]): Promise<string> {
     return runner.run("git", args, {
       cwd,
-      timeoutMs: args[0] === "worktree" ? 15000 : 2500,
+      timeoutMs: args[0] === "worktree" || args[0] === "for-each-ref" ? 15000 : 2500,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", LANG: "C" },
     });
   }
@@ -151,7 +151,10 @@ export function createGitService(
     const worktrees = await Promise.all(entries.map(async (w) => {
       const current = normalizePath(w.path) === normalizePath(root);
       const missing = !(await exists(w.path));
-      const comparison = w.branch ? refCounts.get(w.branch) ?? null : null;
+      const detachedSha = w.branch ? null : detachedHeads.get(w.path) || null;
+      const comparison = w.branch
+        ? refCounts.get(w.branch) ?? null
+        : base && detachedSha ? await counts(cwd, base, detachedSha) : null;
       return {
         ...w,
         branch: w.branch ?? (w.detached ? detachedHeads.get(w.path) || null : null),
@@ -181,7 +184,7 @@ export function createGitService(
                 "git", ["status", "--porcelain=v1", "--untracked-files=normal"],
                 {
                   cwd: w.path,
-                  timeoutMs: 10000,
+                  timeoutMs: 60000,
                   env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", LANG: "C" },
                 },
               );
