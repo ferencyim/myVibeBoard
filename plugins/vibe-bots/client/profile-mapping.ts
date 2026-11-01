@@ -5,7 +5,6 @@ export function findBotForAgent<T extends { id: string; mainAgentId: string | nu
 export const NAME_MAX = 100;
 export const TITLE_MAX = 200;
 export const INSTRUCTIONS_MAX = 30_000;
-export const BACKUP_MAX = 20;
 /** Instructions are saved this long after the last keystroke. */
 export const INSTRUCTIONS_DEBOUNCE_MS = 400;
 
@@ -29,16 +28,6 @@ export function validateTextDraft(draft: { name: string; title: string; instruct
     title: draft.title.length > TITLE_MAX ? `头衔最多 ${TITLE_MAX} 个字符` : null,
     instructions: draft.instructions.length > INSTRUCTIONS_MAX ? `角色说明超出 ${INSTRUCTIONS_MAX} 个字符（当前 ${draft.instructions.length}）` : null,
   };
-}
-
-interface BackupModel { provider: string; model: string; thinking: string }
-export function canAddBackupModel(backups: readonly BackupModel[], provider: string, model: string, thinking: string) {
-  return !!provider && !!model && backups.length < BACKUP_MAX && !backups.some((item) => item.provider === provider && item.model === model && item.thinking === thinking);
-}
-
-/** Right-hand value of the backup-model row. */
-export function backupSummary(count: number) {
-  return count ? `${count} 个` : "未设置";
 }
 
 export function notificationsSummary(value: { enabled: boolean; completed: boolean; failed: boolean }) {

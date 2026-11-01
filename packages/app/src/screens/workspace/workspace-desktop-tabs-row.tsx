@@ -546,7 +546,6 @@ function sameWidths(left: number[], right: number[]): boolean {
 }
 
 export interface WorkspaceDesktopTabsRowProps {
-  iconOnly?: boolean;
   host?: PaneHost;
   launchPurpose?: WorkspaceTabLaunchPurpose;
   paneId?: string;
@@ -1076,7 +1075,6 @@ export function WorkspaceDesktopTabsRow(props: WorkspaceDesktopTabsRowProps) {
 }
 
 function ResolvedWorkspaceDesktopTabsRow({
-  iconOnly = false,
   host = "main",
   launchPurpose = "primary",
   paneId,
@@ -1433,8 +1431,8 @@ function ResolvedWorkspaceDesktopTabsRow({
       const shouldShowCloseButton =
         layout.closeButtonPolicy === "all" && item.presentation.showCloseButton;
       const layoutItem = layout.items[index] ?? null;
-      const resolvedTabWidth = iconOnly ? 48 : (layoutItem?.width ?? 150);
-      const showLabel = !iconOnly && (layoutItem?.showLabel ?? true);
+      const resolvedTabWidth = layoutItem?.width ?? 150;
+      const showLabel = layoutItem?.showLabel ?? true;
       const showDropIndicatorBefore = activeDragTabId !== null && tabDropPreviewIndex === index;
       const showDropIndicatorAfter =
         activeDragTabId !== null &&
@@ -1487,7 +1485,6 @@ function ResolvedWorkspaceDesktopTabsRow({
       activeDragTabId,
       hasFlowTabs,
       hoveredTabIndex,
-      iconOnly,
       displayedTabs,
       isFocused,
       layout.closeButtonPolicy,

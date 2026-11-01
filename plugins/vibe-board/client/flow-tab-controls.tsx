@@ -41,7 +41,8 @@ export function FlowTabControls(props: Props) {
 
 /** Agents outside a task still show the prompts injected into them (project bot, master). */
 function OtherAgentPrompts(props: PluginSurfaceProps & { labels?: Record<string, string> }) {
-  if (!props.labels) return null;
+  // A project bot lists its injected prompts in its 资料 panel, not in the header.
+  if (!props.labels || props.labels["vibe.role"] === "project") return null;
   return <HostProvider value={{ theme: props.theme, compact: props.layout.compact }}>
     <InjectedPromptsButton target={{ labels: props.labels }} label="当前 agent" />
   </HostProvider>;

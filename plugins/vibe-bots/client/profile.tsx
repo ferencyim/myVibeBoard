@@ -9,9 +9,10 @@ import { botsListRpc, botsArchiveRpc, projectDefaultBotSetRpc, memoriesAddRpc, m
 import type { BotMemory } from "../shared/vibe/contract/bots";
 import { ModelSection } from "./model-section";
 import { BotRoutines } from "./routines";
+import { DocumentsPage, PromptsPage } from "./project-resources";
 import {
   AVATAR_HUES, INSTRUCTIONS_DEBOUNCE_MS, INSTRUCTIONS_MAX, NAME_MAX, PERMISSION_LABELS, TITLE_MAX,
-  applyPatchToList, backupSummary, canAddBackupModel, findBotForAgent, notificationsSummary, validateTextDraft, widensPermission,
+  applyPatchToList, findBotForAgent, notificationsSummary, validateTextDraft, widensPermission,
   type PermissionMode,
 } from "./profile-mapping";
 import { AvatarButton, AvatarPopover, Caption, ControlRow, ErrorLine, Field, Group, KitProvider, NavRow, OutlineButton, SettingsBody, SubPageHeader, SwitchRow, TextArea, ValueRow, useKit } from "./settings-kit";
@@ -19,7 +20,7 @@ import { BOT_LIST_KEY, useBotSaver, useTextDraft, type BotView } from "./use-bot
 import { useBotConversation } from "./use-bot-conversation";
 
 type Nav = PluginScreenProps["navigation"];
-type Page = "root" | "permissions" | "notifications" | "backups" | "advanced" | "memories" | "routines";
+type Page = "root" | "documents" | "prompts" | "permissions" | "notifications" | "advanced" | "memories" | "routines";
 type Saver = ReturnType<typeof useBotSaver>;
 interface LoaderProps { theme: PluginTheme; navigation?: Nav; tab?: PluginAgentPanelProps["tab"]; pick(bots: readonly BotView[]): BotView | undefined; missing: string }
 
@@ -77,7 +78,8 @@ function Profile({ theme, navigation, tab, bot }: ProfileProps) {
   else if (page === "routines") content = <><SubPageHeader title="例程" onBack={back} /><SettingsBody><BotRoutines theme={theme} navigation={navigation} botId={bot.id} /></SettingsBody></>;
   else if (page === "permissions") content = <PermissionsPage bot={bot} saver={saver} onBack={back} />;
   else if (page === "notifications") content = <NotificationsPage bot={bot} saver={saver} onBack={back} />;
-  else if (page === "backups") content = <BackupsPage bot={bot} saver={saver} onBack={back} />;
+  else if (page === "documents") content = <DocumentsPage botId={bot.id} onBack={back} />;
+  else if (page === "prompts") content = <PromptsPage botId={bot.id} onBack={back} />;
   else if (page === "advanced") content = <AdvancedPage bot={bot} navigation={navigation} onBack={back} />;
   else content = <RootPage bot={bot} saver={saver} onNavigate={setPage} />;
   return <KitProvider theme={theme}>{content}</KitProvider>;
@@ -101,7 +103,7 @@ function RootPage({ bot, saver, onNavigate }: { bot: BotView; saver: Saver; onNa
   // An emptied name falls back to the saved one when the field loses focus.
   const blurName = useCallback(() => { if (!nameDraft.draft.trim()) nameDraft.reset(); else nameDraft.flush(); }, [nameDraft]);
   const go = useMemo(() => ({
-    backups: () => onNavigate("backups"), memories: () => onNavigate("memories"), routines: () => onNavigate("routines"),
+    documents: () => onNavigate("documents"), prompts: () => onNavigate("prompts"), memories: () => onNavigate("memories"), routines: () => onNavigate("routines"),
     permissions: () => onNavigate("permissions"), notifications: () => onNavigate("notifications"), advanced: () => onNavigate("advanced"),
   }), [onNavigate]);
   return <SettingsBody>
@@ -111,7 +113,10 @@ function RootPage({ bot, saver, onNavigate }: { bot: BotView; saver: Saver; onNa
     <Field label="头衔" value={titleDraft.draft} onChangeText={titleDraft.change} onBlur={titleDraft.flush} placeholder="这个 bot 负责什么" maxLength={TITLE_MAX} error={errors.title} />
     <TextArea label="角色说明" value={instructionsDraft.draft} onChangeText={instructionsDraft.change} onBlur={instructionsDraft.flush} placeholder="这个 bot 的职责、风格和约定" error={errors.instructions} />
     <ModelSection bot={bot} save={save} />
-    <Group><NavRow icon="ArrowLeftRight" label="备用模型" value={backupSummary(bot.backupModels.length)} onPress={go.backups} /></Group>
+    {bot.kind === "project" ? <Group>
+      <NavRow icon="FileText" label="项目文档" onPress={go.documents} />
+      <NavRow icon="MessageSquare" label="注入的提示词" onPress={go.prompts} />
+    </Group> : null}
     <Group>
       <NavRow icon="Brain" label="记忆" value={`${bot.memories.length} 条`} onPress={go.memories} />
       <NavRow icon="Clock" label="例程" onPress={go.routines} />
@@ -177,32 +182,6 @@ function NotificationsPage({ bot, saver, onBack }: { bot: BotView; saver: Saver;
       <ErrorLine error={saver.error} />
     </SettingsBody>
   </>;
-}
-
-function BackupsPage({ bot, saver, onBack }: { bot: BotView; saver: Saver; onBack(): void }) {
-  const { save } = saver;
-  const provider = bot.provider ?? "";
-  const model = bot.model ?? "";
-  const canAdd = canAddBackupModel(bot.backupModels, provider, model, bot.thinking);
-  const add = useCallback(() => { void save({ backupModels: [...bot.backupModels, { provider, model, thinking: bot.thinking }] }); }, [save, bot.backupModels, provider, model, bot.thinking]);
-  const removeAt = useCallback((index: number) => { void save({ backupModels: bot.backupModels.filter((_, i) => i !== index) }); }, [save, bot.backupModels]);
-  return <>
-    <SubPageHeader title="备用模型" onBack={onBack} />
-    <SettingsBody>
-      <Caption>主模型不可用或额度用尽时，按下面的顺序依次改用备用模型。</Caption>
-      <Group title="顺序">
-        {bot.backupModels.map((backup, index) => <BackupRow key={`${backup.provider}:${backup.model}:${backup.thinking}`} index={index} label={`${backup.provider} / ${backup.model}${backup.thinking ? ` · ${backup.thinking}` : ""}`} onRemove={removeAt} />)}
-        {bot.backupModels.length === 0 ? <ValueRow label="未设置顺序" value="使用主模型" /> : null}
-      </Group>
-      <View><OutlineButton label="将当前模型加入备用" disabled={!canAdd} onPress={add} /></View>
-      <ErrorLine error={saver.error} />
-    </SettingsBody>
-  </>;
-}
-
-function BackupRow({ index, label, onRemove }: { index: number; label: string; onRemove(index: number): void }) {
-  const remove = useCallback(() => onRemove(index), [onRemove, index]);
-  return <ControlRow label={label}><OutlineButton label="移除" onPress={remove} /></ControlRow>;
 }
 
 function AdvancedPage({ bot, navigation, onBack }: { bot: BotView; navigation?: Nav; onBack(): void }) {

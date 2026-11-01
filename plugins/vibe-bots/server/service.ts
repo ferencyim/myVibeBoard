@@ -443,9 +443,6 @@ export function createBotService(db: VibeDb, paseo: BotHost) {
       }
       append(bot.presetId, true);
     }
-    for (const candidate of bot.backupModels) {
-      chain.push({ ...candidate, permissionMode: bot.permissionMode, instructions: "", runtimeEnv: null, fastMode: bot.fastMode });
-    }
     return chain;
   }
 
@@ -993,6 +990,8 @@ ${COORDINATOR_PROMPT}` : base;
 
   return {
     bots, threads, openThread, waitThread, memoryDelivery, ready, view, caller, models,
+    prompts: store.prompts,
+    projectRoot: async (projectId: string) => (await project(projectId)).projectRootPath,
     modelsForProject: async (query?: string, projectId?: string, refresh = false) => {
       const cwd = projectId ? (await project(projectId)).projectRootPath : undefined;
       if (refresh) await paseo.providers.refresh(cwd ? { cwd } : {});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyPatchToList, avatarColor, avatarInitial, backupSummary, canAddBackupModel, findBotForAgent, notificationsSummary,
+  applyPatchToList, avatarColor, avatarInitial, findBotForAgent, notificationsSummary,
   replaceBotInList, validateTextDraft, widensPermission, INSTRUCTIONS_MAX, NAME_MAX,
 } from "../client/profile-mapping";
 
@@ -30,19 +30,7 @@ describe("bot profile mapping", () => {
     expect(validateTextDraft({ name: "a", title: "", instructions: "x".repeat(INSTRUCTIONS_MAX) }).instructions).toBeNull();
   });
 
-  it("only offers a complete, new backup model", () => {
-    const existing = [{ provider: "p", model: "m", thinking: "" }];
-    expect(canAddBackupModel(existing, "p", "m", "")).toBe(false);
-    expect(canAddBackupModel(existing, "p", "m", "high")).toBe(true);
-    expect(canAddBackupModel(existing, "", "m", "")).toBe(false);
-    expect(canAddBackupModel(existing, "p", "", "")).toBe(false);
-    const full = Array.from({ length: 20 }, (_, i) => ({ provider: "p", model: `m${i}`, thinking: "" }));
-    expect(canAddBackupModel(full, "p", "new", "")).toBe(false);
-  });
-
   it("summarizes rows for the settings list", () => {
-    expect(backupSummary(0)).toBe("未设置");
-    expect(backupSummary(3)).toBe("3 个");
     expect(notificationsSummary({ enabled: false, completed: true, failed: true })).toBe("已关闭");
     expect(notificationsSummary({ enabled: true, completed: true, failed: true })).toBe("已开启");
     expect(notificationsSummary({ enabled: true, completed: true, failed: false })).toBe("完成时");

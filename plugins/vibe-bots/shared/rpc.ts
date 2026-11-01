@@ -132,3 +132,44 @@ export const botsNotifyRpc = defineRpc({
   }),
   output: z.object({ accepted: z.boolean(), reason: z.string().optional() }),
 });
+
+export const projectDocumentSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  totalBytes: z.number(),
+  truncated: z.boolean(),
+});
+export const botsDocumentsRpc = defineRpc({
+  name: "bots.documents.list",
+  input: z.object({ botId: z.string() }),
+  output: z.object({ documents: z.array(projectDocumentSchema) }),
+});
+
+export const injectedPromptSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  description: z.string(),
+  whenSent: z.string(),
+  audience: z.string(),
+  defaultText: z.string(),
+  fixedSuffix: z.string(),
+  globalOverride: z.string().nullable(),
+  placeholders: z.array(z.object({ name: z.string(), description: z.string() })),
+  /** The bot's own role prompts, as opposed to the shared handoff/context ones. */
+  own: z.boolean(),
+});
+export const botsPromptsListRpc = defineRpc({
+  name: "bots.prompts.list",
+  input: z.object({ botId: z.string() }),
+  output: z.object({ prompts: z.array(injectedPromptSchema) }),
+});
+export const botsPromptsSetRpc = defineRpc({
+  name: "bots.prompts.set",
+  input: z.object({ botId: z.string(), key: z.string().min(1), text: z.string() }),
+  output: z.object({ ok: z.literal(true) }),
+});
+export const botsPromptsClearRpc = defineRpc({
+  name: "bots.prompts.clear",
+  input: z.object({ botId: z.string(), key: z.string().min(1) }),
+  output: z.object({ ok: z.literal(true) }),
+});

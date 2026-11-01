@@ -9,6 +9,7 @@ import { BotCreateSchema, BotPatchSchema } from "./server/vibe/contract/bots";
 import { migrateOwner } from "./server/vibe/db/migrate";
 import { openVibeDb } from "./server/vibe/db/sqlite";
 import { createBotService } from "./server/service";
+import { readProjectDocs } from "./server/project-docs";
 import { registerBotContinuations } from "./server/continuation";
 import { registerVisualReply } from "./server/visual-reply";
 import { createBotMessaging } from "./server/messages";
@@ -34,6 +35,48 @@ export default function contribute(server: PluginServerContext) {
   const messaging = createBotMessaging(db, service, server.paseo);
   registerHubTools(server, service, messaging);
   void service.ready().then(() => messaging.flushAll()).catch((error) => console.error("[vibe-bots] bot 消息启动重投失败", error));
+  const PROJECT_BOT_PROMPT_KEYS = ["project.agent.role", "project.agent.task_done"];
+  const SHARED_PROMPT_KEYS = ["context.inject_frame", "context.cold_start", "context.failure_handoff", "context.compact_notes", "context.compact_restore"];
+  function projectBot(botId: string) {
+    const bot = service.bots.get(botId);
+    if (!bot || bot.kind !== "project" || !bot.projectId) throw new Error("只有项目 bot 提供项目文档与注入提示词");
+    return { ...bot, projectId: bot.projectId };
+  }
+  function ownedPromptKey(key: string) {
+    if (![...PROJECT_BOT_PROMPT_KEYS, ...SHARED_PROMPT_KEYS].includes(key)) throw new Error("该提示词不属于此 bot");
+  }
+  server.handle(rpc.botsDocumentsRpc, async (input, ctx) => {
+    userOnly(ctx.callerAgentId);
+    return { documents: await readProjectDocs(await service.projectRoot(projectBot(input.botId).projectId)) };
+  });
+  server.handle(rpc.botsPromptsListRpc, (input, ctx) => {
+    userOnly(ctx.callerAgentId);
+    projectBot(input.botId);
+    const byKey = new Map(service.prompts.list({ projectId: null }).map((item) => [item.key, item]));
+    const keys = [...PROJECT_BOT_PROMPT_KEYS, ...SHARED_PROMPT_KEYS].filter((key) => byKey.has(key));
+    return { prompts: keys.map((key) => {
+      const item = byKey.get(key)!;
+      return {
+        key, title: item.title, description: item.description, whenSent: item.whenSent, audience: item.audience,
+        defaultText: item.defaultText, fixedSuffix: item.fixedSuffix, globalOverride: item.globalOverride,
+        placeholders: item.placeholders, own: PROJECT_BOT_PROMPT_KEYS.includes(key),
+      };
+    }) };
+  });
+  server.handle(rpc.botsPromptsSetRpc, (input, ctx) => {
+    userOnly(ctx.callerAgentId);
+    projectBot(input.botId);
+    ownedPromptKey(input.key);
+    service.prompts.setOverride(input.key, input.text, { projectId: null });
+    return { ok: true as const };
+  });
+  server.handle(rpc.botsPromptsClearRpc, (input, ctx) => {
+    userOnly(ctx.callerAgentId);
+    projectBot(input.botId);
+    ownedPromptKey(input.key);
+    service.prompts.clearOverride(input.key, { projectId: null });
+    return { ok: true as const };
+  });
   server.handle(rpc.botsNotifyRpc, (input, ctx) => {
     userOnly(ctx.callerAgentId);
     return messaging.notify(input.target, input.source, input.text);

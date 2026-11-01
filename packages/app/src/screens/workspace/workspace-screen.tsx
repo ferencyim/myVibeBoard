@@ -3820,7 +3820,6 @@ function WorkspaceScreenContent({
     if (!explorerPane) return null;
     const dock = (
       <ExplorerSidebarDock
-        iconOnly={Boolean(botAgentId) && !hasTaskFlow}
         pane={explorerPane}
         uiTabs={uiTabs}
         normalizedServerId={normalizedServerId}
@@ -3859,8 +3858,6 @@ function WorkspaceScreenContent({
     );
   }, [
     workspaceLayout,
-    botAgentId,
-    hasTaskFlow,
     explorerSidebarPaneId,
     persistenceKey,
     isMobile,
