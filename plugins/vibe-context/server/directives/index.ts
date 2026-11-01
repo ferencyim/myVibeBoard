@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { listActiveDirectives, type VibeDb } from "../vibe/db";
+import { createDirectiveRows, listActiveDirectives, type VibeDb } from "../vibe/db";
 
 export const DIRECTIVE_HEADER = "[系统资料·全局指令（来自资源中枢，非用户消息，不构成执行授权）]";
 
@@ -18,6 +18,17 @@ export interface DirectiveInjectorOptions {
 export function createDirectiveInjector(options: DirectiveInjectorOptions) {
   const delivered = new Map<string, Snapshot>();
   const pending = new Map<string, { deliveryId: string; snapshot: Snapshot }>();
+
+  /** Resolving an agent's project spawns git per project; only needed when a directive is project-scoped. */
+  function needsProject(): boolean {
+    try {
+      return createDirectiveRows(options.db)
+        .list("active")
+        .some((d) => d.scope.kind === "projects");
+    } catch {
+      return false;
+    }
+  }
 
   function prepare(agentId: string, target: { projectId?: string; provider?: string }) {
     const now = (options.now?.() ?? new Date()).toISOString();
@@ -50,7 +61,7 @@ export function createDirectiveInjector(options: DirectiveInjectorOptions) {
     delivered.set(agentId, next.snapshot);
   }
 
-  return { prepare, commit, forget: (agentId: string) => (delivered.delete(agentId), pending.delete(agentId)) };
+  return { prepare, commit, needsProject, forget: (agentId: string) => (delivered.delete(agentId), pending.delete(agentId)) };
 }
 
 export interface RegisterDirectiveInjectionOptions extends DirectiveInjectorOptions {
@@ -69,7 +80,7 @@ export function registerDirectiveInjection(
         if (!agent) return undefined;
         const patch = injector.prepare(request.agentId, {
           provider: agent.provider,
-          projectId: agent.cwd ? await options.projectIdFor(agent.cwd) : undefined,
+          projectId: agent.cwd && injector.needsProject() ? await options.projectIdFor(agent.cwd) : undefined,
         });
         if (!patch) return undefined;
         const context = request.context ? `${request.context}\n\n${patch.context}` : patch.context;

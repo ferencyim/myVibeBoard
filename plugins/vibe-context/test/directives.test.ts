@@ -76,4 +76,14 @@ describe("directive injection", () => {
   it("injects nothing when no directive applies", () => {
     expect(setup().injector.prepare("ag", { provider: "claude" })).toBeNull();
   });
+
+  it("needsProject is true only while an active directive is project-scoped", () => {
+    const { add, db, injector } = setup();
+    add("a", "全局", { kind: "all" });
+    expect(injector.needsProject()).toBe(false);
+    add("b", "只给项目 P", { kind: "projects", projectIds: ["P"] });
+    expect(injector.needsProject()).toBe(true);
+    db.prepare("UPDATE hub_directive SET status='revoked' WHERE id='b'").run();
+    expect(injector.needsProject()).toBe(false);
+  });
 });
