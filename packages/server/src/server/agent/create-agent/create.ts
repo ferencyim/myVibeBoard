@@ -22,8 +22,15 @@ import { buildAgentPrompt } from "../prompt-attachments.js";
 import { normalizeClientMessageId, resolveClientMessageId } from "../../client-message-id.js";
 import { resolveRequiredProviderModel, type ResolvedProviderModel } from "../mcp-shared.js";
 import { resolveCreateAgentIntent } from "./intent.js";
+import type { ModelGroup, ProviderUsage } from "@getpaseo/protocol/messages";
+import {
+  MODEL_GROUP_LABEL,
+  MODEL_GROUP_ORDER_LABEL,
+  selectModelGroupEntry,
+} from "../model-groups.js";
 
 export interface CreateAgentCommandDependencies {
+  modelGroups?: { getGroups(): ModelGroup[]; listUsage(): Promise<ProviderUsage[]> };
   finishSubscriptions?: FinishSubscriptions;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -142,6 +149,36 @@ function resolveProviderModel(providerValue: string): ResolvedProviderModel {
   return { provider: providerInput, model: undefined };
 }
 
+async function resolveModelGroup(
+  dependencies: CreateAgentCommandDependencies,
+  provider: string,
+  model: string | undefined,
+) {
+  if (provider !== "modelgroup") return null;
+  const group = dependencies.modelGroups?.getGroups().find((candidate) => candidate.id === model);
+  if (!group) throw new Error(`Model group ${model ?? ""} not found`);
+  const usage = await dependencies.modelGroups!.listUsage();
+  const result = await selectModelGroupEntry(
+    group,
+    (candidate) => dependencies.agentManager.getProviderAvailability(candidate),
+    usage,
+  );
+  if (!result.entry) {
+    throw new Error(
+      `Model group ${group.id} has no available entries: ${result.reasons.join("; ") || "group is empty"}`,
+    );
+  }
+  const entry = result.entry;
+  return {
+    config: {
+      provider: entry.provider,
+      model: entry.model,
+      thinkingOptionId: entry.thinkingOptionId,
+    },
+    labels: { [MODEL_GROUP_LABEL]: group.id, [MODEL_GROUP_ORDER_LABEL]: String(entry.order) },
+  };
+}
+
 interface ResolvedCreateAgent {
   config: AgentSessionConfig;
   createOptions: CreateAgentOptions;
@@ -218,7 +255,12 @@ async function resolveSessionCreateAgent(
   input: CreateAgentFromSessionInput,
 ): Promise<ResolvedCreateAgent> {
   const trimmedPrompt = input.initialPrompt?.trim();
-  const builtSessionConfig = input.config;
+  const selection = await resolveModelGroup(
+    dependencies,
+    input.config.provider,
+    input.config.model,
+  );
+  const builtSessionConfig = selection ? { ...input.config, ...selection.config } : input.config;
   const resolvedCreateConfig = await dependencies.providerSnapshotManager.resolveCreateConfig({
     cwd: builtSessionConfig.cwd,
     provider: builtSessionConfig.provider,
@@ -247,7 +289,7 @@ async function resolveSessionCreateAgent(
   return {
     config: sessionConfig,
     createOptions: {
-      labels: input.labels,
+      labels: { ...input.labels, ...selection?.labels },
       initialPrompt: trimmedPrompt,
       env: input.env,
       initialTitle: input.provisionalTitle,
@@ -267,11 +309,29 @@ async function resolveSessionCreateAgent(
   };
 }
 
+async function resolveMcpProviderModel(
+  dependencies: CreateAgentCommandDependencies,
+  providerValue: string,
+) {
+  const requested = resolveProviderModel(providerValue);
+  const selection = await resolveModelGroup(dependencies, requested.provider, requested.model);
+  if (!selection) {
+    return { resolvedProviderModel: requested, groupConfig: {}, groupLabels: {}, groupInput: {} };
+  }
+  return {
+    resolvedProviderModel: { provider: selection.config.provider, model: selection.config.model },
+    groupConfig: selection.config,
+    groupLabels: selection.labels,
+    groupInput: { thinking: selection.config.thinkingOptionId },
+  };
+}
+
 async function resolveMcpCreateAgent(
   dependencies: CreateAgentCommandDependencies,
   input: CreateAgentFromMcpInput,
 ): Promise<ResolvedCreateAgent> {
-  const resolvedProviderModel = resolveProviderModel(input.provider);
+  const { resolvedProviderModel, groupConfig, groupLabels, groupInput } =
+    await resolveMcpProviderModel(dependencies, input.provider);
   const provider = resolvedProviderModel.provider;
   const parentAgent = input.callerAgentId
     ? requireParentAgent(dependencies.agentManager, input.callerAgentId)
@@ -316,17 +376,22 @@ async function resolveMcpCreateAgent(
 
   const trimmedPrompt = input.initialPrompt?.trim() ?? "";
   return {
-    config: buildMcpSessionConfig({
-      input,
-      resolvedProviderModel,
-      provider,
-      resolvedCwd: intent.cwd,
-      trimmedPrompt,
-      resolvedMode: resolvedCreateConfig.modeId,
-      resolvedFeatures: resolvedCreateConfig.featureValues,
-    }),
+    config: {
+      ...buildMcpSessionConfig({
+        input: { ...input, ...groupInput },
+        resolvedProviderModel,
+        provider,
+        resolvedCwd: intent.cwd,
+        trimmedPrompt,
+        resolvedMode: resolvedCreateConfig.modeId,
+        resolvedFeatures: resolvedCreateConfig.featureValues,
+      }),
+      ...groupConfig,
+    },
     createOptions: {
-      ...(Object.keys(intent.labels).length > 0 ? { labels: intent.labels } : {}),
+      ...(Object.keys({ ...intent.labels, ...groupLabels }).length > 0
+        ? { labels: { ...intent.labels, ...groupLabels } }
+        : {}),
       workspaceId: intent.workspaceId,
       owner: input.owner,
       env: input.env,

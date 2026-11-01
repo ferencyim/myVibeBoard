@@ -29,6 +29,7 @@ function reloadableConfig(
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
     terminalProfiles: daemon.terminalProfiles,
     agentProfiles: daemon.agentProfiles,
+    modelGroups: daemon.modelGroups,
     cors: { allowedOrigins: [] },
     trustedProxies: ["loopback"],
     git: {
@@ -193,6 +194,29 @@ describe("DaemonConfigStore", () => {
       },
     ]);
     expect(store.get().agentProfiles).toHaveLength(1);
+  });
+
+  test("model groups patch replaces and persists the list", () => {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
+    tempDirs.push(paseoHome);
+    const store = new DaemonConfigStore(paseoHome, reloadableConfig({}));
+    const groups = [
+      {
+        id: "main",
+        name: "Main",
+        entries: [
+          { order: 2, provider: "codex", model: "second" },
+          { order: 1, provider: "claude", model: "first", thinkingOptionId: "high" },
+        ],
+      },
+    ];
+
+    store.patch({ modelGroups: groups });
+    expect(store.get().modelGroups).toEqual(groups);
+    expect(loadPersistedConfig(paseoHome).daemon?.modelGroups).toEqual(groups);
+    store.patch({ modelGroups: [] });
+    expect(store.get().modelGroups).toEqual([]);
+    expect(loadPersistedConfig(paseoHome).daemon?.modelGroups).toEqual([]);
   });
 
   test("patch replaces the whole agent profile list rather than merging entries", () => {

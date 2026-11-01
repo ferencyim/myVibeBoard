@@ -768,6 +768,11 @@ export class AgentManager {
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
   private readonly agents = new Map<string, LiveManagedAgent>();
+  private readonly foregroundPrompts = new Map<
+    string,
+    { prompt: AgentPromptInput; turnId?: string }
+  >();
+  private readonly foregroundPromptGenerations = new Map<string, number>();
   private readonly timelineStore: InMemoryAgentTimelineStore;
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly pendingSubagentHistory = new Map<
@@ -1373,6 +1378,15 @@ export class AgentManager {
     // Loading during reload must wait for the replacement, not resume another writer.
     await this.lifecycleMutationTails.get(agentId);
     await this.inFlightAgentCloses?.get(agentId)?.catch(() => undefined);
+  }
+
+  getForegroundPrompt(id: string, turnId?: string): AgentPromptInput | undefined {
+    const entry = this.foregroundPrompts.get(id);
+    return entry && entry.turnId === turnId ? entry.prompt : undefined;
+  }
+
+  getForegroundPromptGeneration(id: string): number {
+    return this.foregroundPromptGenerations.get(id) ?? 0;
   }
 
   getTimeline(id: string): AgentTimelineItem[] {
@@ -2875,6 +2889,7 @@ export class AgentManager {
         throw error;
       }
       if (isStaleProviderSessionError(error)) {
+        this.foregroundPrompts.delete(agentId);
         pendingRun.start = { status: "failed", error: error.message };
         agent.pendingReplacement = false;
         if (!agent.activeForegroundTurnId) agent.lifecycle = "idle";
@@ -2946,6 +2961,13 @@ export class AgentManager {
     agent.lastError = undefined;
 
     const pendingRun = this.runs.createPendingRun(agentId);
+    if (agent.labels["paseo.model-group"]) {
+      this.foregroundPrompts.set(agentId, { prompt });
+      this.foregroundPromptGenerations.set(
+        agentId,
+        this.getForegroundPromptGeneration(agentId) + 1,
+      );
+    }
 
     const streamForwarder = async function* streamForwarder(this: AgentManager) {
       let turnId: string;
@@ -2958,6 +2980,8 @@ export class AgentManager {
         options,
       });
 
+      if (agent.labels["paseo.model-group"])
+        this.foregroundPrompts.set(agentId, { prompt, turnId });
       if (isReplacement) {
         agent.pendingReplacement = false;
       }
@@ -3287,6 +3311,8 @@ export class AgentManager {
     clientMessageId: string | undefined,
     expectedTurnId: string,
   ): Promise<void> {
+    // A steered turn contains multiple prompts; it is not safe to infer which failed.
+    this.foregroundPrompts.delete(agent.id);
     if (!clientMessageId) {
       return;
     }
@@ -3635,6 +3661,8 @@ export class AgentManager {
   }
 
   async deleteAgentState(agentId: string): Promise<void> {
+    this.foregroundPrompts.delete(agentId);
+    this.foregroundPromptGenerations.delete(agentId);
     this.discardRetainedAgentState(agentId);
     await this.deleteCommittedTimeline(agentId);
   }
@@ -4181,6 +4209,8 @@ export class AgentManager {
   }
 
   private emitClosedAgent(agent: ManagedAgentClosed, options?: { persist?: boolean }): void {
+    this.foregroundPrompts.delete(agent.id);
+    this.foregroundPromptGenerations.delete(agent.id);
     this.emitState(agent, options);
     if (!agent.internal) {
       this.pluginLifecycle?.emit("agent.closed", {
@@ -4707,6 +4737,12 @@ export class AgentManager {
 
       if (flags.shouldDispatchEvent) {
         this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
+      }
+      if (
+        isTurnTerminalEvent(event) &&
+        this.foregroundPrompts.get(agent.id)?.turnId === eventTurnId
+      ) {
+        this.foregroundPrompts.delete(agent.id);
       }
     }
 

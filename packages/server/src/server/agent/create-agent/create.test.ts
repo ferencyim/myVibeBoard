@@ -468,3 +468,64 @@ test("session create with an internal config skips provider session persistence"
   expect(createAgent.mock.calls[1]?.[0]).not.toHaveProperty("internal");
   expect(createAgent.mock.calls[1]?.[2]).not.toHaveProperty("persistSession");
 });
+
+test.each(["session", "mcp"] as const)(
+  "%s creation resolves a model group before provider policy",
+  async (kind) => {
+    const snapshot = { id: "a", provider: "codex", cwd: "/tmp" } as ManagedAgent;
+    const createAgent = vi.fn(async () => snapshot);
+    const stub = createProviderSnapshotManagerStub();
+    const dependencies: Parameters<typeof createAgentCommand>[0] = {
+      agentManager: {
+        createAgent,
+        getProviderAvailability: async () => ({ available: true, error: null }),
+      } as unknown as AgentManager,
+      agentStorage: {} as AgentStorage,
+      logger,
+      providerSnapshotManager: stub.manager,
+      modelGroups: {
+        getGroups: () => [
+          {
+            id: "g",
+            name: "G",
+            entries: [{ order: 3, provider: "codex", model: "m", thinkingOptionId: "high" }],
+          },
+        ],
+        listUsage: async () => [],
+      },
+    };
+    await createAgentCommand(
+      dependencies,
+      kind === "session"
+        ? {
+            kind,
+            config: { provider: "modelgroup", model: "g", cwd: "/tmp" },
+            workspaceId: "w",
+            labels: {},
+            provisionalTitle: null,
+            firstAgentContext: { attachments: [] },
+          }
+        : {
+            kind,
+            provider: "modelgroup/g",
+            title: "test",
+            cwd: "/tmp",
+            workspaceId: "w",
+            notifyOnFinish: false,
+          },
+    );
+    expect(stub.resolveCreateConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "codex" }),
+    );
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "codex", model: "m", thinkingOptionId: "high" }),
+      undefined,
+      expect.objectContaining({
+        labels: expect.objectContaining({
+          "paseo.model-group": "g",
+          "paseo.model-group-order": "3",
+        }),
+      }),
+    );
+  },
+);

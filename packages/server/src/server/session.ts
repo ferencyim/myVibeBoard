@@ -4534,6 +4534,10 @@ export class Session {
           paseoHome: this.paseoHome,
           worktreesRoot: this.worktreesRoot,
           providerSnapshotManager: this.providerSnapshotManager,
+          modelGroups: {
+            getGroups: () => this.daemonConfigStore.get().modelGroups ?? [],
+            listUsage: async () => (await this.pluginRuntime?.listLegacyUsage())?.providers ?? [],
+          },
         },
         {
           kind: "session",

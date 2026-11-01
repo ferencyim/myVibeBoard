@@ -40,7 +40,7 @@ import {
   requireActiveWorkspaceForArchive,
   type ArchiveDependencies,
 } from "../../workspace-archive-service.js";
-import { createAgentCommand } from "../create-agent/create.js";
+import { createAgentCommand, type CreateAgentCommandDependencies } from "../create-agent/create.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
 import type { FirstAgentContext } from "../../messages.js";
 import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
@@ -127,6 +127,7 @@ export interface PaseoToolHostDependencies {
   scheduleService?: ScheduleService | null;
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
+  modelGroups?: CreateAgentCommandDependencies["modelGroups"];
   github?: ForgeService;
   workspaceGitService?: Pick<
     WorkspaceGitService,
@@ -1634,6 +1635,7 @@ function createToolCatalog(
           worktreesRoot: options.worktreesRoot,
           terminalManager,
           providerSnapshotManager,
+          modelGroups: options.modelGroups,
           createPaseoWorktree: options.createPaseoWorktree,
           ...(options.ensureWorkspaceForCreate
             ? { ensureWorkspaceForCreate: options.ensureWorkspaceForCreate }

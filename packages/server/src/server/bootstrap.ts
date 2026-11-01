@@ -177,6 +177,7 @@ import {
   type ActiveWorkspaceRef,
 } from "./workspace-archive-service.js";
 import { setupAutoArchiveOnMerge } from "./auto-archive-on-merge/index.js";
+import { registerModelGroupFailover } from "./agent/model-group-failover.js";
 import { wrapSessionMessage, type SessionOutboundMessage } from "./messages.js";
 import type { TerminalManager } from "../terminal/terminal-manager.js";
 import { createConfiguredTerminalManager } from "../terminal/terminal-manager-factory.js";
@@ -190,6 +191,7 @@ import { resolveDaemonVersion } from "./daemon-version.js";
 import type { AgentClient, AgentProvider } from "./agent/agent-sdk-types.js";
 import type {
   AgentProfile,
+  ModelGroup,
   AgentSkillSelection,
   FirstAgentContext,
   PluginSource,
@@ -446,6 +448,7 @@ export interface PaseoDaemonConfig {
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
+  modelGroups?: ModelGroup[];
   skillSelection?: AgentSkillSelection;
   pluginsEnabled?: boolean;
   plugins?: Record<string, PluginSource>;
@@ -617,6 +620,9 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
 
   if (config.agentProfiles !== undefined) {
     initialConfig.agentProfiles = config.agentProfiles;
+  }
+  if (config.modelGroups !== undefined) {
+    initialConfig.modelGroups = config.modelGroups;
   }
 
   return initialConfig;
@@ -1035,6 +1041,13 @@ export async function createPaseoDaemon(
   const unsubscribePluginProviders =
     pluginRuntime.subscribeProviderRegistrations(syncPluginProviders);
 
+  const unsubscribeModelGroupFailover = registerModelGroupFailover({
+    agentManager,
+    getGroups: () => daemonConfigStore.get().modelGroups ?? [],
+    getUsage: async () => (await pluginRuntime.listLegacyUsage()).providers,
+    logger,
+  });
+
   const detachAgentStoragePersistence = attachAgentStoragePersistence(
     logger,
     agentManager,
@@ -1266,6 +1279,10 @@ export async function createPaseoDaemon(
     worktreesRoot: config.worktreesRoot,
     terminalManager,
     providerSnapshotManager,
+    modelGroups: {
+      getGroups: () => daemonConfigStore.get().modelGroups ?? [],
+      listUsage: async () => (await pluginRuntime.listLegacyUsage()).providers,
+    },
     createPaseoWorktree: createPaseoWorktreeForTools,
     ensureWorkspaceForCreate: ensureWorkspaceForCreateAndBroadcastExternal,
   };
@@ -1544,6 +1561,7 @@ export async function createPaseoDaemon(
     }),
     markWorkspaceArchiving: markWorkspaceArchivingExternal,
     clearWorkspaceArchiving: clearWorkspaceArchivingExternal,
+    modelGroups: createAgentCommandDependencies.modelGroups,
     ensureWorkspaceForCreate: createAgentCommandDependencies.ensureWorkspaceForCreate,
     createPaseoWorktree: createAgentCommandDependencies.createPaseoWorktree,
     browserToolsEnabled: browserToolsPolicy.isEnabled(),
@@ -1948,6 +1966,7 @@ export async function createPaseoDaemon(
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
       unsubscribePluginProviders();
+      unsubscribeModelGroupFailover();
       await pluginRuntime.stopAllPlugins().catch(() => undefined);
       await serviceProxy.stopStandalone().catch(() => undefined);
       await agentProviderRuntime.shutdown().catch(() => undefined);
@@ -1971,6 +1990,7 @@ export async function createPaseoDaemon(
     // that is still open. Plugins themselves are stopped once every session
     // they serve has been closed, further down.
     unsubscribePluginProviders();
+    unsubscribeModelGroupFailover();
     await hubRelationships.stop();
     workspaceReconciliation.dispose();
     scriptHealthMonitor.stop();
