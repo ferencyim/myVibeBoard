@@ -36,14 +36,16 @@ export function createProgressiveStatus(loader: Loader, timeoutMs = 2400) {
     });
   }
   return {
-    async get(key: string, force = false): Promise<Status> {
+    async get(key: string, force = false, progressOnly = false): Promise<Status> {
       let entry = entries.get(key);
       if (!entry) {
         entry = { at: 0, forcePending: false, lastComplete: 0 };
         entries.set(key, entry);
       }
+      // Progress polls only read snapshots; a cold server still needs an initial load.
+      progressOnly = progressOnly && !force && !!entry.fast;
       let timedOut = false;
-      if (force || !entry.fast || Date.now() - entry.at >= 10000) {
+      if (!progressOnly && (force || !entry.fast || Date.now() - entry.at >= 10000)) {
         if (!entry.fastPending) {
           const target = entry;
           target.fastPending = loader.fast(key).catch((): Status => ({
@@ -71,7 +73,7 @@ export function createProgressiveStatus(loader: Loader, timeoutMs = 2400) {
         release: { status: "dashboard_down" as const, products: [] },
       };
       const complete = entry.complete && (loader.snapshot?.(entry.complete) ?? entry.complete);
-      if (fast.git.status === "ok" && (force || !complete || (!complete.git.scanning && Date.now() - entry.lastComplete >= 10000))) {
+      if (!progressOnly && fast.git.status === "ok" && (force || !complete || (!complete.git.scanning && Date.now() - entry.lastComplete >= 10000))) {
         refresh(entry, fast.git.workspacePath, force);
       }
       if (!complete) return entry.completeError ? { ...fast, git: { ...fast.git, scanning: false, scanError: entry.completeError } } : fast;

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { statusRpc, type Changes, type Status } from "../shared/rpc";
-import { hostReconnected, statusFailureMessage, statusRetryDelay } from "./status-retry";
+import { hostReconnected, statusFailureMessage, statusPollInterval, statusRetryDelay } from "./status-retry";
 
 const labels: Record<string, string> = {
   ok: "正常",
@@ -324,6 +324,7 @@ export function GitPanel({ theme, workspaceId, host }: PluginWorkspacePanelProps
   const call = useRpc(statusRpc);
   const hostStatus = useHosts().find((item) => item.serverId === host.id)?.status;
   const previousHostStatus = useRef(hostStatus);
+  const scanningSince = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const queryKey = ["vibe-git", "status", workspaceId];
   const refresh = useMutation({
@@ -337,9 +338,14 @@ export function GitPanel({ theme, workspaceId, host }: PluginWorkspacePanelProps
   });
   const query = useQuery({
     queryKey,
-    queryFn: () => call({ workspaceId }),
-    refetchInterval: (query) => refresh.isPending ? false :
-      query.state.data?.git.scanning || query.state.data?.git.error === "读取 Git 状态超时，请重试" ? 2_000 : 30_000,
+    queryFn: () => call({ workspaceId, progressOnly: queryClient.getQueryData<Status>(queryKey)?.git.scanning || undefined }),
+    refetchInterval: (query) => {
+      if (refresh.isPending) return false;
+      if (query.state.data?.git.scanning) scanningSince.current ??= Date.now();
+      else scanningSince.current = null;
+      if (query.state.data?.git.error === "读取 Git 状态超时，请重试") return 5_000;
+      return statusPollInterval(scanningSince.current, Date.now());
+    },
     retry: true,
     retryDelay: statusRetryDelay,
   });

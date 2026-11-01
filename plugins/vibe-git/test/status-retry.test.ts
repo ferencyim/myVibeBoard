@@ -1,11 +1,13 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hostReconnected, statusFailureMessage, statusRetryDelay } from "../client/status-retry";
+import { hostReconnected, statusFailureMessage, statusPollInterval, statusRetryDelay } from "../client/status-retry";
 
 afterEach(() => vi.useRealTimers());
 
 describe("Git 面板状态重试", () => {
   it("退避有上限，只有主机恢复在线时立即重试", () => {
+    expect([0, 29_999, 30_000, 120_000].map((elapsed) => statusPollInterval(1, elapsed + 1))).toEqual([5_000, 5_000, 10_000, 30_000]);
+    expect(statusPollInterval(null, 120_000)).toBe(30_000);
     expect([0, 1, 2, 3, 4].map(statusRetryDelay)).toEqual([2_000, 5_000, 15_000, 30_000, 30_000]);
     expect(hostReconnected("offline", "online")).toBe(true);
     expect(hostReconnected("online", "online")).toBe(false);

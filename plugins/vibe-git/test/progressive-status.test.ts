@@ -35,6 +35,29 @@ describe("渐进式 Git 状态", () => {
     service.clear();
   });
 
+  it("扫描进度查询只读取快照，冷启动和手动刷新仍加载", async () => {
+    const fast = vi.fn(async () => status("current", true));
+    let scanning = true;
+    const complete = vi.fn(async () => status("complete", true));
+    const service = createProgressiveStatus({ fast, complete, snapshot: (value) => ({ ...value, git: { ...value.git, scanning } }) });
+    await service.get("workspace", false, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 60_000);
+    try {
+      expect((await service.get("workspace", false, true)).git.scanning).toBe(true);
+      scanning = false;
+      expect((await service.get("workspace", false, true)).git.scanning).toBe(false);
+      expect(fast).toHaveBeenCalledTimes(1);
+      expect(complete).toHaveBeenCalledTimes(1);
+      await service.get("workspace", true, true);
+      expect(fast).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.restoreAllMocks();
+      service.clear();
+    }
+  });
+
   it("手动刷新绕过缓存，进行中的后台请求完成后仍执行强制刷新", async () => {
     const fast = vi.fn(async () => status("current"));
     let finish!: (value: Status) => void;

@@ -44,10 +44,14 @@ it("逐项发布，合并强制刷新，失败时保留旧结果和时间", asyn
     await vi.waitFor(() => expect(state.scans.get(normalizePath(root))?.scanning).toBe(false));
     expect(scan).toHaveBeenCalledTimes(4);
     const result = await service.gitStatus(root);
+    expect(result.scanning).toBe(false);
+    expect(result.scanError).toContain(first);
     expect(result.scanError).toContain("扫描失败示例");
     expect(result.worktrees.find((w) => w.path === first)?.changes).toEqual(saved.changes);
     expect(result.worktrees.find((w) => w.path === first)?.changesScannedAt).toBe(saved.changesScannedAt);
     expect(result.worktrees.find((w) => w.path === second)?.changes?.total).toBe(1);
+    await service.gitStatus(root);
+    expect(scan).toHaveBeenCalledTimes(4);
   } finally {
     state.closed = true;
     release("");

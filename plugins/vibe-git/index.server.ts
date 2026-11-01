@@ -64,9 +64,9 @@ export default function contribute(server: PluginServerContext) {
       }
     },
   });
-  server.handle(statusRpc, ({ workspaceId, force }, context) => {
+  server.handle(statusRpc, ({ workspaceId, force, progressOnly }, context) => {
     serverContext = (id) => context.paseo.workspaces.ref(id).refresh().catch(() => null);
-    return service.get(workspaceId, force);
+    return service.get(workspaceId, force, progressOnly);
   });
   return async () => {
     closed = true;

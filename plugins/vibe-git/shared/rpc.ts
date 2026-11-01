@@ -96,6 +96,6 @@ export type Status = z.infer<typeof StatusSchema>;
 export type Changes = z.infer<typeof changes>;
 export const statusRpc = defineRpc({
   name: "git.status",
-  input: z.object({ workspaceId: z.string().min(1), force: z.boolean().optional() }),
+  input: z.object({ workspaceId: z.string().min(1), force: z.boolean().optional(), progressOnly: z.boolean().optional() }),
   output: StatusSchema,
 });
