@@ -524,7 +524,12 @@ export interface SessionOptions {
       forceRefresh?: boolean;
       reportIds?: string[];
     }): Promise<UsageReportEntry[]>;
-    listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
+    listLegacyUsage(progressive?: boolean): Promise<{
+      fetchedAt: string;
+      providers: ProviderUsage[];
+      hasSnapshot?: boolean;
+      refreshing?: boolean;
+    }>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
   mcpBaseUrl?: string | null;
@@ -8250,11 +8255,34 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "agent.provider_subagents.list.request" }>,
   ): Promise<void> {
     try {
+      const cached = await this.agentManager.getDurableProviderSubagents(
+        msg.parentAgentId,
+        async () => {
+          const latest = await this.agentStorage.get(msg.parentAgentId);
+          if (latest?.archivedAt) throw new Error(`Agent is archived: ${msg.parentAgentId}`);
+          if (latest?.internal || (!latest && !this.agentManager.getAgent(msg.parentAgentId))) {
+            throw new Error(`Agent not found: ${msg.parentAgentId}`);
+          }
+        },
+      );
+      if (cached) {
+        this.emit({
+          type: "agent.provider_subagents.list.response",
+          payload: {
+            requestId: msg.requestId,
+            parentAgentId: msg.parentAgentId,
+            subagents: cached,
+            error: null,
+          },
+        });
+        return;
+      }
       await ensureUnarchivedAgentLoaded(msg.parentAgentId, {
         agentManager: this.agentManager,
         agentStorage: this.agentStorage,
         logger: this.sessionLogger,
       });
+      await this.agentManager.ensureProviderSubagentHistory(msg.parentAgentId);
       this.emit({
         type: "agent.provider_subagents.list.response",
         payload: {
@@ -8288,6 +8316,7 @@ export class Session {
         agentStorage: this.agentStorage,
         logger: this.sessionLogger,
       });
+      await this.agentManager.ensureProviderSubagentHistory(msg.parentAgentId, { timeline: true });
       const descriptor = this.agentManager.getProviderSubagent(msg.parentAgentId, msg.subagentId);
       if (!descriptor) {
         throw new Error("Provider subagent not found");

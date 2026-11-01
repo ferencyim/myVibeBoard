@@ -2,6 +2,7 @@
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
+import type { ProviderSubagentDescriptor } from "./provider-subagents/store.js";
 import type {
   AgentTimelineFetchOptions,
   AgentTimelineFetchResult,
@@ -31,6 +32,7 @@ mkdirSync(dirname(workerData.filePath), { recursive: true });
 const db = new DatabaseSync(workerData.filePath);
 db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS timelines (agent_id TEXT PRIMARY KEY, epoch TEXT NOT NULL); CREATE TABLE IF NOT EXISTS timeline_rows (agent_id TEXT NOT NULL, seq INTEGER NOT NULL, row_json TEXT NOT NULL, PRIMARY KEY(agent_id, seq));');
 if (!db.prepare('PRAGMA table_info(timelines)').all().some(c => c.name === 'clean')) db.exec('ALTER TABLE timelines ADD COLUMN clean INTEGER NOT NULL DEFAULT 0');
+db.exec('CREATE TABLE IF NOT EXISTS subagent_snapshots (agent_id TEXT PRIMARY KEY, data TEXT NOT NULL)');
 const dirty = db.prepare('UPDATE timelines SET clean=0 WHERE agent_id=?');
 const clean = db.prepare('UPDATE timelines SET clean=1 WHERE agent_id=?');
 const ensure = db.prepare('INSERT OR IGNORE INTO timelines(agent_id, epoch) VALUES (?, ?)');
@@ -40,6 +42,8 @@ let scheduled = false;
 function run(m) {
   const a = m.agentId;
   switch (m.op) {
+    case 'getSubagents': { const r = db.prepare('SELECT data FROM subagent_snapshots WHERE agent_id=?').get(a); return r ? JSON.parse(r.data) : null; }
+    case 'setSubagents': db.prepare('INSERT INTO subagent_snapshots(agent_id,data) VALUES (?,?) ON CONFLICT(agent_id) DO UPDATE SET data=excluded.data').run(a, JSON.stringify(m.descriptors)); return null;
     case 'rows': return db.prepare('SELECT row_json FROM timeline_rows WHERE agent_id=? ORDER BY seq').all(a).map(r => JSON.parse(r.row_json));
     case 'fetch':
     case 'lastItem':
@@ -75,7 +79,7 @@ function run(m) {
       for (const row of m.rows) insert.run(a, row.seq, JSON.stringify(row));
       return null;
     case 'update': dirty.run(a); db.prepare('UPDATE timeline_rows SET row_json=? WHERE agent_id=? AND seq=?').run(JSON.stringify(m.row), a, m.row.seq); return null;
-    case 'delete': db.prepare('DELETE FROM timeline_rows WHERE agent_id=?').run(a); db.prepare('DELETE FROM timelines WHERE agent_id=?').run(a); return null;
+    case 'delete': db.prepare('DELETE FROM timeline_rows WHERE agent_id=?').run(a); db.prepare('DELETE FROM timelines WHERE agent_id=?').run(a); db.prepare('DELETE FROM subagent_snapshots WHERE agent_id=?').run(a); return null;
   }
 }
 function drain() {
@@ -97,6 +101,15 @@ start().catch(error => { throw error; });
 `;
 
 export class SqliteAgentTimelineStore implements AgentTimelineStore {
+  getSubagentSnapshot(agentId: string): Promise<ProviderSubagentDescriptor[] | null> {
+    return this.request("getSubagents", agentId);
+  }
+  async setSubagentSnapshot(
+    agentId: string,
+    descriptors: ProviderSubagentDescriptor[],
+  ): Promise<void> {
+    await this.request("setSubagents", agentId, { descriptors });
+  }
   private readonly worker: Worker;
   private nextId = 0;
   private readonly pending = new Map<

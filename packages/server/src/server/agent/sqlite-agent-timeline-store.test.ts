@@ -4,6 +4,21 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { SqliteAgentTimelineStore } from "./sqlite-agent-timeline-store.js";
 
+it("distinguishes a missing subagent snapshot from an empty one and deletes it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "subagent-snapshot-"));
+  const store = new SqliteAgentTimelineStore(path.join(directory, "timeline.sqlite"));
+  try {
+    expect(await store.getSubagentSnapshot("agent")).toBeNull();
+    await store.setSubagentSnapshot("agent", []);
+    expect(await store.getSubagentSnapshot("agent")).toEqual([]);
+    await store.deleteAgent("agent");
+    expect(await store.getSubagentSnapshot("agent")).toBeNull();
+  } finally {
+    await store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it("persists projected pages, epochs, updates and deletion", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "timeline-store-"));
   const file = path.join(dir, "timeline.sqlite");

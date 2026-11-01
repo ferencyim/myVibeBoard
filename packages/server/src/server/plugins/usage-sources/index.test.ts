@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { UsageSourceRegistry } from "./index.js";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -827,4 +827,48 @@ test("failed discovery preserves history until discovery confirms account remova
   expect(await registry.listReports()).toEqual([]);
   present = true;
   expect((await registry.listReports())[0]?.lastSuccessful).toBeUndefined();
+});
+
+test("progressive legacy usage returns promptly, coalesces refreshes and retains expired data", async () => {
+  let now = 0;
+  let calls = 0;
+  let finish: ((value: unknown) => void) | undefined;
+  const registry = new UsageSourceRegistry(() => now, 100);
+  registry.register(
+    source({
+      id: "codex",
+      discover: async () => [{ key: "work", input: {} }],
+      fetch: () => {
+        calls++;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    }),
+  );
+  expect(await registry.listLegacyUsage(true)).toMatchObject({
+    hasSnapshot: false,
+    refreshing: true,
+  });
+  expect(await registry.listLegacyUsage(true)).toMatchObject({
+    hasSnapshot: false,
+    refreshing: true,
+  });
+  await vi.waitFor(() => expect(calls).toBe(1));
+  finish!({ status: "available", windows: [] });
+  await vi.waitFor(async () =>
+    expect((await registry.listLegacyUsage(true)).hasSnapshot).toBe(true),
+  );
+  expect((await registry.listLegacyUsage(true)).providers).toHaveLength(1);
+  now = 101;
+  expect(await registry.listLegacyUsage(true)).toMatchObject({
+    hasSnapshot: true,
+    refreshing: true,
+    providers: [{ providerId: "codex" }],
+  });
+  await vi.waitFor(() => expect(calls).toBe(2));
+  finish!({ status: "available", windows: [] });
+  await vi.waitFor(async () =>
+    expect((await registry.listLegacyUsage(true)).refreshing).toBe(false),
+  );
 });

@@ -183,8 +183,8 @@ export class PluginService {
     return this.usageSources.listReports(options);
   }
 
-  listLegacyUsage() {
-    return this.usageSources.listLegacyUsage();
+  listLegacyUsage(progressive?: boolean) {
+    return this.usageSources.listLegacyUsage(progressive);
   }
 
   subscribeProviderRegistrations(listener: () => void): () => void {

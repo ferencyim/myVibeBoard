@@ -449,6 +449,7 @@ export type PaseoProviderDiagnosticResult = ProviderDiagnosticResponseMessage["p
 export type PaseoProviderUsageResult = ProviderUsageListResponseMessage["payload"];
 export interface PaseoProviderUsageOptions {
   requestId?: string;
+  progressive?: boolean;
 }
 
 export interface PaseoProviderListOptions {

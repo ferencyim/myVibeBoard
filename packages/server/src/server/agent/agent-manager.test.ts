@@ -20,6 +20,7 @@ import {
 } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
+import { SqliteAgentTimelineStore } from "./sqlite-agent-timeline-store.js";
 import { toAgentPayload } from "./agent-projections.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import { getOpenAgentTabLabel, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
@@ -761,6 +762,122 @@ test("resuming a durable timeline preserves its rows and cursor epoch", async ()
     expect((await manager.fetchDurableTimeline(id))?.epoch).toBe(before?.epoch);
   } finally {
     await manager.closeAgent(id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("migrates missing subagent snapshots once and reuses the clean snapshot", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-subagent-snapshot-"));
+  const store = new SqliteAgentTimelineStore(join(workdir, "timeline.sqlite"));
+  const id = randomUUID();
+  await store.replaceAgent(id, [], "epoch");
+  await store.markClean(id);
+  let replays = 0;
+  const historyStarted = deferred<void>();
+  const releaseHistory = deferred<void>();
+  class ReplaySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      replays++;
+      historyStarted.resolve();
+      await releaseHistory.promise;
+      yield {
+        type: "provider_subagent",
+        provider: "codex",
+        event: { type: "upsert", id: "child", title: "Child", status: "completed" },
+      };
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new ReplaySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    expect(await manager.getDurableProviderSubagents(id)).toBeNull();
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved" },
+      { cwd: workdir },
+      id,
+    );
+    const history = Promise.all([
+      manager.ensureProviderSubagentHistory(id),
+      manager.ensureProviderSubagentHistory(id, { timeline: true }),
+    ]);
+    await historyStarted.promise;
+    let closed = false;
+    const closing = manager.closeAgent(id).then(() => {
+      closed = true;
+      return true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    releaseHistory.resolve();
+    await history;
+    expect(replays).toBe(1);
+    await closing;
+    expect(await manager.getDurableProviderSubagents(id)).toMatchObject([
+      { id: "child", status: "completed" },
+    ]);
+  } finally {
+    await manager.closeAgent(id).catch(() => undefined);
+    await store.close();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("serializes a snapshot read with concurrent provider resume", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-subagent-read-race-"));
+  const store = new SqliteAgentTimelineStore(join(workdir, "timeline.sqlite"));
+  const id = randomUUID();
+  await store.replaceAgent(id, [], "epoch");
+  await store.setSubagentSnapshot(id, []);
+  await store.markClean(id);
+  const readStarted = deferred<void>();
+  const releaseRead = deferred<void>();
+  const originalRead = store.getSubagentSnapshot.bind(store);
+  let first = true;
+  vi.spyOn(store, "getSubagentSnapshot").mockImplementation(async (agentId) => {
+    if (first) {
+      first = false;
+      readStarted.resolve();
+      await releaseRead.promise;
+    }
+    return originalRead(agentId);
+  });
+  const client = new TestAgentClient();
+  const resume = vi.spyOn(client, "resumeSession");
+  const manager = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    const reading = manager.getDurableProviderSubagents(id);
+    await readStarted.promise;
+    const loading = manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved" },
+      { cwd: workdir },
+      id,
+    );
+    await Promise.resolve();
+    expect(resume).not.toHaveBeenCalled();
+    releaseRead.resolve();
+    expect(await reading).toEqual([]);
+    await loading;
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(await manager.getDurableProviderSubagents(id)).toBeNull();
+  } finally {
+    releaseRead.resolve();
+    await manager.closeAgent(id).catch(() => undefined);
+    await store.close();
     rmSync(workdir, { recursive: true, force: true });
   }
 });

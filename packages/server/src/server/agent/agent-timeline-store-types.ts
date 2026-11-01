@@ -1,5 +1,6 @@
 import type { ProjectedTimelineRow } from "./timeline-projection.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
+import type { ProviderSubagentDescriptor } from "./provider-subagents/store.js";
 
 export interface AgentTimelineRow {
   seq: number;
@@ -48,6 +49,8 @@ export interface AgentTimelineFetchResult {
 }
 
 export interface AgentTimelineStore {
+  getSubagentSnapshot?(agentId: string): Promise<ProviderSubagentDescriptor[] | null>;
+  setSubagentSnapshot?(agentId: string, descriptors: ProviderSubagentDescriptor[]): Promise<void>;
   appendCommitted(
     agentId: string,
     item: AgentTimelineItem,

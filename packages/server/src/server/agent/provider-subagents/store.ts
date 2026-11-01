@@ -79,6 +79,12 @@ export class ProviderSubagentStore {
   private readonly descriptors = new Map<string, ProviderSubagentDescriptor>();
   private readonly timelines = new InMemoryAgentTimelineStore();
 
+  restore(descriptors: ProviderSubagentDescriptor[]): void {
+    for (const descriptor of descriptors) {
+      this.descriptors.set(storeKey(descriptor.parentAgentId, descriptor.id), descriptor);
+    }
+  }
+
   apply(
     parentAgentId: string,
     provider: AgentProvider,

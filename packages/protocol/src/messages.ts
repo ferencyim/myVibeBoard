@@ -1872,6 +1872,7 @@ export const ProviderDiagnosticRequestMessageSchema = z.object({
 export const ProviderUsageListRequestMessageSchema = z.object({
   type: z.literal("provider.usage.list.request"),
   requestId: z.string(),
+  progressive: z.boolean().optional(),
 });
 
 export const UsageListReportsRequestMessageSchema = z.object({
@@ -6470,6 +6471,8 @@ export const ProviderUsageListResponseMessageSchema = z.object({
     requestId: z.string(),
     fetchedAt: z.string(),
     providers: z.array(ProviderUsageSchema),
+    hasSnapshot: z.boolean().optional(),
+    refreshing: z.boolean().optional(),
   }),
 });
 

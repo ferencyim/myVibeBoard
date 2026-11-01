@@ -770,6 +770,12 @@ export class AgentManager {
   private readonly agents = new Map<string, LiveManagedAgent>();
   private readonly timelineStore: InMemoryAgentTimelineStore;
   private readonly providerSubagents = new ProviderSubagentStore();
+  private readonly pendingSubagentHistory = new Map<
+    string,
+    Extract<AgentStreamEvent, { type: "provider_subagent" }>[]
+  >();
+  private readonly subagentHistoryLoads = new Map<string, Promise<void>>();
+  private readonly completeSubagentSnapshots = new Set<string>();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
   private readonly sessionEventTails = new Map<string, Promise<void>>();
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
@@ -1400,6 +1406,56 @@ export class AgentManager {
     return this.providerSubagents.list(parentAgentId);
   }
 
+  getDurableProviderSubagents(
+    agentId: string,
+    validate?: () => Promise<void>,
+  ): Promise<ProviderSubagentDescriptor[] | null> {
+    return this.runLifecycleMutation(agentId, async () => {
+      await validate?.();
+      if (
+        this.agents.has(agentId) ||
+        !this.durableTimelineStore?.getSubagentSnapshot ||
+        !(await this.durableTimelineStore.isClean(agentId))
+      )
+        return null;
+      return this.durableTimelineStore.getSubagentSnapshot(agentId);
+    });
+  }
+
+  async ensureProviderSubagentHistory(
+    agentId: string,
+    options?: { timeline?: boolean },
+  ): Promise<void> {
+    if (!options?.timeline && this.completeSubagentSnapshots.has(agentId)) return;
+    if (!this.pendingSubagentHistory.has(agentId)) return;
+    const existing = this.subagentHistoryLoads.get(agentId);
+    if (existing) return existing;
+    const task = this.runLifecycleMutation(agentId, async () => {
+      if (!this.pendingSubagentHistory.has(agentId)) return;
+      const agent = this.requireSessionAgent(agentId);
+      const history: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
+      for await (const raw of agent.session.streamHistory()) {
+        const event = limitAgentStreamEventContent(raw);
+        if (event.type === "provider_subagent") history.push(event);
+      }
+      // Live events collected since resume are newer than the historical snapshot.
+      const live = this.pendingSubagentHistory.get(agentId);
+      if (!live) return;
+      this.providerSubagents.deleteParent(agentId);
+      for (const event of [...history, ...live]) {
+        this.providerSubagents.apply(agentId, event.provider, event.event);
+      }
+      this.pendingSubagentHistory.delete(agentId);
+      this.completeSubagentSnapshots.add(agentId);
+    });
+    this.subagentHistoryLoads.set(agentId, task);
+    try {
+      await task;
+    } finally {
+      this.subagentHistoryLoads.delete(agentId);
+    }
+  }
+
   listProviderSubagentActivity(): ProviderSubagentDescriptor[] {
     const publicParentIds = new Set(
       Array.from(this.agents.values())
@@ -1554,7 +1610,7 @@ export class AgentManager {
       agentId ?? this.idFactory(),
       "resumeAgentFromPersistence",
     );
-    await this.prepareDurableTimelineForResume(resolvedAgentId);
+    await this.prepareDurableTimelineForResume(resolvedAgentId, handle.provider);
     const metadata = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
     const mergedConfig = {
       ...metadata,
@@ -1634,9 +1690,28 @@ export class AgentManager {
     });
   }
 
-  private async prepareDurableTimelineForResume(agentId: string): Promise<void> {
-    if (await this.durableTimelineStore?.isClean(agentId)) {
+  private async prepareDurableTimelineForResume(
+    agentId: string,
+    provider: AgentProvider,
+  ): Promise<void> {
+    const store = this.durableTimelineStore;
+    if (store && (await store.isClean(agentId))) {
       this.trustedTimelineSeeds.add(agentId);
+      // Claude and Codex expose a frozen subagent replay captured during resume.
+      // Other providers may discover children asynchronously after subscription.
+      const supportsSubagentSnapshot = provider === "claude" || provider === "codex";
+      const subagents = supportsSubagentSnapshot
+        ? await store.getSubagentSnapshot?.(agentId)
+        : null;
+      if (subagents) {
+        this.providerSubagents.deleteParent(agentId);
+        this.providerSubagents.restore(subagents);
+        this.completeSubagentSnapshots.add(agentId);
+      } else {
+        this.completeSubagentSnapshots.delete(agentId);
+      }
+      if (supportsSubagentSnapshot && store.getSubagentSnapshot)
+        this.pendingSubagentHistory.set(agentId, []);
     } else {
       this.trustedTimelineSeeds.delete(agentId);
     }
@@ -1997,8 +2072,19 @@ export class AgentManager {
           this.timelineStore.getEpoch(agentId),
         );
       }
+      if (
+        (agent.provider === "claude" || agent.provider === "codex") &&
+        (!this.pendingSubagentHistory.has(agentId) || this.completeSubagentSnapshots.has(agentId))
+      ) {
+        await this.durableTimelineStore?.setSubagentSnapshot?.(
+          agentId,
+          this.providerSubagents.list(agentId),
+        );
+      }
       await this.durableTimelineStore?.markClean(agentId);
     }
+    this.pendingSubagentHistory.delete(agentId);
+    this.completeSubagentSnapshots.delete(agentId);
 
     let persistError: unknown;
     try {
@@ -4197,6 +4283,7 @@ export class AgentManager {
     event: AgentStreamEvent,
   ): Promise<void> {
     if (event.type === "provider_subagent") {
+      this.pendingSubagentHistory.get(agent.id)?.push(event);
       const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
       this.dispatch({ type: "provider_subagent", event: update });
       return;
@@ -4416,6 +4503,8 @@ export class AgentManager {
       }
     }
     await this.replaceDurableReplay(agent.id, replayRows, this.timelineStore.getEpoch(agent.id));
+    this.pendingSubagentHistory.delete(agent.id);
+    this.completeSubagentSnapshots.add(agent.id);
     agent.historyPrimed = true;
     this.touchUpdatedAt(agent);
     this.emitState(agent);
@@ -4488,6 +4577,8 @@ export class AgentManager {
       this.timelineStore.initialize(agent.id, { rows: replayRows, epoch });
     }
     await this.replaceDurableReplay(agent.id, replayRows, epoch);
+    this.pendingSubagentHistory.delete(agent.id);
+    this.completeSubagentSnapshots.add(agent.id);
     this.logger.info(
       { agentId: agent.id, rows: replayRows.length, elapsedMs: Date.now() - replayStartedAt },
       "Timeline provider replay backfilled",

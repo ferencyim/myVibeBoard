@@ -7,7 +7,12 @@ export interface UsageSessionOptions {
   emit(message: SessionOutboundMessage): void;
   runtime?: {
     listUsageReports(options: ListUsageReportsOptions): Promise<UsageReportEntry[]>;
-    listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
+    listLegacyUsage(progressive?: boolean): Promise<{
+      fetchedAt: string;
+      providers: ProviderUsage[];
+      hasSnapshot?: boolean;
+      refreshing?: boolean;
+    }>;
   };
   logger: pino.Logger;
 }
@@ -51,13 +56,16 @@ export class UsageSession {
   ): Promise<void> {
     try {
       if (!this.options.runtime) throw new Error("Plugin runtime is unavailable");
-      const usage = await this.options.runtime.listLegacyUsage();
+      const usage = await this.options.runtime.listLegacyUsage(msg.progressive);
       this.options.emit({
         type: "provider.usage.list.response",
         payload: {
           requestId: msg.requestId,
           fetchedAt: usage.fetchedAt,
           providers: usage.providers,
+          ...(msg.progressive
+            ? { hasSnapshot: usage.hasSnapshot, refreshing: usage.refreshing }
+            : {}),
         },
       });
     } catch (error) {

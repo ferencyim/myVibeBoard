@@ -58,6 +58,9 @@ export class UsageSourceRegistry {
   private readonly cache = new Map<string, { at: number; entry: UsageReportEntry }>();
   private readonly successful = new Map<string, NonNullable<UsageReportEntry["lastSuccessful"]>>();
   private readonly pending = new Map<string, Promise<UsageReportEntry>>();
+  private legacySnapshot: { at: number; fetchedAt: string; providers: ProviderUsage[] } | undefined;
+  private legacyPending: Promise<void> | undefined;
+  private sourceGeneration = 0;
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -70,10 +73,14 @@ export class UsageSourceRegistry {
   register(source: UsageSource): void {
     if (this.sources.has(source.id)) throw new Error(`Duplicate usage source: ${source.id}`);
     this.sources.set(source.id, source);
+    this.sourceGeneration++;
+    this.legacySnapshot = undefined;
   }
 
   unregister(id: string): void {
     this.sources.delete(id);
+    this.sourceGeneration++;
+    this.legacySnapshot = undefined;
     for (const key of this.defaults.keys()) if (key.startsWith(`${id}:`)) this.defaults.delete(key);
     // Re-discover on the next session query when a source is replaced.
     for (const [agentId, mapping] of this.byAgent) {
@@ -238,7 +245,45 @@ export class UsageSourceRegistry {
   }
 
   // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-03-26.
-  async listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }> {
+  async listLegacyUsage(progressive = false): Promise<{
+    fetchedAt: string;
+    providers: ProviderUsage[];
+    hasSnapshot?: boolean;
+    refreshing?: boolean;
+  }> {
+    if (progressive) {
+      if (!this.legacySnapshot || this.now() - this.legacySnapshot.at >= this.ttlMs) {
+        this.refreshLegacySnapshot();
+      }
+      return {
+        fetchedAt: this.legacySnapshot?.fetchedAt ?? new Date(this.now()).toISOString(),
+        providers: this.legacySnapshot?.providers ?? [],
+        hasSnapshot: !!this.legacySnapshot,
+        refreshing: !!this.legacyPending,
+      };
+    }
+    return this.fetchLegacyUsage();
+  }
+
+  private refreshLegacySnapshot(): void {
+    if (this.legacyPending) return;
+    const generation = this.sourceGeneration;
+    const pending = this.fetchLegacyUsage()
+      .then((result) => {
+        if (generation === this.sourceGeneration)
+          this.legacySnapshot = { ...result, at: this.now() };
+        return undefined;
+      })
+      .catch((error) => {
+        this.logger.warn({ err: error }, "Background usage refresh failed");
+      })
+      .finally(() => {
+        if (this.legacyPending === pending) this.legacyPending = undefined;
+      });
+    this.legacyPending = pending;
+  }
+
+  private async fetchLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }> {
     const reports = await this.listReports();
     return {
       fetchedAt: reports.length
