@@ -7,11 +7,10 @@ import { taskPanelRpc, taskTabCommandRpc } from "../shared/task-tabs";
 import type { TaskTabRole } from "../shared/vibe/contract";
 import { HostProvider } from "./common/ctx";
 import { errorMessage } from "./common/logic";
-import { Btn } from "./common/ui";
-import { RolePromptButton } from "./role-prompt-button";
+import { HeaderButton, InjectedPromptsButton, RolePromptButton } from "./role-prompt-button";
 
 let counter = 0;
-type Props = PluginSurfaceProps & { workspaceId: string; tabId?: string; agentId?: string };
+type Props = PluginSurfaceProps & { workspaceId: string; tabId?: string; agentId?: string; labels?: Record<string, string> };
 export function FlowTabControls(props: Props) {
   const panel = useRpc(taskPanelRpc);
   const command = useRpc(taskTabCommandRpc);
@@ -21,7 +20,7 @@ export function FlowTabControls(props: Props) {
     queryFn: () => panel({ workspaceId: props.workspaceId }), refetchInterval: 5000, retry: false });
   const task = query.data?.task;
   const tab = query.data?.tabs.find((item) => props.tabId ? item.role === props.tabId : item.agentId === props.agentId);
-  if (!task || !tab) return null;
+  if (!task || !tab) return <OtherAgentPrompts {...props} />;
   const running = ["queued", "executing", "reviewing", "verifying"].includes(task.phase);
   const run = async () => {
     setPending(true);
@@ -35,12 +34,22 @@ export function FlowTabControls(props: Props) {
   return <HostProvider value={{ theme: props.theme, compact: props.layout.compact }}>
     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
       <RolePromptButton role={tab.role as TaskTabRole} label={tab.roleLabel} />
-      <Btn label={running ? "暂停" : task.phase === "paused" ? "重新执行" : "执行"} small disabled={pending} onPress={() => void run()} />
+      <HeaderButton label={running ? "暂停" : task.phase === "paused" ? "重新执行" : "执行"} disabled={pending} onPress={() => void run()} />
     </View>
+  </HostProvider>;
+}
+
+/** Agents outside a task still show the prompts injected into them (project bot, master). */
+function OtherAgentPrompts(props: PluginSurfaceProps & { labels?: Record<string, string> }) {
+  if (!props.labels) return null;
+  return <HostProvider value={{ theme: props.theme, compact: props.layout.compact }}>
+    <InjectedPromptsButton target={{ labels: props.labels }} label="当前 agent" />
   </HostProvider>;
 }
 
 export function FlowConversationControls(props: PluginConversationHeaderAccessoryProps) {
   const workspaceId = useAgent(props.agentId, (agent) => agent.workspaceId);
-  return workspaceId ? <FlowTabControls {...props} workspaceId={workspaceId} agentId={props.agentId} /> : null;
+  const labels = useAgent(props.agentId, (agent) => agent.labels);
+  if (workspaceId) return <FlowTabControls {...props} workspaceId={workspaceId} agentId={props.agentId} labels={labels} />;
+  return <OtherAgentPrompts {...props} labels={labels} />;
 }
