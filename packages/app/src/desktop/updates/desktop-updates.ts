@@ -1,6 +1,4 @@
-import { isElectronRuntime } from "@/desktop/host";
 import { invokeDesktopCommand } from "@/desktop/electron/invoke";
-import { isWeb } from "@/constants/platform";
 import { i18n } from "@/i18n/i18next";
 
 export interface DesktopAppUpdateCheckResult {
@@ -61,8 +59,10 @@ function toNumberOr(defaultValue: number, value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : defaultValue;
 }
 
+// myVibeBoard fork: the updater points at upstream getpaseo/paseo releases, which would replace this
+// fork. myVibeBoard is updated by reinstalling the build, so the update UI and checks stay off.
 export function shouldShowDesktopUpdateSection(): boolean {
-  return isWeb && isElectronRuntime();
+  return false;
 }
 
 export function parseLocalDaemonVersionResult(raw: unknown): LocalDaemonVersionResult {
