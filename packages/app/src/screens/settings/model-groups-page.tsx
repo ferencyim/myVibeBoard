@@ -71,6 +71,8 @@ export function ModelGroupsPage({ serverId }: { serverId: string }) {
             <Text style={styles.label}>组名</Text>
             <FormTextInput
               accessibilityLabel="组名"
+              size="sm"
+              style={styles.input}
               initialValue={group.name}
               resetKey={`${group.id}-${rowRevision}`}
               onChangeText={(name) => updateGroup(groupIndex, (current) => ({ ...current, name }))}
@@ -80,6 +82,8 @@ export function ModelGroupsPage({ serverId }: { serverId: string }) {
                 <View style={styles.order}>
                   <FormTextInput
                     accessibilityLabel="序号"
+                    size="sm"
+                    style={styles.input}
                     keyboardType="numeric"
                     initialValue={Number.isNaN(entry.order) ? "" : String(entry.order)}
                     resetKey={`${group.id}-${entryIndex}`}
@@ -199,6 +203,7 @@ const styles = StyleSheet.create((theme) => ({
   group: { padding: theme.spacing[4], gap: theme.spacing[3] },
   label: { color: theme.colors.textPrimary, fontSize: theme.fontSize.base },
   hint: { color: theme.colors.textMuted, fontSize: theme.fontSize.base },
+  input: { borderColor: theme.colors.borderStrong },
   entry: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: theme.spacing[2] },
   order: { width: 72 },
   model: { flex: 1, minWidth: 140 },

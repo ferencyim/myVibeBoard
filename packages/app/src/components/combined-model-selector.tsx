@@ -22,6 +22,7 @@ interface CombinedModelSelectorProps {
   onRetryProvider?: (provider: string) => void;
   isRetryingProvider?: boolean;
   disabled?: boolean;
+  getDisabledReason?: (provider: string, modelId: string) => string | undefined;
   serverId?: string | null;
   cwd?: string | null;
   /** Full-width form-field trigger (schedule form, settings). */
@@ -65,6 +66,7 @@ export function CombinedModelSelector({
       onRetryProvider={rest.onRetryProvider}
       isRetryingProvider={rest.isRetryingProvider}
       disabled={rest.disabled}
+      getDisabledReason={rest.getDisabledReason}
       serverId={rest.serverId}
       cwd={rest.cwd}
       onOpen={rest.onOpen}

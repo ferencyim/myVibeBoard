@@ -207,6 +207,10 @@ export interface ModelPickerFieldProps {
   thinking: string;
   loading?: boolean;
   disabled?: boolean;
+  /** Restrict an existing session to this provider, including model group entries. */
+  sessionProvider?: string;
+  /** Return a reason to disable a provider/model row. */
+  getDisabledReason?(provider: string, model: string): string | undefined;
   /** A rejection rolls the optimistic selection back. */
   onSelect(provider: string, model: string): void | Promise<unknown>;
   onSelectThinking?(id: string): void | Promise<unknown>;

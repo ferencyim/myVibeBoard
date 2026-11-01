@@ -52,6 +52,8 @@ import { filterSelectableModels } from "@/provider-selection/model-catalog";
 import { usePluginHostNavigation } from "@/plugins/host-navigation";
 import { useSessionStore } from "@/stores/session-store";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
+import { useModelGroupProvider } from "@/hooks/use-model-group-provider";
+import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { resolveProviderDefinition } from "@/utils/provider-definitions";
 import { mergeProviderPreferences, useFormPreferences } from "@/hooks/use-form-preferences";
 import { Combobox, ComboboxItem, type ComboboxOption } from "@/components/ui/combobox";
@@ -114,8 +116,10 @@ interface ControlledAgentControlsProps {
   onSelectProvider?: (providerId: string) => void;
   modelOptions?: AgentControlOption[];
   selectedModelId?: string;
-  onSelectModel?: (modelId: string) => void;
-  onSelectProviderAndModel?: (provider: string, modelId: string) => void;
+  modelSelectorProvider?: string;
+  getModelDisabledReason?: (provider: string, modelId: string) => string | undefined;
+  onSelectModel?: (modelId: string) => void | Promise<unknown>;
+  onSelectProviderAndModel?: (provider: string, modelId: string) => void | Promise<unknown>;
   thinkingOptions?: AgentControlOption[];
   selectedThinkingOptionId?: string;
   onSelectThinkingOption?: (thinkingOptionId: string) => void;
@@ -324,15 +328,14 @@ function pickDesktopModel({
   nextProviderId: string;
   modelId: string;
   currentProvider: string;
-  onSelectModel?: (modelId: string) => void;
-  onSelectProviderAndModel?: (provider: string, modelId: string) => void;
+  onSelectModel?: (modelId: string) => void | Promise<unknown>;
+  onSelectProviderAndModel?: (provider: string, modelId: string) => void | Promise<unknown>;
 }) {
   if (onSelectProviderAndModel) {
-    onSelectProviderAndModel(nextProviderId, modelId);
-    return;
+    return onSelectProviderAndModel(nextProviderId, modelId);
   }
   if (nextProviderId === currentProvider) {
-    onSelectModel?.(modelId);
+    return onSelectModel?.(modelId);
   }
 }
 
@@ -347,6 +350,7 @@ type AgentControlsSlice = {
   lastUsage: unknown;
   status: string;
   botId: string | null;
+  modelGroupId: string | null;
 } | null;
 
 function selectAgentControlsSlice(
@@ -369,6 +373,7 @@ function selectAgentControlsSlice(
     lastUsage: currentAgent.lastUsage,
     status: currentAgent.status,
     botId: currentAgent.labels?.["vibe.bot"] ?? null,
+    modelGroupId: currentAgent.labels?.["paseo.model-group"] || null,
   };
 }
 
@@ -423,6 +428,8 @@ function ControlledAgentControls({
   onSelectProvider,
   modelOptions,
   selectedModelId,
+  modelSelectorProvider,
+  getModelDisabledReason,
   onSelectModel,
   onSelectProviderAndModel,
   thinkingOptions,
@@ -640,7 +647,7 @@ function ControlledAgentControls({
 
   const handleDesktopModelSelect = useCallback(
     (nextProviderId: string, modelId: string) => {
-      pickDesktopModel({
+      return pickDesktopModel({
         nextProviderId,
         modelId,
         currentProvider: provider,
@@ -685,6 +692,8 @@ function ControlledAgentControls({
           selectedProviderId={selectedProviderId}
           modelOptions={modelOptions}
           selectedModelId={selectedModelId}
+          modelSelectorProvider={modelSelectorProvider}
+          getModelDisabledReason={getModelDisabledReason}
           thinkingOptions={formattedThinkingOptions}
           selectedThinkingOptionId={selectedThinkingOptionId}
           features={features}
@@ -735,6 +744,8 @@ function ControlledAgentControls({
 }
 
 interface DesktopAgentControlsContentProps {
+  modelSelectorProvider?: string;
+  getModelDisabledReason?: (provider: string, modelId: string) => string | undefined;
   provider: string;
   providerOptions?: AgentControlOption[];
   selectedProviderId?: string;
@@ -767,7 +778,7 @@ interface DesktopAgentControlsContentProps {
   handleThinkingPress: () => void;
   handleProviderSelect: (id: string) => void;
   handleThinkingSelect: (id: string) => void;
-  handleDesktopModelSelect: (providerId: string, modelId: string) => void;
+  handleDesktopModelSelect: (providerId: string, modelId: string) => void | Promise<unknown>;
   handleProviderOpenChange: (open: boolean) => void;
   handleThinkingOpenChange: (open: boolean) => void;
   handleOpenChange: (selector: AgentControlSelector) => (nextOpen: boolean) => void;
@@ -800,6 +811,8 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     providerOptions,
     selectedProviderId,
     selectedModelId,
+    modelSelectorProvider,
+    getModelDisabledReason,
     thinkingOptions,
     selectedThinkingOptionId,
     features,
@@ -892,7 +905,8 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
             <View style={styles.modelControl}>
               <CombinedModelSelector
                 providers={modelSelectorProviders}
-                selectedProvider={provider}
+                selectedProvider={modelSelectorProvider ?? provider}
+                getDisabledReason={getModelDisabledReason}
                 selectedModel={selectedModelId ?? ""}
                 onSelect={handleDesktopModelSelect}
                 isLoading={isModelLoading}
@@ -1292,6 +1306,11 @@ export const AgentControls = memo(function AgentControls({
   );
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const toast = useToast();
+  const { config } = useDaemonConfig(serverId);
+  const modelGroupProvider = useModelGroupProvider(serverId);
+  const supportsModelGroupSessionSelection = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.modelGroupSessionSelection === true,
+  );
   const modeControl = useLiveAgentModeControl(serverId, agentId);
   const commandCenterModes = toCommandCenterModes(modeControl);
   const modeProviderDefinitions = getModeProviderDefinitions(modeControl);
@@ -1324,21 +1343,42 @@ export const AgentControls = memo(function AgentControls({
   // Every selectable provider is listed so the live picker shows the same catalog as the draft one.
   const agentModelSelectorProviders = useMemo(() => {
     const selectable = buildSelectableProviderSelectorProviders(snapshotEntries);
-    if (selectable.some((entry) => entry.id === agent?.provider)) return selectable;
-    if (snapshotSelectedEntry) {
-      return buildSelectableProviderSelectorProviders([snapshotSelectedEntry]);
+    if (selectable.some((entry) => entry.id === agent?.provider)) {
+      return modelGroupProvider ? [...selectable, modelGroupProvider] : selectable;
     }
-    return buildProviderSelectorProviders({
+    if (snapshotSelectedEntry) {
+      const providers = buildSelectableProviderSelectorProviders([snapshotSelectedEntry]);
+      return modelGroupProvider ? [...providers, modelGroupProvider] : providers;
+    }
+    const providers = buildProviderSelectorProviders({
       providerDefinitions: agentProviderDefinitions,
       modelsByProvider: agentProviderModels,
     });
+    return modelGroupProvider ? [...providers, modelGroupProvider] : providers;
   }, [
     agent?.provider,
     agentProviderDefinitions,
     agentProviderModels,
+    modelGroupProvider,
     snapshotEntries,
     snapshotSelectedEntry,
   ]);
+
+  const getModelDisabledReason = useCallback(
+    (provider: string, modelId: string) => {
+      if (provider === "modelgroup" && !supportsModelGroupSessionSelection) {
+        return "请更新主机以在已有会话中选择模型组";
+      }
+      const firstProvider =
+        provider === "modelgroup"
+          ? [...(config?.modelGroups?.find((group) => group.id === modelId)?.entries ?? [])].sort(
+              (a, b) => a.order - b.order,
+            )[0]?.provider
+          : provider;
+      return firstProvider !== agent?.provider ? "已有会话不能切换模型提供方" : undefined;
+    },
+    [agent?.provider, config?.modelGroups, supportsModelGroupSessionSelection],
+  );
 
   const modelSelection = resolveAgentModelSelection({
     models,
@@ -1425,6 +1465,14 @@ export const AgentControls = memo(function AgentControls({
   );
   const handleSelectProviderAndModel = useCallback(
     (nextProvider: AgentProvider, modelId: string) => {
+      if (getModelDisabledReason(nextProvider, modelId)) return undefined;
+      if (nextProvider === "modelgroup") {
+        if (!client) return undefined;
+        return client.setAgentModel(agentId, `modelgroup/${modelId}`).catch((error) => {
+          toast.error(toErrorMessage(error));
+          throw error;
+        });
+      }
       if (nextProvider === agentProvider) return handleSelectModel(modelId);
       if (isRunning && !botId) {
         pendingSwitch.current = { provider: nextProvider, modelId };
@@ -1433,7 +1481,17 @@ export const AgentControls = memo(function AgentControls({
       }
       return switchProvider(nextProvider, modelId);
     },
-    [agentProvider, botId, handleSelectModel, isRunning, switchProvider, toast],
+    [
+      agentId,
+      agentProvider,
+      botId,
+      client,
+      getModelDisabledReason,
+      handleSelectModel,
+      isRunning,
+      switchProvider,
+      toast,
+    ],
   );
   useEffect(() => {
     if (isRunning || !pendingSwitch.current) return;
@@ -1587,7 +1645,9 @@ export const AgentControls = memo(function AgentControls({
         provider={agent.provider}
         modelSelectorProviders={agentModelSelectorProviders}
         modelOptions={modelOptions}
-        selectedModelId={modelSelection.activeModelId ?? undefined}
+        selectedModelId={agent.modelGroupId ?? modelSelection.activeModelId ?? undefined}
+        modelSelectorProvider={agent.modelGroupId ? "modelgroup" : undefined}
+        getModelDisabledReason={getModelDisabledReason}
         onSelectModel={handleSelectModel}
         onSelectProviderAndModel={handleSelectProviderAndModel}
         thinkingOptions={thinkingOptions.length > 0 ? thinkingOptions : undefined}

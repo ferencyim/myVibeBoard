@@ -27,3 +27,4 @@
 - `provider-selection.ts` 增加 `buildModelGroupProvider(groups)`，在 `use-agent-form-state.ts`、`agent-controls/index.tsx`、`schedule-form-model.ts`、`metadata-generation-page.tsx`、`plugins/react-native/model-picker-field.tsx`、命令中心的 providers 构造处并入（经 `useDaemonConfig`）。
 - 编辑界面：设置页新增「模型组」，参照 `agent-profiles/settings/`：组名可改，条目行有可编辑序号 + 模型选择（复用 `CombinedModelSelector`，传入的 providers 不含 `modelgroup`，即「不显示模型组」）。
 - 模型组选择器自身里条目选择器不显示模型组，避免递归。
+- 已创建会话可选择模型组；首个条目的 provider 与会话不同时禁用该组。选择时解析首个可用条目并保存组标签，以便后续顺延。

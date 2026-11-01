@@ -363,10 +363,10 @@ function TabRow({ tab, openAgent, current, phaseLabel, disabled, nextStep, onSta
           {current ? `当前 · ${phaseLabel}` : enabled ? tab.status : "未启用"}
         </Text>
       </View>
-      {role ? <ModelPickerField providers={providers} provider={tab.provider} model={model} thinking={tab.thinking ?? ""}
-        loading={modelsLoading} disabled={disabled}
+      {role ? <View style={{ alignSelf: "stretch", minWidth: 0, flexShrink: 0 }}><ModelPickerField providers={providers} provider={tab.provider} model={model} thinking={tab.thinking ?? ""}
+        loading={modelsLoading} disabled={disabled} sessionProvider={tab.agentId ? tab.provider : undefined}
         onSelect={(provider, nextModel) => onChangeModel(role, provider, nextModel)}
-        onSelectThinking={(thinking) => onChangeModel(role, tab.provider, model, thinking)} /> : null}
+        onSelectThinking={(thinking) => onChangeModel(role, tab.provider, model, thinking)} /></View> : null}
       {tab.reviewModels?.map((reviewer, index) => (
         <Text key={index} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
           {`审阅：${[reviewer.provider, reviewer.model, reviewer.thinking].filter(Boolean).join(" · ")}`}

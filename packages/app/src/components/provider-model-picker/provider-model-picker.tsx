@@ -53,6 +53,8 @@ export interface ProviderModelPickerProps {
   /** May return a promise; a rejection rolls the optimistic selection back. */
   onSelect: (provider: string, modelId: string) => void | Promise<unknown>;
   isLoading: boolean;
+  /** Return a reason to disable a provider/model row. */
+  getDisabledReason?: (provider: string, modelId: string) => string | undefined;
   thinking?: PickerThinking | null;
   fast?: PickerFast | null;
   permission?: PickerPermission | null;
@@ -179,6 +181,7 @@ export function ProviderModelPicker(props: ProviderModelPickerProps) {
   const panel = (
     <ProviderModelPanel
       providers={providers}
+      getDisabledReason={props.getDisabledReason}
       selectedProvider={selection.provider}
       selectedModel={selection.model}
       isLoading={isLoading}

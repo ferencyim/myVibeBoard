@@ -3877,6 +3877,8 @@ export const ServerInfoStatusPayloadSchema = z
         agentProfiles: z.boolean().optional(),
         // COMPAT(modelGroups): added in v0.13.2, remove gate after 2027-11-01.
         modelGroups: z.boolean().optional(),
+        // COMPAT(modelGroupSessionSelection): added in v0.13.2, remove gate after 2027-11-01.
+        modelGroupSessionSelection: z.boolean().optional(),
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: z.boolean().optional(),
       })

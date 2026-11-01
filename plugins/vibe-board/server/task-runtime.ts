@@ -307,16 +307,17 @@ export function registerTaskRuntime(
     const model = parts.join("/");
     const tab = task.tabs.find((item) => item.role === input.role);
     if (tab) {
-      if (tab.provider !== provider) throw new Error("已有会话不能切换模型提供方，请在会话中更换");
+      if (provider !== "modelgroup" && tab.provider !== provider) throw new Error("已有会话不能切换模型提供方，请在会话中更换");
       const paseo = options.getPaseo();
       if (!paseo) throw new Error("任务宿主连接尚未就绪");
       const handle = paseo.agents.ref(tab.agentId);
-      await handle.setModel(model);
-      if (input.thinkingOptionId !== undefined) await handle.setThinkingOption(input.thinkingOptionId || null);
-      options.store.tasks.updateTab(input.workspaceId, tab.agentId, { model, thinking: input.thinkingOptionId });
+      await handle.setModel(provider === "modelgroup" ? input.provider : model);
+      if (provider !== "modelgroup" && input.thinkingOptionId !== undefined) await handle.setThinkingOption(input.thinkingOptionId || null);
+      const agent = provider === "modelgroup" ? (await handle.refresh())?.agent : undefined;
+      options.store.tasks.updateTab(input.workspaceId, tab.agentId, { model: agent?.model ?? model, thinking: provider === "modelgroup" ? agent?.thinkingOptionId ?? undefined : input.thinkingOptionId });
     }
     const models = typeof task.control?.roleModels === "object" && task.control.roleModels !== null ? task.control.roleModels : {};
-    return { task: options.store.tasks.updateControl(input.workspaceId, { roleModels: { ...models, [input.role]: { provider, model, thinking: input.thinkingOptionId } } }) };
+    return { task: options.store.tasks.updateControl(input.workspaceId, { roleModels: { ...models, [input.role]: { provider, model, thinking: provider === "modelgroup" ? undefined : input.thinkingOptionId } } }) };
   });
   server.handle(taskPlanStartRpc, async (input, context) => {
     options.onPaseo(context.paseo);

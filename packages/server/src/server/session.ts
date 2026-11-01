@@ -116,6 +116,11 @@ import type {
   ManagedAgent,
 } from "./agent/agent-manager.js";
 import { createAgentCommand } from "./agent/create-agent/create.js";
+import {
+  MODEL_GROUP_LABEL,
+  MODEL_GROUP_ORDER_LABEL,
+  selectModelGroupEntry,
+} from "./agent/model-groups.js";
 import { resolveCreateAgentIntent, type CreateAgentIntent } from "./agent/create-agent/intent.js";
 import {
   archiveAgentCommand,
@@ -1072,7 +1077,50 @@ export class Session {
         },
         setMode: async (agentId, modeId) =>
           (await setAgentModeCommand({ agentManager }, { agentId, modeId })).notice,
-        setModel: (agentId, modelId) => agentManager.setAgentModel(agentId, modelId),
+        setModel: async (agentId, modelId) => {
+          // COMPAT(modelGroupSessionSelection): added in v0.13.2, remove after 2027-11-01.
+          // Clients must check the server feature before sending this reserved model reference;
+          // older servers treat it as a provider model.
+          if (modelId?.startsWith("modelgroup/")) {
+            const groupId = modelId.slice("modelgroup/".length);
+            const group = this.daemonConfigStore
+              .get()
+              .modelGroups?.find((item) => item.id === groupId);
+            if (!group) throw new Error(`Model group ${groupId} not found`);
+            const provider = agentManager.getAgent(agentId)?.config.provider;
+            const first = [...group.entries].sort((a, b) => a.order - b.order)[0];
+            if (first && first.provider !== provider) throw new Error("已有会话不能切换模型提供方");
+            const usage = (await this.pluginRuntime?.listLegacyUsage())?.providers ?? [];
+            const { entry, reasons } = await selectModelGroupEntry(
+              group,
+              (candidate) => agentManager.getProviderAvailability(candidate),
+              usage,
+            );
+            if (!entry)
+              throw new Error(
+                `Model group ${groupId} has no available entries: ${reasons.join("; ")}`,
+              );
+            if (provider !== entry.provider) {
+              throw new Error("已有会话不能切换模型提供方");
+            }
+            await agentManager.setAgentModel(agentId, entry.model);
+            if (entry.thinkingOptionId)
+              await agentManager.setAgentThinkingOption(agentId, entry.thinkingOptionId);
+            await agentManager.patchLabels(agentId, {
+              [MODEL_GROUP_LABEL]: groupId,
+              [MODEL_GROUP_ORDER_LABEL]: String(entry.order),
+            });
+            return;
+          }
+          await agentManager.setAgentModel(agentId, modelId);
+          const labels = agentManager.getAgent(agentId)?.labels;
+          if (labels?.[MODEL_GROUP_LABEL] || labels?.[MODEL_GROUP_ORDER_LABEL]) {
+            await agentManager.patchLabels(agentId, {
+              [MODEL_GROUP_LABEL]: null,
+              [MODEL_GROUP_ORDER_LABEL]: null,
+            });
+          }
+        },
         setFeature: (agentId, featureId, value) =>
           agentManager.setAgentFeature(agentId, featureId, value),
         setThinking: (agentId, thinkingOptionId) =>

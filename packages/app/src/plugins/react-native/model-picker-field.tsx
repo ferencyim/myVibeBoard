@@ -1,3 +1,4 @@
+import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useModelGroupProvider } from "@/hooks/use-model-group-provider";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -27,6 +28,12 @@ function permissionTierLabel(tier: (typeof PERMISSION_TIERS)[number], provider: 
 export function ModelPickerField(props: ModelPickerFieldProps) {
   const serverId = usePluginHostId();
   const modelGroupProvider = useModelGroupProvider(serverId);
+  const { config } = useDaemonConfig(serverId);
+  // COMPAT(modelGroupSessionSelection): added in v0.13.2, remove gate after 2027-11-01.
+  const supportsModelGroupSessionSelection = useSessionStore(
+    (state) =>
+      state.sessions[serverId ?? ""]?.serverInfo?.features?.modelGroupSessionSelection === true,
+  );
   const cwd = useSessionStore((state) =>
     serverId && props.projectId
       ? (state.sessions[serverId]?.projects.get(props.projectId)?.projectRootPath ?? null)
@@ -66,6 +73,25 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
       ...(modelGroupProvider ? [modelGroupProvider] : []),
     ],
     [providers, modelGroupProvider],
+  );
+  const { getDisabledReason: customDisabledReason, sessionProvider } = props;
+  const modelGroups = config?.modelGroups;
+  const getDisabledReason = useCallback(
+    (candidate: string, modelId: string) => {
+      const reason = customDisabledReason?.(candidate, modelId);
+      if (reason || !sessionProvider) return reason;
+      if (candidate === "modelgroup" && !supportsModelGroupSessionSelection) {
+        return "请更新主机以在已有会话中选择模型组";
+      }
+      const effectiveProvider =
+        candidate === "modelgroup"
+          ? [...(modelGroups?.find((group) => group.id === modelId)?.entries ?? [])].sort(
+              (a, b) => a.order - b.order,
+            )[0]?.provider
+          : candidate;
+      return effectiveProvider !== sessionProvider ? "已有会话不能切换模型提供方" : undefined;
+    },
+    [modelGroups, customDisabledReason, sessionProvider, supportsModelGroupSessionSelection],
   );
   const efforts = useMemo(
     () =>
@@ -143,6 +169,7 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
   return (
     <ProviderModelPicker
       providers={selectorProviders}
+      getDisabledReason={getDisabledReason}
       selectedProvider={provider}
       selectedModel={model}
       onSelect={onSelect}

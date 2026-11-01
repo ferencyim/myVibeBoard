@@ -72,6 +72,7 @@ export interface PickerPanelProps {
   selectedProvider: string;
   selectedModel: string;
   isLoading: boolean;
+  getDisabledReason?: (provider: string, modelId: string) => string | undefined;
   thinking?: PickerThinking | null;
   fast?: PickerFast | null;
   permission?: PickerPermission | null;
@@ -157,6 +158,7 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
     isLoading,
     autoFocusSearch = false,
     keyHandlerRef,
+    getDisabledReason,
   } = props;
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(-1);
@@ -178,8 +180,10 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
     setHighlight(-1);
   }, []);
   const pick = useCallback(
-    (item: PickerModelItem) => onPick(item.provider, item.modelId),
-    [onPick],
+    (item: PickerModelItem) => {
+      if (!getDisabledReason?.(item.provider, item.modelId)) onPick(item.provider, item.modelId);
+    },
+    [getDisabledReason, onPick],
   );
   const ensureVisible = useCallback((key: string) => {
     const layout = layouts.current.get(key);
@@ -287,6 +291,7 @@ function ProviderBody(props: PickerPanelProps & { provider: ProviderSelectorProv
                   item={entry.item}
                   selected={Boolean(ownsSelection) && entry.item.modelId === selectedModel}
                   highlighted={highlightedKey === entry.key}
+                  disabledReason={getDisabledReason?.(entry.item.provider, entry.item.modelId)}
                   onPick={pick}
                   onLayoutRow={recordLayout}
                 />
@@ -418,13 +423,18 @@ const ModelRow = memo(function ModelRow(props: {
   item: PickerModelItem;
   selected: boolean;
   highlighted: boolean;
+  disabledReason?: string;
   onPick: (item: PickerModelItem) => void;
   onLayoutRow: (key: string, y: number, height: number) => void;
 }) {
   const { item, onPick, onLayoutRow } = props;
+  const accessibilityState = useMemo(
+    () => ({ disabled: Boolean(props.disabledReason), checked: props.selected }),
+    [props.disabledReason, props.selected],
+  );
   const handlePress = useCallback(() => {
-    if (!props.selected) onPick(item);
-  }, [item, onPick, props.selected]);
+    if (!props.selected && !props.disabledReason) onPick(item);
+  }, [item, onPick, props.selected, props.disabledReason]);
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) =>
       onLayoutRow(item.key, event.nativeEvent.layout.y, event.nativeEvent.layout.height),
@@ -433,18 +443,23 @@ const ModelRow = memo(function ModelRow(props: {
   const style = useCallback(
     ({ hovered }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.row,
-      (Boolean(hovered) || props.highlighted) && styles.rowHovered,
+      !props.disabledReason && (Boolean(hovered) || props.highlighted) && styles.rowHovered,
+      props.disabledReason && styles.rowDisabled,
     ],
-    [props.highlighted],
+    [props.highlighted, props.disabledReason],
   );
   return (
     <PressHighlight
       onPress={handlePress}
+      disabled={Boolean(props.disabledReason)}
       onLayout={handleLayout}
       style={style}
       accessibilityRole="radio"
       aria-checked={props.selected}
-      accessibilityLabel={item.isDefault ? `${item.name}，默认` : item.name}
+      accessibilityState={accessibilityState}
+      accessibilityLabel={[item.name, item.isDefault ? "默认" : null, props.disabledReason]
+        .filter(Boolean)
+        .join("，")}
       testID={`provider-model-picker-row-${item.modelId || "default"}`}
     >
       <View style={[styles.radio, props.selected ? styles.radioOn : null]}>
@@ -455,6 +470,9 @@ const ModelRow = memo(function ModelRow(props: {
       <Text style={styles.rowText} numberOfLines={1}>
         {item.name}
       </Text>
+      {props.disabledReason ? (
+        <Text style={styles.disabledReason}>{props.disabledReason}</Text>
+      ) : null}
       {item.isDefault ? (
         <View style={styles.badge}>
           <Text style={styles.badgeText}>默认</Text>
@@ -744,6 +762,12 @@ const styles = StyleSheet.create((theme) => ({
     paddingLeft: 10,
   },
   rowHovered: { backgroundColor: theme.colors.hoverTint },
+  rowDisabled: { opacity: 0.5 },
+  disabledReason: {
+    flexShrink: 1,
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
   radio: {
     width: 16,
     height: 16,
