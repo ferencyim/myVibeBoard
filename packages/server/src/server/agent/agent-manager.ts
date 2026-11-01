@@ -1983,10 +1983,20 @@ export class AgentManager {
     // native writer, so publishing a resumable closed snapshot would orphan it.
     this.refreshSessionPersistence(agent);
     await agent.session.close();
+    await this.drainSessionEvents(agentId);
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");
     await this.flush();
     if (closedAgent.historyPrimed && !this.failedTimelineWrites.has(agentId)) {
+      // Empty new sessions have never appended a row, so no durable timeline
+      // record exists yet. Persist their epoch before marking them complete.
+      if (this.durableTimelineStore && this.timelineStore.getRows(agentId).length === 0) {
+        await this.durableTimelineStore.replaceAgent(
+          agentId,
+          [],
+          this.timelineStore.getEpoch(agentId),
+        );
+      }
       await this.durableTimelineStore?.markClean(agentId);
     }
 

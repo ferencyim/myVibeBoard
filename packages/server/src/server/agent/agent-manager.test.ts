@@ -125,7 +125,7 @@ class RecordingTimelineStore implements AgentTimelineStore {
     this.clean.delete(agentId);
   }
   async markClean(agentId: string): Promise<void> {
-    this.clean.add(agentId);
+    if (this.memory.has(agentId)) this.clean.add(agentId);
   }
 
   private ensure(agentId: string): void {
@@ -761,6 +761,28 @@ test("resuming a durable timeline preserves its rows and cursor epoch", async ()
     expect((await manager.fetchDurableTimeline(id))?.epoch).toBe(before?.epoch);
   } finally {
     await manager.closeAgent(id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("closing a new empty session persists its epoch for the next daemon", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-empty-close-"));
+  const store = new RecordingTimelineStore();
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const epoch = manager.fetchTimeline(agent.id).epoch;
+    await manager.closeAgent(agent.id);
+    const restarted = new AgentManager({ durableTimelineStore: store, logger });
+    expect(await restarted.fetchDurableTimeline(agent.id)).toMatchObject({ epoch, rows: [] });
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
   }
 });

@@ -7995,7 +7995,7 @@ export class Session {
       });
       this.sessionLogger.info(
         { agentId: agentId, durationMs: Date.now() - startedAt },
-        "Timeline provider replay and backfill completed",
+        "Timeline cache unavailable; agent load completed",
       );
     } else if (durableTimeline) {
       this.sessionLogger.debug({ agentId: agentId }, "Timeline durable store hit");
