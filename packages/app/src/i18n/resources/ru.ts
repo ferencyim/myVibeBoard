@@ -2328,6 +2328,7 @@ export const ru: TranslationResources = {
       sendFailedTitle: "Не удалось отправить тестовое уведомление",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "Проекты",
       connections: "Подключения",
       agents: "Агенты",

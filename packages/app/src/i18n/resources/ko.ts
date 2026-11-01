@@ -2305,6 +2305,7 @@ export const ko: TranslationResources = {
       sendFailedTitle: "테스트 알림을 보낼 수 없음",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "프로젝트",
       connections: "연결",
       agents: "에이전트",

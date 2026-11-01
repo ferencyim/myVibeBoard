@@ -1,3 +1,4 @@
+import { useModelGroupProvider } from "./use-model-group-provider";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
 import type {
@@ -188,6 +189,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   } = useProvidersSnapshot(serverId, { cwd: workingDir });
 
   const isConnected = useHostRuntimeIsConnected(serverId ?? "");
+  const modelGroupProvider = useModelGroupProvider(serverId);
 
   const allProviderEntries = useMemo(() => snapshotEntries ?? [], [snapshotEntries]);
   const snapshotProviderDefinitions = useMemo(
@@ -222,10 +224,10 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     () => buildProviderModelsByProvider(snapshotEntries),
     [snapshotEntries],
   );
-  const snapshotModelSelectorProviders = useMemo(
-    () => buildSelectableProviderSelectorProviders(snapshotEntries, isConnected),
-    [snapshotEntries, isConnected],
-  );
+  const snapshotModelSelectorProviders = useMemo(() => {
+    const providers = buildSelectableProviderSelectorProviders(snapshotEntries, isConnected);
+    return isCreateFlow && modelGroupProvider ? [...providers, modelGroupProvider] : providers;
+  }, [snapshotEntries, isConnected, isCreateFlow, modelGroupProvider]);
   const snapshotSelectedEntry = useMemo(
     () =>
       formState.provider
@@ -281,7 +283,10 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
 
   const setProviderAndModelFromUser = useCallback(
     (provider: AgentProvider, modelId: string) => {
-      if (!selectableProviderDefinitionMap.has(provider)) {
+      if (
+        !selectableProviderDefinitionMap.has(provider) &&
+        !(provider === "modelgroup" && modelGroupProvider)
+      ) {
         return;
       }
       const providerDef = selectableProviderDefinitionMap.get(provider);
@@ -308,7 +313,12 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
         }),
       );
     },
-    [allProviderModels, selectableProviderDefinitionMap, updateCurrentPreferences],
+    [
+      allProviderModels,
+      selectableProviderDefinitionMap,
+      updateCurrentPreferences,
+      modelGroupProvider,
+    ],
   );
 
   const clearProviderSelectionFromUser = useCallback(() => {

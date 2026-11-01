@@ -2280,6 +2280,7 @@ export const zhCN: TranslationResources = {
       sendFailedTitle: "无法发送测试通知",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "项目",
       connections: "连接",
       agents: "Agents",

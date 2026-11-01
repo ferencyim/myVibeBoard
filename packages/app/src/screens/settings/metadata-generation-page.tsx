@@ -1,3 +1,4 @@
+import { useModelGroupProvider } from "@/hooks/use-model-group-provider";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -20,10 +21,11 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
   const { config, isLoading: isConfigLoading, patchConfig } = useDaemonConfig(serverId);
   const snapshot = useProvidersSnapshot(serverId);
-  const providers = useMemo(
-    () => buildSelectableProviderSelectorProviders(snapshot.entries),
-    [snapshot.entries],
-  );
+  const modelGroupProvider = useModelGroupProvider(serverId);
+  const providers = useMemo(() => {
+    const selectable = buildSelectableProviderSelectorProviders(snapshot.entries);
+    return modelGroupProvider ? [...selectable, modelGroupProvider] : selectable;
+  }, [snapshot.entries, modelGroupProvider]);
   const configuredProviders = config?.metadataGeneration.providers;
   const configuredProvider = configuredProviders?.[0] ?? null;
   const savedMode: SelectionMode = configuredProvider ? "preferred" : "automatic";

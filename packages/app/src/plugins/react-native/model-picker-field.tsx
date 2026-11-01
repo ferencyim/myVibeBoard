@@ -1,3 +1,4 @@
+import { useModelGroupProvider } from "@/hooks/use-model-group-provider";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePluginHostId } from "../host-id-context";
@@ -25,6 +26,7 @@ function permissionTierLabel(tier: (typeof PERMISSION_TIERS)[number], provider: 
 /** Full-width provider / model / effort field for plugin settings screens. */
 export function ModelPickerField(props: ModelPickerFieldProps) {
   const serverId = usePluginHostId();
+  const modelGroupProvider = useModelGroupProvider(serverId);
   const cwd = useSessionStore((state) =>
     serverId && props.projectId
       ? (state.sessions[serverId]?.projects.get(props.projectId)?.projectRootPath ?? null)
@@ -47,8 +49,8 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
     onOpen,
   } = props;
   const selectorProviders = useMemo<ProviderSelectorProvider[]>(
-    () =>
-      providers.map((entry) => {
+    () => [
+      ...providers.map((entry): ProviderSelectorProvider => {
         const label = entry.label ?? entry.provider;
         const rows: ProviderSelectionModelRow[] = entry.models.map((item) => ({
           favoriteKey: `${entry.provider}:${item.id}`,
@@ -61,7 +63,9 @@ export function ModelPickerField(props: ModelPickerFieldProps) {
         }));
         return { id: entry.provider, label, modelSelection: { kind: "models", rows } };
       }),
-    [providers],
+      ...(modelGroupProvider ? [modelGroupProvider] : []),
+    ],
+    [providers, modelGroupProvider],
   );
   const efforts = useMemo(
     () =>

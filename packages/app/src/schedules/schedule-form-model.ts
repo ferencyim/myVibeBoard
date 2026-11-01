@@ -54,6 +54,7 @@ export interface ScheduleFormSnapshot {
 
 export interface ScheduleFormProviderSnapshot {
   entries: ProviderSnapshotEntry[];
+  modelGroupProvider?: ProviderSelectorProvider;
 }
 
 export interface ScheduleDisclosureState {
@@ -1000,7 +1001,10 @@ export function openScheduleForm(snapshot: ScheduleFormSnapshot): ScheduleFormMo
       }
       publish({
         ...resolved,
-        modelSelectorProviders: buildSelectableProviderSelectorProviders(providerEntries),
+        modelSelectorProviders: [
+          ...buildSelectableProviderSelectorProviders(providerEntries),
+          ...(providerSnapshot.modelGroupProvider ? [providerSnapshot.modelGroupProvider] : []),
+        ],
         providerResolutionByServerId,
         providerSnapshotRequest: isPendingResolution ? null : state.providerSnapshotRequest,
       });

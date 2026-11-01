@@ -2,11 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { ModelGroup, ProviderUsage } from "@getpaseo/protocol/messages";
 import type pino from "pino";
 import type { AgentManager } from "./agent-manager.js";
+import type { AgentPromptInput } from "./agent-sdk-types.js";
 import {
   MODEL_GROUP_LABEL,
   MODEL_GROUP_ORDER_LABEL,
+  isProviderExhausted,
   selectModelGroupEntry,
 } from "./model-groups.js";
+
+// Overload, rate limit and model-unavailable failures are usually temporary: retry the same entry
+// after these delays and only then move to the next one. Quota exhaustion is decided from the
+// subscription usage report instead of the error text.
+const DEFAULT_RETRY_DELAYS_MS = [15_000, 45_000, 120_000];
 
 // Provider error messages vary; keep the recognized capacity and availability failures together.
 const FAILOVER_ERROR =
@@ -36,19 +43,43 @@ export function registerModelGroupFailover(options: {
   getGroups: () => ModelGroup[];
   getUsage: () => Promise<ProviderUsage[]>;
   logger: pino.Logger;
+  retryDelaysMs?: number[];
+  sleep?: (ms: number) => Promise<void>;
 }): () => void {
   const { agentManager, logger } = options;
+  const retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const handling = new Set<string>();
+  const retries = new Map<string, number>();
+
+  // Nobody sent a newer message while the retry was waiting.
+  function isStillWaiting(agentId: string, generation: number): boolean {
+    const waiting = agentManager.getAgent(agentId);
+    return (
+      Boolean(waiting) &&
+      waiting!.lifecycle !== "running" &&
+      agentManager.getForegroundPromptGeneration(agentId) === generation
+    );
+  }
+
+  // Consume the stream so the resent turn actually runs.
+  async function drive(agentId: string, prompt: AgentPromptInput): Promise<void> {
+    for await (const _event of agentManager.streamAgent(agentId, prompt, {
+      clientMessageId: randomUUID(),
+    })) {
+      // Events reach subscribers through the manager.
+    }
+  }
   return agentManager.subscribe(
     (message) => {
-      if (message.type !== "agent_stream" || message.event.type !== "turn_failed") return;
+      if (message.type !== "agent_stream") return;
+      if (message.event.type === "turn_completed") retries.delete(message.agentId);
+      if (message.event.type !== "turn_failed") return;
       const event = message.event;
-      if (
-        !isModelGroupFailoverError(
-          [event.error, event.code, event.diagnostic].filter(Boolean).join(" "),
-        )
-      )
-        return;
+      const transient = isModelGroupFailoverError(
+        [event.error, event.code, event.diagnostic].filter(Boolean).join(" "),
+      );
       const agent = agentManager.getAgent(message.agentId);
       const failedPrompt = agentManager.getForegroundPrompt(message.agentId, event.turnId);
       const generation = agentManager.getForegroundPromptGeneration(message.agentId);
@@ -69,10 +100,28 @@ export function registerModelGroupFailover(options: {
       void (async () => {
         const group = options.getGroups().find((candidate) => candidate.id === groupId);
         if (!group) return;
+        const usage = await options.getUsage().catch(() => []);
+        if (!isProviderExhausted(usage, agent.provider)) {
+          const used = retries.get(agent.id) ?? 0;
+          if (!transient) return;
+          if (used < retryDelaysMs.length) {
+            retries.set(agent.id, used + 1);
+            await sleep(retryDelaysMs[used]!);
+            if (!isStillWaiting(agent.id, generation)) {
+              retries.delete(agent.id);
+              return;
+            }
+            handling.delete(agent.id);
+            ownsLock = false;
+            await drive(agent.id, failedPrompt);
+            return;
+          }
+        }
+        retries.delete(agent.id);
         const { entry } = await selectModelGroupEntry(
           group,
           (provider) => agentManager.getProviderAvailability(provider),
-          await options.getUsage().catch(() => []),
+          usage,
           {
             order,
             provider: agent.provider,
@@ -125,11 +174,7 @@ export function registerModelGroupFailover(options: {
         }
         handling.delete(agent.id);
         ownsLock = false;
-        for await (const _event of agentManager.streamAgent(targetId, failedPrompt, {
-          clientMessageId: randomUUID(),
-        })) {
-          // Consume the stream to drive the successor turn.
-        }
+        await drive(targetId, failedPrompt);
       })()
         .catch((error) =>
           logger.warn({ err: error, agentId: agent.id }, "Model group failover failed"),

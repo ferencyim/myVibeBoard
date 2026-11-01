@@ -2331,6 +2331,7 @@ export const ar: TranslationResources = {
       sendFailedTitle: "تعذر إرسال إشعار الاختبار",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "المشاريع",
       connections: "اتصالات",
       agents: "Agents",

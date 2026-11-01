@@ -2316,6 +2316,7 @@ export const ja: TranslationResources = {
       sendFailedTitle: "テスト通知を送信できません",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "プロジェクト",
       connections: "接続",
       agents: "エージェント",

@@ -2343,6 +2343,7 @@ export const fr: TranslationResources = {
       sendFailedTitle: "Impossible d’envoyer la notification de test",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "Projets",
       connections: "Connexions",
       agents: "Agents",

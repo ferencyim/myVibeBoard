@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import { isModelGroupFailoverError, registerModelGroupFailover } from "./model-group-failover.js";
 import type { AgentManager, AgentSubscriber } from "./agent-manager.js";
 import type pino from "pino";
+import type { ProviderUsage } from "@getpaseo/protocol/messages";
 
 describe("model group failover errors", () => {
   test.each([
@@ -22,7 +23,17 @@ describe("model group failover errors", () => {
   );
 });
 
-function setup(nextProvider = "codex") {
+const EXHAUSTED_USAGE = [
+  {
+    providerId: "codex",
+    displayName: "Codex",
+    status: "ok",
+    planLabel: null,
+    windows: [{ id: "5h", label: "5h", remainingPct: 0, resetsAt: "2999-01-01T00:00:00Z" }],
+  },
+] as unknown as ProviderUsage[];
+
+function setup(nextProvider = "codex", usage: ProviderUsage[] = []) {
   let subscriber!: AgentSubscriber;
   const agent = {
     id: "a",
@@ -61,12 +72,24 @@ function setup(nextProvider = "codex") {
         ],
       },
     ],
-    getUsage: async () => [],
+    getUsage: async () => usage,
     logger: { warn: vi.fn() } as unknown as pino.Logger,
+    retryDelaysMs: [1, 1],
+    sleep: async () => {},
+  });
+  const fail = (error = "server overloaded") =>
+    subscriber({
+      type: "agent_stream",
+      agentId: "a",
+      event: { type: "turn_failed", provider: "codex", error, turnId: "t" },
+    });
+  manager.streamAgent.mockImplementation(async function* (id: string) {
+    if (id === "a" && manager.setAgentModel.mock.calls.length === 0) fail();
+    yield* [];
   });
   return {
     manager,
-    fail: (error = "quota exceeded") =>
+    fail: (error = "server overloaded") =>
       subscriber({
         type: "agent_stream",
         agentId: "a",
@@ -75,19 +98,21 @@ function setup(nextProvider = "codex") {
   };
 }
 
-test("switches the same provider and retries the failed message", async () => {
+test("retries an overloaded model before switching", async () => {
   const { manager, fail } = setup();
   fail();
-  await vi.waitFor(() => expect(manager.streamAgent).toHaveBeenCalled());
-  expect(manager.setAgentModel).toHaveBeenCalledWith("a", "two");
+  await vi.waitFor(() => expect(manager.setAgentModel).toHaveBeenCalledWith("a", "two"));
+  const sameAgentStreams = manager.streamAgent.mock.calls.filter(([id]) => id === "a");
+  // two retries on the failing entry, then one send after switching
+  expect(sameAgentStreams).toHaveLength(3);
   expect(manager.updateAgentMetadata).toHaveBeenCalledWith("a", {
     labels: { "paseo.model-group": "g", "paseo.model-group-order": "2" },
   });
-  expect(manager.streamAgent).toHaveBeenCalledWith("a", "try this", expect.any(Object));
 });
 
 test("creates a successor in the workspace and forwards the message", async () => {
-  const { manager, fail } = setup("claude");
+  const { manager, fail } = setup("claude", EXHAUSTED_USAGE);
+  manager.streamAgent.mockImplementation(async function* () {});
   const prompt = [{ type: "image" as const, data: "image-data", mimeType: "image/png" }];
   manager.getForegroundPrompt.mockReturnValue(prompt as unknown as string);
   fail();
@@ -98,12 +123,15 @@ test("creates a successor in the workspace and forwards the message", async () =
     expect.objectContaining({ workspaceId: "w" }),
   );
   expect(manager.streamAgent).toHaveBeenCalledWith("b", prompt, expect.any(Object));
+  // The usage report already shows the quota is gone, so there is no retry on the old agent.
+  expect(manager.streamAgent).not.toHaveBeenCalledWith("a", expect.anything(), expect.anything());
   expect(manager.appendTimelineItem).toHaveBeenCalledTimes(2);
 });
 
 test("leaves unrelated errors untouched", async () => {
   const { manager, fail } = setup();
   fail("invalid API key");
-  await Promise.resolve();
-  expect(manager.getForegroundPrompt).not.toHaveBeenCalled();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(manager.streamAgent).not.toHaveBeenCalled();
+  expect(manager.setAgentModel).not.toHaveBeenCalled();
 });

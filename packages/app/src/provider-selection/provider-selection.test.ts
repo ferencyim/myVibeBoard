@@ -1,3 +1,4 @@
+import { buildModelGroupProvider } from "./provider-selection";
 import { describe, expect, it } from "vitest";
 import type { AgentModelDefinition, ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
@@ -508,5 +509,47 @@ describe("resolveEffectiveComposerModeId", () => {
     expect(
       resolveEffectiveComposerModeId({ ...selection, modeId: "build", modeOptions: [] }, true),
     ).toBe("build");
+  });
+});
+
+describe("buildModelGroupProvider", () => {
+  it("omits an empty list and displays groups and sorted members without mutation", () => {
+    expect(buildModelGroupProvider([])).toBeUndefined();
+    const groups = [
+      {
+        id: "g",
+        name: "备用",
+        entries: [
+          { order: 2, provider: "codex", model: "b" },
+          { order: 1, provider: "claude", model: "a" },
+          { order: 1, provider: "codex", model: "c", thinkingOptionId: "high" },
+        ],
+      },
+    ];
+    const provider = buildModelGroupProvider(groups)!;
+    expect(provider).toMatchObject({
+      id: "modelgroup",
+      label: "模型组",
+      modelSelection: {
+        kind: "models",
+        rows: [
+          {
+            provider: "modelgroup",
+            modelId: "g",
+            modelLabel: "备用",
+            description: "claude/a、codex/c (high)、codex/b",
+          },
+        ],
+      },
+    });
+    expect(groups[0].entries[0].order).toBe(2);
+    expect(
+      resolveSelectedModelLabel({
+        providers: [provider],
+        selectedProvider: "modelgroup",
+        selectedModel: "g",
+        isLoading: false,
+      }),
+    ).toBe("备用");
   });
 });

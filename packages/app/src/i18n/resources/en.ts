@@ -2365,6 +2365,7 @@ export const en = {
       sendFailedTitle: "Unable to send test notification",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "Projects",
       connections: "Connections",
       agents: "Agents",

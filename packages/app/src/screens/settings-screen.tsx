@@ -123,6 +123,7 @@ import { buildProjectDocumentBackRoute } from "@/projects/document-navigation";
 import { buildPluginSettingsRoute } from "@/plugins/settings/routes";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
+import { ModelGroupsPage } from "@/screens/settings/model-groups-page";
 import { PromptLibraryPage } from "@/prompt-library/page";
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
@@ -244,6 +245,7 @@ const HOST_SECTION_ITEMS: HostSectionItem[] = [
   { id: "pair-device", labelKey: "openProject.tiles.pairDevice.title", icon: Smartphone },
   { id: "agents", labelKey: "settings.hostSections.agents", icon: Bot },
   { id: "metadata", labelKey: "settings.hostSections.metadata", icon: Sparkles },
+  { id: "model-groups", labelKey: "settings.hostSections.modelGroups", icon: Boxes },
   { id: "workspaces", labelKey: "settings.hostSections.workspaces", icon: FolderGit2 },
   { id: "providers", labelKey: "settings.hostSections.providers", icon: Boxes },
   { id: "usage", labelKey: "settings.hostSections.usage", icon: Gauge },
@@ -268,6 +270,8 @@ function renderHostSettingsContent(
       return <HostAgentsPage serverId={view.serverId} />;
     case "metadata":
       return <MetadataGenerationPage serverId={view.serverId} />;
+    case "model-groups":
+      return <ModelGroupsPage serverId={view.serverId} />;
     case "workspaces":
       return <HostWorkspacesPage serverId={view.serverId} />;
     case "providers":
@@ -1030,6 +1034,9 @@ function SettingsSidebar({
     [insets.top, isDesktop],
   );
   const selectedSectionId = sidebarView.kind === "section" ? sidebarView.section : null;
+  const supportsModelGroups = useSessionStore((state) =>
+    Boolean(state.sessions[activeHostServerId ?? ""]?.serverInfo?.features?.modelGroups),
+  );
   let selectedHostSection: HostSectionSlug | null = null;
   if (sidebarView.kind === "host") selectedHostSection = sidebarView.section;
   if (sidebarView.kind === "project" || sidebarView.kind === "document")
@@ -1062,7 +1069,10 @@ function SettingsSidebar({
             onAddHost={onAddHost}
             enableBuiltInDaemonOption={enableBuiltInDaemonOption}
           />
-          {HOST_SECTION_ITEMS.filter((item) => matches(t(item.labelKey))).map((item) => (
+          {HOST_SECTION_ITEMS.filter(
+            (item) =>
+              (item.id !== "model-groups" || supportsModelGroups) && matches(t(item.labelKey)),
+          ).map((item) => (
             <SidebarHostSectionButton
               key={item.id}
               itemId={item.id}

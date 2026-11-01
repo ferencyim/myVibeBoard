@@ -1,3 +1,4 @@
+import type { ModelGroup } from "@getpaseo/protocol/messages";
 import type {
   AgentMode,
   AgentModelDefinition,
@@ -157,6 +158,34 @@ export function buildSelectableProviderSelectorProviders(
         modelSelection: buildEntryModelSelection(entry, label, isConnected),
       };
     });
+}
+
+export function buildModelGroupProvider(
+  groups: readonly ModelGroup[],
+): ProviderSelectorProvider | undefined {
+  if (groups.length === 0) return undefined;
+  const label = "模型组";
+  return {
+    id: "modelgroup",
+    label,
+    modelSelection: {
+      kind: "models",
+      rows: groups.map((group) => ({
+        favoriteKey: buildModelRowKey("modelgroup", group.id),
+        provider: "modelgroup",
+        providerLabel: label,
+        modelId: group.id,
+        modelLabel: group.name,
+        description: [...group.entries]
+          .sort((a, b) => a.order - b.order)
+          .map(
+            (entry) =>
+              `${entry.provider}/${entry.model}${entry.thinkingOptionId ? ` (${entry.thinkingOptionId})` : ""}`,
+          )
+          .join("、"),
+      })),
+    },
+  };
 }
 
 export function getProviderModelRows(

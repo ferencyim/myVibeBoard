@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelGroup, ProviderUsage } from "@getpaseo/protocol/messages";
-import { selectModelGroupEntry } from "./model-groups.js";
+import { isProviderExhausted, selectModelGroupEntry } from "./model-groups.js";
 
 const group: ModelGroup = {
   id: "g",
@@ -41,5 +41,32 @@ describe("model group selection", () => {
         )
       ).reasons,
     ).toHaveLength(2);
+  });
+});
+
+describe("isProviderExhausted", () => {
+  const report = (window: object) =>
+    [{ providerId: "codex", windows: [window] }] as unknown as ProviderUsage[];
+  const now = Date.parse("2026-11-01T00:00:00Z");
+  it("is exhausted when a window has nothing left and has not reset", () => {
+    expect(
+      isProviderExhausted(
+        report({ remainingPct: 0, resetsAt: "2026-11-02T00:00:00Z" }),
+        "codex",
+        now,
+      ),
+    ).toBe(true);
+    expect(isProviderExhausted(report({ usedPct: 100 }), "codex", now)).toBe(true);
+  });
+  it("ignores windows that already reset, have quota left, or belong to another provider", () => {
+    expect(
+      isProviderExhausted(
+        report({ remainingPct: 0, resetsAt: "2026-10-31T00:00:00Z" }),
+        "codex",
+        now,
+      ),
+    ).toBe(false);
+    expect(isProviderExhausted(report({ remainingPct: 40 }), "codex", now)).toBe(false);
+    expect(isProviderExhausted(report({ remainingPct: 0 }), "claude", now)).toBe(false);
   });
 });

@@ -2343,6 +2343,7 @@ export const es: TranslationResources = {
       sendFailedTitle: "No se pudo enviar la notificación de prueba",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "Proyectos",
       connections: "Conexiones",
       agents: "Agents",

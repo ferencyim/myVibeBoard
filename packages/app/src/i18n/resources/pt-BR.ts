@@ -2328,6 +2328,7 @@ export const ptBR: TranslationResources = {
       sendFailedTitle: "Não foi possível enviar a notificação de teste",
     },
     hostSections: {
+      modelGroups: "模型组",
       projects: "Projetos",
       connections: "Conexões",
       agents: "Agentes",
