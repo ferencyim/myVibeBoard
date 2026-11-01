@@ -194,11 +194,12 @@ export function BotConversationHeader({
             </Text>
           ) : null}
         </PressHighlight>
-        {isBot ? (
-          <View style={styles.threads} testID="conversation-header-threads">
-            <ConversationHeaderAccessories serverId={serverId} agentId={agentId} />
-          </View>
-        ) : null}
+        <View
+          style={isBot ? styles.threads : styles.accessories}
+          testID="conversation-header-threads"
+        >
+          <ConversationHeaderAccessories serverId={serverId} agentId={agentId} />
+        </View>
         {placement !== "runtime" ? (
           <ComposerKeyboardScopeProvider {...scope}>
             <AgentControls
@@ -273,6 +274,8 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
   },
   threads: { flex: 1, minWidth: 0 },
+  // Ordinary agents: plugin controls sit beside the model picker, in the same row.
+  accessories: { flexShrink: 1, minWidth: 0, flexDirection: "row", alignItems: "center" },
   name: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,

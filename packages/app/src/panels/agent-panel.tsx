@@ -550,7 +550,7 @@ function AgentPanelContent({
     );
   return (
     <View style={styles.root}>
-      {!isBot && resolvedServerId && resolvedAgentId ? (
+      {!isBot && !(showsHeader && !fullscreen) && resolvedServerId && resolvedAgentId ? (
         <ConversationHeaderAccessories serverId={resolvedServerId} agentId={resolvedAgentId} />
       ) : null}
       {(showsHeader || isBot) && !fullscreen && resolvedServerId && resolvedAgentId ? (
