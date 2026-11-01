@@ -47,6 +47,7 @@ interface ExplorerSidebarDockProps extends Pick<
     tab: WorkspaceTabDescriptor;
   }) => WorkspacePaneContentModel;
   headerAction?: ReactNode;
+  iconOnly?: boolean;
 }
 
 /** A dock shell over the shared panel host. It owns no workspace-pane capabilities. */
@@ -75,6 +76,7 @@ export function ExplorerSidebarDock({
   onReorderTabsInPane,
   buildPaneContentModel,
   headerAction,
+  iconOnly,
 }: ExplorerSidebarDockProps) {
   const { activeDragTabId, tabDropPreview, externalDndContext } = useWorkspaceTabDrag();
   const paneState = useMemo(() => deriveWorkspacePaneState({ pane, tabs: uiTabs }), [pane, uiTabs]);
@@ -125,6 +127,7 @@ export function ExplorerSidebarDock({
             <TitlebarDragRegion />
             <View style={styles.tabRow}>
               <WorkspaceDesktopTabsRow
+                iconOnly={iconOnly}
                 host="explorer"
                 launchPurpose="supporting"
                 isFocused={isWorkspaceFocused}

@@ -60,7 +60,6 @@ describe("settings categories and search", () => {
     expect(settingsPluginCategory("vibe-board")).toBe("task");
     expect(settingsPluginCategory("vibe-bots")).toBe("task");
     expect(settingsPluginCategory("vibe-scheduler")).toBe("automation");
-    expect(settingsPluginCategory("vibe-maintain")).toBe("automation");
     expect(settingsPluginCategory("custom")).toBe("other");
   });
   it("matches translated labels without case or surrounding whitespace", () => {

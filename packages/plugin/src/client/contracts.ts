@@ -359,6 +359,13 @@ export interface PluginWorkspaceTabDescriptor {
 }
 export interface PluginWorkspaceTabProvider {
   id: string;
+  /** Optional controls shown at the start of the provider's tab row. */
+  HeaderComponent?: ComponentType<
+    PluginSurfaceProps & { workspaceId: string; serverId: string; refresh(): void }
+  >;
+  TabComponent?: ComponentType<
+    PluginSurfaceProps & { workspaceId: string; serverId: string; tabId: string; refresh(): void }
+  >;
   resolve(input: { workspaceId: string }): Promise<PluginWorkspaceTabDescriptor[]>;
   /** Create only; the host delivers the first message through its native user path. */
   create(input: {

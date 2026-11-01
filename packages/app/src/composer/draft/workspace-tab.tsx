@@ -50,6 +50,7 @@ import {
 } from "@/workspace-tabs/model";
 import { openWorkspaceChanges } from "@/workspace-tabs/open-supporting-view";
 import { useWorkspaceTabPlaceholder } from "./workspace-tab-placeholder";
+import { WorkspaceTabControls } from "@/plugins/workspace-tab-header";
 import { useSettings } from "@/hooks/use-settings";
 
 const EMPTY_PENDING_PERMISSIONS = new Map();
@@ -293,6 +294,23 @@ function resolveImportPillPress(
     return null;
   }
   return onOpenImportSheet ?? null;
+}
+
+function renderWorkspaceTabControls(
+  serverId: string,
+  workspaceId: string,
+  placeholder: WorkspaceTabPlaceholder | undefined,
+) {
+  if (!placeholder) return null;
+  return (
+    <WorkspaceTabControls
+      serverId={serverId}
+      workspaceId={workspaceId}
+      tabId={placeholder.tabId}
+      pluginId={placeholder.pluginId}
+      providerId={placeholder.providerId}
+    />
+  );
 }
 
 export function WorkspaceDraftAgentTab({
@@ -680,6 +698,7 @@ export function WorkspaceDraftAgentTab({
             onFocusInput={handleFocusInputCallback}
             commandDraft={composerState.commandDraft}
             agentControls={composerAgentControls}
+            agentControlsAccessory={renderWorkspaceTabControls(serverId, workspaceId, placeholder)}
             isCompactLayout={isCompactComposerLayout}
           />
         </View>

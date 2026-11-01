@@ -51,10 +51,31 @@ export function mergePluginWorkspaceTabs(
     const tabIds = pane.tabIds.map((tabId) => (orders.has(tabId) ? sorted[index++]! : tabId));
     layout = reorderPaneTabsInLayout({ layout, paneId: pane.id, tabIds }) ?? layout;
   }
-  if (
-    originalFocusedTabId &&
-    collectAllTabs(layout.root).some((tab) => tab.tabId === originalFocusedTabId)
-  ) {
+  return restoreFocusedTab(layout, originalFocusedTabId);
+}
+
+function restoreFocusedTab(
+  layout: WorkspaceLayout,
+  originalFocusedTabId: string | null | undefined,
+): WorkspaceLayout {
+  const allTabs = collectAllTabs(layout.root);
+  const original = allTabs.find((tab) => tab.tabId === originalFocusedTabId);
+  const isHiddenFlowTab =
+    original &&
+    ((original.target.kind === "agent" && original.target.flowTab?.disabled) ||
+      (original.target.kind === "draft" &&
+        original.target.placeholder?.providerId === "task-flow" &&
+        original.target.placeholder.disabled));
+  if (isHiddenFlowTab) {
+    const fallback = allTabs.find(
+      (tab) =>
+        (tab.target.kind === "agent" && tab.target.flowTab && !tab.target.flowTab.disabled) ||
+        (tab.target.kind === "draft" &&
+          tab.target.placeholder?.providerId === "task-flow" &&
+          !tab.target.placeholder.disabled),
+    );
+    if (fallback) layout = focusTabInLayout({ layout, tabId: fallback.tabId }) ?? layout;
+  } else if (originalFocusedTabId && allTabs.some((tab) => tab.tabId === originalFocusedTabId)) {
     layout = focusTabInLayout({ layout, tabId: originalFocusedTabId }) ?? layout;
   }
   return layout;

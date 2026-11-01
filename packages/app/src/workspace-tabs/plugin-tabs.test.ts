@@ -3,6 +3,8 @@ import {
   collectAllTabs,
   openTabInLayoutBackground,
   createDefaultLayout,
+  findPaneById,
+  focusTabInLayout,
 } from "@/stores/workspace-layout-actions";
 import { mergePluginWorkspaceTabs, type PluginWorkspaceTabs } from "./plugin-tabs";
 
@@ -35,6 +37,24 @@ function merge(
 }
 
 describe("plugin workspace tabs", () => {
+  it("focuses an enabled flow tab when the selected role is disabled", () => {
+    const entries = contributions();
+    entries[0]!.providerId = "task-flow";
+    let layout = merge(null, entries);
+    const worker = collectAllTabs(layout.root).find(
+      (tab) => tab.target.kind === "draft" && tab.target.placeholder?.order === 4,
+    )!;
+    layout = focusTabInLayout({ layout, tabId: worker.tabId })!;
+    entries[0]!.tabs = entries[0]!.tabs.map((tab) =>
+      tab.order === 4 ? Object.assign({}, tab, { disabled: true }) : tab,
+    );
+    layout = merge(layout, entries);
+    const focused = findPaneById(layout.root, layout.focusedPaneId)?.focusedTabId;
+    expect(focused).not.toBe(worker.tabId);
+    const target = collectAllTabs(layout.root).find((tab) => tab.tabId === focused)?.target;
+    expect(target?.kind === "agent" && target.flowTab?.disabled).toBe(false);
+  });
+
   it("shows all six roles without presets or successful provisioning and orders real and placeholder tabs together", () => {
     const layout = merge(null);
     const tabs = collectAllTabs(layout.root);

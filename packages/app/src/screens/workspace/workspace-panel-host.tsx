@@ -1,5 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ScrollView, Text, View } from "react-native";
+import { StyleSheet } from "react-native-unistyles";
+import { useConversationBot } from "@/panels/bot-conversation-header";
+import ProjectSettingsScreen from "@/screens/project-settings-screen";
 import { RetainedPanel } from "@/components/retained-panel";
+import { PressHighlight } from "@/components/ui/press-highlight";
 import { useModifiedPanelTabIds } from "@/panels/panel-instance-attributes";
 import {
   WorkspacePaneContent,
@@ -33,7 +38,51 @@ interface MountedTabProps {
   isWorkspaceFocused: boolean;
   onFocusPane?: (paneId: string) => void;
   buildPaneContentModel: WorkspacePanelHostProps["buildPaneContentModel"];
+  serverId: string;
 }
+
+function ProjectBotProfile({
+  serverId,
+  agentId,
+  children,
+}: {
+  serverId: string;
+  agentId: string;
+  children: ReactNode;
+}) {
+  const bot = useConversationBot(serverId, agentId);
+  const [showSettings, setShowSettings] = useState(false);
+  const toggle = useCallback(() => setShowSettings((value) => !value), []);
+  const close = useCallback(() => setShowSettings(false), []);
+  if (bot?.kind !== "project" || !bot.projectId) return children;
+  return (
+    <View style={profileStyles.container}>
+      <PressHighlight accessibilityRole="button" onPress={toggle} style={profileStyles.switcher}>
+        <Text style={profileStyles.switcherText}>
+          {showSettings ? "返回 bot 资料" : "项目设置"}
+        </Text>
+      </PressHighlight>
+      {showSettings ? (
+        <ScrollView keyboardShouldPersistTaps="handled">
+          <ProjectSettingsScreen
+            serverId={serverId}
+            projectId={bot.projectId}
+            onBackToProjects={close}
+            showBackToProjects={false}
+          />
+        </ScrollView>
+      ) : (
+        children
+      )}
+    </View>
+  );
+}
+
+const profileStyles = StyleSheet.create((theme) => ({
+  container: { flex: 1, minHeight: 0 },
+  switcher: { paddingHorizontal: 16, paddingVertical: 10 },
+  switcherText: { color: theme.colors.foreground },
+}));
 
 const MountedTab = memo(function MountedTab({
   tab,
@@ -43,21 +92,37 @@ const MountedTab = memo(function MountedTab({
   isWorkspaceFocused,
   onFocusPane,
   buildPaneContentModel,
+  serverId,
 }: MountedTabProps) {
   const content = useMemo(
     () => buildPaneContentModel({ paneId, tab }),
     [buildPaneContentModel, paneId, tab],
   );
   const handleFocusPane = useCallback(() => onFocusPane?.(paneId), [onFocusPane, paneId]);
+  const panel = (
+    <WorkspacePaneContent
+      content={content}
+      isWorkspaceFocused={isWorkspaceFocused}
+      isPaneFocused={interactive}
+      onFocusPane={onFocusPane ? handleFocusPane : undefined}
+    />
+  );
+  const target = tab.target;
+  const isBotProfile =
+    target.kind === "plugin" &&
+    target.context === "agent" &&
+    target.pluginId === "vibe-bots" &&
+    target.panelId === "profile";
   return (
     <RenderProfile id={`DesktopMountedTab:${tab.kind}:${tab.tabId}`}>
       <RetainedPanel active={visible}>
-        <WorkspacePaneContent
-          content={content}
-          isWorkspaceFocused={isWorkspaceFocused}
-          isPaneFocused={interactive}
-          onFocusPane={onFocusPane ? handleFocusPane : undefined}
-        />
+        {isBotProfile && target.kind === "plugin" && target.context === "agent" ? (
+          <ProjectBotProfile serverId={serverId} agentId={target.agentId}>
+            {panel}
+          </ProjectBotProfile>
+        ) : (
+          panel
+        )}
       </RetainedPanel>
     </RenderProfile>
   );
@@ -132,6 +197,7 @@ export function WorkspacePanelHost({
         isWorkspaceFocused={isWorkspaceFocused}
         onFocusPane={onFocusPane}
         buildPaneContentModel={buildPaneContentModel}
+        serverId={normalizedServerId}
       />
     );
   });

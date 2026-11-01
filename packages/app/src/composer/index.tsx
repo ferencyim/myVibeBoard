@@ -28,6 +28,7 @@ import {
   useImperativeHandle,
   memo,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -991,6 +992,7 @@ interface ComposerProps {
   onAttentionPromptSend?: () => void;
   /** Controlled agent controls rendered in input area (draft flows). */
   agentControls?: DraftAgentControlsProps;
+  agentControlsAccessory?: ReactNode;
   quote?: ComposerQuote | null;
   onClearQuote?: (quote: ComposerQuote) => void;
   onSetQuote?: (quote: ComposerQuote | null) => void;
@@ -1288,6 +1290,7 @@ function ComposerContentImpl({
   onAttentionInputFocus,
   onAttentionPromptSend,
   agentControls,
+  agentControlsAccessory,
   quote,
   onClearQuote,
   onSetQuote,
@@ -2307,6 +2310,7 @@ function ComposerContentImpl({
             mode.showAgentControls &&
             (!hideAgentControls || resolveAgentControlsMode(agentControls) === "draft"),
         })}
+        {mode.showAgentControls ? agentControlsAccessory : null}
         {mode.showAttachments ? (
           <PromptLibraryComposerButton serverId={serverId} onInsert={insertPromptAtCursor} />
         ) : null}
@@ -2314,6 +2318,7 @@ function ComposerContentImpl({
     ),
     [
       agentControls,
+      agentControlsAccessory,
       agentId,
       focusInput,
       hideAgentControls,

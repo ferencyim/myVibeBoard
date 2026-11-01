@@ -12,6 +12,7 @@ import React, {
 } from "react";
 import { Pressable, Text, View, type LayoutChangeEvent, type ScrollView } from "react-native";
 import { useFilePanelOpenWithMenu } from "@/file-panels";
+import { WorkspaceTabHeader } from "@/plugins/workspace-tab-header";
 import {
   CopyX,
   ArrowLeftToLine,
@@ -146,6 +147,32 @@ function updateMeasuredWidth(
 ) {
   const nextWidth = Math.round(event.nativeEvent.layout.width);
   setWidth((current) => retainWorkspaceTabMeasuredWidth(current, nextWidth));
+}
+
+function FlowTabHeader({
+  visible,
+  serverId,
+  workspaceId,
+  setWidth,
+}: {
+  visible: boolean;
+  serverId: string;
+  workspaceId: string;
+  setWidth: Dispatch<SetStateAction<number>>;
+}) {
+  const handleLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      updateMeasuredWidth(setWidth, event);
+    },
+    [setWidth],
+  );
+
+  if (!visible) return null;
+  return (
+    <View onLayout={handleLayout}>
+      <WorkspaceTabHeader serverId={serverId} workspaceId={workspaceId} />
+    </View>
+  );
 }
 
 function normalizeAgentTooltipTitle(title: string): string {
@@ -519,6 +546,7 @@ function sameWidths(left: number[], right: number[]): boolean {
 }
 
 export interface WorkspaceDesktopTabsRowProps {
+  iconOnly?: boolean;
   host?: PaneHost;
   launchPurpose?: WorkspaceTabLaunchPurpose;
   paneId?: string;
@@ -556,6 +584,20 @@ export interface WorkspaceDesktopTabsRowProps {
 
 interface ResolvedWorkspaceDesktopTabsRowProps extends Omit<WorkspaceDesktopTabsRowProps, "tabs"> {
   tabs: ResolvedWorkspaceDesktopTabRowItem[];
+}
+
+function isTabReorderingDisabled(
+  tabs: ResolvedWorkspaceDesktopTabRowItem[],
+  externalDndContext: boolean,
+) {
+  return (
+    tabs.some(
+      ({ tab }) =>
+        (tab.target.kind === "agent" && !!tab.target.flowTab) ||
+        (tab.target.kind === "draft" && tab.target.placeholder?.providerId === "task-flow"),
+    ) ||
+    (!externalDndContext && tabs.length < 2)
+  );
 }
 
 interface WorkspaceDesktopTabPresentationSlotProps {
@@ -1003,6 +1045,14 @@ export function WorkspaceDesktopTabsRow(props: WorkspaceDesktopTabsRowProps) {
   const resolvedTabs = useMemo(
     () =>
       props.tabs.flatMap((item) => {
+        const target = item.tab.target;
+        if (
+          (target.kind === "agent" && target.flowTab?.disabled) ||
+          (target.kind === "draft" &&
+            target.placeholder?.providerId === "task-flow" &&
+            target.placeholder.disabled)
+        )
+          return [];
         const presentation = presentations.get(item.tab.key);
         return presentation ? [{ ...item, presentation }] : [];
       }),
@@ -1026,6 +1076,7 @@ export function WorkspaceDesktopTabsRow(props: WorkspaceDesktopTabsRowProps) {
 }
 
 function ResolvedWorkspaceDesktopTabsRow({
+  iconOnly = false,
   host = "main",
   launchPurpose = "primary",
   paneId,
@@ -1066,6 +1117,7 @@ function ResolvedWorkspaceDesktopTabsRow({
   const [tabsContainerWidth, setTabsContainerWidth] = useState<number>(0);
   const tabsScrollRef = useRef<ScrollView>(null);
   const [exitFocusModeWidth, setExitFocusModeWidth] = useState<number>(0);
+  const [flowHeaderWidth, setFlowHeaderWidth] = useState<number>(0);
   const [hoveredTabIndex, setHoveredTabIndex] = useState<number | null>(null);
   const tabScrollBoundary = useHorizontalScrollBoundary();
   const [labelMeasurements, setLabelMeasurements] = useState(
@@ -1092,6 +1144,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       actionsReservedWidth: Math.max(
         0,
         DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH +
+          (hasFlowTabs ? flowHeaderWidth : 0) +
           (focusModeEnabled ? exitFocusModeWidth : 0) +
           (showPaneSplitActions ? PANE_SPLIT_ACTIONS_RESERVED_WIDTH : 0) +
           (showPaneMaximizeAction ? PANE_MAXIMIZE_ACTION_RESERVED_WIDTH : 0),
@@ -1105,7 +1158,14 @@ function ResolvedWorkspaceDesktopTabsRow({
       tabHorizontalPadding: TAB_CHIP_HORIZONTAL_PADDING,
       closeButtonWidth: TAB_CLOSE_BUTTON_RESERVED_WIDTH,
     }),
-    [exitFocusModeWidth, focusModeEnabled, showPaneMaximizeAction, showPaneSplitActions],
+    [
+      exitFocusModeWidth,
+      flowHeaderWidth,
+      hasFlowTabs,
+      focusModeEnabled,
+      showPaneMaximizeAction,
+      showPaneSplitActions,
+    ],
   );
 
   const panePanelKinds = useMemo(() => tabs.map(({ tab }) => tab.kind), [tabs]);
@@ -1373,8 +1433,8 @@ function ResolvedWorkspaceDesktopTabsRow({
       const shouldShowCloseButton =
         layout.closeButtonPolicy === "all" && item.presentation.showCloseButton;
       const layoutItem = layout.items[index] ?? null;
-      const resolvedTabWidth = layoutItem?.width ?? 150;
-      const showLabel = layoutItem?.showLabel ?? true;
+      const resolvedTabWidth = iconOnly ? 48 : (layoutItem?.width ?? 150);
+      const showLabel = !iconOnly && (layoutItem?.showLabel ?? true);
       const showDropIndicatorBefore = activeDragTabId !== null && tabDropPreviewIndex === index;
       const showDropIndicatorAfter =
         activeDragTabId !== null &&
@@ -1427,6 +1487,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       activeDragTabId,
       hasFlowTabs,
       hoveredTabIndex,
+      iconOnly,
       displayedTabs,
       isFocused,
       layout.closeButtonPolicy,
@@ -1491,6 +1552,12 @@ function ResolvedWorkspaceDesktopTabsRow({
         onPress={onExitFocusMode}
         onLayout={handleExitFocusModeLayout}
       />
+      <FlowTabHeader
+        visible={hasFlowTabs}
+        serverId={normalizedServerId}
+        workspaceId={normalizedWorkspaceId}
+        setWidth={setFlowHeaderWidth}
+      />
       <View style={styles.tabsScrollContainer}>
         <Animated.ScrollView
           ref={tabsScrollRef}
@@ -1509,15 +1576,7 @@ function ResolvedWorkspaceDesktopTabsRow({
             data={displayedTabs}
             keyExtractor={tabKeyExtractor}
             useDragHandle
-            disabled={
-              displayedTabs.some(
-                ({ tab }) =>
-                  (tab.target.kind === "agent" && !!tab.target.flowTab) ||
-                  (tab.target.kind === "draft" &&
-                    tab.target.placeholder?.providerId === "task-flow"),
-              ) ||
-              (!externalDndContext && displayedTabs.length < 2)
-            }
+            disabled={isTabReorderingDisabled(displayedTabs, externalDndContext)}
             onDragEnd={handleDragEnd}
             externalDndContext={externalDndContext}
             activeId={activeDragTabId}
