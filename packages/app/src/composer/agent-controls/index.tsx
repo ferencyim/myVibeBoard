@@ -1364,20 +1364,31 @@ export const AgentControls = memo(function AgentControls({
     snapshotSelectedEntry,
   ]);
 
+  const botId = agent?.botId ?? null;
+  const firstGroupEntry = useCallback(
+    (groupId: string) =>
+      [...(config?.modelGroups?.find((group) => group.id === groupId)?.entries ?? [])].sort(
+        (a, b) => a.order - b.order,
+      )[0],
+    [config?.modelGroups],
+  );
   const getModelDisabledReason = useCallback(
     (provider: string, modelId: string) => {
       if (provider === "modelgroup" && !supportsModelGroupSessionSelection) {
         return "请更新主机以在已有会话中选择模型组";
       }
-      const firstProvider =
-        provider === "modelgroup"
-          ? [...(config?.modelGroups?.find((group) => group.id === modelId)?.entries ?? [])].sort(
-              (a, b) => a.order - b.order,
-            )[0]?.provider
-          : provider;
-      return firstProvider !== agent?.provider ? "已有会话不能切换模型提供方" : undefined;
+      // Another provider's model or group continues the conversation in a new agent (switchProvider).
+      // A bot keeps one provider at a time; a group whose first entry is elsewhere is not offered.
+      if (
+        provider === "modelgroup" &&
+        botId &&
+        firstGroupEntry(modelId)?.provider !== agent?.provider
+      ) {
+        return "项目 bot 请在资料里改用其它提供方的模型";
+      }
+      return undefined;
     },
-    [agent?.provider, config?.modelGroups, supportsModelGroupSessionSelection],
+    [agent?.provider, botId, firstGroupEntry, supportsModelGroupSessionSelection],
   );
 
   const modelSelection = resolveAgentModelSelection({
@@ -1436,11 +1447,12 @@ export const AgentControls = memo(function AgentControls({
   // conversation elsewhere: bots hand over through vibe-bots (applied when idle), other
   // sessions through the switch-provider plugin once the current turn has ended.
   const navigation = usePluginHostNavigation(serverId);
-  const botId = agent?.botId ?? null;
   const isRunning = agent?.status === "running";
-  const pendingSwitch = useRef<{ provider: string; modelId: string } | null>(null);
+  const pendingSwitch = useRef<{ provider: string; modelId: string; groupId?: string } | null>(
+    null,
+  );
   const switchProvider = useCallback(
-    async (nextProvider: string, modelId: string) => {
+    async (nextProvider: string, modelId: string, groupId?: string) => {
       if (!client) return;
       try {
         if (botId) {
@@ -1456,6 +1468,12 @@ export const AgentControls = memo(function AgentControls({
           provider: nextProvider,
           modelId,
         })) as { agentId: string };
+        // The new agent starts on the group's first entry; selecting the group there records it so
+        // later failures still move down the group.
+        if (groupId)
+          await client
+            .setAgentModel(created.agentId, `modelgroup/${groupId}`)
+            .catch((error) => toast.error(toErrorMessage(error)));
         navigation.openAgent({ agentId: created.agentId, serverId });
       } catch (error) {
         toast.error(toErrorMessage(error));
@@ -1468,6 +1486,19 @@ export const AgentControls = memo(function AgentControls({
       if (getModelDisabledReason(nextProvider, modelId)) return undefined;
       if (nextProvider === "modelgroup") {
         if (!client) return undefined;
+        const first = firstGroupEntry(modelId);
+        if (first && first.provider !== agentProvider) {
+          if (isRunning) {
+            pendingSwitch.current = {
+              provider: first.provider,
+              modelId: first.model,
+              groupId: modelId,
+            };
+            toast.show("本轮结束后切换");
+            return undefined;
+          }
+          return switchProvider(first.provider, first.model, modelId);
+        }
         return client.setAgentModel(agentId, `modelgroup/${modelId}`).catch((error) => {
           toast.error(toErrorMessage(error));
           throw error;
@@ -1486,6 +1517,7 @@ export const AgentControls = memo(function AgentControls({
       agentProvider,
       botId,
       client,
+      firstGroupEntry,
       getModelDisabledReason,
       handleSelectModel,
       isRunning,
@@ -1497,7 +1529,7 @@ export const AgentControls = memo(function AgentControls({
     if (isRunning || !pendingSwitch.current) return;
     const pending = pendingSwitch.current;
     pendingSwitch.current = null;
-    void switchProvider(pending.provider, pending.modelId);
+    void switchProvider(pending.provider, pending.modelId, pending.groupId);
   }, [isRunning, switchProvider]);
   const handleSelectCommandCenterModel = handleSelectProviderAndModel;
 

@@ -20,11 +20,11 @@
 
 ## 运行中顺延
 
-订阅 `turn_failed`：错误文本命中额度/限流/过载/模型不可用正则（集中在一个模块、有单测），且 agent 带 `paseo.model-group` 标签时，选组内下一个可用条目：同 provider 用现有改模型能力；跨 provider 则在同 workspace 新建后继 agent 并转交失败的那条用户消息，原 agent 留作历史，时间线写系统提示。组内耗尽时停止并显示原错误。
+订阅 `turn_failed`：错误文本命中额度/限流/过载/模型不可用正则（集中在一个模块、有单测），且 agent 带 `paseo.model-group` 标签时，选组内下一个可用条目：同 provider 用现有改模型能力；跨 provider 则经 switch-provider 插件（`session.switch`）把整段对话转换或摘要后接到同 workspace 的新 agent（新 agent 带组标签），再转交失败的那条用户消息，原 agent 留作历史，时间线写系统提示；插件不可用时退回只转交失败消息的空后继 agent。组内耗尽时停止并显示原错误。
 
 ## 客户端
 
 - `provider-selection.ts` 增加 `buildModelGroupProvider(groups)`，在 `use-agent-form-state.ts`、`agent-controls/index.tsx`、`schedule-form-model.ts`、`metadata-generation-page.tsx`、`plugins/react-native/model-picker-field.tsx`、命令中心的 providers 构造处并入（经 `useDaemonConfig`）。
 - 编辑界面：设置页新增「模型组」，参照 `agent-profiles/settings/`：组名可改，条目行有可编辑序号 + 模型选择（复用 `CombinedModelSelector`，传入的 providers 不含 `modelgroup`，即「不显示模型组」）。
 - 模型组选择器自身里条目选择器不显示模型组，避免递归。
-- 已创建会话可选择模型组；首个条目的 provider 与会话不同时禁用该组。选择时解析首个可用条目并保存组标签，以便后续顺延。
+- 已创建会话可选择任意模型或模型组：同 provider 原地改模型；跨 provider 走同一个 switch-provider 流程（新 agent 带着历史，界面切到新 agent），选组时在新 agent 上再选一次组以写入组标签。项目 bot 选首个条目在别家的组仍不提供，须在资料里改模型。

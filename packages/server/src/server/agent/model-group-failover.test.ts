@@ -33,7 +33,11 @@ const EXHAUSTED_USAGE = [
   },
 ] as unknown as ProviderUsage[];
 
-function setup(nextProvider = "codex", usage: ProviderUsage[] = []) {
+function setup(
+  nextProvider = "codex",
+  usage: ProviderUsage[] = [],
+  switchProvider?: Parameters<typeof registerModelGroupFailover>[0]["switchProvider"],
+) {
   let subscriber!: AgentSubscriber;
   const agent = {
     id: "a",
@@ -73,6 +77,7 @@ function setup(nextProvider = "codex", usage: ProviderUsage[] = []) {
       },
     ],
     getUsage: async () => usage,
+    switchProvider,
     logger: { warn: vi.fn() } as unknown as pino.Logger,
     retryDelaysMs: [1, 1],
     sleep: async () => {},
@@ -134,4 +139,28 @@ test("leaves unrelated errors untouched", async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(manager.streamAgent).not.toHaveBeenCalled();
   expect(manager.setAgentModel).not.toHaveBeenCalled();
+});
+
+test("carries the conversation to the next provider through switch-provider", async () => {
+  const switchProvider = vi.fn(async () => ({ agentId: "carried" }));
+  const { manager, fail } = setup("claude", EXHAUSTED_USAGE, switchProvider);
+  manager.streamAgent.mockImplementation(async function* () {});
+  fail();
+  await vi.waitFor(() => expect(manager.streamAgent).toHaveBeenCalled());
+  expect(switchProvider).toHaveBeenCalledWith({ agentId: "a", provider: "claude", modelId: "two" });
+  expect(manager.createAgent).not.toHaveBeenCalled();
+  expect(manager.updateAgentMetadata).toHaveBeenCalledWith("carried", {
+    labels: { "paseo.model-group": "g", "paseo.model-group-order": "2" },
+  });
+  expect(manager.streamAgent).toHaveBeenCalledWith("carried", "try this", expect.any(Object));
+});
+
+test("falls back to a bare successor when switch-provider is unavailable", async () => {
+  const { manager, fail } = setup("claude", EXHAUSTED_USAGE, async () => null);
+  manager.streamAgent.mockImplementation(async function* () {});
+  fail();
+  await vi.waitFor(() =>
+    expect(manager.streamAgent).toHaveBeenCalledWith("b", "try this", expect.any(Object)),
+  );
+  expect(manager.createAgent).toHaveBeenCalled();
 });

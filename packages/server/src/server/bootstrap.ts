@@ -1045,6 +1045,25 @@ export async function createPaseoDaemon(
     agentManager,
     getGroups: () => daemonConfigStore.get().modelGroups ?? [],
     getUsage: async () => (await pluginRuntime.listLegacyUsage()).providers,
+    // The switch-provider plugin carries the conversation (converted session or transcript) to the
+    // next provider; without it the failed prompt alone moves over.
+    switchProvider: async (input) => {
+      try {
+        return (await pluginRuntime.invokePluginRpc(
+          "switch-provider",
+          "session.switch",
+          input,
+        )) as {
+          agentId: string;
+        };
+      } catch (error) {
+        logger.warn(
+          { err: error, agentId: input.agentId },
+          "Model group switch-provider unavailable",
+        );
+        return null;
+      }
+    },
     logger,
   });
 

@@ -43,6 +43,15 @@ export function registerModelGroupFailover(options: {
   getGroups: () => ModelGroup[];
   getUsage: () => Promise<ProviderUsage[]>;
   logger: pino.Logger;
+  /**
+   * Continues an agent's conversation on another provider: converts or summarizes its history into
+   * a new agent. Returns null when that is unavailable, and the failed prompt alone moves over.
+   */
+  switchProvider?: (input: {
+    agentId: string;
+    provider: string;
+    modelId: string;
+  }) => Promise<{ agentId: string } | null>;
   retryDelaysMs?: number[];
   sleep?: (ms: number) => Promise<void>;
 }): () => void {
@@ -146,19 +155,32 @@ export function registerModelGroupFailover(options: {
           await agentManager.setAgentThinkingOption(current.id, entry.thinkingOptionId ?? null);
           await agentManager.updateAgentMetadata(current.id, { labels });
         } else {
-          const successor = await agentManager.createAgent(
-            {
-              ...current.config,
-              provider: entry.provider,
-              model: entry.model,
-              thinkingOptionId: entry.thinkingOptionId,
-              // Provider-specific settings cannot safely be carried to another provider.
-              providerOptions: undefined,
-            },
-            undefined,
-            { workspaceId: current.workspaceId, owner: current.owner, labels },
-          );
-          targetId = successor.id;
+          const switched = await options.switchProvider?.({
+            agentId: current.id,
+            provider: entry.provider,
+            modelId: entry.model,
+          });
+          if (switched) {
+            // The successor carries the conversation; keep it in the group.
+            targetId = switched.agentId;
+            if (entry.thinkingOptionId)
+              await agentManager.setAgentThinkingOption(targetId, entry.thinkingOptionId);
+            await agentManager.updateAgentMetadata(targetId, { labels });
+          } else {
+            const successor = await agentManager.createAgent(
+              {
+                ...current.config,
+                provider: entry.provider,
+                model: entry.model,
+                thinkingOptionId: entry.thinkingOptionId,
+                // Provider-specific settings cannot safely be carried to another provider.
+                providerOptions: undefined,
+              },
+              undefined,
+              { workspaceId: current.workspaceId, owner: current.owner, labels },
+            );
+            targetId = successor.id;
+          }
         }
         await agentManager.appendTimelineItem(current.id, {
           type: "notification",
