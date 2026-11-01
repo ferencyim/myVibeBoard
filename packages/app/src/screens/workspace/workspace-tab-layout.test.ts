@@ -267,3 +267,15 @@ describe("resolveWorkspaceTabChipBackdrop", () => {
     ).toBe("surface0");
   });
 });
+
+describe("computeWorkspaceTabLayout side panels", () => {
+  it("keeps natural widths and labels, scrolling on overflow, instead of shrinking to icons", () => {
+    const base = { viewportWidth: 404, tabLabelWidths: [98, 98, 98, 98], metrics, compact: false };
+    const shrunk = computeWorkspaceTabLayout(base);
+    expect(shrunk.items.every((item) => item.showLabel)).toBe(false);
+    const scrolling = computeWorkspaceTabLayout({ ...base, scrollOnOverflow: true });
+    expect(scrolling.requiresHorizontalScrollFallback).toBe(true);
+    expect(scrolling.items.every((item) => item.showLabel)).toBe(true);
+    expect(scrolling.closeButtonPolicy).toBe("all");
+  });
+});

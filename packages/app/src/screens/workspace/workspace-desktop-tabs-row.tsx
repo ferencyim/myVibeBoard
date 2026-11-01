@@ -1291,6 +1291,7 @@ function ResolvedWorkspaceDesktopTabsRow({
     viewportWidthOverride: tabsContainerWidth > 0 ? tabsContainerWidth : null,
     metrics: layoutMetrics,
     compact: isCompact,
+    scrollOnOverflow: host === "explorer",
   });
   // A scroll view keeps its offset when its content shrinks under the viewport, so a row that
   // stops scrolling would leave the tabs it had panned past out of view with no way back.

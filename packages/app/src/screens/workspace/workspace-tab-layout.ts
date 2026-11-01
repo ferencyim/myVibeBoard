@@ -25,6 +25,11 @@ export interface WorkspaceTabLayoutInput {
    * narrow X beside the label is easy to hit by accident and the tab's long-press menu closes it.
    */
   compact: boolean;
+  /**
+   * Narrow side panels keep every label: tabs stay at their natural width and the row scrolls on
+   * overflow instead of shrinking tabs until their labels drop to icons.
+   */
+  scrollOnOverflow?: boolean;
 }
 
 export interface WorkspaceTabLayoutItem {
@@ -91,14 +96,15 @@ export function computeWorkspaceTabLayout(
   // A row that scrolls has no reason to truncate: the tabs keep their natural widths and the
   // viewport pans over them. Pointer layouts first shrink toward the clickable minimum and scroll
   // only once even that does not fit; compact layouts skip the shrink.
-  const requiresHorizontalScrollFallback = input.compact
+  const keepNaturalWidths = input.compact || input.scrollOnOverflow === true;
+  const requiresHorizontalScrollFallback = keepNaturalWidths
     ? naturalTotalWidth > availableTabsWidth
     : availableTabsWidth < minimumTotalWidth;
 
   let resolvedWidths = naturalWidths;
   if (
     !requiresHorizontalScrollFallback &&
-    !input.compact &&
+    !keepNaturalWidths &&
     naturalTotalWidth > availableTabsWidth
   ) {
     const widthToRemove = naturalTotalWidth - availableTabsWidth;
