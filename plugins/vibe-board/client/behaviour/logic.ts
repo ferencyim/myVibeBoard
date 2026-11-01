@@ -28,7 +28,6 @@ export const ROLE_LABELS: Record<string, string> = {
   scout: "探路兵",
   reviewer: "复核",
   verifier: "验证",
-  maintenance: "自动维护",
   context: "上下文",
   handoff: "交接 / 切换",
   watchdog: "看门狗",
@@ -63,8 +62,6 @@ export const AUTOMATION_LINKS = [
   },
   { pluginId: "vibe-scheduler", screenId: "preferences", label: "调度器：并发、资源与派发超时" },
 ] as const;
-
-export const MAINTENANCE_HINT = "在总协调 bot 右侧『自动维护』面板中设置";
 
 export interface RoleGroup {
   role: string;

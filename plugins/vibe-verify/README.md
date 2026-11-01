@@ -24,8 +24,7 @@ copied in for the run and unlinked afterwards), compares the medians and writes 
 Judgement: fail if the command fails or `after > thresholdMs`; doubt if under 10% faster or no before timing
 (`beforeMs` is accepted as a recorded fallback); else pass. The pipeline creates the baseline worktree for web
 projects and whenever the worker's `.vibe/verify.json` has `backend.perf`, injects it, and keeps the worker's
-`backend.perf` when the verifier's own config lacks it. vibe-maintain's `perf-slow` rule tells its worker to
-write this block.
+`backend.perf` when the verifier's own config lacks it.
 
 ## iOS and desktop collectors (WP-46)
 
@@ -64,7 +63,7 @@ write this block.
 
 复核与验证通过任务群聊 send 创建或复用成员，parentMemberId 指向规划 anchor；任务 owner 的 admit hook 统一申请计算名额与仓库验证屏障，验证器不再先申请第二份租约。主/子写者未停止时不会运行验证。prepared/dispatching 只查询原投递回执；unknown 或传输结果不明保留成员并暂停，不能轮换模型重发。
 
-代码复核先运行；严重问题退回修复，其它结果再进入必做证据验证。保留 Web、backend、Android、iOS、desktop 采集器、自动测试/lint、性能基线与设备租约。验证配置由只读模型直接回复，按项目全部平台采集；不可用、降级或缺证据明确记为存疑。每项 pass 都必须引用本轮证据文件，遗漏或重复检查编号不能通过。
+启用的代码复核先运行；严重问题退回修复，其它结果在验证启用时进入证据验证。中等流程默认关闭验证、自定义流程可单独关闭复核或验证；仅复核时根据复核结果进入验收，均关闭时记录用户跳过复核与验证，由用户直接验收。保留 Web、backend、Android、iOS、desktop 采集器、自动测试/lint、性能基线与设备租约。验证配置由只读模型直接回复，按项目全部平台采集；不可用、降级或缺证据明确记为存疑。证据检查的每项 pass 都必须引用本轮证据文件，遗漏或重复检查编号不能通过。
 
 采集配置回执严格核对顶层字段，误回代码复核对象不会被静默当成空配置继续运行。合法空配置仍表示没有额外配置，不代表检查通过；没有实际证据仍须存疑。
 

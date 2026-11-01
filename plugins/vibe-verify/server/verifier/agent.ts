@@ -224,9 +224,7 @@ async function tabVerifier(
   const role = input.role ?? "verifier";
   const prompts = options.prompts ?? defaultPrompts;
   const prompt =
-    prompts.resolve(role === "reviewer" ? "verify.reviewer_system" : "verify.verifier_system", {
-      projectId: input.project.id,
-    }) + (input.snapshot?.instructions ? "\n\n" + input.snapshot.instructions : "");
+    prompts.resolve(role === "reviewer" ? "verify.reviewer_system" : "verify.verifier_system") + (input.snapshot?.instructions ? "\n\n" + input.snapshot.instructions : "");
   const spec = model.startsWith(`${input.provider}/`) ? model : `${input.provider}/${model}`;
   const modelId = spec.slice(spec.indexOf("/") + 1);
   let handle: PaseoAgentHandle | undefined;

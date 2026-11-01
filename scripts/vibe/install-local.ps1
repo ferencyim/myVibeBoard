@@ -24,7 +24,7 @@ param(
   [string]$HubAdmissionFile = "D:\devRepo\ci-dashboard\queue\win-heavy-guard.admission.json",
   [string[]]$Plugins = @(
     "vibe-board", "vibe-bots", "vibe-context", "vibe-master", "vibe-scheduler",
-    "vibe-maintain", "vibe-stats", "vibe-git", "vibe-verify", "switch-provider"
+    "vibe-stats", "vibe-git", "vibe-verify", "switch-provider"
   ),
   [switch]$SkipCopy
 )

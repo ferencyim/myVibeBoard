@@ -5,10 +5,10 @@ import type { Clock } from "../clock";
 import { defaultTuning, type TuningSource } from "../tuning";
 import type { MasterStateFile } from "./state";
 
-export type AlertKind = "provider_error" | "quota_low" | "quota_error" | "maintenance_paused" | "permission_wait" | "requirements_failed";
+export type AlertKind = "provider_error" | "quota_low" | "quota_error" | "permission_wait" | "requirements_failed";
 
 export interface Alerts {
-  /** `subject` is the provider for quota alerts and the rule name for maintenance alerts. */
+  /** `subject` is the provider for quota alerts. */
   raise(kind: AlertKind, subject: string, message: string): boolean;
 }
 
@@ -17,7 +17,6 @@ const COOLDOWN_GROUP = {
   provider_error: "urgent",
   quota_low: "quotaLow",
   quota_error: "urgent",
-  maintenance_paused: "routine",
   permission_wait: "urgent",
   requirements_failed: "routine",
 } as const satisfies Record<AlertKind, "quotaLow" | "urgent" | "routine">;
@@ -39,7 +38,7 @@ export function createAlerts(options: {
         type: "master.alert",
         payload: {
           kind,
-          ...(kind === "maintenance_paused" ? {} : { provider: subject }),
+          provider: subject,
           message,
           sessionId: options.sessionId() ?? "master",
         },

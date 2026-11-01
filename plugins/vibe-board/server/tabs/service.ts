@@ -92,7 +92,7 @@ export function formatTabs(
     .join("\n");
 }
 
-/** Pre-created role tabs follow the flow order (round 8: #2 方案、#3 探路、#4 执行、#5 复核、
+/** Pre-created role tabs follow the flow order (round 8: #2 方案复核、#3 探路、#4 执行、#5 复核、
  *  #6 验证); numbering matches sequential provisioning. */
 export type FlowRole = Extract<TaskTabRole, ModelRole>;
 export const FLOW_ROLE_ORDER: readonly FlowRole[] = [
@@ -126,7 +126,7 @@ function snapshotOf(
   });
 }
 
-/** The #2 方案 model list (writer first, then reviewers in order), resolved live: reviews run
+/** The #2 方案复核 model list (writer first, then reviewers in order), resolved live: reviews run
  *  before confirmation freezes anything; an unconfigured writer inherits the main tab. */
 export function resolvePlannerPresets(
   store: DefaultsStore,
@@ -214,23 +214,28 @@ export function roleTabPreset(
   try {
     const enabled = input.task?.control?.enabledRoles;
     const main = input.task?.tabs.find((tab) => tab.role === "main");
-    if (main && Array.isArray(enabled) && enabled.includes(role)) {
-      const fallback = mainFallbackSnapshot(main);
-      return { snapshot: fallback, model: fallback.models[0]! };
-    }
     snapshot = input.task?.rolesSnapshot
       ? (input.task.rolesSnapshot[role] ?? null)
       : resolveRolePreset(store, role, {
           selections: input.task?.roleSelections,
           projectId: input.projectId,
-          main: input.task?.tabs.find((tab) => tab.role === "main") ?? input.main,
+          main: main ?? input.main,
         });
+    if (!snapshot && main && ((Array.isArray(enabled) && enabled.includes(role)) || (input.task?.flowLevel === "medium" && role === "reviewer")))
+      snapshot = mainFallbackSnapshot(main);
   } catch (error) {
     onError?.(error);
     return null;
   }
   const model = snapshot?.models[0];
-  return snapshot && model ? { snapshot, model } : null;
+  if (!snapshot || !model) return null;
+  const models = input.task?.control?.roleModels;
+  const override = typeof models === "object" && models !== null ? (models as Record<string, unknown>)[role] : null;
+  if (override && typeof override === "object" && "provider" in override && "model" in override && typeof override.provider === "string" && typeof override.model === "string") {
+    const selected = { ...model, provider: override.provider, model: override.model, thinking: "thinking" in override && typeof override.thinking === "string" ? override.thinking : model.thinking };
+    return { snapshot: { ...snapshot, models: [selected, ...snapshot.models.slice(1)] }, model: selected };
+  }
+  return { snapshot, model };
 }
 
 export function roleTabDisabled(
@@ -239,10 +244,12 @@ export function roleTabDisabled(
   input: { task?: Task; projectId?: string | null; main?: MainTabModel },
 ): boolean {
   const task = input.task;
+  if (Array.isArray(task?.control?.disabledRoles) && task.control.disabledRoles.includes(role))
+    return true;
   if (Array.isArray(task?.control?.enabledRoles) && task.control.enabledRoles.includes(role))
     return false;
   if (task?.flowLevel === "simple" && role !== "worker") return true;
-  if (task?.flowLevel === "medium" && (role === "scout" || role === "reviewer")) return true;
+  if (task?.flowLevel === "medium") return role === "scout" || role === "verifier";
   if (task?.rolesSnapshot && OPTIONAL_TASK_ROLES.includes(role))
     return task.rolesSnapshot[role] === null;
   try {
@@ -335,13 +342,13 @@ export function rolePosition(
 ): string {
   const { main, planner, scout, worker, reviewer, verifier } = roleVars(tabs);
   if (role === "main")
-    return `你是 #${selfNumber} 主会话（群主）。需求交给 ${planner} 出方案，调查交给 ${scout}，用户授权后由 ${worker} 执行；之后为 ${reviewer}、${verifier}。`;
+    return `你是 #${selfNumber} 方案（群主）。需求交给 ${planner} 出方案，调查交给 ${scout}，用户授权后由 ${worker} 执行；之后为 ${reviewer}、${verifier}。`;
   if (role === "planner")
-    return `你是 #${selfNumber} 方案。上游：${main} 转达需求，用户也可以直接和你对话；调查可请 ${scout}；下游：用户确认后由 ${worker} 执行。`;
+    return `你是 #${selfNumber} 方案复核。上游：${main} 转达需求，用户也可以直接和你对话；调查可请 ${scout}；下游：用户确认后由 ${worker} 执行。`;
   if (role === "scout")
     return `你是 #${selfNumber} 探路（共享、只读调研）。任何 tab 都可以向你提问；结论发回提问的 tab，并给 ${main} 留摘要，不修改项目文件。`;
   if (role === "plan_reviewer")
-    return `你是 #${selfNumber} 方案复核（只读审查）。上游：${planner}；审查意见交回 ${planner}，不修改项目文件。`;
+    return `你是 #${selfNumber} 方案审阅（只读审查）。上游：${planner}；审查意见交回 ${planner}，不修改项目文件。`;
   if (role === "worker")
     return `你是 #${selfNumber} 执行。上游：${planner}（方案，经用户确认）；下游：${reviewer}、${verifier}。交付后由插件启动复核与验证。`;
   if (role === "reviewer")
@@ -767,7 +774,7 @@ export function createTaskTabs(options: {
       modelId: config.model,
       thinking: config.thinkingOptionId,
       status: "未启动",
-      title: `#1 主会话 · ${model}`,
+      title: `#1 方案 · ${model}`,
       busy: false,
     };
   }
@@ -812,7 +819,7 @@ export function createTaskTabs(options: {
       // but the task's 子任务 role rules still apply. #2's plan reviewers get the reviewer rules.
       const roleText = store.prompts.resolve(
         request.labels?.[PLAN_REVIEW_LABEL] ? "task.role.plan_reviewer" : "task.role.subagent",
-        { projectId, vars: roleVars(task?.tabs ?? []) },
+        { vars: roleVars(task?.tabs ?? []) },
       );
       if (!roleText || supplied.includes(roleText)) return request;
       return {
@@ -864,7 +871,6 @@ export function createTaskTabs(options: {
     const roleKey = rolePromptKey(role);
     const roleText = roleKey
       ? safeResolve(roleKey, {
-          projectId,
           vars: {
             ...roles,
             ...(role === "worker"
@@ -1002,7 +1008,7 @@ export function createTaskTabs(options: {
     const projectId = placement.projectId;
     const roleKey = rolePromptKey(input.role);
     const roleText = roleKey
-      ? store.prompts.resolve(roleKey, { projectId, vars: roleVars(task.tabs) })
+      ? store.prompts.resolve(roleKey, { vars: roleVars(task.tabs) })
       : "";
     const prompt = [roleText, preset?.instructions, input.task.trim()].filter(Boolean).join("\n\n");
     const config: Record<string, unknown> = { provider: spec };

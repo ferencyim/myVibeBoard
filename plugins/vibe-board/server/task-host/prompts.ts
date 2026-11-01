@@ -19,8 +19,8 @@ const TEXT: Record<TabRole, string> = {
 };
 /** Placeholders every role text may use; values come from the task's live (or planned) tabs. */
 const ROLE_PLACEHOLDERS = [
-  { name: "main", description: "主会话 tab，例如 #1 主会话" },
-  { name: "planner", description: "方案 tab，例如 #2 方案；未建时为「方案（未启用）」" },
+  { name: "main", description: "方案 tab，例如 #1 方案" },
+  { name: "planner", description: "方案复核 tab，例如 #2 方案复核；未建时为「方案复核（未启用）」" },
   { name: "scout", description: "探路 tab；未启用时为「探路（未启用）」" },
   { name: "worker", description: "执行 tab" },
   { name: "reviewer", description: "复核 tab；未启用时为「复核（未启用）」" },
@@ -34,8 +34,8 @@ const PROMPT_ROLE: Record<TabRole, PromptDef["role"]> = {
   subagent: "executor",
 };
 const LABELS: Record<TabRole, string> = {
-  main: "主会话（群主）",
-  planner: "方案",
+  main: "方案（群主）",
+  planner: "方案复核",
   scout: "探路",
   plan_reviewer: "方案审阅",
   subagent: "子任务",

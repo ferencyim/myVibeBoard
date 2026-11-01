@@ -1,3 +1,6 @@
+import React from "react";
+import { FlowTabControls } from "./flow-tab-controls";
+import { FlowSelector } from "./flow-selector";
 import type { PluginClientContext, PluginWorkspaceTabDescriptor } from "@getpaseo/plugin/client";
 import { taskPanelRpc, taskTabEnsureRpc, taskWorkspaceTabsRpc, type TaskTabViewData } from "../shared/task-tabs";
 import { UNRESOLVED_TAB_MODEL } from "../shared/vibe/contract";
@@ -25,6 +28,10 @@ export function taskWorkspaceTabs(tabs: TaskTabViewData[]): PluginWorkspaceTabDe
 export function contributeWorkspaceTabs(client: PluginClientContext) {
   return client.addWorkspaceTabProvider({
     id: "task-flow",
+    TabComponent: FlowTabControls,
+    HeaderComponent: ({ workspaceId, refresh }) => React.createElement(FlowSelector, {
+      workspaceId, refresh, openPanel: () => client.openPanel("task-flow", { workspaceId, location: "explorer" }),
+    }),
     async resolve({ workspaceId }) {
       const tabs = await client.rpc(taskWorkspaceTabsRpc, { workspaceId });
       return taskWorkspaceTabs(tabs);

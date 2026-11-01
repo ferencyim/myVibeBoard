@@ -117,9 +117,6 @@ export function SchedulerScreen({ theme }: PluginScreenProps) {
         <Muted theme={theme}>全机任务队列、共用资源、暂停窗口和全局指令。</Muted>
       </View>
       <HubSections theme={theme} />
-      <Section theme={theme} title="运行记录与维护规则">
-        <Muted theme={theme}>在总协调 bot 右侧「自动维护」面板中设置和查看维护规则。</Muted>
-      </Section>
       <View style={{ flexDirection: "row" }}>
         <Button
           theme={theme}

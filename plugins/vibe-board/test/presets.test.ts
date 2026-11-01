@@ -116,7 +116,7 @@ describe("preset persistence round trip", () => {
         "native-project",
         "/legacy",
       ),
-    ).toThrow("#1 主会话预设不存在");
+    ).toThrow("#1 方案预设不存在");
   });
 
   it("reorders candidates with their settings and mirrors the first model in the payload", () => {

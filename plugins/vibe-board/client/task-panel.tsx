@@ -1,10 +1,12 @@
 import { useRpc, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import { ModelPickerField } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   taskPanelRpc,
-  taskFlowSetRpc,
+  taskFlowRoleSetRpc,
+  taskFlowModelSetRpc,
   taskPlanStartRpc,
   taskTabCommandRpc,
   type ProjectPlanData,
@@ -12,10 +14,12 @@ import {
   type TaskTabCommand,
   type TaskTabViewData,
 } from "../shared/task-tabs";
+import { botModelsListRpc } from "../shared/project-bots";
 import { withAlpha } from "./common/colors";
 import { HostProvider, useHost } from "./common/ctx";
 import { Btn, Dot, Muted } from "./common/ui";
 import { taskPanelQueryKey, taskPanelRefreshInterval } from "./task-panel-query";
+import { RolePromptButton } from "./role-prompt-button";
 
 let requestCounter = 0;
 const nextRequestId = () => `task-panel-${Date.now()}-${++requestCounter}`;
@@ -43,7 +47,10 @@ function TaskFlowPanelBody({
   const { theme } = useHost();
   const panel = useRpc(taskPanelRpc);
   const command = useRpc(taskTabCommandRpc);
-  const setFlow = useRpc(taskFlowSetRpc);
+  const setRole = useRpc(taskFlowRoleSetRpc);
+  const setModel = useRpc(taskFlowModelSetRpc);
+  const listModels = useRpc(botModelsListRpc);
+  const models = useQuery({ queryKey: ["vibe-board", "flow-models"], queryFn: () => listModels({}) });
   const startPlan = useRpc(taskPlanStartRpc);
   const query = useQuery({
     queryKey: taskPanelQueryKey(workspaceId),
@@ -84,23 +91,30 @@ function TaskFlowPanelBody({
     },
     [command, query, task, workspaceId],
   );
-  const changeFlow = useCallback(
-    async (level: "simple" | "medium" | "full") => {
-      setError(null);
-      setMessage(null);
-      setPending("flow");
-      try {
-        await setFlow({ workspaceId, level });
-        await query.refetch();
-        setMessage("流程档位已更新。");
-      } catch (failure) {
-        setError(failure instanceof Error ? failure.message : String(failure));
-      } finally {
-        setPending(null);
-      }
-    },
-    [query, setFlow, workspaceId],
-  );
+  const toggleRole = useCallback(async (role: "planner" | "scout" | "worker" | "reviewer" | "verifier", enabled: boolean) => {
+    setError(null);
+    setPending("flow");
+    try {
+      await setRole({ workspaceId, role, enabled });
+      await query.refetch();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setPending(null);
+    }
+  }, [query, setRole, workspaceId]);
+  const changeModel = useCallback(async (role: "main" | "planner" | "scout" | "worker" | "reviewer" | "verifier", provider: string, model: string, thinkingOptionId?: string) => {
+    setError(null);
+    setPending("flow");
+    try {
+      await setModel({ workspaceId, role, provider: `${provider}/${model}`, thinkingOptionId });
+      await query.refetch();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setPending(null);
+    }
+  }, [query, setModel, workspaceId]);
   const beginPlan = useCallback(async () => {
     setError(null);
     setMessage(null);
@@ -175,106 +189,34 @@ function TaskFlowPanelBody({
         {task.summary ? <Muted size={13}>{task.summary}</Muted> : null}
       </View>
 
-      <Text testID="task-flow-section-progress" style={[hint, { fontSize: 12, fontWeight: "600" }]}>进度</Text>
-      <View style={{ gap: 6 }}>
-        <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>流程档位</Text>
-        <Text style={heading}>
-          {`${{ simple: "简单", medium: "中等", full: "完整" }[task.flowLevel]} · ${task.flowSource === "user" ? "用户选择" : "项目 bot 评估"}`}
-        </Text>
-        {task.flowReason ? <Muted size={13}>{task.flowReason}</Muted> : null}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {([["simple", "简单"], ["medium", "中等"], ["full", "完整"]] as const).map(([level, label]) => (
-            <Btn key={level} label={label} small variant={task.flowLevel === level ? "primary" : "default"}
-              disabled={disabled || task.flowLevel === level} onPress={() => void changeFlow(level)}
-              testID={`task-flow-level-${level}`} />
-          ))}
-        </View>
-      </View>
-
       {data.blockingReason ? (
-        <View
-          style={{
-            borderWidth: 1,
-            borderRadius: 10,
-            borderColor: theme.colors.statusWarning,
-            backgroundColor: withAlpha(theme.colors.statusWarning, 0.12),
-            padding: 10,
-            gap: 4,
-          }}
-        >
-          <Text style={{ color: theme.colors.statusWarning, fontSize: 12, fontWeight: "600" }}>
-            阻塞原因
-          </Text>
-          <Text style={[heading, { fontSize: 13 }]}>{data.blockingReason}</Text>
-        </View>
+        <Text style={{ color: theme.colors.statusWarning, fontSize: 13 }}>{data.blockingReason}</Text>
       ) : null}
-
-      {data.nextStep === "evaluating" ? (
-        <Muted>项目 bot 正在评估流程档位…</Muted>
-      ) : null}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        {data.nextStep === "start_plan" ? (
-          <Btn
-            label="让 #2 出方案"
-            variant="primary"
-            small
-            disabled={disabled}
-            onPress={() => void beginPlan()}
-            testID="task-flow-start-plan"
-          />
-        ) : null}
-        <Btn
-          label="执行"
-          variant={data.nextStep === "execute" ? "primary" : "default"}
-          small
-          disabled={disabled}
-          onPress={() => void run("execute")}
-          testID="task-flow-execute"
-        />
-        <Btn
-          label="通过"
-          small
-          disabled={disabled}
-          onPress={() => void run("accept")}
-          testID="task-flow-accept"
-        />
-        <Btn
-          label="停止任务"
-          small
-          disabled={disabled}
-          onPress={() => void run("stop")}
-          testID="task-flow-stop"
-        />
-        <Btn
-          label="状态"
-          variant="ghost"
-          small
-          disabled={disabled}
-          onPress={() => void run("status")}
-          testID="task-flow-status"
-        />
-        <Btn
-          label="刷新"
-          variant="ghost"
-          small
-          disabled={pending === "refresh"}
-          onPress={() => void run("refresh")}
-          testID="task-flow-refresh"
-        />
-      </View>
-
       {message ? <Muted size={13}>{message}</Muted> : null}
-      {error ? (
-        <Text style={{ fontSize: 13, color: theme.colors.statusDanger }}>{error}</Text>
-      ) : null}
+      {error ? <Text style={{ fontSize: 13, color: theme.colors.statusDanger }}>{error}</Text> : null}
 
-      <Text style={[hint, { fontSize: 12, fontWeight: "600" }]}>流程 tab</Text>
-      {data.tabs.map((tab) => (
-        <TabRow key={tab.agentId || tab.role} tab={tab} openAgent={openAgent} />
+      <Text testID="task-flow-section-progress" style={[hint, { fontSize: 12, fontWeight: "600" }]}>流程</Text>
+      {data.tabs.filter((tab) => tab.role !== "session" && tab.role !== "plan_reviewer").map((tab) => (
+        <TabRow
+          key={tab.role}
+          tab={tab}
+          openAgent={openAgent}
+          current={currentRole(task.phase, data.nextStep, data.tabs) === tab.role}
+          phaseLabel={data.phaseLabel}
+          disabled={disabled}
+          nextStep={data.nextStep}
+          onStartPlan={() => void beginPlan()}
+          onExecute={() => void run("execute")}
+          onAccept={() => void run("accept")}
+          onStop={() => void run("stop")}
+          phase={task.phase}
+          onToggleRole={(role, enabled) => void toggleRole(role, enabled)}
+          providers={models.data?.providers ?? []}
+          modelsLoading={models.isLoading}
+          onChangeModel={(role, provider, model, thinking) => void changeModel(role, provider, model, thinking)}
+        />
       ))}
-      {!openAgent ? (
-        <Muted>当前宿主不支持从面板切换 tab；请使用顶部 tab 打开。</Muted>
-      ) : null}
+      {data.nextStep === "evaluating" ? <Muted>项目 bot 正在评估流程档位…</Muted> : null}
 
       <Text testID="task-flow-section-subtasks" style={[hint, { fontSize: 12, fontWeight: "600" }]}>
         {`子任务 · 完成 ${data.board?.filter((item) => item.status === "done").length ?? 0}/${data.board?.length ?? 0}`}
@@ -369,65 +311,76 @@ function ProjectPlanRow({ plan }: { plan: ProjectPlanData }) {
   );
 }
 
-function TabRow({
-  tab,
-  openAgent,
-}: {
+function currentRole(phase: string, nextStep: string | null | undefined, tabs: TaskTabViewData[]): string {
+  if (phase === "planning") return nextStep === "start_plan" ? "planner" : "main";
+  if (phase === "awaiting_confirmation") return "planner";
+  if (phase === "reviewing") return "reviewer";
+  if (phase === "verifying") return "verifier";
+  if (phase === "awaiting_acceptance" || phase === "completed") {
+    return ["verifier", "reviewer", "worker"].find((role) => tabs.some((tab) => tab.role === role && tab.status !== "未启用")) ?? "worker";
+  }
+  return "worker";
+}
+
+function TabRow({ tab, openAgent, current, phaseLabel, disabled, nextStep, onStartPlan, onExecute, onAccept, onStop, phase, onToggleRole, providers, modelsLoading, onChangeModel }: {
   tab: TaskTabViewData;
   openAgent?: (input: { readonly agentId: string }) => void;
+  current: boolean;
+  phaseLabel: string;
+  disabled: boolean;
+  nextStep?: string | null;
+  onStartPlan: () => void;
+  onExecute: () => void;
+  onAccept: () => void;
+  onStop: () => void;
+  phase: string;
+  providers: React.ComponentProps<typeof ModelPickerField>["providers"];
+  modelsLoading: boolean;
+  onChangeModel: (role: "main" | "planner" | "scout" | "worker" | "reviewer" | "verifier", provider: string, model: string, thinking?: string) => void;
+  onToggleRole: (role: "planner" | "scout" | "worker" | "reviewer" | "verifier", enabled: boolean) => void;
 }) {
   const { theme } = useHost();
-  const open = useCallback(() => openAgent?.({ agentId: tab.agentId }), [openAgent, tab.agentId]);
-  const status = tab.status === "未启用" ? "本流程未启用" : tab.status;
-  const model = [tab.provider, tab.model, tab.thinking].filter(Boolean).join(" · ");
-  let statusColor = theme.colors.statusSuccess;
-  if (tab.busy) statusColor = theme.colors.statusWarning;
-  if (tab.status === "未启用") statusColor = theme.colors.foregroundMuted;
+  const role = tab.role === "plan_reviewer" || tab.role === "session" ? null : tab.role;
+  const model = tab.modelId ?? tab.model;
+  const enabled = tab.status !== "未启用";
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`#${tab.number} ${tab.roleLabel} ${tab.status === "未启用" ? status : `${model} ${status}`}`}
-      testID={`task-flow-tab-${tab.number}`}
-      disabled={!openAgent || !tab.agentId}
-      onPress={open}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface1,
-        borderRadius: 8,
-        paddingHorizontal: 10,
-        paddingVertical: 9,
-      }}
-    >
-      <Dot color={statusColor} size={8} />
-      <View style={{ flex: 1, gap: 4 }}>
-        <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
-          {`#${tab.number} ${tab.roleLabel}`}
+    <View testID={`task-flow-tab-${tab.number}`} style={{
+      gap: 8, borderWidth: 1, borderColor: current ? theme.colors.accent : theme.colors.border,
+      backgroundColor: theme.colors.surface1, borderRadius: 8, padding: 10,
+    }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        {tab.role === "main" || tab.role === "worker" || !role ? (
+          <Dot color={current ? theme.colors.accent : theme.colors.foregroundMuted} size={8} />
+        ) : (
+          <Pressable accessibilityRole="checkbox" accessibilityLabel={`启用 ${tab.roleLabel}`} accessibilityState={{ checked: enabled, disabled }} disabled={disabled}
+            onPress={() => onToggleRole(role, !enabled)}
+            style={{ width: 20, height: 20, borderWidth: 1, borderColor: enabled ? theme.colors.accent : theme.colors.border, borderRadius: 4, alignItems: "center", justifyContent: "center", backgroundColor: enabled ? theme.colors.accent : "transparent" }}>
+            {enabled ? <Text style={{ color: theme.colors.accentForeground, fontSize: 13 }}>✓</Text> : null}
+          </Pressable>
+        )}
+        <Text style={{ flex: 1, color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}>{`#${tab.number} ${tab.roleLabel}`}</Text>
+        <Text style={{ color: current ? theme.colors.accent : theme.colors.foregroundMuted, fontSize: 12 }}>
+          {current ? `当前 · ${phaseLabel}` : enabled ? tab.status : "未启用"}
         </Text>
-        {tab.status !== "未启用" ? (
-          <>
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{model}</Text>
-            {tab.reviewModels?.map((reviewer, index) => (
-              <Text key={index} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-                {`审阅：${[reviewer.provider, reviewer.model, reviewer.thinking].filter(Boolean).join(" · ")}`}
-              </Text>
-            ))}
-          </>
-        ) : null}
       </View>
-      <Text
-        style={{
-          marginLeft: "auto",
-          color: theme.colors.foregroundMuted,
-          fontSize: 12,
-        }}
-      >
-        {status}
-      </Text>
-    </Pressable>
+      {role ? <ModelPickerField providers={providers} provider={tab.provider} model={model} thinking={tab.thinking ?? ""}
+        loading={modelsLoading} disabled={disabled}
+        onSelect={(provider, nextModel) => onChangeModel(role, provider, nextModel)}
+        onSelectThinking={(thinking) => onChangeModel(role, tab.provider, model, thinking)} /> : null}
+      {tab.reviewModels?.map((reviewer, index) => (
+        <Text key={index} style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          {`审阅：${[reviewer.provider, reviewer.model, reviewer.thinking].filter(Boolean).join(" · ")}`}
+        </Text>
+      ))}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        {tab.agentId && openAgent ? <Btn label="打开" small onPress={() => openAgent({ agentId: tab.agentId })} /> : null}
+        <RolePromptButton role={tab.role} label={tab.roleLabel} />
+        {tab.role === "planner" && nextStep === "start_plan" ? <Btn label="生成方案" variant="primary" small disabled={disabled} onPress={onStartPlan} testID="task-flow-start-plan" /> : null}
+        {tab.role === "worker" && nextStep === "execute" ? <Btn label="执行" variant="primary" small disabled={disabled} onPress={onExecute} testID="task-flow-execute" /> : null}
+        {current && phase === "awaiting_acceptance" ? <Btn label="通过" variant="primary" small disabled={disabled} onPress={onAccept} testID="task-flow-accept" /> : null}
+        {current && ["queued", "executing", "reviewing", "verifying"].includes(phase) ? <Btn label="暂停" small disabled={disabled} onPress={onStop} testID="task-flow-stop" /> : null}
+      </View>
+    </View>
   );
 }
 

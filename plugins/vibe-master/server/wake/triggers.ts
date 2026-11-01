@@ -1,4 +1,4 @@
-// Completed tasks and retained scheduler, context and maintenance events wake the master.
+// Completed tasks and retained scheduler and context events wake the master.
 
 import type { Clock } from "../clock";
 import { type TuningSource } from "../tuning";
@@ -25,8 +25,6 @@ export interface TriggersOptions {
   ready?: Promise<void>;
   /** vibe-scheduler signals: quota getting low / admission paused or resumed (memory). */
   onScheduler?(event: SchedulerSignal): void;
-  /** vibe-maintain: a rule was paused after repeated rejections (the owner is reminded). */
-  onMaintenancePaused?(event: { ruleName: string; rejections: number }): void;
   /** Resume a retained master session when context or provider limits require it. */
   onMasterContinuation?(request: {
     requestId: string;
@@ -68,8 +66,6 @@ export function createTriggers(options: TriggersOptions): Triggers {
       "scheduler.quota_low",
       "scheduler.paused",
       "scheduler.resumed",
-      "maintenance.paused",
-      "maintenance.triggered",
     ],
     startAt: "now",
     pollIntervalMs: options.pollIntervalMs,
@@ -87,15 +83,7 @@ export function createTriggers(options: TriggersOptions): Triggers {
       }
       if (isEvent(event, "scheduler.paused")) return options.onScheduler?.({ kind: "paused" });
       if (isEvent(event, "scheduler.resumed")) return options.onScheduler?.({ kind: "resumed" });
-      if (isEvent(event, "maintenance.paused")) {
-        const { ruleName, rejections } = event.payload;
-        return options.onMaintenancePaused?.({ ruleName, rejections });
-      }
-      if (isEvent(event, "maintenance.triggered")) {
-        return log(
-          `maintenance rule ${event.payload.ruleId} triggered (run ${event.payload.runId})`,
-        );
-      }
+
     },
   });
   consumer.start();

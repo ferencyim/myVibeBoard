@@ -20,7 +20,23 @@ export const taskTabCommandRpc = defineRpc({
 
 export const taskFlowSetRpc = defineRpc({
   name: "vibe.task.flow.set",
-  input: z.object({ workspaceId: z.string().min(1), level: z.enum(["simple", "medium", "full"]) }),
+  input: z.object({ workspaceId: z.string().min(1), level: z.enum(["simple", "medium", "full", "custom"]) }),
+  output: z.object({ task: TaskSchema }),
+});
+
+export const taskFlowRoleSetRpc = defineRpc({
+  name: "vibe.task.flow.role.set",
+  input: z.object({
+    workspaceId: z.string().min(1),
+    role: z.enum(["planner", "scout", "worker", "reviewer", "verifier"]),
+    enabled: z.boolean(),
+  }),
+  output: z.object({ task: TaskSchema }),
+});
+
+export const taskFlowModelSetRpc = defineRpc({
+  name: "vibe.task.flow.model.set",
+  input: z.object({ workspaceId: z.string().min(1), role: z.enum(["main", "planner", "scout", "worker", "reviewer", "verifier"]), provider: z.string().regex(/^[^/]+\/.+$/), thinkingOptionId: z.string().optional() }),
   output: z.object({ task: TaskSchema }),
 });
 

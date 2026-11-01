@@ -8,11 +8,11 @@ import React, { useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import * as rpc from "../../shared/rpc";
 import { PromptGroup } from "../vibe/prompts/prompt-editor";
-import { usePaseo, useRpc } from "@getpaseo/plugin/client";
+import { useRpc } from "@getpaseo/plugin/client";
 import { errorMessage } from "../common/logic";
 import { HostProvider, useHost } from "../common/ctx";
 import { Btn, Chip, Muted } from "../common/ui";
-import { AUTOMATION_LINKS, MAINTENANCE_HINT, groupByRole, type BehaviourPrompt } from "./logic";
+import { AUTOMATION_LINKS, groupByRole, type BehaviourPrompt } from "./logic";
 
 /** Host navigation to other plugins' pages (a fork addition; absent on older hosts). */
 interface CrossNav {
@@ -52,17 +52,6 @@ function BehaviourSection({ children }: { children: React.ReactNode }) {
 
 function BehaviourContent({ nav }: { nav?: CrossNav }) {
   const { theme } = useHost();
-  const paseo = usePaseo();
-  const coordinator = useQuery({
-    queryKey: ["vibe-bots", "list", "coordinator"],
-    queryFn: async () => {
-      const result = await paseo.plugins.invoke("vibe-bots", "bots.list", { kind: "independent" });
-      const bots = (result as { bots?: Array<{ role: string; mainAgentId: string | null }> }).bots ?? [];
-      return bots.find((bot) => bot.role === "coordinator")?.mainAgentId ?? null;
-    },
-    enabled: !!nav?.openAgent,
-    retry: false,
-  });
   const list = useRpc(rpc.promptsListRpc);
   const set = useRpc(rpc.promptsSetRpc);
   const clear = useRpc(rpc.promptsClearRpc);
@@ -126,12 +115,6 @@ function BehaviourContent({ nav }: { nav?: CrossNav }) {
             )}
           </View>
         ))}
-        <Muted>{MAINTENANCE_HINT}，规则提示词按规则分别配置。</Muted>
-        {nav?.openAgent && coordinator.data ? (
-          <View style={{ flexDirection: "row" }}>
-            <Btn small label="打开总协调 bot 会话" onPress={() => nav.openAgent?.({ agentId: coordinator.data! })} />
-          </View>
-        ) : null}
       </BehaviourSection>
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>

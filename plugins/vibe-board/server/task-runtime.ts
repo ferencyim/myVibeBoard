@@ -19,6 +19,8 @@ import {
   groupTargetsRpc,
   taskPanelRpc,
   taskFlowSetRpc,
+  taskFlowRoleSetRpc,
+  taskFlowModelSetRpc,
   taskPlanStartRpc,
   taskWorkspaceTabsRpc,
   taskTabCommandRpc,
@@ -243,7 +245,7 @@ export function registerTaskRuntime(
       if (!task || !task.tabs.some((tab) => tab.agentId === callerAgentId))
         throw new Error("只有任务 tab 可以建议升档");
       const suggestion = suggestionInput.parse(input);
-      const ranks = { simple: 0, medium: 1, full: 2 } as const;
+      const ranks = { simple: 0, medium: 1, full: 2, custom: 2 } as const;
       if (ranks[suggestion.level] <= ranks[task.flowLevel ?? "full"])
         throw new Error("建议的档位必须高于当前档位");
       await tabs.appendStatus(task.anchorAgentId, `建议将流程升为${suggestion.level === "medium" ? "中等" : "完整"}：${suggestion.reason}。请用户在流程面板确认。`);
@@ -265,12 +267,56 @@ export function registerTaskRuntime(
     const task = options.store.tasks.get(input.workspaceId);
     return task ? tabs.tabsFor(task, false) : [];
   });
+  const flowRoles = ["planner", "scout", "worker", "reviewer", "verifier"] as const;
+  async function customRoles(workspaceId: string) {
+    const task = options.store.tasks.get(workspaceId);
+    if (!task) throw new Error("任务不存在");
+    const views = await tabs.tabsFor(task, false);
+    return flowRoles.filter((role) => views.some((view) => view.role === role && view.status !== "未启用"));
+  }
   server.handle(taskFlowSetRpc, async (input, context) => {
     if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    const enabled = input.level === "custom" ? await customRoles(input.workspaceId) : [];
     options.store.tasks.setFlow(input.workspaceId, { level: input.level, source: "user", reason: "用户调整流程" });
+    if (input.level === "custom") options.store.tasks.updateControl(input.workspaceId, {
+      enabledRoles: enabled,
+      disabledRoles: flowRoles.filter((role) => !enabled.includes(role)),
+    });
     await flow.provisionTabs(input.workspaceId);
     await flow.notifyFlowDecided(input.workspaceId, undefined, true);
     return { task: options.store.tasks.get(input.workspaceId)! };
+  });
+  server.handle(taskFlowRoleSetRpc, async (input, context) => {
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    if (input.role === "worker" && !input.enabled) throw new Error("自定义流程不能关闭执行角色");
+    const enabled = new Set(await customRoles(input.workspaceId));
+    enabled.add("worker");
+    if (input.enabled) enabled.add(input.role); else enabled.delete(input.role);
+    options.store.tasks.setFlow(input.workspaceId, { level: "custom", source: "user", reason: "用户调整流程步骤" });
+    const task = options.store.tasks.updateControl(input.workspaceId, { enabledRoles: [...enabled], disabledRoles: flowRoles.filter((role) => !enabled.has(role)) });
+    if (input.enabled) await flow.provisionTabs(input.workspaceId);
+    return { task: options.store.tasks.get(input.workspaceId) ?? task };
+  });
+  server.handle(taskFlowModelSetRpc, async (input, context) => {
+    if (context.callerAgentId) throw new Error(AGENT_CALLER_ERROR);
+    options.onPaseo(context.paseo);
+    const task = options.store.tasks.get(input.workspaceId);
+    if (!task) throw new Error("任务不存在");
+    if (!["planning", "awaiting_confirmation", "paused", "failed", "completed"].includes(task.phase)) throw new Error("流程运行时不能修改模型");
+    const [provider, ...parts] = input.provider.split("/");
+    const model = parts.join("/");
+    const tab = task.tabs.find((item) => item.role === input.role);
+    if (tab) {
+      if (tab.provider !== provider) throw new Error("已有会话不能切换模型提供方，请在会话中更换");
+      const paseo = options.getPaseo();
+      if (!paseo) throw new Error("任务宿主连接尚未就绪");
+      const handle = paseo.agents.ref(tab.agentId);
+      await handle.setModel(model);
+      if (input.thinkingOptionId !== undefined) await handle.setThinkingOption(input.thinkingOptionId || null);
+      options.store.tasks.updateTab(input.workspaceId, tab.agentId, { model, thinking: input.thinkingOptionId });
+    }
+    const models = typeof task.control?.roleModels === "object" && task.control.roleModels !== null ? task.control.roleModels : {};
+    return { task: options.store.tasks.updateControl(input.workspaceId, { roleModels: { ...models, [input.role]: { provider, model, thinking: input.thinkingOptionId } } }) };
   });
   server.handle(taskPlanStartRpc, async (input, context) => {
     options.onPaseo(context.paseo);

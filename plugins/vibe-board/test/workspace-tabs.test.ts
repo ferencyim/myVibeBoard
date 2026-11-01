@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("../client/flow-tab-controls", () => ({ FlowTabControls: () => null }));
+vi.mock("../client/flow-selector", () => ({ FlowSelector: () => null }));
 import { taskWorkspaceTabs } from "../client/workspace-tabs";
 import type { TaskTabViewData } from "../shared/task-tabs";
 
@@ -10,7 +12,7 @@ function roleTab(role: TaskTabViewData["role"], number: number): TaskTabViewData
 }
 
 describe("task workspace placeholders", () => {
-  it("keeps every role and its resolved setup before agents exist", () => {
+  it("keeps disabled roles for the host to hide", () => {
     const tabs = [roleTab("main", 1), roleTab("planner", 2), roleTab("scout", 3),
       roleTab("worker", 4), roleTab("reviewer", 5), roleTab("verifier", 6)];
     tabs[0]!.agentId = "main-agent";

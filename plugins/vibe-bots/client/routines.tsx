@@ -1,6 +1,6 @@
 /* eslint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-array-as-prop -- Small plugin screen; handlers and theme styles depend on each row. */
 /* eslint-disable complexity -- Form state covers all routine fields. */
-import { usePaseo, useRpc, type PluginScreenProps } from "@getpaseo/plugin/client";
+import { useRpc, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useCallback, useState, type PropsWithChildren } from "react";
@@ -13,8 +13,6 @@ import { Button, Feedback, Field, Page } from "./ui";
 
 type Routine = z.infer<typeof routinesListRpc.output>["routines"][number];
 type Schedule = Routine["schedule"];
-const systemSchema = z.object({ routines: z.array(z.object({ id: z.string(), title: z.string(), projectId: z.string(), projectName: z.string(), schedule: z.object({ kind: z.literal("cron"), expression: z.string() }).nullable(), scheduleText: z.string(), timezone: z.string(), nextRunAt: z.string().nullable(), paused: z.boolean(), lastRunAt: z.string().nullable(), lastStatus: z.string().nullable(), lastError: z.string().nullable(), editKey: z.string() })) });
-type SystemRoutine = z.infer<typeof systemSchema>["routines"][number];
 const dateText = (value: string | null) => value ? new Date(value).toLocaleString() : "—";
 const scheduleText = (schedule: Schedule) => schedule.kind === "cron" ? `Cron ${schedule.expression}` : `每 ${schedule.minutes} 分钟`;
 
@@ -24,14 +22,13 @@ export function BotRoutines(props: Pick<PluginScreenProps, "theme" | "navigation
 
 function RoutineBody({ theme, embedded, children }: PropsWithChildren<{ theme: PluginScreenProps["theme"]; embedded: boolean }>) { return embedded ? <View style={{ gap: 16 }}>{children}</View> : <Page theme={theme}>{children}</Page>; }
 
-function RoutineContent({ theme, navigation, botId }: Pick<PluginScreenProps, "theme" | "navigation"> & { botId?: string }) {
+function RoutineContent({ theme, botId }: Pick<PluginScreenProps, "theme" | "navigation"> & { botId?: string }) {
   const list = useRpc(routinesListRpc), botsList = useRpc(botsListRpc);
   const create = useRpc(routinesCreateRpc), update = useRpc(routinesUpdateRpc);
   const pause = useRpc(routinesPauseRpc), resume = useRpc(routinesResumeRpc), remove = useRpc(routinesDeleteRpc), runNow = useRpc(routinesRunNowRpc);
-  const paseo = usePaseo(), queryClient = useQueryClient();
+  const queryClient = useQueryClient();
   const routines = useQuery({ queryKey: ["vibe-bots", "routines", botId], queryFn: () => list(botId ? { botId } : {}), refetchInterval: 15000 });
   const bots = useQuery({ queryKey: ["vibe-bots", "list"], queryFn: () => botsList({}) });
-  const systems = useQuery({ queryKey: ["vibe-maintain", "system-routines"], queryFn: async () => systemSchema.parse(await paseo.plugins.invoke("vibe-maintain", "maintain.system_routines", {})), enabled: !botId, retry: false, refetchInterval: 15000 });
   const [editing, setEditing] = useState<Routine | "new" | null>(null);
   const [view, setView] = useState<"list" | "week">("list");
   const [week, setWeek] = useState(0);
@@ -45,15 +42,12 @@ function RoutineContent({ theme, navigation, botId }: Pick<PluginScreenProps, "t
   }, [queryClient]);
   if (editing) return <RoutineForm embedded={!!botId} theme={theme} routine={editing === "new" ? null : editing} botId={botId} bots={bots.data?.bots ?? []} busy={busy} error={error} onCancel={() => setEditing(null)} onSave={(input) => { void run(async () => { if (editing === "new") await create(input); else { const { botId: _botId, ...patch } = input; await update({ id: editing.id, patch }); } setEditing(null); }); }} />;
   const items = [...(routines.data?.routines ?? [])].sort((a, b) => a.botId.localeCompare(b.botId));
-  const systemItems = systems.data?.routines ?? [];
-  const coordinatorAgent = bots.data?.bots.find((bot) => bot.role === "coordinator")?.mainAgentId;
-  const openMaintenance = () => { if (coordinatorAgent) navigation?.openAgent({ agentId: coordinatorAgent }); };
   const text = { color: theme.colors.foreground }, muted = { color: theme.colors.foregroundMuted };
   return <RoutineBody theme={theme} embedded={!!botId}>
     {botId ? null : <Text style={{ ...text, fontSize: 18 }}>例程</Text>}
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}><Button theme={theme} label={view === "list" ? "● 列表" : "列表"} onPress={() => setView("list")} /><Button theme={theme} label={view === "week" ? "● 周历" : "周历"} onPress={() => setView("week")} /><Button theme={theme} label="新建例程" onPress={() => setEditing("new")} /></View>
-    <Feedback theme={theme} error={error || routines.error || bots.error || systems.error} message={routines.isLoading ? "正在加载例程…" : undefined} />
-    {view === "week" ? <WeekView theme={theme} routines={items} systems={systemItems} week={week} setWeek={setWeek} onEdit={setEditing} onSystem={openMaintenance} /> : <>
+    <Feedback theme={theme} error={error || routines.error || bots.error} message={routines.isLoading ? "正在加载例程…" : undefined} />
+    {view === "week" ? <WeekView theme={theme} routines={items} week={week} setWeek={setWeek} onEdit={setEditing} /> : <>
       {items.map((item, index) => <Fragment key={item.id}>{(index === 0 || items[index - 1].botId !== item.botId) ? <Text style={{ ...text, fontSize: 16 }}>{bots.data?.bots.find((bot) => bot.id === item.botId)?.name ?? item.botId}</Text> : null}<View style={{ gap: 8, paddingVertical: 12, borderBottomWidth: 1, borderColor: theme.colors.border }}>
         <Text style={text}>{item.title}</Text>
         <Text style={muted}>{item.paused ? "已暂停" : "运行中"} · {scheduleText(item.schedule)} · {item.timezone}</Text>
@@ -61,18 +55,16 @@ function RoutineContent({ theme, navigation, botId }: Pick<PluginScreenProps, "t
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}><Button theme={theme} label={item.paused ? "恢复" : "暂停"} disabled={busy} onPress={() => { void run(() => item.paused ? resume({ id: item.id }) : pause({ id: item.id })); }} /><Button theme={theme} label="立即运行" disabled={busy} onPress={() => { void run(() => runNow({ id: item.id })); }} /><Button theme={theme} label="编辑" disabled={busy} onPress={() => setEditing(item)} /><Button theme={theme} label="删除" disabled={busy} onPress={() => setConfirmDelete(item.id)} /></View>
         {confirmDelete === item.id ? <View style={{ flexDirection: "row", gap: 8 }}><Text style={text}>确认删除此例程？</Text><Button theme={theme} label="确认删除" disabled={busy} onPress={() => { void run(async () => { await remove({ id: item.id }); setConfirmDelete(null); }); }} /><Button theme={theme} label="取消" onPress={() => setConfirmDelete(null)} /></View> : null}
       </View></Fragment>)}
-      {systemItems.length ? <Text style={{ ...text, fontSize: 16 }}>系统例程</Text> : null}
-      {systemItems.map((item) => <View key={item.id} style={{ gap: 8, paddingVertical: 12, borderBottomWidth: 1, borderColor: theme.colors.border }}><Text style={text}>{item.projectName} · {item.title}</Text><Text style={muted}>{item.paused ? "已暂停" : "运行中"} · {item.scheduleText} · 下次：{dateText(item.nextRunAt)} · 最近：{item.lastStatus ?? "尚未运行"}</Text><Button theme={theme} label="前往总协调的自动维护" disabled={!navigation || !coordinatorAgent} onPress={openMaintenance} /></View>)}
-      {!items.length && !systemItems.length && !routines.isLoading ? <Text style={muted}>还没有例程。</Text> : null}
+      {!items.length && !routines.isLoading ? <Text style={muted}>还没有例程。</Text> : null}
     </>}
   </RoutineBody>;
 }
 
-function WeekView({ theme, routines, systems, week, setWeek, onEdit, onSystem }: { theme: PluginScreenProps["theme"]; routines: Routine[]; systems: SystemRoutine[]; week: number; setWeek(value: number): void; onEdit(value: Routine): void; onSystem(value: SystemRoutine): void }) {
+function WeekView({ theme, routines, week, setWeek, onEdit }: { theme: PluginScreenProps["theme"]; routines: Routine[]; week: number; setWeek(value: number): void; onEdit(value: Routine): void }) {
   const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - (start.getDay() + 6) % 7 + week * 7);
   const end = new Date(start); end.setDate(end.getDate() + 7);
   let truncated = false;
-  const occurrences = [...routines.filter((r) => !r.paused).map((r) => ({ id: r.id, title: r.title, schedule: r.schedule, timezone: r.timezone, anchor: r.nextRunAt ?? r.createdAt, action: () => onEdit(r) })), ...systems.filter((r) => !r.paused && r.schedule).map((r) => ({ id: r.id, title: `系统 · ${r.title}`, schedule: r.schedule!, timezone: r.timezone, anchor: r.nextRunAt, action: () => onSystem(r) }))].flatMap((item) => {
+  const occurrences = routines.filter((r) => !r.paused).map((r) => ({ id: r.id, title: r.title, schedule: r.schedule, timezone: r.timezone, anchor: r.nextRunAt ?? r.createdAt, action: () => onEdit(r) })).flatMap((item) => {
     const result: { id: string; title: string; at: Date; action(): void }[] = [];
     try { let cursor = new Date(start.getTime() - 1); if (item.schedule.kind === "interval" && item.anchor) { const anchor = new Date(item.anchor).getTime(); const period = item.schedule.minutes * 60000; cursor = new Date(anchor + Math.ceil((start.getTime() - anchor) / period) * period - period); } for (let i = 0; i < 1000; i++) { const at = nextRoutineTime(item.schedule, item.timezone, cursor); if (at >= end || at <= cursor) break; result.push({ ...item, at }); cursor = at; if (i === 999) truncated = true; } } catch { /* Invalid schedules are surfaced by the editor. */ }
     return result;

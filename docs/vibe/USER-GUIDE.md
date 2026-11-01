@@ -6,7 +6,7 @@ myVibeBoard 在 Paseo 的原生 workspace 和 tab 里协作。一个任务对应
 
 ## 开始前
 
-daemon 启用插件后，安装 `vibe-board`、`vibe-context`、`vibe-master`、`vibe-scheduler`、`vibe-maintain`、`vibe-stats`、`vibe-verify`。`vibe-board` 名称保留用于兼容插件身份，现在提供 tab 编号与清单、`/执行` `/通过` `/状态` `/重新审阅`、模型预设与 Agent 行为设置。插件应与本 fork 的宿主一起升级；不要只替换其中一个包。
+daemon 启用插件后，安装 `vibe-board`、`vibe-context`、`vibe-master`、`vibe-scheduler`、`vibe-stats`、`vibe-verify`。`vibe-board` 名称保留用于兼容插件身份，现在提供 tab 编号与清单、`/执行` `/通过` `/状态` `/重新审阅`、模型预设与 Agent 行为设置。插件应与本 fork 的宿主一起升级；不要只替换其中一个包。
 
 原生项目自动关联任务项目扩展，无需手动管理项目。全局任务角色和方案审阅者单人超时在「任务角色」设置中配置，项目可覆盖角色设置。
 
@@ -92,9 +92,9 @@ Android 在线使用原生 workspace 和 tab，斜杠命令与桌面一致。首
 
 已有任务的后续消息、模型选择和提示词需要在线操作。旧手机看板副本、LWW 同步与旧积压不会导入。点到旧卡片通知时会显示「入口已停用」，请从项目的 workspace 进入新任务。
 
-## 设置与自动维护
+## bot 设置
 
-bot 的资料、模型、记忆和例程在其会话右侧资料面板中查看和编辑；在总协调 bot 会话右侧常驻的「自动维护」面板管理规则。自动维护先创建任务会话和方案，仍需你显式确认执行。Git 体检按分支/worktree 列出台账，并给出「建议合并 / 建议清理 / 需你决定 / 保留」的可直接确认方案（「需你决定」按原因分组，每组一句可批量拍板的建议），不再直接展示原始发现 JSON。总协调 bot 协助管理跨项目资源与维护。各项目分组第一行「项目 agent」接收需求，判断新开任务或转给已有任务 #1，并在任务完成后整理本项目记忆与需求文档。维护规则、提示词和配置仍按一份配置选择多个项目，不为各项目复制规则。
+bot 的资料、模型、记忆和例程在其会话右侧资料面板中查看和编辑。总协调 bot 协助管理跨项目资源。各项目分组第一行「项目 agent」接收需求，判断新开任务或转给已有任务 #1，并在任务完成后整理本项目记忆与需求文档。
 
 项目设置的「项目简介」展示 AGENTS.md / CLAUDE.md 的同步快照，可保存待合并修改；联网后交给项目 agent 合并，不直接覆盖仓库文件。「项目文档」可离线阅读缓存的 Markdown，大文件的截断标记表示缓存不是全文。环境故障由 daemon 检测并交给项目 agent 诊断；项目 agent 自身异常会在入口标记。详细边界见 [第九轮设计](ROUND9-DESIGN.md)。
 
@@ -104,14 +104,13 @@ bot 的资料、模型、记忆和例程在其会话右侧资料面板中查看�
 
 第六轮精简后，一个场景对应一条模板：
 
-| 插件          | 保留的提示词                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| vibe-shared   | `task.plan_format`（方案固定 JSON 段，只读后缀）                                                                                                                                                                                                                                                                                                                                                    |
-| vibe-board    | `task.role.main`（#1 群主）、`task.role.planner`（#2 写方案）、`task.role.scout`（探路）、`task.role.plan_reviewer`（方案审阅者）、`board.plan_review.request` / `board.plan_review.revise`（审阅请求与修订请求）、`board.scout.ask`（探路请求）、`board.task.work`（执行主代理）、`task.role.subagent`（子任务）、`board.tabs.guide`（tab 交流说明）、`board.task.continuation`（`/接手 #n` 接续） |
-| vibe-verify   | `verify.task.setup`、`verify.task.judge`、`verify.task.review`、`verify.task.fix`（验证四阶段）、`verify.verifier_system`、`verify.reviewer_system`（验证/复核角色规则）                                                                                                                                                                                                                            |
-| vibe-context  | `context.compact_notes`、`context.compact_restore`（上下文压缩）、`context.cold_start`、`context.failure_handoff`、`context.inject_frame`（冷启动与接续）                                                                                                                                                                                                                                           |
-| vibe-master   | `master.task_dispatch`、`master.rules`、`master.rules_supplement`、`master.rules_updated`、`master.repair_json`、`master.handoff_summary`（总 agent 跨项目派发）                                                                                                                                                                                                                                    |
-| vibe-maintain | `maintenance.review`、`maintenance.fix`（自动维护的复核/修复两种产出，使用同一组规则参数）                                                                                                                                                                                                                                                                                                          |
+| 插件         | 保留的提示词                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| vibe-shared  | `task.plan_format`（方案固定 JSON 段，只读后缀）                                                                                                                                                                                                                                                                                                                                                    |
+| vibe-board   | `task.role.main`（#1 群主）、`task.role.planner`（#2 写方案）、`task.role.scout`（探路）、`task.role.plan_reviewer`（方案审阅者）、`board.plan_review.request` / `board.plan_review.revise`（审阅请求与修订请求）、`board.scout.ask`（探路请求）、`board.task.work`（执行主代理）、`task.role.subagent`（子任务）、`board.tabs.guide`（tab 交流说明）、`board.task.continuation`（`/接手 #n` 接续） |
+| vibe-verify  | `verify.task.setup`、`verify.task.judge`、`verify.task.review`、`verify.task.fix`（验证四阶段）、`verify.verifier_system`、`verify.reviewer_system`（验证/复核角色规则）                                                                                                                                                                                                                            |
+| vibe-context | `context.compact_notes`、`context.compact_restore`（上下文压缩）、`context.cold_start`、`context.failure_handoff`、`context.inject_frame`（冷启动与接续）                                                                                                                                                                                                                                           |
+| vibe-master  | `master.task_dispatch`、`master.rules`、`master.rules_supplement`、`master.rules_updated`、`master.repair_json`、`master.handoff_summary`（总 agent 跨项目派发）                                                                                                                                                                                                                                    |
 
 合并掉的旧 key（`board.task.plan`、`board.task.scout`、`board.task.plan_review`、`task.role.worker`、`board.task.subtask`、`task.role.reviewer`、`task.role.verifier`）在你升级后第一次启动时会先把原覆盖迁移到新 key；如果新 key 在同一作用域已有覆盖，则保留新覆盖、旧覆盖不动。删除的 `verify.task.evidence_scope` 没有替代 key；若你曾设置覆盖，页面顶部会显示「旧覆盖已失效，请重新设置」，可逐条删除后重新编辑对应角色的提示词。
 

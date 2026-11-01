@@ -174,13 +174,6 @@ export function createMasterRuntime(deps: RuntimeDeps) {
         })
         .catch((error) => log("总 agent 接续失败", error));
     },
-    onMaintenancePaused({ ruleName, rejections }) {
-      alerts.raise(
-        "maintenance_paused",
-        ruleName,
-        `维护规则「${ruleName}」因连续 ${rejections} 次驳回而暂停，请在维护设置中恢复`,
-      );
-    },
     onScheduler(signal) {
       if (signal.kind === "paused") schedulerPaused = true;
       else if (signal.kind === "resumed") schedulerPaused = false;

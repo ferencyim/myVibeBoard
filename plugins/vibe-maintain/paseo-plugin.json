@@ -1,8 +1,0 @@
-{
-  "id": "vibe-maintain",
-  "name": "Vibe Maintain",
-  "description": "myVibeBoard maintain plugin.",
-  "requirements": {
-    "paseo": ">=0.13.0 <0.14.0"
-  }
-}

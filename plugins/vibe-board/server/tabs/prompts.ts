@@ -15,7 +15,7 @@ export const TASK_TAB_GUIDE_PROMPT: PromptDef = {
 创建本 tab 时同任务的其它 tab（之后可能新增或关闭，以 vibe_tabs 的实时结果为准，不要依赖这份清单）：
 {{tabs}}
 
-角色职责：{{main}} 是群主，和用户对话、派活、跟进并汇总；简单流程负责写简短方案，不改代码；{{planner}} 写方案，完整流程中方案模型有多个时插件对第一份完整方案自动安排其余模型审阅一次，再由 {{planner}} 修订定稿，之后要再审由用户发送 /重新审阅；{{scout}} 供所有 tab 共用，只读调研，结论回给提问的 tab；{{worker}} 按已确认方案实施，管理子代理（任务看板）、后台命令与终端；{{reviewer}} 检查代码；{{verifier}} 采集证据并判定。流程档位决定启用的角色：简单仅启用 {{main}} 和 {{worker}}，中等启用 {{main}}、{{planner}}、{{worker}}、{{verifier}}，完整流程启用全部角色；未启用的 tab 保留编号并可由用户启用，不创建 agent。已启用但未配置预设时沿用主会话模型；界面始终列出全部流程 tab。启用的角色 tab 由插件后台预建或首条用户消息时创建；需要额外并行调研时才用 vibe_open_tab 新开。
+角色职责：{{main}} 是群主，和用户对话、派活、跟进并汇总；简单流程负责写简短方案，不改代码；{{planner}} 写方案，完整流程中方案模型有多个时插件对第一份完整方案自动安排其余模型审阅一次，再由 {{planner}} 修订定稿，之后要再审由用户发送 /重新审阅；{{scout}} 供所有 tab 共用，只读调研，结论回给提问的 tab；{{worker}} 按已确认方案实施，管理子代理（任务看板）、后台命令与终端；{{reviewer}} 检查代码；{{verifier}} 采集证据并判定。流程档位决定启用的角色：简单仅启用 {{main}} 和 {{worker}}，中等启用 {{main}}、{{planner}}、{{worker}}、{{reviewer}}，完整流程启用全部角色；未启用的 tab 保留编号并可由用户启用，不创建 agent。已启用但未配置预设时沿用方案模型；任务流程面板始终列出全部流程步骤。启用的角色 tab 由插件后台预建或首条用户消息时创建；需要额外并行调研时才用 vibe_open_tab 新开。
 用户可以在 {{main}} 用 @#编号 直接找任一 tab，插件原样转来的就是用户本人的消息，与用户在本 tab 直接说话相同；各 tab 每轮结束后插件会把结论摘要汇报到 {{main}}。
 与其它 tab 交流使用 Paseo 工具：
 - vibe_tabs：读取本任务每个 tab 的编号、agentId、角色、模型和状态；
@@ -41,8 +41,8 @@ tab 协作约定：
     { name: "self", description: "当前 tab 的编号、角色与模型" },
     { name: "position", description: "当前 tab 在流程中的上下游位置" },
     { name: "tabs", description: "创建时的其它 tab 列表（实时清单用 vibe_tabs）" },
-    { name: "main", description: "主会话 tab，例如 #1 主会话" },
-    { name: "planner", description: "方案 tab；未建时为「方案（未启用）」" },
+    { name: "main", description: "方案 tab，例如 #1 方案" },
+    { name: "planner", description: "方案复核 tab；未建时为「方案复核（未启用）」" },
     { name: "scout", description: "探路 tab；未启用时为「探路（未启用）」" },
     { name: "worker", description: "执行 tab" },
     { name: "reviewer", description: "复核 tab；未启用时为「复核（未启用）」" },
@@ -56,7 +56,7 @@ export const PLAN_REVIEW_REQUEST_PROMPT: PromptDef = {
   plugin: "vibe-board",
   role: "reviewer",
   title: "方案审阅请求",
-  description: "方案 tab 出初稿后（或用户 /重新审阅 时），插件依次发给每个审阅者的任务说明。",
+  description: "方案复核 tab 出初稿后（或用户 /重新审阅 时），插件依次发给每个审阅者的任务说明。",
   whenSent: "方案初稿完成、轮到某个审阅者时",
   audience: "方案审阅子代理",
   defaultText: `请审阅 {{planner}} 的方案稿。你是第 {{position}} 位审阅者。
@@ -68,9 +68,9 @@ export const PLAN_REVIEW_REQUEST_PROMPT: PromptDef = {
 前面审阅者的意见：
 {{reviews}}`,
   placeholders: [
-    { name: "planner", description: "写方案的 tab，例如 #2 方案" },
+    { name: "planner", description: "写方案的 tab，例如 #2 方案复核" },
     { name: "position", description: "当前审阅者序号，例如 1/2" },
-    { name: "draft", description: "方案 tab 写作模型的方案稿全文" },
+    { name: "draft", description: "方案复核 tab 写作模型的方案稿全文" },
     { name: "reviews", description: "前面审阅者的意见，没有时为「（你是第一位审阅者）」" },
   ],
   fixedSuffix: "只输出评估意见，不输出 vibe-plan 方案段，不修改任何项目文件。",
@@ -82,9 +82,9 @@ export const PLAN_REVIEW_REVISE_PROMPT: PromptDef = {
   plugin: "vibe-board",
   role: "planner",
   title: "按审阅意见修订方案",
-  description: "全部审阅者完成后，插件请方案 tab 的写作模型汇总修订最终方案。",
+  description: "全部审阅者完成后，插件请方案复核 tab 的写作模型汇总修订最终方案。",
   whenSent: "最后一位审阅者完成后",
-  audience: "方案 tab",
+  audience: "方案复核 tab",
   defaultText: `{{count}} 位审阅者已审阅你的方案初稿，意见如下。请汇总全部意见，修订出最终方案，仍按固定格式输出完整方案段；在方案末尾加「审阅意见处理」一节，逐条说明采纳了哪些、没采纳哪些及理由。
 
 {{reviews}}`,
@@ -110,7 +110,7 @@ export const SCOUT_ASK_PROMPT: PromptDef = {
     { name: "question", description: "调查问题" },
   ],
   fixedSuffix:
-    "完成后用 send_agent_prompt 把结论发回提问方（上面写明的 agentId），再给主会话 tab 留一句摘要；提问方就是主会话时不必重复。只读调查，不修改项目文件。",
+    "完成后用 send_agent_prompt 把结论发回提问方（上面写明的 agentId），再给方案 tab 留一句摘要；提问方就是方案 tab 时不必重复。只读调查，不修改项目文件。",
 };
 
 /** The read-only notice that precedes any quoted history; users cannot edit it away. */

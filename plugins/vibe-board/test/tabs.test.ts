@@ -468,8 +468,8 @@ describe("任务 tab 编号与标题", () => {
 
     const first = await tabs.ensureTab("agent-1");
     expect(first).toMatchObject({ number: 1, agentId: "agent-1", role: "main", model: "first" });
-    expect(tabTitle(first!)).toBe("#1 主会话 · first");
-    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 主会话 · first" });
+    expect(tabTitle(first!)).toBe("#1 方案 · first");
+    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 方案 · first" });
 
     fake.addAgent({ id: "agent-2", model: "second" });
     const second = await tabs.ensureTab("agent-2");
@@ -507,7 +507,7 @@ describe("任务 tab 编号与标题", () => {
     fake.addAgent({ id: "agent-1", provider: "qoder", model: "dfmodel" });
     const first = await tabs.ensureTab("agent-1");
     expect(first).toMatchObject({ model: "dfmodel", modelLabel: "DeepSeek-Flash" });
-    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 主会话 · DeepSeek-Flash" });
+    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 方案 · DeepSeek-Flash" });
 
     fake.addAgent({ id: "agent-2", provider: "qoder", model: "unknown-id" });
     const second = await tabs.ensureTab("agent-2");
@@ -596,11 +596,11 @@ describe("任务 tab 编号与标题", () => {
     fake.addAgent({ id: "agent-1", model: null });
     const first = await tabs.ensureTab("agent-1");
     expect(first).toMatchObject({ number: 1, model: UNRESOLVED_TAB_MODEL });
-    expect(tabTitle(first!)).toBe("#1 主会话");
-    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 主会话" });
+    expect(tabTitle(first!)).toBe("#1 方案");
+    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 方案" });
     fake.agents.get("agent-1")!.model = "resolved";
     await tabs.tabsFor(store.tasks.get("ws")!, true);
-    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 主会话 · resolved" });
+    expect(fake.titles.at(-1)).toEqual({ agentId: "agent-1", title: "#1 方案 · resolved" });
     expect(store.tasks.get("ws")!.tabs[0]!.model).toBe("resolved");
   });
 });
@@ -912,12 +912,23 @@ describe("任务 tab 交流说明注入", () => {
       env: { VIBE_ROLE: "planner" },
     } as never)) as { config: { systemPrompt?: string } };
     // No task row yet: the planner is the first tab, and the prompt names the real number.
-    expect(planner.config.systemPrompt).toContain("你是 #2 方案");
-    expect(planner.config.systemPrompt).toContain("#1 主会话");
+    expect(planner.config.systemPrompt).toContain("你是 #2 方案复核");
+    expect(planner.config.systemPrompt).toContain("#1 方案");
     expect(planner.config.systemPrompt).toContain("vibe_project_plans");
     expect(planner.config.systemPrompt).toContain("vibe-plan");
     expect(prompt).toContain("vibe_tabs");
     expect(prompt).not.toContain("wait_for_agent");
+  });
+
+  it("角色提示词按全局覆盖注入，不受项目覆盖影响", async () => {
+    const { store, fake, tabs } = setup();
+    fake.addAgent({ id: "agent-1" });
+    store.prompts.setOverride("task.role.main", "全局角色规则");
+    const project = store.projects.create({ name: "任务项目", prefix: "T", repoPath: fake.directory, paseoProjectId: fake.projectId });
+    store.prompts.setOverride("task.role.main", "项目角色规则", { projectId: project.id });
+    const result = await tabs.injectGuide({ config: {}, workspaceId: "ws" } as never);
+    expect(result.config.systemPrompt).toContain("全局角色规则");
+    expect(result.config.systemPrompt).not.toContain("项目角色规则");
   });
 
   it("已有任务时注入编号清单；会话 tab 不重复注入规划规则", async () => {
@@ -929,7 +940,7 @@ describe("任务 tab 交流说明注入", () => {
       workspaceId: "ws",
     } as never)) as { config: { systemPrompt?: string } };
     const prompt = result.config.systemPrompt ?? "";
-    expect(prompt).toContain("#1 主会话 · first");
+    expect(prompt).toContain("#1 方案 · first");
     expect(prompt).not.toContain("本任务的群主");
     expect(store.tasks.get("ws")!.tabs).toHaveLength(1);
 
@@ -994,7 +1005,7 @@ describe("vibe_tabs", () => {
           number: 1,
           agentId: "agent-1",
           role: "main",
-          roleLabel: "主会话",
+          roleLabel: "方案",
           provider: "codex",
           model: "first",
           status: "空闲",
@@ -1069,7 +1080,7 @@ describe("WP132 未配置角色沿用主会话", () => {
   });
   it.each([
     ["simple", ["main", "worker"]],
-    ["medium", ["main", "planner", "worker", "verifier"]],
+    ["medium", ["main", "planner", "worker", "reviewer"]],
     ["full", ["main", "planner", "scout", "worker", "reviewer", "verifier"]],
   ] as const)("%s 档只预建启用的角色，局部启用后可创建", async (level, roles) => {
     const { store, flow, tabs } = await projectTask();
@@ -1090,7 +1101,7 @@ describe("WP132 未配置角色沿用主会话", () => {
       workspaceId: "ws",
       config: { provider: "codex/first", thinkingOptionId: "high" },
     } as never);
-    expect(request.config.systemPrompt).toContain("#2 方案");
+    expect(request.config.systemPrompt).toContain("#2 方案复核");
     expect(request.config.systemPrompt).toContain("#6 验证");
     expect(request.config.systemPrompt).not.toMatch(/^#\d+ .*（未启用）$/m);
   });
@@ -1428,7 +1439,7 @@ describe("接手 tab", () => {
     expect(fake.sends).toHaveLength(1);
   });
 
-  it("主会话 tab 即使说「继续 #2 的工作」也不会被改成其他角色", async () => {
+  it("方案 tab 即使说「继续 #2 的工作」也不会被改成其他角色", async () => {
     const { store, fake, tabs, flow } = await projectTask();
     await tabs.openTab("agent-1", { role: "scout", task: "调查入口" });
     const sendsBefore = fake.sends.length;
@@ -2327,7 +2338,7 @@ describe("预建流程 tab", () => {
     } as never)) as { config: { systemPrompt?: string } };
     const prompt = result.config.systemPrompt ?? "";
     expect(prompt).toContain("你的身份：#7 会话");
-    expect(prompt).toContain("#2 方案");
+    expect(prompt).toContain("#2 方案复核");
     expect(prompt).toContain("#3 探路");
     expect(prompt).toContain("#4 执行");
     expect(prompt).toContain("#5 复核");
@@ -3827,7 +3838,7 @@ function reviewersOf(fake: ReturnType<typeof fakePaseo>) {
 }
 
 describe("WP-130 tab 新顺序与旧任务补 tab", () => {
-  it("新任务：#1 主会话、#2 方案、#3 探路、#4 执行、#5 复核、#6 验证，标题按新角色", async () => {
+  it("新任务：#1 方案、#2 方案复核、#3 探路、#4 执行、#5 复核、#6 验证，标题按新角色", async () => {
     const { store, fake } = await round8Task();
     expect(store.tasks.get("ws")!.tabs.map((tab) => `#${tab.number} ${tab.role}`)).toEqual([
       "#1 main",
@@ -3837,13 +3848,13 @@ describe("WP-130 tab 新顺序与旧任务补 tab", () => {
       "#5 reviewer",
       "#6 verifier",
     ]);
-    expect(fake.titles.map((title) => title.title)).toContain("#2 方案 · planner-model");
+    expect(fake.titles.map((title) => title.title)).toContain("#2 方案复核 · planner-model");
   });
 
   it("第八轮之前登记的任务回合补缺并规范为固定流程编号", async () => {
     const { store, fake, flow } = await projectTask();
     configurePresets(store);
-    // The round-7 layout: #1 主会话, then 探路, 执行, 复核, 验证.
+    // The round-7 layout: #1 方案, then 探路, 执行, 复核, 验证.
     for (const [id, role] of [
       ["old-scout", "scout"],
       ["old-worker", "worker"],
@@ -3881,7 +3892,7 @@ describe("WP-130 tab 新顺序与旧任务补 tab", () => {
   });
 });
 
-describe("WP-130 #2 方案多模型互审（插件编排）", () => {
+describe("WP-130 #2 方案复核多模型互审（插件编排）", () => {
   it("列表只有 1 个模型：#2 的方案直接保存待确认，不开审阅者", async () => {
     const { store, fake, tab, turn } = await round8Task();
     const planner = tab("planner");
@@ -4039,7 +4050,7 @@ describe("WP-130 #2 方案多模型互审（插件编排）", () => {
     const injected = (await tabs.injectGuide(request as never)) as {
       config: { systemPrompt?: string };
     };
-    expect(injected.config.systemPrompt).toContain("#2 方案的审阅者");
+    expect(injected.config.systemPrompt).toContain("#2 方案复核的审阅者");
     expect(injected.config.systemPrompt).not.toContain("你是执行子代理");
   });
 });
@@ -4332,7 +4343,7 @@ describe("WP-130 复核修复：审阅者候选、超时与恢复", () => {
 });
 
 describe("WP-130 复核修复：只审初稿一次与 /重新审阅", () => {
-  it("修订稿定稿后再出方案不再审阅；/重新审阅只认主会话或方案 tab，对最新方案再审一轮", async () => {
+  it("修订稿定稿后再出方案不再审阅；/重新审阅只认方案或方案复核 tab，对最新方案再审一轮", async () => {
     const { store, fake, flow, tab, turn } = await round8Task([["claude", "review-a"]]);
     const planner = tab("planner");
     await fake.paseo.agents.ref(planner.agentId).send("需求");
@@ -4360,7 +4371,7 @@ describe("WP-130 复核修复：只审初稿一次与 /重新审阅", () => {
 
     await expect(
       flow.rereview({ workspaceId: "ws", agentId: tab("worker").agentId }),
-    ).rejects.toThrow("主会话或方案 tab");
+    ).rejects.toThrow("方案或方案复核 tab");
     const result = await flow.rereview({ workspaceId: "ws", agentId: "agent-1" });
     expect(result.message).toContain("按用户要求重新审阅");
     const again = reviewersOf(fake).find((agent) => agent.id !== reviewer.id)!;
@@ -4397,15 +4408,15 @@ describe("WP-130 复核修复：提示词编号占位", () => {
       "#6 verifier",
     ]);
     const main = store.prompts.resolve("task.role.main", { vars: roleVars(task.tabs) });
-    expect(main).toContain("交给 #2 方案 出方案");
+    expect(main).toContain("交给 #2 方案复核 出方案");
     expect(main).toContain("交给 探路（未启用）");
     expect(main).toContain("直接在 #4 执行 发消息");
     expect(main).not.toContain("{{");
     const guide = store.prompts.resolve("board.tabs.guide", {
       vars: { ...roleVars(task.tabs), self: "测试", position: "测试", tabs: "测试" },
     });
-    expect(guide).toContain("简单仅启用 #1 主会话 和 #4 执行");
-    expect(guide).toContain("中等启用 #1 主会话、#2 方案、#4 执行、#6 验证");
+    expect(guide).toContain("简单仅启用 #1 方案 和 #4 执行");
+    expect(guide).toContain("中等启用 #1 方案、#2 方案复核、#4 执行、#5 复核");
     expect(guide).not.toContain("{{");
     // #1 群主的授权措辞。
     expect(main).toContain("执行只能由用户授权");
@@ -4419,7 +4430,7 @@ describe("WP-130 复核修复：提示词编号占位", () => {
       parentAgentId: tab("planner").agentId,
       labels: { [PARENT_AGENT_ID_LABEL]: tab("planner").agentId, [PLAN_REVIEW_LABEL]: "c" },
     } as never)) as { config: { systemPrompt?: string } };
-    expect(reviewer.config.systemPrompt).toContain("你是 #2 方案的审阅者");
+    expect(reviewer.config.systemPrompt).toContain("你是 #2 方案复核的审阅者");
     const sub = (await tabs.injectGuide({
       config: { provider: "claude/x" },
       workspaceId: "ws",
@@ -4464,7 +4475,7 @@ describe("WP-130 复核修复：方案感知的调用者与文件范围", () => 
 });
 
 describe("WP-131 #1 群聊", () => {
-  /** A provisioned task (#1 主会话 … #6 验证) with a group chat over the same fake host. */
+  /** A provisioned task (#1 方案 … #6 验证) with a group chat over the same fake host. */
   async function groupTask(
     options: { clock?: () => number; handoffWaitMs?: number; reportIntervalMs?: number } = {},
   ) {
@@ -4588,7 +4599,7 @@ describe("WP-131 #1 群聊", () => {
     const before = fake.sends.length;
     // The hook answers synchronously even though the delivery will be slow.
     const result = hook("@#2 写个方案");
-    expect(result).toEqual({ handled: true, note: "正在转给 #2 方案。" });
+    expect(result).toEqual({ handled: true, note: "正在转给 #2 方案复核。" });
     await vi.advanceTimersByTimeAsync(20);
     // Nothing goes out before the host has recorded the takeover.
     expect(fake.sends.length).toBe(before);
@@ -4682,7 +4693,7 @@ describe("WP-131 #1 群聊", () => {
     const missing = hook("@#９ 你好");
     expect(missing?.handled).toBe(true);
     expect(missing?.note).toContain("#9 不存在");
-    expect(missing?.note).toContain("#2 方案、#3 探路、#4 执行");
+    expect(missing?.note).toContain("#2 方案复核、#3 探路、#4 执行");
     expect(hook("@#2")).toEqual({ handled: true, note: "@#2 后面没有内容，消息没有转发。" });
     await group.settle();
     expect(fake.sends.length).toBe(before);
@@ -4703,14 +4714,14 @@ describe("WP-131 #1 群聊", () => {
     expect(targets.main).toBe(true);
     expect(targets.selected).toBeNull();
     expect(targets.options.map((option) => [option.label, option.role])).toEqual([
-      ["#2 方案 · planner-model", "planner"],
+      ["#2 方案复核 · planner-model", "planner"],
       ["#3 探路 · scout-model", "scout"],
       ["#4 执行 · second", "worker"],
       ["#5 复核 · review-model", "reviewer"],
       ["#6 验证 · verify-model", "verifier"],
     ]);
     expect((await group.targetsFor("ws", tab("planner").agentId)).main).toBe(false);
-    await expect(group.select("ws", tab("planner").agentId, 3)).rejects.toThrow("主会话");
+    await expect(group.select("ws", tab("planner").agentId, 3)).rejects.toThrow("方案会话");
     expect((await group.select("ws", "agent-1", 3)).selected).toBe(3);
     expect((await prompt("帮我查查依赖"))?.note).toBe("正在转给 #3 探路。");
     expect(fake.sends.at(-1)).toMatchObject({
@@ -4726,12 +4737,12 @@ describe("WP-131 #1 群聊", () => {
       main: true,
       selfNumber: 1,
       options: [
-        { number: 2, label: "#2 方案 · m", role: "planner", open: true },
+        { number: 2, label: "#2 方案复核 · m", role: "planner", open: true },
         { number: 4, label: "#4 执行 · m", role: "worker", open: true },
       ],
     };
     expect(targetLabel({ ...base, selected: null })).toBe("将发给 群主");
-    expect(targetLabel({ ...base, selected: 2 })).toBe("将发给 #2 方案");
+    expect(targetLabel({ ...base, selected: 2 })).toBe("将发给 #2 方案复核");
     expect(targetLabel({ ...base, selected: 4 })).toBe("发送即授权 #4 执行");
   });
 
@@ -4983,7 +4994,7 @@ describe("WP-131 #1 群聊", () => {
       .map((row) => row.data.text);
     expect(texts.some((text) => text.includes("开始多模型审阅"))).toBe(true);
     // The planner's own turn row is covered by the review rows.
-    expect(texts.some((text) => text.startsWith("#2 方案 本轮结束"))).toBe(false);
+    expect(texts.some((text) => text.startsWith("#2 方案复核 本轮结束"))).toBe(false);
   });
 
   it("任务 tab 带上编号排序标签，旧 tab 刷新时补上", async () => {

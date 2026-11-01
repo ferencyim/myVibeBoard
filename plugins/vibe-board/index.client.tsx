@@ -9,6 +9,7 @@ import { TaskFlowPanel } from "./client/task-panel";
 import { TaskInfoPanel } from "./client/task-info";
 import { TaskStatusItem } from "./client/task-status";
 import { contributeGroupTarget } from "./client/group-target";
+import { FlowConversationControls } from "./client/flow-tab-controls";
 import { contributeWorkspaceTabs } from "./client/workspace-tabs";
 import { contributeTaskSidebarProjection } from "./client/project-agent-task-projection";
 import { taskStatusDataSchema, taskTabCommandRpc, type TaskTabCommand } from "./shared/task-tabs";
@@ -53,6 +54,7 @@ const COMMANDS: readonly {
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
     contributeWorkspaceTabs(client),
+    client.addConversationHeaderAccessory({ id: "task-flow-controls", Component: FlowConversationControls }),
     contributeProjectBotWorkspaces(client),
     contributeTaskSidebarProjection(client),
     client.addProjectSidebarGroup({

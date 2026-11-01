@@ -377,6 +377,27 @@ function setup(
 }
 
 describe("原生 workspace 验证", () => {
+  it("关闭验证时只执行复核并以复核结果进入待验收", async () => {
+    const h = setup({ review: "pass" });
+    h.board.tasks.setControl("ws-task", { disabledRoles: ["verifier"] });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "pass" });
+    expect(h.launched.map((input) => input.role)).toEqual(["reviewer"]);
+    expect(h.board.tasks.get("ws-task")!.phase).toBe("awaiting_acceptance");
+    expect(h.verify.items(result!.verificationId).map((item) => item.kind)).toEqual(["review"]);
+  });
+
+  it("复核和验证均关闭时明确记录跳过，由用户验收", async () => {
+    const h = setup({ review: "pass" });
+    h.board.tasks.setControl("ws-task", { disabledRoles: ["reviewer", "verifier"] });
+    const result = await h.pipeline.run("ws-task");
+    expect(result).toMatchObject({ conclusion: "pass" });
+    expect(h.launched).toHaveLength(0);
+    expect(h.board.tasks.get("ws-task")!.phase).toBe("awaiting_acceptance");
+    expect(h.verify.items(result!.verificationId)).toMatchObject([
+      { checkText: "用户关闭复核及验证", method: "skipped" },
+    ]);
+  });
   it("本轮Git原文保存为绑定提交的可引用证据，判定仅引用真实文件名", async () => {
     const h = setup({ verdictEvidence: ["git-evidence.json"] });
     const result = await h.pipeline.run("ws-task");

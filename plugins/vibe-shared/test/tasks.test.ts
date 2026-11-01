@@ -404,6 +404,17 @@ describe("workspace task commands", () => {
 
 
 describe("task flow levels", () => {
+  it("persists custom flow and role choices across reads, and resets them when selecting a preset", () => {
+    const state = tasks();
+    state.tasks.setFlow("workspace-1", { level: "custom", source: "user", reason: "自定义" });
+    state.tasks.updateControl("workspace-1", { enabledRoles: ["reviewer"], disabledRoles: ["verifier"] });
+    expect(state.tasks.get("workspace-1")).toMatchObject({ flowLevel: "custom", control: { enabledRoles: ["reviewer"], disabledRoles: ["verifier"] } });
+    const changed = state.tasks.setFlow("workspace-1", { level: "full", source: "user", reason: "调整" });
+    expect(changed.flowLevel).toBe("full");
+    expect(changed.control).not.toHaveProperty("disabledRoles");
+    state.db.close();
+  });
+
   it("persists changes and clears earlier local and creation authorizations", () => {
     const state = tasks();
     state.tasks.setControl("workspace-1", { enabledRoles: ["reviewer"], simpleAutoExecute: true });

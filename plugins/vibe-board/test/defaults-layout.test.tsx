@@ -34,7 +34,7 @@ describe("任务角色卡片", () => {
   it("方案继承提示位于方案卡片内，关闭角色仍可操作", () => {
     const onChange = vi.fn();
     render(<DefaultModelsEditor value={{}} onChange={onChange} settings={[]} providers={[]} saveRole={vi.fn()} />);
-    const planner = screen.getByTestId("role-card-#2 方案 · 添加审阅模型");
+    const planner = screen.getByTestId("role-card-#2 方案复核 · 添加审阅模型");
     expect(within(planner).getByText("沿用 #1 模型")).toBeTruthy();
     const scout = screen.getByTestId("role-card-#3 探路");
     const disable = within(scout).getByRole("button", { name: "不启用" });
@@ -55,7 +55,7 @@ describe("任务角色卡片", () => {
       ],
     } as React.ComponentProps<typeof DefaultModelsEditor>["settings"][number];
     render(<DefaultModelsEditor projectId="project-1" value={{ main: "preset" }} onChange={vi.fn()} settings={[setting]} providers={[]} saveRole={vi.fn()} />);
-    const main = screen.getByTestId("role-card-#1 主会话");
+    const main = screen.getByTestId("role-card-#1 方案");
     const pickers = within(main).getAllByTestId("model-picker");
     expect(pickers).toHaveLength(3);
     for (const picker of screen.getAllByTestId("model-picker")) {

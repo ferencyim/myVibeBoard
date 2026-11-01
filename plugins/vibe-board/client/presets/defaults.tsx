@@ -357,8 +357,8 @@ function PlannerField({
     () => onChange(setPlanner(value, index, null)),
     [onChange, value, index],
   );
-  let label = "#2 方案 · 添加审阅模型";
-  if (id) label = index === 0 ? "#2 方案 · 写作" : `#2 方案 · 审阅 ${index}`;
+  let label = "#2 方案复核 · 添加审阅模型";
+  if (id) label = index === 0 ? "#2 方案复核 · 写作" : `#2 方案复核 · 审阅 ${index}`;
   return (
     <RoleCard
       label={label}
@@ -399,7 +399,7 @@ export function DefaultModelsEditor(props: EditorProps) {
   return (
     <View style={styles.stack}>
       <SettingsCard>{roles.slice(0, 2)}</SettingsCard>
-      <SettingsSection title="#2 方案" info="第 1 个写作，其余按顺序审阅。">
+      <SettingsSection title="#2 方案复核" info="第 1 个写作，其余按顺序审阅。">
         <SettingsCard>
           {plannerRows.map((row) => (
             <PlannerField key={row.key} {...props} id={row.id} index={row.index} />

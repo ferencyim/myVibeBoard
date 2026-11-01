@@ -419,12 +419,12 @@ export function createTaskFlow(options: {
   function rereview(input: { workspaceId: string; agentId: string }) {
     return queue(input.workspaceId, async () => {
       const task = requireTask(input.workspaceId);
-      if (task.flowLevel !== "full") throw new Error("当前流程不启用方案互审，请先切换完整流程");
+      if (task.flowLevel !== "full" && task.flowLevel !== "custom") throw new Error("当前流程不启用方案互审，请先切换完整流程");
       const caller = tabFor(task, input.agentId);
       if (!caller || (caller.role !== "main" && caller.role !== "planner"))
-        throw new Error("请在主会话或方案 tab（或任务流程面板）发送 /重新审阅");
+        throw new Error("请在方案或方案复核 tab（或任务流程面板）发送 /重新审阅");
       const planner = plannerTab(task);
-      if (!planner) throw new Error("本任务还没有方案 tab");
+      if (!planner) throw new Error("本任务还没有方案复核 tab");
       const page = await timeline(planner.agentId);
       const found = planMessage(page);
       if (!found) throw new Error(`#${planner.number} 方案还没有输出完整方案`);
@@ -454,10 +454,15 @@ export function createTaskFlow(options: {
     const enabled = task.control?.enabledRoles;
     if (main && Array.isArray(enabled)) {
       for (const role of ["scout", "reviewer"] as const)
-        if (enabled.includes(role) && !resolved[role]) resolved[role] = mainFallbackSnapshot(main);
+        if ((enabled.includes(role) || (task.flowLevel === "medium" && role === "reviewer")) && !resolved[role]) resolved[role] = mainFallbackSnapshot(main);
     }
     for (const role of ["scout", "reviewer"] as const) {
       if (roleTabDisabled(store, role, { task, projectId })) resolved[role] = null;
+    }
+    for (const role of ["planner", "scout", "worker", "reviewer", "verifier"] as const) {
+      if (roleTabDisabled(store, role, { task, projectId })) continue;
+      const selected = roleTabPreset(store, role, { task, projectId });
+      if (selected) resolved[role] = selected.snapshot;
     }
     return resolved;
   }
@@ -472,10 +477,11 @@ export function createTaskFlow(options: {
     void provisionTabs(input.workspaceId).catch((error) => log("流程 tab 预建失败", error));
     return queue(input.workspaceId, async () => {
       let task = requireTask(input.workspaceId);
-      if (!["planning", "awaiting_confirmation"].includes(task.phase))
-        throw new Error("当前阶段不能确认执行；请先在主会话修改方案");
+      const restart = task.phase === "paused" && !!task.control?.stoppedAt && !task.control?.blockingReason;
+      if (!["planning", "awaiting_confirmation"].includes(task.phase) && !restart)
+        throw new Error("当前阶段不能确认执行；请先在方案会话修改方案");
       const tab = tabFor(task, input.agentId) ?? anchorTab(task);
-      if (!tab) throw new Error("任务还没有主会话 tab");
+      if (!tab) throw new Error("任务还没有方案 tab");
       const candidates = planCandidates(task, tab);
       let located:
         | { plan: TaskPlan; entry: TimelineEntry; page: TimelinePage; sourceTab: TaskTab }
@@ -488,7 +494,9 @@ export function createTaskFlow(options: {
           break;
         }
       }
-      if (!located) throw new Error("还没有完整方案，请让 #2 方案输出 vibe-plan 方案");
+      if (!located) throw new Error("还没有完整方案，请让 #2 方案复核输出 vibe-plan 方案");
+      // Resuming is an explicit new confirmation: the stopped turn is not replayed.
+      if (restart) task = store.tasks.setPhase(input.workspaceId, "awaiting_confirmation");
       task = store.tasks.savePlan(input.workspaceId, located.plan);
       const reason = input.reason?.trim();
       if (reason) store.tasks.updateControl(input.workspaceId, { executionReason: reason });
@@ -570,7 +578,7 @@ export function createTaskFlow(options: {
     );
     return { task: confirmed, message: "已确认方案，等待调度器准入后发送给执行 tab。" };
   }
-  /** Create the idle role tabs a task should expose (#2 方案、#3 探路、#4 执行、#5 复核、#6 验证).
+  /** Create the idle role tabs a task should expose (#2 方案复核、#3 探路、#4 执行、#5 复核、#6 验证).
    *  No prompt is sent, so pre-created tabs do not consume a model turn. */
   function provisionTabs(workspaceId: string): Promise<void> {
     const pending = provisioning.get(workspaceId);
@@ -597,7 +605,7 @@ export function createTaskFlow(options: {
     const placement = await tabs.workspace(workspaceId);
     if (!task.tabs.some((tab) => tab.role === "main")) {
       const main = await tabs.ensureTab(task.anchorAgentId, { role: "main" });
-      if (!main) throw new Error("旧任务主会话尚不可用，暂缓流程 tab 补建");
+      if (!main) throw new Error("旧任务方案会话尚不可用，暂缓流程 tab 补建");
       task = requireTask(workspaceId);
     }
     for (const role of PREBUILT_ROLES) {
@@ -735,7 +743,7 @@ export function createTaskFlow(options: {
     }
     if (!preset && input.enable) {
       const main = task.tabs.find((tab) => tab.role === "main");
-      if (!main) throw new Error("主会话模型尚未就绪，请到「任务角色」设置选择模型");
+      if (!main) throw new Error("方案会话模型尚未就绪，请到「任务角色」设置选择模型");
       const snapshot = mainFallbackSnapshot(main);
       const model = snapshot.models[0]!;
       preset = { snapshot, model };
@@ -771,10 +779,10 @@ export function createTaskFlow(options: {
     if (input.thinkingOptionId !== undefined)
       model = { ...model, thinking: input.thinkingOptionId };
     if (!model.provider || !model.model || model.model === UNRESOLVED_TAB_MODEL)
-      throw new Error("主会话模型尚未解析，请到「任务角色」设置选择模型");
+      throw new Error("方案会话模型尚未解析，请到「任务角色」设置选择模型");
     return { snapshot, model };
   }
-  const FLOW_LABELS = { simple: "简单", medium: "中等", full: "完整" } as const;
+  const FLOW_LABELS = { simple: "简单", medium: "中等", full: "完整", custom: "自定义" } as const;
   /** Tell #1 the flow is decided and which role tabs are ready: its frozen system prompt and the
    *  placeholders it saw while the flow was being evaluated may say the roles are not enabled. */
   async function notifyFlowDecided(
@@ -791,7 +799,7 @@ export function createTaskFlow(options: {
         ? "流程已定为简单；请由你评估并输出简短方案及完整 vibe-plan。"
         : planner
           ? `流程已定为${label}；#${planner.number} 方案 等已就绪。请把需求交给 #${planner.number}（send_agent_prompt），或按简单流程处理。`
-          : `流程已定为${label}；方案 tab 仍在创建，请稍后用 vibe_tabs 重读，再把需求交给它（send_agent_prompt）。`;
+          : `流程已定为${label}；方案复核 tab 仍在创建，请稍后用 vibe_tabs 重读，再把需求交给它（send_agent_prompt）。`;
     try {
       const handle = paseo().agents.ref(task.anchorAgentId);
       if (onlyIfBusy) {
@@ -847,7 +855,7 @@ export function createTaskFlow(options: {
   async function startPlanner(workspaceId: string) {
     const task = requireTask(workspaceId);
     const planner = await idlePlanner(task);
-    if (!planner) throw new Error("方案 tab 当前不需要接收需求（已有对话、正在运行或尚未创建）");
+    if (!planner) throw new Error("方案复核 tab 当前不需要接收需求（已有对话、正在运行或尚未创建）");
     const text = (await requirementOf(task)) as string;
     await paseo()
       .agents.ref(planner.agentId)
@@ -899,12 +907,10 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
     task: Task,
     handle: PaseoAgentHandle,
     tab: TaskTab | null,
-    projectId: string,
   ) {
     const reason = String(task.control?.executionReason ?? "").trim();
     const executing = store.tasks.setPhase(task.workspaceId, "executing");
     const prompt = store.prompts.resolve("board.task.work", {
-      projectId,
       vars: { plan: JSON.stringify(executing.plan, null, 2), reason },
     });
     await handle.send(prompt + "\n\n" + readResourceBriefing(db).briefing, {
@@ -1015,7 +1021,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
           });
           task = requireTask(task.workspaceId);
           if (task.phase !== "queued") throw new Error("任务已停止，不启动执行 tab");
-          await startWork(task, existing, tab, projectId);
+          await startWork(task, existing, tab);
           return;
         }
         const updated = store.tasks.updateTab(task.workspaceId, candidate.agentId, {
@@ -1060,7 +1066,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
       });
       task = requireTask(task.workspaceId);
       if (task.phase !== "queued") throw new Error("任务已停止，不打开执行 tab");
-      await startWork(task, handle, tab, projectId);
+      await startWork(task, handle, tab);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       // Release only what this call holds: the admission it bound, or the still-unbound
@@ -1205,7 +1211,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
     await queue(workspaceId, async () => {
       const task = store.tasks.get(workspaceId);
       if (!task || !tabFor(task, tab.agentId)) return;
-      if (task.flowLevel === "medium") {
+      if (task.flowLevel === "medium" || (task.flowLevel === "custom" && roleTabDisabled(store, "planner", { task }))) {
         if (["planning", "awaiting_confirmation"].includes(task.phase)) {
           store.tasks.savePlan(workspaceId, plan);
           store.tasks.setSummary(workspaceId, `#${tab.number} 方案已更新：${plan.goal}。请确认执行。`);
@@ -1224,7 +1230,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
       if (!["planning", "awaiting_confirmation"].includes(current.phase)) return;
       if (JSON.stringify(current.plan) !== JSON.stringify(found.plan)) {
         store.tasks.savePlan(task.workspaceId, found.plan);
-        store.tasks.setSummary(task.workspaceId, `主会话已更新方案：${found.plan.goal}`);
+        store.tasks.setSummary(task.workspaceId, `方案已更新：${found.plan.goal}`);
       }
       // Only the creation-time choice grants this authorization. Changing the level later
       // cannot create it, and the confirmation consumes it before subsequent rounds.
@@ -1641,7 +1647,6 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
       const message = [
         roleText
           ? store.prompts.resolve(roleText, {
-              projectId,
               vars: roleVars(requireTask(task.workspaceId).tabs),
             })
           : "",
@@ -2009,7 +2014,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
         `#${tab.number} ${TASK_TAB_ROLE_LABELS[tab.role]}结论：${text.length > 200 ? text.slice(0, 200) + "…" : text}`,
       );
     } catch (error) {
-      log("探路或方案复核结论记录失败", error);
+      log("探路或方案审阅结论记录失败", error);
     }
   }
   async function rejectWorkerTurn(workspaceId: string, tab: TaskTab, text: string): Promise<void> {
@@ -2168,7 +2173,6 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
         // The execution confirmation: the tab was told not to edit files before it arrives.
         const current = requireTask(workspaceId);
         const prompt = store.prompts.resolve("board.task.work", {
-          projectId,
           vars: { plan: JSON.stringify(current.plan, null, 2), reason: direct },
         });
         await handle.send(prompt + "\n\n" + readResourceBriefing(db).briefing, {
@@ -2339,7 +2343,7 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
   }
   const STEP_TITLES: Record<string, string> = {
     scout: "探路结论",
-    plan_review: "方案复核",
+    plan_review: "方案审阅",
     delivery: "执行交付",
     review: "代码复核",
     verification: "验证结果",

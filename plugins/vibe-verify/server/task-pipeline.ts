@@ -188,6 +188,12 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
     }
   }
   async function execute(task: Task) {
+    const disabled = (role: "reviewer" | "verifier") => {
+      if (Array.isArray(task.control?.disabledRoles) && task.control.disabledRoles.includes(role)) return true;
+      if (Array.isArray(task.control?.enabledRoles) && task.control.enabledRoles.includes(role)) return false;
+      return task.flowLevel === "simple" || (task.flowLevel === "medium" && role === "verifier");
+    };
+    const verifyEnabled = !disabled("verifier");
     const workspace = await deps.workspace(task.workspaceId);
     const initial = await taskTree(runner, workspace.worktreePath);
     if (initial.status) throw new Error("工作树有未提交改动，须先收口提交再验证");
@@ -198,7 +204,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       confirmedAt: task.confirmedAt!,
       projectId: workspace.projectId,
       commitHash: initial.head,
-      checks: task.plan!.checks,
+      checks: verifyEnabled ? task.plan!.checks : [],
     });
     const vid = created.verification.id;
     const notes: string[] = [];
@@ -634,7 +640,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
           role: "reviewer",
           admittedOnly: true,
         }) ?? task.rolesSnapshot!.reviewer;
-      if (reviewerPreset) {
+      if (reviewerPreset && !disabled("reviewer")) {
         await ensureStable();
         if (board.tasks.get(task.workspaceId)!.phase === "verifying")
           board.db.immediate(() => {
@@ -799,7 +805,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         });
       }
       // Severe review findings are returned before collecting evidence for code that must change.
-      if (!verify.items(vid).some((i) => i.kind === "review" && i.judgement === "fail")) {
+      if (verifyEnabled && !verify.items(vid).some((i) => i.kind === "review" && i.judgement === "fail")) {
         board.tasks.setPhase(task.workspaceId, "verifying");
         await withAgent("verifier", task.rolesSnapshot!.verifier, async (agent) => {
           const config = await configureEvidence(agent);
@@ -810,6 +816,14 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
           verifierSource = agent.source;
         });
       }
+      if (!verifyEnabled && !verify.items(vid).some((item) => item.kind === "review")) {
+        if (disabled("reviewer"))
+          add("用户关闭复核及验证", "skipped", "pass", "本轮未执行复核或验证，由用户直接验收");
+        else add("复核运行完整性", "runtime", "doubt", "验证未启用且没有可用的复核结果");
+      }
+      // The phase contract reaches acceptance through verifying, including review-only flows.
+      if (board.tasks.get(task.workspaceId)?.phase === "reviewing")
+        board.tasks.setPhase(task.workspaceId, "verifying");
     } catch (error) {
       notes.push("验证中断：" + (error instanceof Error ? error.message : String(error)));
       add("验证运行完整性", "runtime", "doubt", notes.at(-1)!);
@@ -883,6 +897,9 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
       if (item.judgement === null) verify.judgeItem(item.id, "doubt", "未取得有效判定");
     const items = verify.items(vid);
     const conclusion = aggregate(items.map((item) => item.judgement));
+    const summary = verifyEnabled
+      ? verificationLine(conclusion, items, initial.head, false)
+      : `${disabled("reviewer") ? "复核和验证已关闭" : "仅复核"}：${conclusion === "pass" ? "待用户验收" : conclusion === "fail" ? "未通过" : "存疑"} · 提交 ${initial.head.slice(0, 8)}`;
     const report = writeArtifact(
       ctx,
       "report",
@@ -914,7 +931,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         sourceKey,
         confirmedAt: task.confirmedAt,
         source: artifactSource(task, verifierSource?.backendAgentId, sourceKey, verifierSource),
-        summary: verificationLine(conclusion, items, initial.head, false),
+        summary,
         data: {
           verificationId: vid,
           commitHash: initial.head,
@@ -949,7 +966,7 @@ export function createTaskPipeline(deps: TaskPipelineDeps) {
         if (returned) suffix = "。已退回执行阶段等待资源重新准入，修复后必须重新验证。";
         await announce(
           task,
-          verificationLine(conclusion, items, initial.head, false) +
+          summary +
             (voided ? "，本轮任务或代码状态变化，证据作废" : "") +
             " · 证据 " +
             vid +

@@ -15,9 +15,9 @@ export function resolveMainConfig(
     store.modelDefaults.global().main;
   if (!id) return {};
   const preset = store.presets.get(id);
-  if (!preset) throw new Error("#1 主会话预设不存在：" + id);
+  if (!preset) throw new Error("#1 方案预设不存在：" + id);
   const model = presetModels(preset)[0];
-  if (!model) throw new Error("#1 主会话预设没有模型");
+  if (!model) throw new Error("#1 方案预设没有模型");
   return {
     config: {
       provider: model.provider,

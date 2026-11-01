@@ -139,6 +139,9 @@ function planningControl(control: TaskControl | null | undefined): string | null
     "startedCommandRequests",
     "planReview",
     "enabledRoles",
+    "disabledRoles",
+    "customFlow",
+    "roleModels",
     "highRiskFlow",
     "projectId",
     "archivedAt",
@@ -151,9 +154,13 @@ function planningControl(control: TaskControl | null | undefined): string | null
 /** The only writer of task. Every mutation and its bus notification share one transaction. */
 export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {}) {
   const now = options.now ?? (() => new Date());
+  const decodeTask = (row: Record<string, unknown>): Task => {
+    const task = decodeRow(TaskSchema, row);
+    return task.control?.customFlow === true ? { ...task, flowLevel: "custom" } : task;
+  };
   const get = (workspaceId: string): Task | undefined => {
     const row = db.prepare("SELECT * FROM task WHERE workspace_id = ?").get(workspaceId);
-    return row ? decodeRow(TaskSchema, row) : undefined;
+    return row ? decodeTask(row) : undefined;
   };
   const requireTask = (workspaceId: string): Task => {
     const task = get(workspaceId);
@@ -196,7 +203,7 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
             .prepare("SELECT * FROM task WHERE phase = ? ORDER BY confirmed_at, workspace_id")
             .all(TaskPhaseSchema.parse(filter.phase))
         : db.prepare("SELECT * FROM task ORDER BY confirmed_at, workspace_id").all();
-      return rows.map((row) => decodeRow(TaskSchema, row));
+      return rows.map(decodeTask);
     },
     create(input: { workspaceId: string; anchorAgentId: string; conversationId?: string }): Task {
       const parsed = z
@@ -216,7 +223,7 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
         return changed(parsed.workspaceId, ["created"]);
       });
     },
-    setFlow(workspaceId: string, input: { level: "simple" | "medium" | "full"; source: "user" | "bot"; reason: string }): Task {
+    setFlow(workspaceId: string, input: { level: "simple" | "medium" | "full" | "custom"; source: "user" | "bot"; reason: string }): Task {
       const level = FlowLevelSchema.parse(input.level);
       const source = FlowSourceSchema.parse(input.source);
       const reason = z.string().parse(input.reason);
@@ -226,12 +233,17 @@ export function createTaskCommands(db: VibeDb, options: { now?: () => Date } = {
         if (level === "simple" && task.control?.highRiskFlow === true)
           throw new TaskCommandError("invalid", "高风险任务不得使用简单流程");
         const control = { ...task.control };
-        delete control.enabledRoles;
+        if (level === "custom") control.customFlow = true;
+        else {
+          delete control.customFlow;
+          delete control.enabledRoles;
+          delete control.disabledRoles;
+        }
         delete control.simpleAutoExecute;
         delete control.flowEvaluationPending;
         delete control.flowEvaluationText;
         db.prepare("UPDATE task SET flow_level = ?, flow_source = ?, flow_reason = ?, control_json = ? WHERE workspace_id = ?")
-          .run(level, source, reason, JSON.stringify(control), workspaceId);
+          .run(level === "custom" ? "full" : level, source, reason, JSON.stringify(control), workspaceId);
         return changed(workspaceId, ["flowLevel", "flowSource", "flowReason"]);
       });
     },

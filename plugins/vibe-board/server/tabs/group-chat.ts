@@ -155,7 +155,7 @@ export function createGroupChat(options: {
   }
   async function select(workspaceId: string, agentId: string, number: number | null) {
     const task = anchorTask(workspaceId, agentId);
-    if (!task) throw new Error("只有任务的主会话可以选择发送对象");
+    if (!task) throw new Error("只有任务的方案会话可以选择发送对象");
     if (number === null || number === selfNumber(task)) targets.delete(agentId);
     else {
       if (!(await tabs.tabsFor(task, true)).some((tab) => tab.number === number))

@@ -1,7 +1,7 @@
 import { cleanDefaults, plannerList, type ModelDefaults } from "../../shared/vibe/contract";
 
 export const DEFAULT_MODEL_FIELDS = [
-  ["main", "#1 主会话"],
+  ["main", "#1 方案"],
   ["project", "项目 agent"],
   ["scout", "#3 探路"],
   ["worker", "#4 执行"],

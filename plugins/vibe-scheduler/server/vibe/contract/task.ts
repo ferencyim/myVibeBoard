@@ -135,10 +135,10 @@ export const TASK_TAB_ROLES = [
 export const TaskTabRoleSchema = z.enum(TASK_TAB_ROLES);
 export type TaskTabRole = z.infer<typeof TaskTabRoleSchema>;
 export const TASK_TAB_ROLE_LABELS: Record<TaskTabRole, string> = {
-  main: "主会话",
-  planner: "方案",
+  main: "方案",
+  planner: "方案复核",
   scout: "探路",
-  plan_reviewer: "方案复核",
+  plan_reviewer: "方案审阅",
   worker: "执行",
   reviewer: "复核",
   verifier: "验证",
@@ -242,7 +242,7 @@ export const TaskArtifactSchema = z.object({
     .nullable(),
 });
 export type TaskArtifact = z.infer<typeof TaskArtifactSchema>;
-export const FlowLevelSchema = z.enum(["simple", "medium", "full"]);
+export const FlowLevelSchema = z.enum(["simple", "medium", "full", "custom"]);
 export type FlowLevel = z.infer<typeof FlowLevelSchema>;
 export const FlowSourceSchema = z.enum(["user", "bot"]);
 

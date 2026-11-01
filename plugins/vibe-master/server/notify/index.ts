@@ -20,7 +20,6 @@ const MASTER_ALERT_LABELS: Record<string, string> = {
   provider_error: "总 agent：预设内所有模型均不可用",
   quota_low: "Master: quota low",
   quota_error: "Master: quota error",
-  maintenance_paused: "Maintenance rule paused",
   permission_wait: "Master: waiting for permission",
   requirements_failed: "Master: requirements document not updated",
   review_loop: "Review: repeated severe issues",
