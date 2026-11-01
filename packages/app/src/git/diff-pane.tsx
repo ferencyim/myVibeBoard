@@ -1551,6 +1551,7 @@ export function ChangesSurface({
   const {
     status,
     isStatusLoading,
+    isStatusFetching,
     isGit,
     notGit,
     statusErrorMessage,
@@ -1810,7 +1811,7 @@ export function ChangesSurface({
         hasChanges={hasChanges}
         emptyMessage={emptyMessage}
         emptyAction={emptyAction}
-        checkingRepositoryLabel={t("workspace.git.diff.checkingRepository")}
+        checkingRepositoryLabel="正在读取 Git 状态…"
         notRepositoryLabel={t("workspace.git.diff.notRepository")}
       >
         <DiffDocument
@@ -1859,7 +1860,7 @@ export function ChangesSurface({
         hasChanges,
         canUseSplitLayout,
         refreshSupported,
-        isRefreshing,
+        isRefreshing: isRefreshing || (isStatusFetching && !isStatusLoading),
         layout: preferences.layout,
         hideWhitespace: preferences.hideWhitespace,
         wrapLines,
@@ -1896,6 +1897,8 @@ export function ChangesSurface({
       preferences.layout,
       isMobile,
       isRefreshing,
+      isStatusFetching,
+      isStatusLoading,
       presentation,
       refreshSupported,
       wrapLines,

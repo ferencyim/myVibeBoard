@@ -116,6 +116,17 @@ const TEST_CAPABILITIES = {
 class RecordingTimelineStore implements AgentTimelineStore {
   readonly writes: AgentTimelineRow[][] = [];
   private readonly memory = new InMemoryAgentTimelineStore();
+  private readonly clean = new Set<string>();
+
+  async isClean(agentId: string): Promise<boolean> {
+    return this.clean.has(agentId);
+  }
+  async markDirty(agentId: string): Promise<void> {
+    this.clean.delete(agentId);
+  }
+  async markClean(agentId: string): Promise<void> {
+    this.clean.add(agentId);
+  }
 
   private ensure(agentId: string): void {
     if (!this.memory.has(agentId)) this.memory.initialize(agentId);
@@ -156,17 +167,32 @@ class RecordingTimelineStore implements AgentTimelineStore {
 
   async deleteAgent(agentId: string): Promise<void> {
     this.memory.delete(agentId);
+    this.clean.delete(agentId);
   }
 
-  async bulkInsert(agentId: string, rows: readonly AgentTimelineRow[]): Promise<void> {
+  async replaceAgent(
+    agentId: string,
+    rows: readonly AgentTimelineRow[],
+    epoch: string,
+  ): Promise<void> {
+    this.clean.delete(agentId);
+    this.memory.initialize(agentId, { rows, epoch });
+  }
+
+  async bulkInsert(
+    agentId: string,
+    rows: readonly AgentTimelineRow[],
+    epoch?: string,
+  ): Promise<void> {
+    this.clean.delete(agentId);
     this.writes.push(rows.map((row) => ({ ...row })));
-    this.ensure(agentId);
-    for (const row of rows) {
-      this.memory.append(agentId, row.item, {
-        timestamp: row.timestamp,
-        turnId: row.turnId,
-      });
-    }
+    const existing = this.memory.has(agentId) ? this.memory.getRows(agentId) : [];
+    const currentEpoch = this.memory.has(agentId) ? this.memory.getEpoch(agentId) : epoch;
+    const merged = new Map([...existing, ...rows].map((row) => [row.seq, row]));
+    this.memory.initialize(agentId, {
+      rows: [...merged.values()].sort((a, b) => a.seq - b.seq),
+      epoch: currentEpoch,
+    });
   }
 
   async updateCommittedRow(agentId: string, row: AgentTimelineRow): Promise<void> {
@@ -697,6 +723,139 @@ test("uses an injected timeline store without making it a production requirement
   }
 });
 
+test("resuming a durable timeline preserves its rows and cursor epoch", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-durable-resume-"));
+  const store = new RecordingTimelineStore();
+  const id = randomUUID();
+  await store.bulkInsert(
+    id,
+    [
+      {
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        item: { type: "assistant_message", text: "saved" },
+      },
+    ],
+    "saved-epoch",
+  );
+  await store.markClean(id);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    const before = await manager.fetchDurableTimeline(id);
+    expect(before?.epoch).toBe("saved-epoch");
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "saved" },
+      { cwd: workdir },
+      id,
+    );
+    expect(manager.fetchTimeline(id).epoch).toBe(before?.epoch);
+    expect(manager.getTimeline(id)).toContainEqual({ type: "assistant_message", text: "saved" });
+    await manager.appendTimelineItem(id, { type: "assistant_message", text: "new" });
+    await manager.flush();
+    expect(await manager.fetchDurableTimeline(id)).toBeNull();
+    await manager.closeAgent(id);
+    expect((await manager.fetchDurableTimeline(id))?.epoch).toBe(before?.epoch);
+  } finally {
+    await manager.closeAgent(id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a dirty durable timeline is replayed instead of trusted", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-dirty-resume-"));
+  const store = new RecordingTimelineStore();
+  const id = randomUUID();
+  await store.bulkInsert(
+    id,
+    [
+      {
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        item: { type: "assistant_message", text: "incomplete" },
+      },
+    ],
+    "old-epoch",
+  );
+  class ReplaySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "complete" },
+      };
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new ReplaySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    expect(await manager.fetchDurableTimeline(id)).toBeNull();
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "dirty" },
+      { cwd: workdir },
+      id,
+    );
+    await manager.hydrateTimelineFromProvider(id);
+    expect(manager.getTimeline(id)).toEqual([{ type: "assistant_message", text: "complete" }]);
+    await manager.closeAgent(id);
+    expect((await manager.fetchDurableTimeline(id))?.rows[0]?.item).toEqual({
+      type: "assistant_message",
+      text: "complete",
+    });
+  } finally {
+    await manager.closeAgent(id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a clean empty durable timeline retains its epoch and needs no replay", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-empty-resume-"));
+  const store = new RecordingTimelineStore();
+  const id = randomUUID();
+  await store.replaceAgent(id, [], "empty-epoch");
+  await store.markClean(id);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  try {
+    expect(await manager.fetchDurableTimeline(id)).toMatchObject({
+      epoch: "empty-epoch",
+      rows: [],
+    });
+    await manager.resumeAgentFromPersistence(
+      { provider: "codex", sessionId: "empty" },
+      { cwd: workdir },
+      id,
+    );
+    expect(manager.getAgent(id)?.historyPrimed).toBe(true);
+    expect(manager.fetchTimeline(id)).toMatchObject({ epoch: "empty-epoch", rows: [] });
+    await manager.closeAgent(id);
+    expect(await manager.fetchDurableTimeline(id)).toMatchObject({
+      epoch: "empty-epoch",
+      rows: [],
+    });
+  } finally {
+    await manager.closeAgent(id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("refreshing an agent replaces the injected timeline store instead of appending a second copy", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-timeline-rehydrate-"));
   const store = new RecordingTimelineStore();
@@ -812,7 +971,7 @@ test("a failed history replay leaves the committed timeline intact", async () =>
     ).rejects.toThrow("history stream closed");
     await manager.flush();
 
-    expect(await manager.getTimelineRows(agent.id)).toEqual(committed);
+    expect(await store.getCommittedRows(agent.id)).toEqual(committed);
 
     // A retry once the provider recovers replaces that history rather than stacking on it.
     failReplay = false;
@@ -12182,6 +12341,8 @@ test("reads the last durable assistant response without loading a stored-only ch
   });
   const manager = new AgentManager({ clients: {}, durableTimelineStore: store, logger });
   expect(manager.getAgent("stored-child")).toBeNull();
+  expect(await manager.getLastAssistantMessage("stored-child")).toBeNull();
+  await store.markClean("stored-child");
   expect(await manager.getLastAssistantMessage("stored-child")).toBe(
     "Partial work saved before restart",
   );

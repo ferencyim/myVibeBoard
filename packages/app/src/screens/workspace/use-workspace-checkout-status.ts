@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { checkoutStatusQueryKey } from "@/git/query-keys";
-import { fetchCheckoutStatus } from "@/git/checkout-status-cache";
+import { fetchCheckoutStatus, isInitialCheckoutStatusLoading } from "@/git/checkout-status-cache";
 import { canCreateWorkspaceTerminal } from "@/screens/workspace/terminals/state";
 import { useHostRuntimeClient } from "@/runtime/host-runtime";
 
@@ -41,15 +41,20 @@ export function useWorkspaceCheckoutStatus(input: UseWorkspaceCheckoutStatusInpu
         client: input.client,
         serverId: input.normalizedServerId,
         cwd: input.workspaceDirectory,
+        progressive: true,
       });
     },
+    refetchInterval: (currentQuery) => (currentQuery.state.data?.refreshing ? 1000 : false),
     staleTime: Infinity,
     refetchOnMount: true,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
   });
   const isCheckoutStatusLoading = useMemo(
-    () => isCheckoutQueryEnabled && checkoutQuery.data === undefined && !checkoutQuery.isError,
+    () =>
+      isCheckoutQueryEnabled &&
+      (checkoutQuery.data === undefined || isInitialCheckoutStatusLoading(checkoutQuery.data)) &&
+      !checkoutQuery.isError,
     [checkoutQuery.data, checkoutQuery.isError, isCheckoutQueryEnabled],
   );
 

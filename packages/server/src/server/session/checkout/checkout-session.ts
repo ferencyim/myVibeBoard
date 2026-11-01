@@ -157,6 +157,7 @@ export class CheckoutSession {
   private readonly worktreesRoot: string | undefined;
   private readonly logger: pino.Logger;
   private readonly statusUpdateFingerprints = new Map<string, string>();
+  private readonly initialReadErrors = new Map<string, unknown>();
 
   constructor(options: CheckoutSessionOptions) {
     this.host = options.host;
@@ -236,6 +237,53 @@ export class CheckoutSession {
   async handleStatusRequest(msg: CheckoutStatusRequest): Promise<void> {
     const { cwd, requestId } = msg;
     const resolvedCwd = expandTilde(cwd);
+
+    if (msg.progressive && this.workspaceGitService.getCachedSnapshot) {
+      const cached = this.workspaceGitService.getCachedSnapshot(resolvedCwd);
+      const errorKey = `git:${resolvedCwd}`;
+      if (cached.snapshot) this.initialReadErrors.delete(errorKey);
+      const readError = this.initialReadErrors.get(errorKey);
+      if (!cached.snapshot && !this.initialReadErrors.has(errorKey)) {
+        void this.workspaceGitService
+          .getSnapshot(resolvedCwd, { includeForge: false })
+          .catch((error) => {
+            this.initialReadErrors.set(errorKey, error);
+            this.logger.warn({ err: error, cwd }, "Background checkout status read failed");
+          });
+      }
+      this.host.emit({
+        type: "checkout_status_response",
+        payload: cached.snapshot
+          ? {
+              ...buildCheckoutStatusPayloadFromSnapshot({
+                cwd,
+                requestId,
+                snapshot: cached.snapshot,
+              }),
+              refreshing: cached.refreshing,
+              cachedAt: cached.cachedAt,
+            }
+          : {
+              cwd,
+              isGit: false,
+              repoRoot: null,
+              currentBranch: null,
+              isDirty: null,
+              baseRef: null,
+              aheadBehind: null,
+              aheadOfOrigin: null,
+              behindOfOrigin: null,
+              hasRemote: false,
+              remoteUrl: null,
+              isPaseoOwnedWorktree: false,
+              error: readError === undefined ? null : toCheckoutError(readError),
+              requestId,
+              refreshing: readError === undefined,
+              cachedAt: null,
+            },
+      });
+      return;
+    }
 
     try {
       // The status payload is git-only: skip forge, and jump ahead of background refreshes.
@@ -485,6 +533,8 @@ export class CheckoutSession {
   async handleRefreshRequest(msg: CheckoutRefreshRequest): Promise<void> {
     const { cwd, requestId } = msg;
     const resolvedCwd = expandTilde(cwd);
+    this.initialReadErrors.delete(`git:${resolvedCwd}`);
+    this.initialReadErrors.delete(`pr:${resolvedCwd}`);
 
     try {
       (await this.resolveForgeService(resolvedCwd))?.service.invalidate({ cwd: resolvedCwd });
@@ -1136,6 +1186,51 @@ export class CheckoutSession {
     msg: Extract<SessionInboundMessage, { type: "checkout_pr_status_request" }>,
   ): Promise<void> {
     const { cwd, requestId } = msg;
+
+    if (msg.progressive && this.workspaceGitService.getCachedSnapshot) {
+      const resolvedCwd = expandTilde(cwd);
+      const cached = this.workspaceGitService.getCachedSnapshot(resolvedCwd, true);
+      const errorKey = `pr:${resolvedCwd}`;
+      if (cached.snapshot) this.initialReadErrors.delete(errorKey);
+      const readError = this.initialReadErrors.get(errorKey);
+      if (!cached.snapshot && !this.initialReadErrors.has(errorKey)) {
+        void this.workspaceGitService
+          .getSnapshot(resolvedCwd, {
+            force: true,
+            includeForge: true,
+            reason: "initial-pr-status",
+          })
+          .catch((error) => {
+            this.initialReadErrors.set(errorKey, error);
+            this.logger.warn({ err: error, cwd }, "Background checkout PR status read failed");
+          });
+      }
+      this.host.emit({
+        type: "checkout_pr_status_response",
+        payload: cached.snapshot
+          ? {
+              ...buildCheckoutPrStatusPayloadFromSnapshot({
+                cwd,
+                requestId,
+                snapshot: cached.snapshot,
+              }),
+              refreshing: cached.refreshing,
+              cachedAt: cached.cachedAt,
+            }
+          : {
+              cwd,
+              status: null,
+              githubFeaturesEnabled: false,
+              authState: "error",
+              forge: "github",
+              error: readError === undefined ? null : toCheckoutError(readError),
+              requestId,
+              refreshing: readError === undefined,
+              cachedAt: null,
+            },
+      });
+      return;
+    }
 
     try {
       const snapshot = await this.workspaceGitService.getSnapshot(cwd);

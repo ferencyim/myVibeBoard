@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { checkoutStatusQueryKey } from "@/git/query-keys";
-import { fetchCheckoutStatus } from "./checkout-status-cache";
+import { fetchCheckoutStatus, isInitialCheckoutStatusLoading } from "./checkout-status-cache";
 
 export type { CheckoutStatusPayload } from "./checkout-status-cache";
 
@@ -24,9 +24,10 @@ export function useCheckoutStatusQuery({ serverId, cwd }: UseCheckoutStatusQuery
       if (!client) {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
-      return await fetchCheckoutStatus({ client, serverId, cwd });
+      return await fetchCheckoutStatus({ client, serverId, cwd, progressive: true });
     },
     enabled: !!client && isConnected && !!cwd,
+    refetchInterval: (currentQuery) => (currentQuery.state.data?.refreshing ? 1000 : false),
     staleTime: Infinity,
     // Freshness is push-driven (checkout_status_update applied globally); with
     // staleTime: Infinity, refetchOnMount only fires after an explicit invalidation
@@ -36,10 +37,11 @@ export function useCheckoutStatusQuery({ serverId, cwd }: UseCheckoutStatusQuery
     refetchOnWindowFocus: false,
   });
 
+  const isInitialLoading = isInitialCheckoutStatusLoading(query.data);
   return {
-    status: query.data ?? null,
-    isLoading: query.isLoading,
-    isFetching: query.isFetching,
+    status: isInitialLoading ? null : (query.data ?? null),
+    isLoading: query.isLoading || isInitialLoading,
+    isFetching: query.isFetching || Boolean(query.data?.refreshing),
     isError: query.isError,
     error: query.error,
   };
@@ -60,7 +62,7 @@ export function useCheckoutStatusCacheOnly({ serverId, cwd }: UseCheckoutStatusQ
       if (!client) {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
-      return await fetchCheckoutStatus({ client, serverId, cwd });
+      return await fetchCheckoutStatus({ client, serverId, cwd, progressive: true });
     },
     enabled: false,
     staleTime: CHECKOUT_STATUS_STALE_TIME,

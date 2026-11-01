@@ -35,6 +35,7 @@ export function useWorkingDiff({
   const {
     status,
     isLoading: isStatusLoading,
+    isFetching: isStatusFetching,
     isError: isStatusError,
     error: statusError,
   } = useCheckoutStatusQuery({ serverId, cwd });
@@ -102,6 +103,7 @@ export function useWorkingDiff({
   return {
     status,
     isStatusLoading,
+    isStatusFetching,
     isGit,
     notGit,
     statusErrorMessage,

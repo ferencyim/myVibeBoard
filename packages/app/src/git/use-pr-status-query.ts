@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { isInitialCheckoutStatusLoading } from "@/git/checkout-status-cache";
 import { usePullRequestConnection } from "@/git/pull-request-connection";
 import { checkoutPrStatusQueryKey } from "@/git/query-keys";
 import { normalizeForge } from "@/git/forge";
@@ -33,9 +34,12 @@ export function useCheckoutPrStatusQuery({
       if (!client) {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
-      return normalizeCheckoutPrStatusPayload(await client.checkoutPrStatus(cwd));
+      return normalizeCheckoutPrStatusPayload(
+        await client.checkoutPrStatus(cwd, undefined, { progressive: true }),
+      );
     },
     enabled: !!client && isConnected && !!cwd && enabled,
+    refetchInterval: (currentQuery) => (currentQuery.state.data?.refreshing ? 1000 : false),
     staleTime: Infinity,
     // Refetch on mount only after explicit invalidation (e.g. reconnect) — see
     // useCheckoutStatusQuery for the rationale.
@@ -44,6 +48,7 @@ export function useCheckoutPrStatusQuery({
     refetchOnWindowFocus: false,
   });
 
+  const isInitialLoading = isInitialCheckoutStatusLoading(query.data);
   return {
     status: query.data?.status ?? null,
     githubFeaturesEnabled: query.data?.githubFeaturesEnabled ?? true,
@@ -51,10 +56,11 @@ export function useCheckoutPrStatusQuery({
     forge: normalizeForge(query.data?.forge),
     // Null until a response arrives, so callers that can infer the forge from
     // the remote URL (e.g. web-URL grammar) don't act on the github default.
-    resolvedForge: query.data === undefined ? null : normalizeForge(query.data.forge),
+    resolvedForge:
+      query.data === undefined || isInitialLoading ? null : normalizeForge(query.data.forge),
     payloadError: query.data?.error ?? null,
-    isLoading: query.isLoading,
-    isFetching: query.isFetching,
+    isLoading: query.isLoading || isInitialLoading,
+    isFetching: query.isFetching || Boolean(query.data?.refreshing),
     isError: query.isError,
     error: query.error,
   };
@@ -74,9 +80,12 @@ export function useWorkspacePrHint({
       if (!client) {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
-      return normalizeCheckoutPrStatusPayload(await client.checkoutPrStatus(cwd));
+      return normalizeCheckoutPrStatusPayload(
+        await client.checkoutPrStatus(cwd, undefined, { progressive: true }),
+      );
     },
     enabled: !!client && isConnected && !!cwd && enabled,
+    refetchInterval: (currentQuery) => (currentQuery.state.data?.refreshing ? 1000 : false),
     staleTime: Infinity,
     // Refetch on mount only after explicit invalidation (e.g. reconnect) — see
     // useCheckoutStatusQuery for the rationale.

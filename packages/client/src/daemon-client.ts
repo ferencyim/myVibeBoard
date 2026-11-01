@@ -4482,12 +4482,13 @@ export class DaemonClient {
 
   async getCheckoutStatus(
     cwd: string,
-    options?: { requestId?: string },
+    options?: { requestId?: string; progressive?: boolean },
   ): Promise<CheckoutStatusPayload> {
     const requestId = options?.requestId;
+    const cacheKey = `${cwd}:${options?.progressive === true ? "progressive" : "standard"}`;
 
     if (!requestId) {
-      const existing = this.checkoutStatusInFlight.get(cwd);
+      const existing = this.checkoutStatusInFlight.get(cacheKey);
       if (existing) {
         return existing;
       }
@@ -4497,6 +4498,7 @@ export class DaemonClient {
     const message = SessionInboundMessageSchema.parse({
       type: "checkout_status_request",
       cwd,
+      progressive: options?.progressive,
       requestId: resolvedRequestId,
     });
 
@@ -4516,11 +4518,11 @@ export class DaemonClient {
     });
 
     if (!requestId) {
-      this.checkoutStatusInFlight.set(cwd, responsePromise);
+      this.checkoutStatusInFlight.set(cacheKey, responsePromise);
       void responsePromise
         .finally(() => {
-          if (this.checkoutStatusInFlight.get(cwd) === responsePromise) {
-            this.checkoutStatusInFlight.delete(cwd);
+          if (this.checkoutStatusInFlight.get(cacheKey) === responsePromise) {
+            this.checkoutStatusInFlight.delete(cacheKey);
           }
         })
         .catch(() => undefined);
@@ -4829,12 +4831,17 @@ export class DaemonClient {
     );
   }
 
-  async checkoutPrStatus(cwd: string, requestId?: string): Promise<CheckoutPrStatusPayload> {
+  async checkoutPrStatus(
+    cwd: string,
+    requestId?: string,
+    options?: { progressive?: boolean },
+  ): Promise<CheckoutPrStatusPayload> {
     return this.sendCorrelatedSessionRequest({
       requestId,
       message: {
         type: "checkout_pr_status_request",
         cwd,
+        progressive: options?.progressive,
       },
       responseType: "checkout_pr_status_response",
     });

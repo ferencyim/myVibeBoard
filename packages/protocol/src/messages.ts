@@ -2255,6 +2255,7 @@ const CheckoutDiffCompareSchema = z.object({
 export const CheckoutStatusRequestSchema = z.object({
   type: z.literal("checkout_status_request"),
   cwd: z.string(),
+  progressive: z.boolean().optional(),
   requestId: z.string(),
 });
 
@@ -2434,6 +2435,7 @@ export const CheckoutGithubGetCheckDetailsRequestSchema =
 export const CheckoutPrStatusRequestSchema = z.object({
   type: z.literal("checkout_pr_status_request"),
   cwd: z.string(),
+  progressive: z.boolean().optional(),
   requestId: z.string(),
 });
 
@@ -5381,6 +5383,8 @@ const AheadBehindSchema = z.object({
 
 const CheckoutStatusCommonSchema = z.object({
   cwd: z.string(),
+  refreshing: z.boolean().optional(),
+  cachedAt: z.number().nullable().optional(),
   error: CheckoutErrorSchema.nullable(),
   requestId: z.string(),
   // The full ref currentBranch tracks, as git resolves `<branch>@{upstream}`:
@@ -5558,6 +5562,8 @@ export const ForgeAuthStateSchema = z.unknown().optional();
 
 const CheckoutPrStatusPayloadSchema = z.object({
   cwd: z.string(),
+  refreshing: z.boolean().optional(),
+  cachedAt: z.number().nullable().optional(),
   status: CheckoutPrStatusSchema.nullable(),
   githubFeaturesEnabled: z.boolean(),
   // COMPAT(forgeAuthState): added in v0.2.0-beta.1. Remove the legacy

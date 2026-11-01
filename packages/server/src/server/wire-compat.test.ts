@@ -6,7 +6,7 @@ import {
 } from "./test-utils/session-stubs.js";
 import pino from "pino";
 import { z } from "zod";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import {
@@ -193,6 +193,8 @@ function createSessionForWireCompatTest(options?: {
   messages?: SessionOutboundMessage[];
   onMessageToSource?: SessionOptions["onMessageToSource"];
   rows?: AgentTimelineRow[];
+  agentManager?: SessionOptions["agentManager"];
+  agentStorage?: SessionOptions["agentStorage"];
   workspaceRegistry?: SessionOptions["workspaceRegistry"];
 }): Session {
   const messages = options?.messages ?? [];
@@ -228,10 +230,14 @@ function createSessionForWireCompatTest(options?: {
     downloadTokenStore: {} as SessionOptions["downloadTokenStore"],
     pushNotifications: {} as SessionOptions["pushNotifications"],
     paseoHome: "/tmp/paseo-home",
-    agentManager: new InMemoryAgentManager(
-      options?.rows ?? rows,
-    ) as unknown as SessionOptions["agentManager"],
-    agentStorage: new EmptyAgentStorage() as unknown as SessionOptions["agentStorage"],
+    agentManager:
+      options?.agentManager ??
+      (new InMemoryAgentManager(
+        options?.rows ?? rows,
+      ) as unknown as SessionOptions["agentManager"]),
+    agentStorage:
+      options?.agentStorage ??
+      (new EmptyAgentStorage() as unknown as SessionOptions["agentStorage"]),
     projectRegistry: new EmptyProjectRegistry() as unknown as SessionOptions["projectRegistry"],
     workspaceRegistry:
       options?.workspaceRegistry ??
@@ -322,6 +328,56 @@ async function emitTimelineResponse(options?: {
 }
 
 describe("wire compatibility", () => {
+  test("reads an unloaded agent timeline without resuming its provider", async () => {
+    const messages: SessionOutboundMessage[] = [];
+    const timeline = new InMemoryAgentTimelineStore();
+    timeline.initialize("agent-1", {
+      epoch: "persisted-epoch",
+      rows: [
+        {
+          seq: 1,
+          timestamp: "2026-05-02T00:00:00.000Z",
+          item: { type: "assistant_message", text: "saved" },
+        },
+      ],
+    });
+    const resume = vi.fn();
+    const manager = {
+      getAgent: () => null,
+      fetchDurableTimeline: async (_id: string, options: AgentTimelineFetchOptions) =>
+        timeline.fetch("agent-1", options),
+      resumeAgentFromPersistence: resume,
+      subscribe: () => () => {},
+    } as unknown as SessionOptions["agentManager"];
+    const storage = {
+      get: async () => ({
+        id: "agent-1",
+        provider: "codex",
+        cwd: "/tmp/project",
+        createdAt: "2026-05-02T00:00:00.000Z",
+        updatedAt: "2026-05-02T00:00:00.000Z",
+        lastStatus: "running",
+        labels: {},
+      }),
+    } as unknown as SessionOptions["agentStorage"];
+    const session = createSessionForWireCompatTest({
+      messages,
+      agentManager: manager,
+      agentStorage: storage,
+    });
+    await (session as unknown as SessionInternals).handleFetchAgentTimelineRequest({
+      type: "fetch_agent_timeline_request",
+      requestId: "stored",
+      agentId: "agent-1",
+    });
+    const response = messages[0];
+    expect(response?.type).toBe("fetch_agent_timeline_response");
+    if (response?.type !== "fetch_agent_timeline_response") throw new Error("missing response");
+    expect(response.payload.epoch).toBe("persisted-epoch");
+    expect(response.payload.agent?.status).toBe("idle");
+    expect(response.payload.entries[0]?.item).toEqual({ type: "assistant_message", text: "saved" });
+    expect(resume).not.toHaveBeenCalled();
+  });
   test("sends project updates only to clients that declare support", async () => {
     const project = createPersistedProjectRecord({
       projectId: "project-1",

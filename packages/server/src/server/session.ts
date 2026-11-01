@@ -7967,6 +7967,53 @@ export class Session {
     });
   }
 
+  private async resolveTimelinePage(
+    agentId: string,
+    options: {
+      direction: AgentTimelineFetchDirection;
+      cursor?: AgentTimelineCursor;
+      limit: number;
+    },
+  ) {
+    let snapshot = this.agentManager.getAgent(agentId);
+    let storedRecord = snapshot ? null : await this.agentStorage.get(agentId);
+    let durableTimeline = storedRecord
+      ? await this.agentManager.fetchDurableTimeline(agentId, options)
+      : null;
+    // A concurrent interactive load owns the latest in-memory timeline.
+    snapshot = this.agentManager.getAgent(agentId);
+    if (snapshot) {
+      storedRecord = null;
+      durableTimeline = null;
+    }
+    if (!snapshot && !durableTimeline) {
+      const startedAt = Date.now();
+      snapshot = await ensureAgentLoaded(agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      this.sessionLogger.info(
+        { agentId: agentId, durationMs: Date.now() - startedAt },
+        "Timeline provider replay and backfill completed",
+      );
+    } else if (durableTimeline) {
+      this.sessionLogger.debug({ agentId: agentId }, "Timeline durable store hit");
+    }
+    const agentPayload = snapshot
+      ? await this.buildAgentPayload(snapshot)
+      : this.buildStoredAgentPayload(storedRecord!);
+    if (
+      !snapshot &&
+      (agentPayload.status === "running" || agentPayload.status === "initializing")
+    ) {
+      agentPayload.status = "idle";
+    }
+    const fetchedControlTimeline =
+      durableTimeline ?? this.agentManager.fetchTimeline(agentId, options);
+    return { agentPayload, fetchedControlTimeline };
+  }
+
   private async handleFetchAgentTimelineRequest(
     msg: Extract<SessionInboundMessage, { type: "fetch_agent_timeline_request" }>,
     source?: object,
@@ -7983,14 +8030,7 @@ export class Session {
       : undefined;
 
     try {
-      const snapshot = await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const agentPayload = await this.buildAgentPayload(snapshot);
-
-      const fetchedControlTimeline = this.agentManager.fetchTimeline(msg.agentId, {
+      const { agentPayload, fetchedControlTimeline } = await this.resolveTimelinePage(msg.agentId, {
         direction,
         cursor,
         limit: pageLimit,
@@ -8036,7 +8076,7 @@ export class Session {
             ...(msg.mergeWindow === true ? { mergeWindow: true } : {}),
             entries: entries.map((entry) => {
               const payloadEntry = {
-                provider: snapshot.provider,
+                provider: agentPayload.provider,
                 item: entry.item,
                 timestamp: entry.timestamp,
                 seqStart: entry.seqStart,
@@ -8108,26 +8148,31 @@ export class Session {
     });
   }
 
+  private async readHistoryTimeline(agentId: string) {
+    if (!this.agentManager.getAgent(agentId) && (await this.agentStorage.get(agentId))) {
+      const timeline = await this.agentManager.fetchDurableTimeline(agentId, {
+        direction: "tail",
+        limit: 0,
+      });
+      if (timeline && !this.agentManager.getAgent(agentId)) return timeline;
+    }
+    await ensureAgentLoaded(agentId, {
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      logger: this.sessionLogger,
+    });
+    return this.agentManager.fetchTimeline(agentId, { direction: "tail", limit: 0 });
+  }
+
   private async handleAgentTimelineSearchRequest(
     msg: Extract<SessionInboundMessage, { type: "agent.timeline.search.request" }>,
     source?: object,
   ): Promise<void> {
     try {
-      await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const rows = await this.agentManager.getTimelineRows(msg.agentId);
-      const { epoch } = this.agentManager.fetchTimeline(msg.agentId, {
-        direction: "tail",
-        limit: 1,
-      });
+      const timeline = await this.readHistoryTimeline(msg.agentId);
+      const { epoch, rows } = timeline;
       const result = await searchTimeline({ rows, query: msg.query, cursor: msg.cursor });
-      if (
-        this.agentManager.fetchTimeline(msg.agentId, { direction: "tail", limit: 1 }).epoch !==
-        epoch
-      ) {
+      if ((await this.readHistoryTimeline(msg.agentId)).epoch !== epoch) {
         throw new Error("History changed; search again");
       }
       this.emitForSource(
@@ -8166,17 +8211,8 @@ export class Session {
     source?: object,
   ): Promise<void> {
     try {
-      await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const rows = await this.agentManager.getTimelineRows(msg.agentId);
-      const timeline = this.agentManager.fetchTimeline(msg.agentId, {
-        direction: "tail",
-        limit: 1,
-      });
-      const index = buildTimelinePromptIndex(timeline.epoch, rows);
+      const timeline = await this.readHistoryTimeline(msg.agentId);
+      const index = buildTimelinePromptIndex(timeline.epoch, timeline.rows);
       this.emitForSource(
         {
           type: "agent.timeline.list_prompts.response",

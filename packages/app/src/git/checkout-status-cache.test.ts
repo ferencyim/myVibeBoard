@@ -23,6 +23,7 @@ import {
   type CheckoutPrStatusPayload,
   type CheckoutStatusPayload,
   fetchCheckoutStatus,
+  isInitialCheckoutStatusLoading,
 } from "./checkout-status-cache";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({
@@ -119,6 +120,14 @@ describe("fetchCheckoutStatus", () => {
     expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd);
   });
 
+  it("requests progressive results when explicitly enabled", async () => {
+    const client = { getCheckoutStatus: vi.fn(async () => checkoutStatus()) };
+
+    await fetchCheckoutStatus({ client, serverId, cwd, progressive: true });
+
+    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd, { progressive: true });
+  });
+
   it("keeps a manual working-diff comparison when the fetched dirty state flips", async () => {
     selectBaseComparison();
     const client = { getCheckoutStatus: vi.fn(async () => checkoutStatus({ isDirty: false })) };
@@ -141,6 +150,20 @@ describe("ensureCheckoutStatus", () => {
     expect(first).toEqual(fetched);
     expect(second).toEqual(fetched);
     expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd);
+  });
+
+  it("does not treat the initial progressive placeholder as a completed status", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(
+      checkoutStatusQueryKey(serverId, cwd),
+      checkoutStatus({ isGit: false, refreshing: true, cachedAt: null }),
+    );
+    const fetched = checkoutStatus({ currentBranch: "main" });
+    const client = { getCheckoutStatus: vi.fn(async () => fetched) };
+
+    expect(await ensureCheckoutStatus({ queryClient, client, serverId, cwd })).toEqual(fetched);
+    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd);
+    expect(queryClient.getQueryData(checkoutStatusQueryKey(serverId, cwd))).toEqual(fetched);
   });
 
   it("awaits a refetch when the canonical cached status was invalidated", async () => {
@@ -374,5 +397,25 @@ describe("applyCheckoutStatusUpdateFromEvent", () => {
     expect(queryClient.getQueryState(otherTimelineKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(pipelineKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(otherPipelineKey)?.isInvalidated).toBe(false);
+  });
+});
+
+describe("initial checkout status", () => {
+  it("keeps a cache miss loading but exposes a failed read", () => {
+    expect(
+      isInitialCheckoutStatusLoading(checkoutStatus({ refreshing: true, cachedAt: null })),
+    ).toBe(true);
+    expect(
+      isInitialCheckoutStatusLoading(
+        checkoutStatus({
+          refreshing: false,
+          cachedAt: null,
+          error: { code: "UNKNOWN", message: "read failed" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isInitialCheckoutStatusLoading(checkoutStatus({ refreshing: true, cachedAt: 123 })),
+    ).toBe(false);
   });
 });

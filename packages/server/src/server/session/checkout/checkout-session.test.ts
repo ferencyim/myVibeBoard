@@ -225,6 +225,107 @@ function createGitSnapshot(
 
 describe("CheckoutSession", () => {
   describe("status", () => {
+    it("returns a loading response without waiting for the first snapshot", async () => {
+      let reads = 0;
+      const { checkout, emitted } = makeCheckoutSession({
+        git: {
+          getCachedSnapshot: () => ({ snapshot: null, cachedAt: null, refreshing: false }),
+          getSnapshot: () => {
+            reads++;
+            return new Promise(() => {});
+          },
+        },
+      });
+      await checkout.handleStatusRequest({
+        type: "checkout_status_request",
+        cwd: "/repo",
+        requestId: "r",
+        progressive: true,
+      });
+      expect(reads).toBe(1);
+      expect(emitted[0]).toMatchObject({
+        type: "checkout_status_response",
+        payload: { refreshing: true, cachedAt: null },
+      });
+    });
+
+    it("reports an initial read failure instead of polling forever", async () => {
+      let reads = 0;
+      const { checkout, emitted } = makeCheckoutSession({
+        git: {
+          getCachedSnapshot: () => ({ snapshot: null, cachedAt: null, refreshing: false }),
+          getSnapshot: async () => {
+            reads++;
+            throw new Error("git failed");
+          },
+        },
+      });
+      const request = {
+        type: "checkout_status_request" as const,
+        cwd: "/repo",
+        requestId: "r",
+        progressive: true,
+      };
+      await checkout.handleStatusRequest(request);
+      await Promise.resolve();
+      await checkout.handleStatusRequest(request);
+      expect(reads).toBe(1);
+      expect(emitted[1]).toMatchObject({
+        payload: { refreshing: false, error: { message: "git failed" } },
+      });
+    });
+
+    it("returns the cached status while a refresh is running", async () => {
+      let reads = 0;
+      const { checkout, emitted } = makeCheckoutSession({
+        git: {
+          getCachedSnapshot: () => ({
+            snapshot: createGitSnapshot("/repo", "main"),
+            cachedAt: 42,
+            refreshing: true,
+          }),
+          getSnapshot: async () => {
+            reads++;
+            return createGitSnapshot("/repo", "main");
+          },
+        },
+      });
+      await checkout.handleStatusRequest({
+        type: "checkout_status_request",
+        cwd: "/repo",
+        requestId: "r",
+        progressive: true,
+      });
+      expect(reads).toBe(0);
+      expect(emitted[0]).toMatchObject({
+        type: "checkout_status_response",
+        payload: { currentBranch: "main", cachedAt: 42, refreshing: true },
+      });
+    });
+
+    it("returns a loading PR response without waiting for forge", async () => {
+      let reads = 0;
+      const { checkout, emitted } = makeCheckoutSession({
+        git: {
+          getCachedSnapshot: () => ({ snapshot: null, cachedAt: null, refreshing: false }),
+          getSnapshot: () => {
+            reads++;
+            return new Promise(() => {});
+          },
+        },
+      });
+      await checkout.handleCheckoutPrStatusRequest({
+        type: "checkout_pr_status_request",
+        cwd: "/repo",
+        requestId: "r",
+        progressive: true,
+      });
+      expect(reads).toBe(1);
+      expect(emitted[0]).toMatchObject({
+        type: "checkout_pr_status_response",
+        payload: { refreshing: true, cachedAt: null },
+      });
+    });
     it("emits a checkout status response built from the git snapshot", async () => {
       const { checkout, emitted } = makeCheckoutSession({
         git: { getSnapshot: async () => createGitSnapshot("/repo", "main") },

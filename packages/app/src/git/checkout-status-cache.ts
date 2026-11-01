@@ -13,19 +13,32 @@ import { resetDraftAgentCommandsForCheckout } from "@/hooks/agent-commands-query
 export type CheckoutStatusPayload = CheckoutStatusResponse["payload"];
 export type { CheckoutPrStatusPayload } from "@/git/pr-status";
 
+export function isInitialCheckoutStatusLoading(
+  payload: { refreshing?: boolean; cachedAt?: number | null; error?: unknown } | undefined,
+): boolean {
+  return Boolean(payload?.refreshing && payload.cachedAt == null && !payload.error);
+}
+
 export interface CheckoutStatusClient {
-  getCheckoutStatus: (cwd: string) => Promise<CheckoutStatusPayload>;
+  getCheckoutStatus: (
+    cwd: string,
+    options?: { progressive?: boolean },
+  ) => Promise<CheckoutStatusPayload>;
 }
 
 export async function fetchCheckoutStatus({
   client,
   cwd,
+  progressive = false,
 }: {
   client: CheckoutStatusClient;
   serverId: string;
   cwd: string;
+  progressive?: boolean;
 }): Promise<CheckoutStatusPayload> {
-  const payload = await client.getCheckoutStatus(cwd);
+  const payload = progressive
+    ? await client.getCheckoutStatus(cwd, { progressive: true })
+    : await client.getCheckoutStatus(cwd);
   return payload;
 }
 
@@ -40,8 +53,15 @@ export async function ensureCheckoutStatus({
   serverId: string;
   cwd: string;
 }): Promise<CheckoutStatusPayload> {
+  const key = checkoutStatusQueryKey(serverId, cwd);
+  const cached = queryClient.getQueryData<CheckoutStatusPayload>(key);
+  if (cached?.refreshing && cached.cachedAt == null) {
+    const result = await fetchCheckoutStatus({ client, serverId, cwd });
+    queryClient.setQueryData(key, result);
+    return result;
+  }
   return await queryClient.fetchQuery({
-    queryKey: checkoutStatusQueryKey(serverId, cwd),
+    queryKey: key,
     queryFn: () => fetchCheckoutStatus({ client, serverId, cwd }),
     staleTime: Infinity,
   });

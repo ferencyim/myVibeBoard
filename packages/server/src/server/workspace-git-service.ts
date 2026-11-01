@@ -278,6 +278,10 @@ export interface WorkspaceGitService {
     cwd: string,
     options?: WorkspaceGitSnapshotOptions,
   ): Promise<WorkspaceGitRuntimeSnapshot>;
+  getCachedSnapshot?(
+    cwd: string,
+    includeForge?: boolean,
+  ): { snapshot: WorkspaceGitRuntimeSnapshot | null; cachedAt: number | null; refreshing: boolean };
   resolveForge(cwd: string): Promise<ForgeResolution | null>;
   getCheckoutDiff(
     cwd: string,
@@ -875,7 +879,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       worktreesRoot: this.worktreesRoot,
       logger: this.logger,
     });
-    const cached = this.getCachedSnapshot(normalizedCwd);
+    const cached = this.getCachedSnapshot(normalizedCwd).snapshot;
     if (cached && cached.git.isGit !== status.isGit) {
       // A fresh checkout read discovered a repository transition. Keep the
       // shared snapshot current before exposing the new project capability.
@@ -911,9 +915,21 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     });
   }
 
-  private getCachedSnapshot(cwd: string): WorkspaceGitRuntimeSnapshot | null {
-    cwd = resolve(cwd);
-    return this.workspaceTargets.get(cwd)?.latestSnapshot ?? null;
+  getCachedSnapshot(
+    cwd: string,
+    includeForge = false,
+  ): {
+    snapshot: WorkspaceGitRuntimeSnapshot | null;
+    cachedAt: number | null;
+    refreshing: boolean;
+  } {
+    const target = this.workspaceTargets.get(resolve(cwd));
+    const cachedAt = includeForge ? target?.latestForgeLoadedAtMs : target?.latestGitLoadedAtMs;
+    return {
+      snapshot: cachedAt != null ? (target?.latestSnapshot ?? null) : null,
+      cachedAt: cachedAt ?? null,
+      refreshing: target?.refreshState.status === "in-flight",
+    };
   }
 
   async getCheckoutDiff(

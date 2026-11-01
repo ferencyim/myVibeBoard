@@ -640,7 +640,7 @@ function buildWorkspaceHeaderCheckoutState(input: {
   if (input.isCheckoutStatusLoading) {
     return { kind: "pending" };
   }
-  if (input.isError || !input.data) {
+  if (input.isError || !input.data || input.data.error) {
     return { kind: "error" };
   }
   return {
