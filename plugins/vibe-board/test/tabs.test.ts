@@ -623,7 +623,7 @@ describe("任务 workspace 标记", () => {
     expect(store.tasks.get("bot")).toMatchObject({ flowLevel: "simple", flowSource: "bot", flowReason: "范围小" });
     expect(store.tasks.get("bot")?.control?.simpleAutoExecute).not.toBe(true);
   });
-  it("定档后通知 #1；评估超时回退完整流程；面板给出下一步", async () => {
+  it("定档后通知 #1；评估超时回退简单流程（高风险回退中等）；面板给出下一步", async () => {
     let clock = 1_000_000;
     const { store, fake, flow } = await projectTask({ now: () => clock, reviewNow: () => clock });
     store.tasks.updateControl("ws", { flowEvaluationPending: true, flowEvaluationAt: clock });
@@ -633,12 +633,22 @@ describe("任务 workspace 标记", () => {
     expect(store.tasks.get("ws")?.control?.flowEvaluationPending).toBe(true);
     clock += 61_000;
     await flow.provisionMissing();
+    expect(store.tasks.get("ws")?.control?.flowEvaluationPending).toBe(true);
+    clock += 60_000;
+    await flow.provisionMissing();
+    expect(store.tasks.get("ws")).toMatchObject({ flowLevel: "simple", flowSource: "bot" });
+    expect(store.tasks.get("ws")?.control?.flowEvaluationPending).toBeUndefined();
+    expect(store.tasks.get("ws")?.tabs.some((tab) => tab.role === "planner")).toBe(false);
+    expect(fake.sends.find((entry) => entry.agentId === "agent-1")?.text).toContain("流程已定为简单");
+
+    // The user adds steps afterwards.
+    store.tasks.setFlow("ws", { level: "full", source: "user", reason: "用户调整流程" });
+    await flow.provisionTabs("ws");
+    await flow.notifyFlowDecided("ws");
     const decided = store.tasks.get("ws")!;
-    expect(decided).toMatchObject({ flowLevel: "full", flowSource: "bot" });
-    expect(decided.control?.flowEvaluationPending).toBeUndefined();
     const planner = decided.tabs.find((tab) => tab.role === "planner")!;
     expect(planner).toBeDefined();
-    const notice = fake.sends.find((entry) => entry.agentId === "agent-1");
+    const notice = fake.sends.filter((entry) => entry.agentId === "agent-1").at(-1);
     expect(notice?.text).toContain("流程已定为完整");
     expect(notice?.text).toContain(`#${planner.number}`);
 

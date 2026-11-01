@@ -357,7 +357,17 @@ export function createProjectAgents(options: ProjectAgentOptions) {
     if (!task.control?.requirementText) store.tasks.updateControl(input.workspaceId, { requirementText: input.text });
     if (task.control?.flowEvaluationPending !== true || typeof projectId !== "string") return false;
     store.tasks.updateControl(input.workspaceId, { flowEvaluationText: input.text });
-    await sendProject(projectId, `请评估任务 ${input.workspaceId} 的流程档位，仅用 vibe_set_task_flow 提交档位和理由。用户需求：\n${input.text}`);
+    try {
+      await sendProject(projectId, `请评估任务 ${input.workspaceId} 的流程档位，仅用 vibe_set_task_flow 提交档位和理由。用户需求：\n${input.text}`);
+    } catch (error) {
+      // The bot never got the request (it could not be opened): settle on the next tick instead of
+      // waiting out the timeout.
+      store.tasks.updateControl(input.workspaceId, { flowEvaluationAt: 0 });
+      throw error;
+    }
+    // The wait for the bot's answer starts when the request reaches it, not when the task was
+    // created: opening a closed project bot can take a while.
+    store.tasks.updateControl(input.workspaceId, { flowEvaluationAt: Date.now() });
     return true;
   }
   async function received(input: UserInput) {

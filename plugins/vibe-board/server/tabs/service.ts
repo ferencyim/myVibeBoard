@@ -391,6 +391,16 @@ export function createTaskTabs(options: {
     if (!agent) throw new Error("找不到原生 agent：" + agentId);
     return { handle, agent };
   }
+  /** A daemon restart closes every agent but keeps the tab rows. Before the plugin hands work to a
+   *  closed role tab, resume that same agent; nothing here ever creates one. */
+  async function reopenIfClosed(agentId: string): Promise<void> {
+    const handle = paseo().agents.ref(agentId);
+    await handle.refresh();
+    const agent = handle.current();
+    if (!agent || agent.archivedAt || agent.status !== "closed") return;
+    await handle.resume();
+    await handle.refresh();
+  }
   const workspaces = new Map<string, Promise<ReturnType<PaseoApi["workspaces"]["ref"]>>>();
   function taskWorkspace(workspaceId: string) {
     const pending = workspaces.get(workspaceId);
@@ -1038,6 +1048,7 @@ export function createTaskTabs(options: {
   }
   return {
     injectGuide,
+    reopenIfClosed,
     ensureTab,
     openTab,
     tabsFor,

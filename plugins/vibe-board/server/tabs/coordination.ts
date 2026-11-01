@@ -118,9 +118,13 @@ export function createCoordination(options: {
         "本任务没有启用探路 tab（项目或全局默认里探路为「不启用」）。请自己调查，或请用户在项目设置里启用探路后再提问。",
       );
     if (scout.agentId === callerAgentId) throw new Error("探路 tab 不能向自己提问");
-    const agent = await agentOf(scout.agentId);
+    let agent = await agentOf(scout.agentId);
+    if (agent?.status === "closed" && !agent.archivedAt) {
+      await tabs.reopenIfClosed(scout.agentId);
+      agent = await agentOf(scout.agentId);
+    }
     if (!agent || agent.archivedAt || agent.status === "closed")
-      throw new Error(`探路 tab #${scout.number} 已关闭或归档，无法接收问题`);
+      throw new Error(`探路 tab #${scout.number} 已归档或无法恢复，无法接收问题`);
     const from = `#${tab.number} ${TASK_TAB_ROLE_LABELS[tab.role]}${tab.agentId === callerAgentId ? "" : ` 的子代理`}（agentId: ${callerAgentId}）`;
     const placement = await tabs.workspace(task.workspaceId).catch(() => undefined);
     const prompt = store.prompts.resolve(SCOUT_ASK_PROMPT.key, {

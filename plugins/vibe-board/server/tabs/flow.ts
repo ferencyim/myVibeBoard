@@ -255,7 +255,7 @@ export function createTaskFlow(options: {
   const provisioning = new Map<string, Promise<void>>();
   const provisionFailures = new Map<string, { attempts: number; retryAt: number; loggedAt: number }>();
   const now = options.now ?? Date.now;
-  const FLOW_EVALUATION_TIMEOUT_MS = 60_000;
+  const FLOW_EVALUATION_TIMEOUT_MS = 120_000;
   function canProvision(key: string) {
     const failure = provisionFailures.get(key);
     return !failure || now() >= failure.retryAt;
@@ -857,6 +857,7 @@ export function createTaskFlow(options: {
     const planner = await idlePlanner(task);
     if (!planner) throw new Error("方案复核 tab 当前不需要接收需求（已有对话、正在运行或尚未创建）");
     const text = (await requirementOf(task)) as string;
+    await tabs.reopenIfClosed(planner.agentId);
     await paseo()
       .agents.ref(planner.agentId)
       .send(`#1 收到的用户原始需求如下，请据此出方案：
@@ -864,20 +865,23 @@ ${text}`, { sourceAgentId: task.anchorAgentId });
     await tabs.appendStatus(task.anchorAgentId, `已把需求交给 #${planner.number} 方案 出方案。`);
     return { message: `已把需求交给 #${planner.number} 方案。` };
   }
-  /** A task whose flow evaluation got no answer in time falls back to the full flow. */
+  /** A task whose flow evaluation got no answer in time falls back to the simple flow (medium when
+   *  the requirement is high risk); the user can add steps afterwards. */
   async function settleStaleEvaluations() {
     const at = now();
     for (const task of store.tasks.list()) {
       if (task.control?.flowEvaluationPending !== true) continue;
       const started = Number(task.control.flowEvaluationAt ?? 0);
       if (at - started < FLOW_EVALUATION_TIMEOUT_MS) continue;
+      const fallback = task.control.highRiskFlow === true ? "medium" : "simple";
+      const label = FLOW_LABELS[fallback];
       try {
         store.tasks.setFlow(task.workspaceId, {
-          level: "full",
+          level: fallback,
           source: "bot",
-          reason: "流程评估超时，按默认完整流程处理",
+          reason: `流程评估超时，按默认${label}流程处理`,
         });
-        await tabs.appendStatus(task.anchorAgentId, "流程评估超过 60 秒未完成，已按默认完整流程定档。");
+        await tabs.appendStatus(task.anchorAgentId, `流程评估超过 ${FLOW_EVALUATION_TIMEOUT_MS / 1000} 秒未完成，已按默认${label}流程定档；需要时可在任务面板增加流程步骤。`);
         await provisionTabs(task.workspaceId);
         await notifyFlowDecided(task.workspaceId);
       } catch (error) {
