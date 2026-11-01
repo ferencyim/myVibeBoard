@@ -4307,7 +4307,13 @@ export class Session {
               {
                 ...request,
                 firstAgentContext: agentInput
-                  ? { prompt: agentInput.initialPrompt, attachments: agentInput.attachments }
+                  ? {
+                      prompt: agentInput.initialPrompt,
+                      attachments: agentInput.attachments,
+                      ...(request.firstAgentContext?.flowLevel
+                        ? { flowLevel: request.firstAgentContext.flowLevel }
+                        : {}),
+                    }
                   : request.firstAgentContext,
               },
               id,
