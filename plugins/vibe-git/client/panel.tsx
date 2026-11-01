@@ -1,9 +1,10 @@
 import type { PluginTheme } from "@getpaseo/plugin";
-import { useRpc, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import { useHosts, useRpc, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useEffect, useState, type ReactNode } from "react";
+import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { statusRpc, type Changes, type Status } from "../shared/rpc";
+import { hostReconnected, statusFailureMessage, statusRetryDelay } from "./status-retry";
 
 const labels: Record<string, string> = {
   ok: "正常",
@@ -319,8 +320,10 @@ function ReleaseSection({ theme, release }: { theme: PluginTheme; release?: Stat
   );
 }
 
-export function GitPanel({ theme, workspaceId }: PluginWorkspacePanelProps) {
+export function GitPanel({ theme, workspaceId, host }: PluginWorkspacePanelProps) {
   const call = useRpc(statusRpc);
+  const hostStatus = useHosts().find((item) => item.serverId === host.id)?.status;
+  const previousHostStatus = useRef(hostStatus);
   const queryClient = useQueryClient();
   const queryKey = ["vibe-git", "status", workspaceId];
   const refresh = useMutation({
@@ -330,14 +333,26 @@ export function GitPanel({ theme, workspaceId }: PluginWorkspacePanelProps) {
       return { data, queryKey };
     },
     onSuccess: ({ data, queryKey: resultKey }) => queryClient.setQueryData(resultKey, data),
+    onError: () => { void queryClient.invalidateQueries({ queryKey }); },
   });
   const query = useQuery({
     queryKey,
     queryFn: () => call({ workspaceId }),
     refetchInterval: (query) => refresh.isPending ? false :
       query.state.data?.git.scanning || query.state.data?.git.error === "读取 Git 状态超时，请重试" ? 2_000 : 30_000,
-    retry: false,
+    retry: true,
+    retryDelay: statusRetryDelay,
   });
+  useEffect(() => {
+    const reconnected = hostReconnected(previousHostStatus.current, hostStatus);
+    previousHostStatus.current = hostStatus;
+    if (reconnected && !refresh.isPending) {
+      void queryClient.cancelQueries({ queryKey: ["vibe-git", "status", workspaceId] }).then(() => query.refetch());
+    }
+  }, [hostStatus, workspaceId, queryClient, query.refetch, refresh.isPending]);
+  useEffect(() => {
+    if (query.dataUpdatedAt && refresh.isError) refresh.reset();
+  }, [query.dataUpdatedAt]);
   const updatedAt = query.dataUpdatedAt
     ? new Date(query.dataUpdatedAt).toLocaleTimeString("zh-CN", { hour12: false })
     : null;
@@ -358,7 +373,11 @@ export function GitPanel({ theme, workspaceId }: PluginWorkspacePanelProps) {
           {updatedAt ? <Line theme={theme}>{`更新于 ${updatedAt}`}</Line> : null}
           {query.isFetching || refresh.isPending ? <Line theme={theme} warning>刷新中…</Line> : null}
         </View>
-        {query.error || refresh.error ? <Line theme={theme} danger>状态读取失败，请刷新重试。</Line> : null}
+        {query.failureReason || refresh.error ? (
+          <Line theme={theme} danger={!query.data} warning={!!query.data}>
+            {statusFailureMessage(!!query.data)}
+          </Line>
+        ) : null}
         <GitSections theme={theme} git={query.data?.git} />
         <BuildSection theme={theme} build={query.data?.build} />
         <ReleaseSection theme={theme} release={query.data?.release} />

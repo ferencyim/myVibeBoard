@@ -69,7 +69,7 @@ export interface RuntimeOptions {
   now?: () => Date;
   isPortFree?: (port: number) => Promise<boolean>;
   /** Fetch provider usage (providers.listUsage); null when no daemon handle is known yet. */
-  fetchUsage?: () => Promise<readonly UsageProviderLike[]> | null;
+  fetchUsage?: () => Promise<readonly UsageProviderLike[] | null> | null;
   settings?: RuntimeSettings;
   /** Hub: directory for hub.json (HTTP API is off when omitted) and the guard admission file to sync. */
   hubDir?: string;
@@ -249,7 +249,9 @@ export function createSchedulerRuntime(options: RuntimeOptions) {
     if (!pending) return;
     usageBusy = true;
     try {
-      quota = normalizeUsage(await pending, {
+      const providers = await pending;
+      if (!providers) return;
+      quota = normalizeUsage(providers, {
         tightPct: settings.quotaTightPct,
         exhaustedPct: settings.quotaExhaustedPct,
       });

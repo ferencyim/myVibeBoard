@@ -558,6 +558,26 @@ describe("原生任务准入", () => {
     expect(await normalizeTaskFiles(["src/{a,b}.ts"], t.dir)).toEqual(["**"]);
     expect(await normalizeTaskFiles(["./src/a.ts"], t.dir)).toEqual(["src/a.ts"]);
   });
+  it("用量快照尚未就绪时保留旧配额并在下次刷新重试", async () => {
+    const t = setup();
+    let usage: Array<{ providerId: string; status: string; windows: Array<{ remainingPct: number }> }> | null = [
+      { providerId: "codex", status: "available", windows: [{ remainingPct: 2 }] },
+    ];
+    const runtime = createSchedulerRuntime({
+      db: t.db, dataDir: join(t.dir, "usage-runtime"), probe: fakeMachine(),
+      settings: DEFAULT_SETTINGS, fetchUsage: async () => usage,
+    });
+    await runtime.refreshUsage(true);
+    const previous = runtime.quota();
+    expect(previous.codex).toBeDefined();
+    usage = null;
+    await runtime.refreshUsage(true);
+    expect(runtime.quota()).toEqual(previous);
+    usage = [{ providerId: "codex", status: "available", windows: [{ remainingPct: 90 }] }];
+    await runtime.refreshUsage(true);
+    expect(runtime.quota()).not.toEqual(previous);
+    await runtime.stop();
+  });
   it("生产 runtime 消费资源事件并发布拒绝响应", async () => {
     const t = setup();
     t.task("a");
