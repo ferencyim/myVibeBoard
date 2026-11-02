@@ -26,6 +26,7 @@ This is an npm workspace monorepo:
 - 每轮改代码前先合上游最新稳定 tag，再做本轮工作；绝不把上游 tag 推到 origin。步骤见 `docs/vibe/FORK-WORKFLOW.md`。
 - 本文件和根 `CLAUDE.md` 与上游结构不同：合上游遇到冲突时保留本结构（`AGENTS.md` 是实体，`CLAUDE.md` 只引用它），把上游的改动移植到本文件、`docs/README.md` 或 `docs/platform-gating.md`。
 - GitHub Actions 关闭。全量验证走本机。
+- GitHub 仓库是公开的（公开项目的分叉，2026-11-02 核实，用户同意把这次记忆迁移推上去）。写进仓库的内容都会公开：不写口令、密钥、生产地址和其他私有项目的细节。
 
 **验收**
 
