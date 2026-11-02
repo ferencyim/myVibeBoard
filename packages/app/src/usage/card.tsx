@@ -111,7 +111,7 @@ export function UsageCard({
       ) : null}
 
       {windows.length > 0 || balances.length > 0 ? (
-        <View style={styles.bars}>
+        <View style={retained ? [styles.bars, styles.barsRetained] : styles.bars}>
           {windows.map((window) => (
             <CardWindowBar
               key={window.id}
@@ -337,6 +337,10 @@ const styles = StyleSheet.create((theme) => ({
   // Window rows carry their own vertical padding, which already separates them.
   bars: {
     gap: theme.spacing[1],
+  },
+  // Values kept from the last successful poll are dimmed.
+  barsRetained: {
+    opacity: 0.5,
   },
   details: {
     gap: theme.spacing[1],

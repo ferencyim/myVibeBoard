@@ -1134,3 +1134,28 @@ it("session Keychain input retains the selected config-directory locator through
   });
   expect(reads).toEqual(Array(3).fill(`${service}:fixture-user`));
 });
+
+it("does not call a login expired while its refresh token is still valid", async () => {
+  const lookup = tokenLookup("stale-token");
+  const credentials = (refreshTokenExpiresAt: number) =>
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "stale-token",
+        refreshToken: "rt",
+        expiresAt: 0,
+        refreshTokenExpiresAt,
+      },
+    });
+  const path = join(lookup.claudeHome, ".credentials.json");
+  const input = { route: { store: "claude", path } } as UsageInput;
+  writeFileSync(path, credentials(Date.now() + 86_400_000));
+  expect(await fetchUsage(input, fetch, lookup)).toMatchObject({
+    status: "unavailable",
+    problem: { kind: "no_quota" },
+  });
+  writeFileSync(path, credentials(1));
+  expect(await fetchUsage(input, fetch, lookup)).toMatchObject({
+    status: "unavailable",
+    problem: { kind: "expired" },
+  });
+});

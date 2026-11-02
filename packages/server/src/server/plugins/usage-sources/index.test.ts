@@ -872,3 +872,22 @@ test("progressive legacy usage returns promptly, coalesces refreshes and retains
     expect((await registry.listLegacyUsage(true)).refreshing).toBe(false),
   );
 });
+
+test("host usage lists only the sources the settings enable", async () => {
+  const enabled = new Set(["claude"]);
+  const registry = new UsageSourceRegistry(Date.now, 300_000, undefined, {
+    hasAgent: () => false,
+    usageSession: () => null,
+    isSourceEnabled: (id) => enabled.has(id),
+  });
+  for (const id of ["claude", "kimi"])
+    registry.register({
+      id,
+      label: id,
+      discover: async () => [{ key: "main", input: {} }],
+      fetch: async () => ({ status: "available", windows: [] }),
+    });
+  expect((await registry.listReports()).map((entry) => entry.sourceId)).toEqual(["claude"]);
+  enabled.add("kimi");
+  expect((await registry.listReports()).map((entry) => entry.sourceId)).toEqual(["claude", "kimi"]);
+});

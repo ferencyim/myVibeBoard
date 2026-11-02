@@ -31,6 +31,7 @@ const ClaudeCredentialsSchema = z.object({
       accessToken: z.string().optional(),
       expiresAt: z.number().optional(),
       refreshToken: z.string().optional(),
+      refreshTokenExpiresAt: z.number().optional(),
       subscriptionType: z.string().optional(),
       rateLimitTier: z.string().optional(),
     })
@@ -507,6 +508,27 @@ function toCredentialRecord(credentials: ClaudeCredentials): ClaudeCredentialRec
     : null;
 }
 
+/** The report for an access token past its expiry, or null while it is still valid. */
+function expiredReport(
+  credentials: ClaudeCredentialRecord,
+  refreshedBy: string,
+  now: number,
+): UsageReport | null {
+  if (credentials.expires === undefined || credentials.expires > now) return null;
+  const { refreshToken, refreshTokenExpiresAt } = credentials.oauth;
+  // Claude Code renews the access token only while it runs; the login itself is still good.
+  if (refreshToken && (refreshTokenExpiresAt === undefined || refreshTokenExpiresAt > now))
+    return unavailable({
+      kind: "no_quota",
+      detail: "Access token expired; Claude Code renews it the next time it runs.",
+    });
+  return unavailable({
+    kind: "expired",
+    expiresAt: new Date(credentials.expires).toISOString(),
+    refreshedBy,
+  });
+}
+
 export async function fetchUsage(
   input: UsageInput,
   fetchApi: typeof fetch = fetch,
@@ -574,15 +596,8 @@ export async function fetchUsage(
     input.route.store === "claude" || input.route.store === "keychain"
       ? "claude"
       : input.route.store;
-  if (
-    credentials.expires !== undefined &&
-    credentials.expires <= (credentialLookup.now ?? Date.now)()
-  )
-    return unavailable({
-      kind: "expired",
-      expiresAt: new Date(credentials.expires).toISOString(),
-      refreshedBy,
-    });
+  const expired = expiredReport(credentials, refreshedBy, (credentialLookup.now ?? Date.now)());
+  if (expired) return expired;
   const profile = await cachedProfile(
     credentials.oauth.accessToken,
     (credentialLookup.now ?? Date.now)(),

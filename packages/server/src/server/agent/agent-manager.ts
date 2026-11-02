@@ -1237,6 +1237,10 @@ export class AgentManager {
     }
   }
 
+  isProviderEnabled(provider: AgentProvider): boolean {
+    return this.providerEnabled.get(provider) === true;
+  }
+
   usageSession(id: string) {
     const agent = this.agents.get(id);
     return agent?.session?.usageSession?.() ?? null;

@@ -33,6 +33,8 @@ interface KnownReport {
 export interface AgentUsageLookup {
   hasAgent(id: string): boolean;
   usageSession(id: string): AgentUsageSession | null;
+  /** Whether the settings enable the provider behind a usage source; absent means all are shown. */
+  isSourceEnabled?(sourceId: string): boolean;
 }
 
 export interface ListUsageReportsOptions {
@@ -114,6 +116,11 @@ export class UsageSourceRegistry {
       [...new Set(ids)].flatMap((id) => {
         const known = reports.get(id);
         if (!known) return [];
+        if (
+          options.agentId === undefined &&
+          this.agents.isSourceEnabled?.(known.source.id) === false
+        )
+          return [];
         return [
           this.fetchId(id, known, options.forceRefresh).then((entry) => {
             options.onReport?.(entry);

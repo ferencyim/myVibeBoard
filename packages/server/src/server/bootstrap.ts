@@ -674,6 +674,9 @@ export async function createPaseoDaemon(
     usageAgents: {
       hasAgent: (id) => agentManager.getAgent(id) !== null,
       usageSession: (id) => agentManager.usageSession(id),
+      // Usage sources follow the providers the settings enable. OpenCode Go bills through opencode.
+      isSourceEnabled: (sourceId) =>
+        agentManager.isProviderEnabled(sourceId === "opencode-go" ? "opencode" : sourceId),
     },
     managedSources: new ManagedPluginSources(config.paseoHome, {
       registries: config.pluginRegistries,
