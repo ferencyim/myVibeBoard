@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import * as rpc from "./shared/rpc";
@@ -10,7 +9,7 @@ import { BotCreateSchema, BotPatchSchema } from "./server/vibe/contract/bots";
 import { migrateOwner } from "./server/vibe/db/migrate";
 import { openVibeDb } from "./server/vibe/db/sqlite";
 import { createBotService } from "./server/service";
-import { readProjectDocs } from "./server/project-docs";
+import { readAllProjectDocs, readProjectDocs } from "./server/project-docs";
 import { registerBotContinuations } from "./server/continuation";
 import { registerVisualReply } from "./server/visual-reply";
 import { createBotMessaging } from "./server/messages";
@@ -47,12 +46,7 @@ export default function contribute(server: PluginServerContext) {
   async function botDocuments(botId: string) {
     const bot = anyBot(botId);
     if (bot.projectId) return readProjectDocs(await service.projectRoot(bot.projectId));
-    const roots = await service.projectRoots();
-    const groups = await Promise.all(roots.map(async (root) => {
-      const name = basename(root);
-      try { return (await readProjectDocs(root)).map((doc) => ({ ...doc, path: `${name}/${doc.path}` })); } catch { return []; }
-    }));
-    return groups.flat();
+    return readAllProjectDocs(await service.projectRoots());
   }
   function ownedPromptKey(key: string) {
     if (![...PROJECT_BOT_PROMPT_KEYS, ...SHARED_PROMPT_KEYS].includes(key)) throw new Error("该提示词不属于此 bot");

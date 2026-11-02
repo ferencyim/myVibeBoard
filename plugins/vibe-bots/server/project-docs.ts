@@ -1,5 +1,5 @@
 import { lstat, open, readdir, realpath } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { basename, join, sep } from "node:path";
 
 const LIMIT = 64 * 1024;
 const MAX_FILES = 80;
@@ -54,4 +54,16 @@ export async function readProjectDocs(projectRoot: string): Promise<ProjectDoc[]
   await markdownUnder(root, "docs", 0, paths);
   const docs = await Promise.all(paths.map((path) => readDoc(root, path)));
   return docs.flatMap((doc) => (doc ? [doc] : []));
+}
+
+/** Documents of several projects at once; each path is prefixed by its project folder name. A broken root is skipped. */
+export async function readAllProjectDocs(projectRoots: readonly string[]): Promise<ProjectDoc[]> {
+  const groups = await Promise.all(projectRoots.map(async (root) => {
+    try {
+      return (await readProjectDocs(root)).map((doc) => ({ ...doc, path: `${basename(root)}/${doc.path}` }));
+    } catch {
+      return [];
+    }
+  }));
+  return groups.flat();
 }
