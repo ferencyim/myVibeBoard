@@ -992,6 +992,7 @@ ${COORDINATOR_PROMPT}` : base;
     bots, threads, openThread, waitThread, memoryDelivery, ready, view, caller, models,
     prompts: store.prompts,
     projectRoot: async (projectId: string) => (await project(projectId)).projectRootPath,
+    projectRoots: async () => (await hostProjects()).map((entry) => entry.projectRootPath),
     modelsForProject: async (query?: string, projectId?: string, refresh = false) => {
       const cwd = projectId ? (await project(projectId)).projectRootPath : undefined;
       if (refresh) await paseo.providers.refresh(cwd ? { cwd } : {});

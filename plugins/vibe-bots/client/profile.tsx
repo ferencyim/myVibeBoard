@@ -113,10 +113,10 @@ function RootPage({ bot, saver, onNavigate }: { bot: BotView; saver: Saver; onNa
     <Field label="头衔" value={titleDraft.draft} onChangeText={titleDraft.change} onBlur={titleDraft.flush} placeholder="这个 bot 负责什么" maxLength={TITLE_MAX} error={errors.title} />
     <TextArea label="角色说明" value={instructionsDraft.draft} onChangeText={instructionsDraft.change} onBlur={instructionsDraft.flush} placeholder="这个 bot 的职责、风格和约定" error={errors.instructions} />
     <ModelSection bot={bot} save={save} />
-    {bot.kind === "project" ? <Group>
+    <Group>
       <NavRow icon="FileText" label="项目文档" onPress={go.documents} />
       <NavRow icon="MessageSquare" label="注入的提示词" onPress={go.prompts} />
-    </Group> : null}
+    </Group>
     <Group>
       <NavRow icon="Brain" label="记忆" value={`${bot.memories.length} 条`} onPress={go.memories} />
       <NavRow icon="Clock" label="例程" onPress={go.routines} />

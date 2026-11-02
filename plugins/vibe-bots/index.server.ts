@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import * as rpc from "./shared/rpc";
@@ -37,42 +38,53 @@ export default function contribute(server: PluginServerContext) {
   void service.ready().then(() => messaging.flushAll()).catch((error) => console.error("[vibe-bots] bot 消息启动重投失败", error));
   const PROJECT_BOT_PROMPT_KEYS = ["project.agent.role", "project.agent.task_done"];
   const SHARED_PROMPT_KEYS = ["context.inject_frame", "context.cold_start", "context.failure_handoff", "context.compact_notes", "context.compact_restore"];
-  function projectBot(botId: string) {
+  function anyBot(botId: string) {
     const bot = service.bots.get(botId);
-    if (!bot || bot.kind !== "project" || !bot.projectId) throw new Error("只有项目 bot 提供项目文档与注入提示词");
-    return { ...bot, projectId: bot.projectId };
+    if (!bot) throw new Error("找不到此 bot");
+    return bot;
+  }
+  /** A project bot reads its own project; every other bot reads all projects, paths prefixed by project folder. */
+  async function botDocuments(botId: string) {
+    const bot = anyBot(botId);
+    if (bot.projectId) return readProjectDocs(await service.projectRoot(bot.projectId));
+    const roots = await service.projectRoots();
+    const groups = await Promise.all(roots.map(async (root) => {
+      const name = basename(root);
+      try { return (await readProjectDocs(root)).map((doc) => ({ ...doc, path: `${name}/${doc.path}` })); } catch { return []; }
+    }));
+    return groups.flat();
   }
   function ownedPromptKey(key: string) {
     if (![...PROJECT_BOT_PROMPT_KEYS, ...SHARED_PROMPT_KEYS].includes(key)) throw new Error("该提示词不属于此 bot");
   }
   server.handle(rpc.botsDocumentsRpc, async (input, ctx) => {
     userOnly(ctx.callerAgentId);
-    return { documents: await readProjectDocs(await service.projectRoot(projectBot(input.botId).projectId)) };
+    return { documents: await botDocuments(input.botId) };
   });
   server.handle(rpc.botsPromptsListRpc, (input, ctx) => {
     userOnly(ctx.callerAgentId);
-    projectBot(input.botId);
+    const own = anyBot(input.botId).kind === "project" ? PROJECT_BOT_PROMPT_KEYS : [];
     const byKey = new Map(service.prompts.list({ projectId: null }).map((item) => [item.key, item]));
-    const keys = [...PROJECT_BOT_PROMPT_KEYS, ...SHARED_PROMPT_KEYS].filter((key) => byKey.has(key));
+    const keys = [...own, ...SHARED_PROMPT_KEYS].filter((key) => byKey.has(key));
     return { prompts: keys.map((key) => {
       const item = byKey.get(key)!;
       return {
         key, title: item.title, description: item.description, whenSent: item.whenSent, audience: item.audience,
         defaultText: item.defaultText, fixedSuffix: item.fixedSuffix, globalOverride: item.globalOverride,
-        placeholders: item.placeholders, own: PROJECT_BOT_PROMPT_KEYS.includes(key),
+        placeholders: item.placeholders, own: own.includes(key),
       };
     }) };
   });
   server.handle(rpc.botsPromptsSetRpc, (input, ctx) => {
     userOnly(ctx.callerAgentId);
-    projectBot(input.botId);
+    anyBot(input.botId);
     ownedPromptKey(input.key);
     service.prompts.setOverride(input.key, input.text, { projectId: null });
     return { ok: true as const };
   });
   server.handle(rpc.botsPromptsClearRpc, (input, ctx) => {
     userOnly(ctx.callerAgentId);
-    projectBot(input.botId);
+    anyBot(input.botId);
     ownedPromptKey(input.key);
     service.prompts.clearOverride(input.key, { projectId: null });
     return { ok: true as const };
