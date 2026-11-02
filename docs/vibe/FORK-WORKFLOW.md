@@ -12,7 +12,7 @@ myVibeBoard 是 `getpaseo/paseo` 的 fork。自研内容尽量放 `plugins/`，�
 - **绝不把上游 tag 推到 origin。** 上游 tag（`v*`、`desktop-v*` 等）一旦出现在 fork，会触发发布类工作流。推送时只推分支：`git push origin main`，不要 `--tags`、不要 `--mirror`。
 - 本地 `git fetch upstream --tags` 会把上游 tag 拉到本地，这是预期的（用于合并 release），只要不 push 即可。
 
-## 2. 每两周合并一次上游 release
+## 2. 合并上游 release（每轮改代码前）
 
 只合并上游**稳定 release tag**（`vX.Y.Z`，不含 `-beta`/`-rc`），不合 upstream/main 的任意提交。
 
@@ -23,13 +23,15 @@ myVibeBoard 是 `getpaseo/paseo` 的 fork。自研内容尽量放 `plugins/`，�
 5. 验证顺序：先跑 **plugins 的测试**（自研代码，最可能被上游接口变化打破），再跑**全量**测试与 typecheck。插件声明的 Paseo 版本范围若不再满足，同步更新（见第 4 节）。
 6. 验证通过后合入 `main` 并 push `origin main`（只推分支）。
 
-频率：每两周一次，不积压；上游出现安全修复时可提前。
+频率：每轮改代码前先合最新稳定 tag（2026-10-26 用户要求，取代原来的每两周一次）。
+
+冲突落在根 `AGENTS.md`、`CLAUDE.md` 时：保留本 fork 的结构（`AGENTS.md` 是实体，上游是 `AGENTS.md` 软链到 `CLAUDE.md`），把上游对 `CLAUDE.md` 的改动移植到 `AGENTS.md`、`docs/README.md` 或 `docs/platform-gating.md`。
 
 ## 3. `[core]` 提交约定
 
 - 凡是修改 `packages/`（以及其他上游拥有的核心文件）的提交，**单独成提交，提交信息以 `[core]` 开头**，例如 `[core] Expose offline data hook in server session`。
 - 一个 `[core]` 提交只做一件事，不混入 `plugins/`、文档或格式化改动，以便合并冲突时快速定位、也便于日后摘出来向上游提 PR。
-- 对上游文件的非代码小改动（如 `CLAUDE.md` 末尾的 fork 约定）不必加 `[core]`，但保持极小。
+- 对上游文件的非代码小改动不必加 `[core]`，但保持极小。根 `AGENTS.md`、`CLAUDE.md` 是例外，见第 2 节。
 - 定位全部核心改动：`git log --grep='^\[core\]' --oneline`。
 
 ## 4. 插件声明支持的 Paseo 版本
@@ -65,7 +67,9 @@ myVibeBoard 是 `getpaseo/paseo` 的 fork。自研内容尽量放 `plugins/`，�
 
 ## 6. GitHub Actions 处理
 
-目标：fork 上**只跑 `ci.yml`**；发布、部署、推镜像、依赖上游 secrets 的工作流一律禁用。这些工作流里没有 `github.repository == 'getpaseo/paseo'` 之类守卫，加守卫要改上游文件、每次合并都冲突，所以采用**在 GitHub 上逐个禁用**（`gh workflow disable`），不改任何 workflow 文件。
+**现状（2026-11-02 核实）：本仓库 Actions 已整体关闭，按全局约定保持关闭，全量验证走本机 guard；下文是早期方案，只作历史参考，不要据此启用。**
+
+早期目标：fork 上只跑 `ci.yml`；发布、部署、推镜像、依赖上游 secrets 的工作流一律禁用。这些工作流里没有 `github.repository == 'getpaseo/paseo'` 之类守卫，加守卫要改上游文件、每次合并都冲突，所以采用**在 GitHub 上逐个禁用**（`gh workflow disable`），不改任何 workflow 文件。
 
 禁用状态存在 GitHub 仓库设置里，不在代码里，合并上游不会受影响。上游新增工作流时，合并后需检查 `.github/workflows/` 是否有新文件并补禁用（合并步骤第 4 步顺带检查：`git diff --stat HEAD~ -- .github/workflows`）。
 
